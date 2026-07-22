@@ -11,6 +11,7 @@
 //                                            follow-up turn (loop-safe)
 //   [[mock:chain]]                       -> two sequential tool calls, then text
 //                                            (a multi-step agent loop)
+//   [[mock:slow-long]]                   -> longer delayed stream for concurrency
 //   [[mock:error:boom]]                  -> emits a stream error
 import { MockLanguageModelV3, simulateReadableStream } from "ai/test";
 
@@ -49,6 +50,9 @@ function hasToolResult(prompt) {
 
 function plan(prompt) {
   const text = lastUserText(prompt);
+  if (allText(prompt).includes("[[mock:slow-anywhere]]")) {
+    return { kind: "slow", text: "tick ".repeat(40) };
+  }
   // Multi-step loop: emit a tool call, then another after the first result,
   // then close with text. Counts how many tool results are already in scope.
   if (text.includes("[[mock:chain]]")) {
@@ -62,6 +66,9 @@ function plan(prompt) {
     return { kind: "text", text: "Mock follow-up: tool result received." };
   }
   // A long, delayed stream so a turn can be cancelled mid-flight.
+  if (text.includes("[[mock:slow-long]]")) {
+    return { kind: "slow", text: "tick ".repeat(120) };
+  }
   if (text.includes("[[mock:slow]]")) {
     return { kind: "slow", text: "tick ".repeat(40) };
   }

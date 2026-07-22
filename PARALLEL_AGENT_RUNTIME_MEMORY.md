@@ -6,8 +6,8 @@
 - Worktree: `/private/tmp/openacme-parallel-plan`
 - Dev data dir: `/private/tmp/openacme-parallel-plan/.openacme-dev`
 - Dev port: `127.0.0.1:3457`
-- Current slice: Slice 4 - Interactive Chat Capacity Gate
-- Last verified command: `pnpm --filter @openacme/server test -- app-routes.test.ts`; `pnpm --filter @openacme/server test -- dispatcher.test.ts`; `pnpm --filter @openacme/server check-types`
+- Current slice: Slice 6 - Manual `.openacme-dev` Smoke And Documentation
+- Last verified command: `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts`; `pnpm --filter @openacme/server test -- dispatcher.test.ts app-routes.test.ts`; `pnpm --filter @openacme/server check-types`
 
 ## Standing Decisions
 
@@ -56,10 +56,10 @@
 ### Slice 5 - Real Platform E2E Suite
 
 - Goal: prove task wake, tool/process result wake, task result wake, new message wake, capacity queue, inbox isolation, defer, and status behavior on a running platform harness.
-- Red tests: pending.
-- Implementation: pending.
-- Validation: pending.
-- Status: pending.
+- Red tests: the first e2e attempt exposed a race-prone assertion where the third session could start after a slot had already freed, and cleanup timed out when SSE handles were left open after assertion failure.
+- Implementation: added `packages/server/test/e2e/parallel-dispatcher.e2e.ts`; extended the e2e client agent creator to accept extra fields; added `[[mock:slow-anywhere]]` and `[[mock:slow-long]]` stub-model directives for real dispatcher timing tests; added afterEach SSE cleanup.
+- Validation: `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts` passed 8/8; `pnpm --filter @openacme/server test -- dispatcher.test.ts app-routes.test.ts` passed 33/33; `pnpm --filter @openacme/server check-types` passed.
+- Status: complete.
 
 ### Slice 6 - Manual `.openacme-dev` Smoke And Documentation
 
@@ -76,4 +76,4 @@
 
 ## Next Action
 
-Start Slice 5 by extending the real platform e2e harness coverage for parallel task wake, capacity backfill, same-session/different-session message wake, tool/process result wake, task result wake, inbox isolation, agent-wide notice, defer, and status state.
+Commit Slice 5, then run Slice 6 manual `.openacme-dev` smoke on port `3457` without touching `~/.openacme`.

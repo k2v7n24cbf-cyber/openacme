@@ -21,16 +21,20 @@ import type { AgentManager } from "../src/agent-manager.js";
  */
 
 type TurnCall = { agentId: string; sessionId: string };
+type FakeAgentDef = { id: string; maxConcurrentSessions?: number };
 
 function fakeManager(
-  agentIds: string[],
+  agentDefs: Array<string | FakeAgentDef>,
   turn: (sessionId: string) => Promise<void> = async () => {}
 ): { manager: AgentManager; calls: TurnCall[] } {
   const calls: TurnCall[] = [];
+  const defs = agentDefs.map((agent) =>
+    typeof agent === "string" ? { id: agent } : agent
+  );
   const manager = {
-    listAgents: () => agentIds.map((id) => ({ id })),
+    listAgents: () => defs,
     getAgentDef: (id: string) =>
-      agentIds.includes(id) ? { id } : null,
+      defs.find((agent) => agent.id === id) ?? null,
     getAgent: (id: string) => ({
       runAutonomous: async ({ sessionId }: { sessionId: string }) => {
         calls.push({ agentId: id, sessionId });
@@ -39,6 +43,13 @@ function fakeManager(
     }),
   } as unknown as AgentManager;
   return { manager, calls };
+}
+
+function deferredTurns() {
+  const release = new Map<string, () => void>();
+  const turn = (sessionId: string) =>
+    new Promise<void>((resolve) => release.set(sessionId, resolve));
+  return { turn, release };
 }
 
 let dataDir: string;
@@ -238,6 +249,93 @@ describe("Dispatcher spawn rule", () => {
     expect(new Set(calls.map((c) => c.sessionId))).toEqual(
       new Set([a.session.id, b.session.id])
     );
+  });
+
+  it("keeps default maxConcurrentSessions at one active session", async () => {
+    const gate = deferredTurns();
+    const { manager, calls } = fakeManager(["a1"], gate.turn);
+    const a = await makeBoundTask("a1");
+    const b = await makeBoundTask("a1");
+
+    const d = makeDispatcher(manager);
+    await d.start();
+
+    expect(calls).toHaveLength(1);
+    expect([a.session.id, b.session.id]).toContain(calls[0]?.sessionId);
+    expect(d.runningSessionIds()).toEqual([calls[0]!.sessionId]);
+    gate.release.get(calls[0]!.sessionId)?.();
+    await d.drain(5_000);
+  });
+
+  it("starts up to maxConcurrentSessions distinct sessions for one agent", async () => {
+    const gate = deferredTurns();
+    const { manager, calls } = fakeManager(
+      [{ id: "a1", maxConcurrentSessions: 2 }],
+      gate.turn
+    );
+    const a = await makeBoundTask("a1");
+    const b = await makeBoundTask("a1");
+
+    const d = makeDispatcher(manager);
+    await d.start();
+
+    expect(calls).toHaveLength(2);
+    expect(new Set(calls.map((call) => call.sessionId))).toEqual(
+      new Set([a.session.id, b.session.id])
+    );
+    expect(new Set(d.runningSessionIds())).toEqual(
+      new Set([a.session.id, b.session.id])
+    );
+    expect(d.isRunning(a.session.id)).toBe(true);
+    expect(d.isRunning(b.session.id)).toBe(true);
+    for (const call of calls) gate.release.get(call.sessionId)?.();
+    await d.drain(5_000);
+  });
+
+  it("backfills another ready session when a capacity slot frees", async () => {
+    const gate = deferredTurns();
+    const { manager, calls } = fakeManager(
+      [{ id: "a1", maxConcurrentSessions: 2 }],
+      gate.turn
+    );
+    const a = await makeBoundTask("a1");
+    const b = await makeBoundTask("a1");
+    const c = await makeBoundTask("a1");
+
+    const d = makeDispatcher(manager);
+    await d.start();
+
+    expect(calls).toHaveLength(2);
+    const firstFinished = calls[0]!.sessionId;
+    for (const task of taskStore.list({
+      session_id: firstFinished,
+      status: "open",
+    })) {
+      await taskStore.update(task.id, { status: "done" });
+    }
+    gate.release.get(firstFinished)?.();
+    await vi.waitFor(() => expect(calls).toHaveLength(3));
+    expect(new Set(calls.map((call) => call.sessionId))).toEqual(
+      new Set([a.session.id, b.session.id, c.session.id])
+    );
+    for (const call of calls) gate.release.get(call.sessionId)?.();
+    await d.drain(5_000);
+  });
+
+  it("counts interactive-busy sessions toward agent capacity", async () => {
+    const { manager, calls } = fakeManager([
+      { id: "a1", maxConcurrentSessions: 1 },
+    ]);
+    const interactive = sessionStore.create("a1");
+    await makeBoundTask("a1");
+
+    const d = makeDispatcher(manager);
+    d.markInteractiveBusy(interactive.id);
+    await d.start();
+    await d.drain(5_000);
+
+    expect(calls).toEqual([]);
+    expect(d.runningSessionIds()).toEqual([interactive.id]);
   });
 
   it("binds unbound ready tasks to a fresh session and spawns it", async () => {

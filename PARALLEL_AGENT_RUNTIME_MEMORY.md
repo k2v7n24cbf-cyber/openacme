@@ -6,8 +6,8 @@
 - Worktree: `/private/tmp/openacme-parallel-plan`
 - Dev data dir: `/private/tmp/openacme-parallel-plan/.openacme-dev`
 - Dev port: `127.0.0.1:3457`
-- Current slice: Slice 2 - Session-Aware Inbox Claim And Agent Drain
-- Last verified command: `pnpm --filter @openacme/db test -- stores.test.ts`; `pnpm --filter @openacme/agent-core test -- agent-inbox.test.ts`; `pnpm --filter @openacme/db check-types`; `pnpm --filter @openacme/agent-core check-types`
+- Current slice: Slice 3 - Dispatcher Capacity Accounting
+- Last verified command: `pnpm --filter @openacme/server test -- dispatcher.test.ts`; `pnpm --filter @openacme/server check-types`
 
 ## Standing Decisions
 
@@ -40,10 +40,10 @@
 ### Slice 3 - Dispatcher Capacity Accounting
 
 - Goal: allow up to `maxConcurrentSessions` distinct active sessions per canonical agent while preserving same-session serialization.
-- Red tests: pending.
-- Implementation: pending.
-- Validation: pending.
-- Status: pending.
+- Red tests: `packages/server/test/dispatcher.test.ts` failed because the dispatcher started only one session for `maxConcurrentSessions: 2` and allowed a different session to run while another session was marked interactive-busy at capacity.
+- Implementation: session-keyed autonomous active turn map; active sessions by agent; capacity resolution from agent definition; session-aware inbox summary in tick; agent-wide inbox notice assigned to one candidate; per-agent backfill kick when capacity `>1` or a real inbox signal waited for a slot.
+- Validation: `pnpm --filter @openacme/server test -- dispatcher.test.ts`; `pnpm --filter @openacme/server check-types`.
+- Status: complete.
 
 ### Slice 4 - Interactive Chat Capacity Gate
 
@@ -76,4 +76,4 @@
 
 ## Next Action
 
-Start Slice 3 by reading dispatcher state/chaining tests, then add red tests for per-agent session capacity accounting.
+Start Slice 4 by reading `/api/chat` turn gating and dispatcher interactive busy APIs, then add red/e2e or route-level tests for capacity-aware interactive queuing.

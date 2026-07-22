@@ -24,6 +24,7 @@ import { z, type ZodTypeAny } from "zod";
 import { resolveSubagentModel } from "@openacme/llm-provider";
 import type { UsageKind } from "@openacme/db";
 import type { Agent } from "./agent.js";
+import { extractErrorText } from "./error-classifier.js";
 import type { TokenUsage } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -203,7 +204,7 @@ async function runForked(
       mode: "forked",
       status: "failed",
       message: assembled,
-      error: e instanceof Error ? e.message : String(e),
+      error: extractErrorText(e),
     };
   }
 }
@@ -322,7 +323,7 @@ async function runStructured<S extends ZodTypeAny>(
       mode: "structured",
       status: "failed",
       object: null,
-      error: e instanceof Error ? e.message : String(e),
+      error: extractErrorText(e),
     };
   }
 }

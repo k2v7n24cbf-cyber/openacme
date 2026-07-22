@@ -30,6 +30,7 @@ function makeAgent(
     mcpServers: {},
     mcpDisabled: [],
     skills: [],
+    memoryExtractionEnabled: true,
     probeIntervalMs: 30 * 60 * 1000,
     paths: [],
   };

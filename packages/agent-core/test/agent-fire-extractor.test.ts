@@ -29,7 +29,7 @@ function freshDb() {
   return db;
 }
 
-function makeAgent(): Agent {
+function makeAgent(configOverrides: Partial<AgentConfig> = {}): Agent {
   const tmpRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "openacme-fire-extractor-")
   );
@@ -48,6 +48,7 @@ function makeAgent(): Agent {
     persona: "test",
     tools: [],
     maxSteps: 1,
+    ...configOverrides,
   };
   return new Agent(config, {
     sessionStore,
@@ -106,6 +107,18 @@ describe("Agent.fireExtractor", () => {
     expect(call.sessionId).toBe("s1");
     expect(call.sessionMessages).toBe(messages);
     expect(call.newMessageCount).toBe(2); // first run, no cursor → all
+  });
+
+  it("does not invoke the extractor when memory extraction is disabled", async () => {
+    const agent = makeAgent({ memoryExtractionEnabled: false });
+    const spy = vi.spyOn(extractorModule, "runExtractor");
+
+    await fireAndSettle(agent, {
+      sessionId: "s1",
+      sessionMessages: [user("u1", "hi"), asst("a1", "ok")],
+    });
+
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it("advances the cursor past the last assistant on completed", async () => {

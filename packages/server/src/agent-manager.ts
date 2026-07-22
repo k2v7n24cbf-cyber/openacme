@@ -2037,6 +2037,7 @@ export class AgentManager {
       // (no more tool calls), not when we cap it.
       maxSteps: DEFAULT_MAX_STEPS,
       maxOutputTokens: b.maxOutputTokens,
+      memoryExtractionEnabled: def.memoryExtractionEnabled,
       skillsIndex,
       compression: {
         thresholdTokens: b.compressionThresholdTokens,

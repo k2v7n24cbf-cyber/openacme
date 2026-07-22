@@ -92,6 +92,7 @@ interface Agent {
   persona: string;
   tools: string[];
   skills: string[];
+  memoryExtractionEnabled?: boolean;
   mcpServers?: Record<string, MCPServerConfigDto>;
   mcpDisabled?: string[];
   managed?: boolean;
@@ -161,6 +162,7 @@ interface FormState {
   persona: string;
   tools: string[];
   skills: string[];
+  memoryExtractionEnabled: boolean;
   mcpServers: Record<string, MCPServerConfigDto>;
   mcpDisabled: string[];
 }
@@ -179,6 +181,7 @@ const FALLBACK_FORM: FormState = {
   persona: "You are a helpful AI assistant.",
   tools: [],
   skills: [],
+  memoryExtractionEnabled: true,
   mcpServers: {},
   mcpDisabled: [],
 };
@@ -316,6 +319,7 @@ const AGENT_TABS = [
   "overview",
   "tools",
   "skills",
+  "settings",
   "mcp",
   "workspace",
   "resources",
@@ -502,6 +506,7 @@ function AgentsPage() {
     persona: formData.persona,
     tools: formData.tools,
     skills: formData.skills,
+    memoryExtractionEnabled: formData.memoryExtractionEnabled,
     mcpServers: formData.mcpServers,
     mcpDisabled: formData.mcpDisabled,
   });
@@ -658,6 +663,7 @@ function AgentsPage() {
       persona: selectedAgent.persona,
       tools: selectedAgent.tools,
       skills: selectedAgent.skills ?? [],
+      memoryExtractionEnabled: selectedAgent.memoryExtractionEnabled ?? true,
       mcpServers: selectedAgent.mcpServers ?? {},
       mcpDisabled: selectedAgent.mcpDisabled ?? [],
     });
@@ -742,6 +748,7 @@ function AgentsPage() {
             // installed skills); the bundled_skills from the template are
             // installed workforce-wide separately, not gated per-agent.
             skills: [],
+            memoryExtractionEnabled: true,
             mcpServers: tpl.agentFields.mcpServers ?? {},
             mcpDisabled: tpl.agentFields.mcpDisabled ?? [],
           });
@@ -794,6 +801,7 @@ function AgentsPage() {
           persona: found.persona,
           tools: found.tools,
           skills: found.skills ?? [],
+          memoryExtractionEnabled: found.memoryExtractionEnabled ?? true,
           mcpServers: found.mcpServers ?? {},
           mcpDisabled: found.mcpDisabled ?? [],
         });
@@ -1102,6 +1110,16 @@ function AgentsPage() {
                           onToggle={toggleSkill}
                         />
                       )}
+
+                      <MemoryExtractionSetting
+                        enabled={formData.memoryExtractionEnabled}
+                        onChange={(memoryExtractionEnabled) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            memoryExtractionEnabled,
+                          }))
+                        }
+                      />
                     </>
                   )}
 
@@ -1639,6 +1657,7 @@ interface AgentDraft {
   model: string;
   auth: "api_key" | "oauth";
   cacheTtl: CacheTtl;
+  memoryExtractionEnabled: boolean;
 }
 
 function draftFromAgent(agent: Agent): AgentDraft {
@@ -1651,6 +1670,7 @@ function draftFromAgent(agent: Agent): AgentDraft {
     model: agent.model.model,
     auth: agent.model.auth ?? "api_key",
     cacheTtl: agent.model.cacheTtl ?? "5m",
+    memoryExtractionEnabled: agent.memoryExtractionEnabled ?? true,
   };
 }
 
@@ -1701,6 +1721,7 @@ function AgentDetail({
         auth: draft.auth,
         cacheTtl: draft.cacheTtl,
       },
+      memoryExtractionEnabled: draft.memoryExtractionEnabled,
       ...tabSlice,
     }),
     [agent, draft, tabSlice]
@@ -1715,7 +1736,8 @@ function AgentDetail({
     ? draft.provider !== saved.provider ||
       draft.model !== saved.model ||
       draft.auth !== saved.auth ||
-      draft.cacheTtl !== saved.cacheTtl
+      draft.cacheTtl !== saved.cacheTtl ||
+      draft.memoryExtractionEnabled !== saved.memoryExtractionEnabled
     : JSON.stringify(draft) !== JSON.stringify(saved);
   // Detail is ruled sections on the pane, not a floating card — one shared
   // measure with the skills + tasks detail panes.
@@ -1787,13 +1809,17 @@ function AgentDetail({
               };
               void save(
                 agent.managed
-                  ? { model }
+                  ? {
+                      model,
+                      memoryExtractionEnabled: draft.memoryExtractionEnabled,
+                    }
                   : {
                       name: draft.name,
                       avatar: draft.avatar,
                       role: draft.role,
                       persona: draft.persona,
                       model,
+                      memoryExtractionEnabled: draft.memoryExtractionEnabled,
                     },
                 "Agent"
               );
@@ -1824,6 +1850,7 @@ function AgentDetail({
             </span>
           </TabsTrigger>
           <TabsTrigger value="skills">Skills</TabsTrigger>
+          <TabsTrigger value="settings">Settings</TabsTrigger>
           <TabsTrigger value="mcp">MCP</TabsTrigger>
           <TabsTrigger value="workspace">Workspace</TabsTrigger>
           <TabsTrigger value="resources">Resources</TabsTrigger>
@@ -1850,6 +1877,14 @@ function AgentDetail({
             allSkills={allSkills}
             onSaved={onAgentUpdated}
             onDraftChange={setTabSlice}
+          />
+        </TabsContent>
+        <TabsContent value="settings">
+          <AgentSettingsTab
+            enabled={draft.memoryExtractionEnabled}
+            onChange={(memoryExtractionEnabled) =>
+              setDraft({ ...draft, memoryExtractionEnabled })
+            }
           />
         </TabsContent>
         <TabsContent value="mcp">
@@ -2402,6 +2437,61 @@ function AgentSkillsTab({
         onSave={() => void save({ skills: selected }, "Skills")}
         onDiscard={() => setSelected(savedSkills)}
       />
+    </div>
+  );
+}
+
+function MemoryExtractionSetting({
+  enabled,
+  onChange,
+}: {
+  enabled: boolean;
+  onChange: (enabled: boolean) => void;
+}) {
+  return (
+    <div className="grid gap-3 border-t border-paper-rule pt-4">
+      <div>
+        <Label htmlFor="memory-extraction">Memory extraction</Label>
+        <p className="mt-1 text-[12px] leading-relaxed text-ink-soft">
+          Allow this agent to extract durable memories from completed turns.
+          Manual memory tools and recall stay available.
+        </p>
+      </div>
+      <label
+        htmlFor="memory-extraction"
+        className="flex max-w-2xl cursor-pointer items-start gap-3 border border-paper-rule bg-paper px-3 py-3 text-sm transition-colors hover:border-plot-red"
+      >
+        <input
+          id="memory-extraction"
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => onChange(e.target.checked)}
+          className="mt-0.5 size-4 accent-plot-red"
+        />
+        <span className="grid gap-1">
+          <span className="font-medium text-ink">
+            Enable automatic extraction
+          </span>
+          <span className="text-[12px] leading-relaxed text-ink-soft">
+            When disabled, post-turn extraction subagents are not launched for
+            this agent.
+          </span>
+        </span>
+      </label>
+    </div>
+  );
+}
+
+function AgentSettingsTab({
+  enabled,
+  onChange,
+}: {
+  enabled: boolean;
+  onChange: (enabled: boolean) => void;
+}) {
+  return (
+    <div className="max-w-4xl py-5">
+      <MemoryExtractionSetting enabled={enabled} onChange={onChange} />
     </div>
   );
 }

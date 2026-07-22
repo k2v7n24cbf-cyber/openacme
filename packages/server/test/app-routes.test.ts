@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -114,6 +114,27 @@ describe("agents CRUD", () => {
     res = await req("/api/agents");
     list = await res.json();
     expect(list).toHaveLength(0);
+  });
+
+  it("persists per-agent memory extraction setting", async () => {
+    await createAgent();
+
+    let res = await req("/api/agents/helper", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ memoryExtractionEnabled: false }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).memoryExtractionEnabled).toBe(false);
+
+    res = await req("/api/agents/helper");
+    expect(res.status).toBe(200);
+    expect((await res.json()).memoryExtractionEnabled).toBe(false);
+
+    const agentFile = path.join(dataDir, "agents", "helper", "AGENT.md");
+    expect(readFileSync(agentFile, "utf8")).toContain(
+      "memoryExtractionEnabled: false",
+    );
   });
 
   it("rejects invalid definitions and unknown ids", async () => {

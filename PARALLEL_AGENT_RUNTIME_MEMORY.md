@@ -6,8 +6,8 @@
 - Worktree: `/private/tmp/openacme-parallel-plan`
 - Dev data dir: `/private/tmp/openacme-parallel-plan/.openacme-dev`
 - Dev port: `127.0.0.1:3457`
-- Current slice: Slice 3 - Dispatcher Capacity Accounting
-- Last verified command: `pnpm --filter @openacme/server test -- dispatcher.test.ts`; `pnpm --filter @openacme/server check-types`
+- Current slice: Slice 4 - Interactive Chat Capacity Gate
+- Last verified command: `pnpm --filter @openacme/server test -- app-routes.test.ts`; `pnpm --filter @openacme/server test -- dispatcher.test.ts`; `pnpm --filter @openacme/server check-types`
 
 ## Standing Decisions
 
@@ -48,10 +48,10 @@
 ### Slice 4 - Interactive Chat Capacity Gate
 
 - Goal: make `/api/chat` respect agent capacity so interactive turns cannot bypass the dispatcher limit.
-- Red tests: pending.
-- Implementation: pending.
-- Validation: pending.
-- Status: pending.
+- Red tests: `packages/server/test/app-routes.test.ts` failed because a different-session `/api/chat` request started the standard interactive path while the agent was already at capacity.
+- Implementation: `Dispatcher.canStartRun(agentId, sessionId)` and `/api/chat` capacity queue path returning `queuedReason: "agent_capacity"` while preserving same-session queue semantics.
+- Validation: `pnpm --filter @openacme/server test -- app-routes.test.ts`; `pnpm --filter @openacme/server test -- dispatcher.test.ts`; `pnpm --filter @openacme/server check-types`.
+- Status: complete.
 
 ### Slice 5 - Real Platform E2E Suite
 
@@ -76,4 +76,4 @@
 
 ## Next Action
 
-Start Slice 4 by reading `/api/chat` turn gating and dispatcher interactive busy APIs, then add red/e2e or route-level tests for capacity-aware interactive queuing.
+Start Slice 5 by extending the real platform e2e harness coverage for parallel task wake, capacity backfill, same-session/different-session message wake, tool/process result wake, task result wake, inbox isolation, agent-wide notice, defer, and status state.

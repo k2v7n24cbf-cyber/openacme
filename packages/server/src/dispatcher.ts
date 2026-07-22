@@ -164,6 +164,20 @@ export class Dispatcher {
   }
 
   /**
+   * True when starting a new turn for this session would respect both
+   * same-session serialization and the agent's configured capacity.
+   */
+  canStartRun(agentId: string, sessionId: string): boolean {
+    if (this.isRunning(sessionId)) return false;
+    const def = this.agentManager.getAgentDef(agentId);
+    if (!def) return false;
+    return (
+      this.activeSessionIdsForAgent(agentId).size <
+      this.maxConcurrentSessions(def)
+    );
+  }
+
+  /**
    * `/api/chat` calls this when it starts driving a turn directly
    * (via `runChatTurn`). The dispatcher's tick skips sessions in
    * this set so we don't try to spawn an autonomous turn into the

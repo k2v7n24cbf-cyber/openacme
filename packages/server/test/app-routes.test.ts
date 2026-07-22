@@ -49,11 +49,15 @@ function req(p: string, init: RequestInit = {}): Promise<Response> {
   return app.request(`http://127.0.0.1${p}`, { ...init, headers });
 }
 
-async function createAgent(id = "helper", name = "Helper") {
+async function createAgent(
+  id = "helper",
+  name = "Helper",
+  extra: Record<string, unknown> = {}
+) {
   const res = await req("/api/agents", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ id, name }),
+    body: JSON.stringify({ id, name, ...extra }),
   });
   expect(res.status).toBe(201);
   return (await res.json()) as { id: string };
@@ -227,6 +231,49 @@ describe("chat validation", () => {
       att.filename
     );
     expect(existsSync(pendingPath)).toBe(true);
+  });
+
+  it("queues a different session when the agent is at interactive capacity", async () => {
+    await createAgent("helper", "Helper", { maxConcurrentSessions: 1 });
+    const busy = manager.sessionStore.create("helper");
+    manager.dispatcher.markInteractiveBusy(busy.id);
+    const sessionId = "22222222-2222-4222-8222-222222222222";
+    const messageId = "msg-capacity";
+
+    const res = await req("/api/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        agentId: "helper",
+        sessionId,
+        messages: [
+          {
+            id: messageId,
+            role: "user",
+            parts: [{ type: "text", text: "queue me" }],
+          },
+        ],
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({
+      sessionId,
+      userMessageId: messageId,
+      queued: true,
+      queuedReason: "agent_capacity",
+    });
+    expect(body.assistantMessageId).toBeUndefined();
+    const pending = manager.inboxStore.pendingFor("helper");
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      kind: "user_message",
+      source: "user",
+      sourceId: messageId,
+      relatedSession: sessionId,
+    });
+    expect(manager.messageStore.getHistory(sessionId)).toEqual([]);
   });
 });
 

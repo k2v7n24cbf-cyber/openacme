@@ -1608,6 +1608,9 @@ export class Agent {
     sessionMessages: readonly UIMessage[];
     abortSignal?: AbortSignal;
   }): void {
+    if (this.config.memoryExtractionEnabled === false) {
+      return;
+    }
     if (this.extractionInProgress.has(opts.sessionId)) {
       return;
     }

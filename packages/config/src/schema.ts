@@ -301,6 +301,10 @@ export const AgentDefinitionSchema = z.object({
   // installed skill in the workforce. Non-empty restricts to just those
   // names. Edit-form picker, not exposed in the catalog import form.
   skills: z.array(z.string()).default([]),
+  // Controls the background post-turn memory extraction subagent. Recall and
+  // the explicit `memory` tool remain available; false only disables automatic
+  // extraction from conversation turns.
+  memoryExtractionEnabled: z.boolean().default(true),
   // Heartbeat / failsafe probe cadence (milliseconds). When an
   // autonomous turn ends with eligible non-terminal work AND the agent
   // didn't call `sleep` to set a per-turn override, the scheduler will

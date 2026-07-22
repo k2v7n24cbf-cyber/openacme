@@ -6,8 +6,8 @@
 - Worktree: `/private/tmp/openacme-parallel-plan`
 - Dev data dir: `/private/tmp/openacme-parallel-plan/.openacme-dev`
 - Dev port: `127.0.0.1:3457`
-- Current slice: Slice 1 - Config, API Shape, And UI Control
-- Last verified command: `pnpm --filter @openacme/config test`; `pnpm --filter @openacme/config check-types`; `pnpm --filter web check-types`
+- Current slice: Slice 2 - Session-Aware Inbox Claim And Agent Drain
+- Last verified command: `pnpm --filter @openacme/db test -- stores.test.ts`; `pnpm --filter @openacme/agent-core test -- agent-inbox.test.ts`; `pnpm --filter @openacme/db check-types`; `pnpm --filter @openacme/agent-core check-types`
 
 ## Standing Decisions
 
@@ -32,10 +32,10 @@
 ### Slice 2 - Session-Aware Inbox Claim And Agent Drain
 
 - Goal: prevent one session from reading or deleting another session's targeted inbox rows.
-- Red tests: pending.
-- Implementation: pending.
-- Validation: pending.
-- Status: pending.
+- Red tests: `packages/db/test/stores.test.ts` failed because `claimForSession`/`pendingSummaryFor` did not exist; `packages/agent-core/test/agent-inbox.test.ts` failed because another session's targeted system notice was injected/deleted at turn start and mid-turn.
+- Implementation: `InboxStore.claimForSession`, `InboxStore.pendingSummaryFor`, turn-start drain via claim, mid-turn drain via claim.
+- Validation: `pnpm --filter @openacme/db test -- stores.test.ts`; `pnpm --filter @openacme/agent-core test -- agent-inbox.test.ts`; `pnpm --filter @openacme/db check-types`; `pnpm --filter @openacme/agent-core check-types`.
+- Status: complete.
 
 ### Slice 3 - Dispatcher Capacity Accounting
 
@@ -76,4 +76,4 @@
 
 ## Next Action
 
-Start Slice 2 by reading the DB inbox store/schema and agent runtime drain paths, then add red tests for session-aware claim semantics.
+Start Slice 3 by reading dispatcher state/chaining tests, then add red tests for per-agent session capacity accounting.

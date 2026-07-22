@@ -1,6 +1,6 @@
 import type { WasmDatabase } from "../wasm/adapter.js";
 import { drizzle } from "../wasm/drizzle.js";
-import { and, asc, count, eq, inArray } from "drizzle-orm";
+import { and, asc, count, eq, inArray, isNull, or } from "drizzle-orm";
 import { agentInbox, type AgentInboxRow } from "../schema.js";
 
 import type { InboxKind, InboxSource } from "@openacme/tasks";
@@ -33,6 +33,19 @@ export interface InboxRow {
   relatedSession: string | null;
   payload: unknown;
   createdAt: number;
+}
+
+export interface InboxClaimInput {
+  agentId: string;
+  sessionId: string;
+  includeAgentWide?: boolean;
+  limit?: number;
+}
+
+export interface InboxPendingSummary {
+  total: number;
+  targetedSessionIds: Set<string>;
+  hasAgentWide: boolean;
 }
 
 function parseRow(row: AgentInboxRow): InboxRow {
@@ -100,6 +113,57 @@ export function createInboxStore(db: WasmDatabase) {
         .orderBy(asc(agentInbox.id))
         .all();
       return rows.map(parseRow);
+    },
+
+    /** Claim rows deliverable to one session and hard-delete them.
+     *  The inbox is staging, not audit; task_events remains the durable log. */
+    claimForSession(input: InboxClaimInput): InboxRow[] {
+      const relatedSessionFilter =
+        input.includeAgentWide === false
+          ? eq(agentInbox.relatedSession, input.sessionId)
+          : or(
+              eq(agentInbox.relatedSession, input.sessionId),
+              isNull(agentInbox.relatedSession)
+            );
+      const query = orm
+        .select()
+        .from(agentInbox)
+        .where(and(eq(agentInbox.agentId, input.agentId), relatedSessionFilter))
+        .orderBy(asc(agentInbox.id));
+      const rows =
+        input.limit !== undefined ? query.limit(input.limit).all() : query.all();
+      if (rows.length > 0) {
+        orm.delete(agentInbox)
+          .where(
+            inArray(
+              agentInbox.id,
+              rows.map((row) => row.id)
+            )
+          )
+          .run();
+      }
+      return rows.map(parseRow);
+    },
+
+    pendingSummaryFor(agentId: string): InboxPendingSummary {
+      const rows = orm
+        .select({
+          relatedSession: agentInbox.relatedSession,
+        })
+        .from(agentInbox)
+        .where(eq(agentInbox.agentId, agentId))
+        .all();
+      const targetedSessionIds = new Set<string>();
+      let hasAgentWide = false;
+      for (const row of rows) {
+        if (row.relatedSession) targetedSessionIds.add(row.relatedSession);
+        else hasAgentWide = true;
+      }
+      return {
+        total: rows.length,
+        targetedSessionIds,
+        hasAgentWide,
+      };
     },
 
     /** Hard delete. Called after a successful drain. */

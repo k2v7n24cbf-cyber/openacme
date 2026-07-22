@@ -93,6 +93,7 @@ interface Agent {
   tools: string[];
   skills: string[];
   memoryExtractionEnabled?: boolean;
+  maxConcurrentSessions?: number;
   mcpServers?: Record<string, MCPServerConfigDto>;
   mcpDisabled?: string[];
   managed?: boolean;
@@ -163,6 +164,7 @@ interface FormState {
   tools: string[];
   skills: string[];
   memoryExtractionEnabled: boolean;
+  maxConcurrentSessions: number;
   mcpServers: Record<string, MCPServerConfigDto>;
   mcpDisabled: string[];
 }
@@ -182,9 +184,12 @@ const FALLBACK_FORM: FormState = {
   tools: [],
   skills: [],
   memoryExtractionEnabled: true,
+  maxConcurrentSessions: 1,
   mcpServers: {},
   mcpDisabled: [],
 };
+
+const PARALLEL_SESSION_OPTIONS = [1, 2, 3, 4, 5] as const;
 
 // Lazy: emoji data is sizeable and only needed once the picker opens.
 const EmojiPicker = lazy(() => import("emoji-picker-react"));
@@ -507,6 +512,7 @@ function AgentsPage() {
     tools: formData.tools,
     skills: formData.skills,
     memoryExtractionEnabled: formData.memoryExtractionEnabled,
+    maxConcurrentSessions: formData.maxConcurrentSessions,
     mcpServers: formData.mcpServers,
     mcpDisabled: formData.mcpDisabled,
   });
@@ -664,6 +670,7 @@ function AgentsPage() {
       tools: selectedAgent.tools,
       skills: selectedAgent.skills ?? [],
       memoryExtractionEnabled: selectedAgent.memoryExtractionEnabled ?? true,
+      maxConcurrentSessions: selectedAgent.maxConcurrentSessions ?? 1,
       mcpServers: selectedAgent.mcpServers ?? {},
       mcpDisabled: selectedAgent.mcpDisabled ?? [],
     });
@@ -749,6 +756,7 @@ function AgentsPage() {
             // installed workforce-wide separately, not gated per-agent.
             skills: [],
             memoryExtractionEnabled: true,
+            maxConcurrentSessions: 1,
             mcpServers: tpl.agentFields.mcpServers ?? {},
             mcpDisabled: tpl.agentFields.mcpDisabled ?? [],
           });
@@ -802,6 +810,7 @@ function AgentsPage() {
           tools: found.tools,
           skills: found.skills ?? [],
           memoryExtractionEnabled: found.memoryExtractionEnabled ?? true,
+          maxConcurrentSessions: found.maxConcurrentSessions ?? 1,
           mcpServers: found.mcpServers ?? {},
           mcpDisabled: found.mcpDisabled ?? [],
         });
@@ -1117,6 +1126,15 @@ function AgentsPage() {
                           setFormData((prev) => ({
                             ...prev,
                             memoryExtractionEnabled,
+                          }))
+                        }
+                      />
+                      <ParallelSessionsSetting
+                        value={formData.maxConcurrentSessions}
+                        onChange={(maxConcurrentSessions) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            maxConcurrentSessions,
                           }))
                         }
                       />
@@ -1658,6 +1676,7 @@ interface AgentDraft {
   auth: "api_key" | "oauth";
   cacheTtl: CacheTtl;
   memoryExtractionEnabled: boolean;
+  maxConcurrentSessions: number;
 }
 
 function draftFromAgent(agent: Agent): AgentDraft {
@@ -1671,6 +1690,7 @@ function draftFromAgent(agent: Agent): AgentDraft {
     auth: agent.model.auth ?? "api_key",
     cacheTtl: agent.model.cacheTtl ?? "5m",
     memoryExtractionEnabled: agent.memoryExtractionEnabled ?? true,
+    maxConcurrentSessions: agent.maxConcurrentSessions ?? 1,
   };
 }
 
@@ -1722,6 +1742,7 @@ function AgentDetail({
         cacheTtl: draft.cacheTtl,
       },
       memoryExtractionEnabled: draft.memoryExtractionEnabled,
+      maxConcurrentSessions: draft.maxConcurrentSessions,
       ...tabSlice,
     }),
     [agent, draft, tabSlice]
@@ -1737,7 +1758,8 @@ function AgentDetail({
       draft.model !== saved.model ||
       draft.auth !== saved.auth ||
       draft.cacheTtl !== saved.cacheTtl ||
-      draft.memoryExtractionEnabled !== saved.memoryExtractionEnabled
+      draft.memoryExtractionEnabled !== saved.memoryExtractionEnabled ||
+      draft.maxConcurrentSessions !== saved.maxConcurrentSessions
     : JSON.stringify(draft) !== JSON.stringify(saved);
   // Detail is ruled sections on the pane, not a floating card — one shared
   // measure with the skills + tasks detail panes.
@@ -1812,6 +1834,7 @@ function AgentDetail({
                   ? {
                       model,
                       memoryExtractionEnabled: draft.memoryExtractionEnabled,
+                      maxConcurrentSessions: draft.maxConcurrentSessions,
                     }
                   : {
                       name: draft.name,
@@ -1820,6 +1843,7 @@ function AgentDetail({
                       persona: draft.persona,
                       model,
                       memoryExtractionEnabled: draft.memoryExtractionEnabled,
+                      maxConcurrentSessions: draft.maxConcurrentSessions,
                     },
                 "Agent"
               );
@@ -1881,9 +1905,13 @@ function AgentDetail({
         </TabsContent>
         <TabsContent value="settings">
           <AgentSettingsTab
-            enabled={draft.memoryExtractionEnabled}
-            onChange={(memoryExtractionEnabled) =>
+            memoryExtractionEnabled={draft.memoryExtractionEnabled}
+            onMemoryExtractionChange={(memoryExtractionEnabled) =>
               setDraft({ ...draft, memoryExtractionEnabled })
+            }
+            maxConcurrentSessions={draft.maxConcurrentSessions}
+            onMaxConcurrentSessionsChange={(maxConcurrentSessions) =>
+              setDraft({ ...draft, maxConcurrentSessions })
             }
           />
         </TabsContent>
@@ -2482,16 +2510,70 @@ function MemoryExtractionSetting({
   );
 }
 
-function AgentSettingsTab({
-  enabled,
+function ParallelSessionsSetting({
+  value,
   onChange,
 }: {
-  enabled: boolean;
-  onChange: (enabled: boolean) => void;
+  value: number;
+  onChange: (value: number) => void;
 }) {
   return (
-    <div className="max-w-4xl py-5">
-      <MemoryExtractionSetting enabled={enabled} onChange={onChange} />
+    <div className="grid gap-3 border-t border-paper-rule pt-4">
+      <div>
+        <Label htmlFor="parallel-sessions">Parallel sessions</Label>
+        <p className="mt-1 text-[12px] leading-relaxed text-ink-soft">
+          Limit how many distinct sessions this agent can run at the same time.
+        </p>
+      </div>
+      <div className="max-w-xs">
+        <Select
+          value={String(value)}
+          onValueChange={(next) => onChange(Number.parseInt(next, 10))}
+        >
+          <SelectTrigger id="parallel-sessions">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {PARALLEL_SESSION_OPTIONS.map((option) => (
+              <SelectItem key={option} value={String(option)}>
+                {option}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      {value > 1 && (
+        <div className="max-w-2xl border border-amber-300 bg-amber-50 px-3 py-3 text-[12px] leading-relaxed text-amber-900">
+          Parallel sessions share this agent&apos;s workspace, browser,
+          tool-host, MCP clients, email identity, and memory namespace. Use
+          this only for agents whose work can safely overlap.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AgentSettingsTab({
+  memoryExtractionEnabled,
+  onMemoryExtractionChange,
+  maxConcurrentSessions,
+  onMaxConcurrentSessionsChange,
+}: {
+  memoryExtractionEnabled: boolean;
+  onMemoryExtractionChange: (enabled: boolean) => void;
+  maxConcurrentSessions: number;
+  onMaxConcurrentSessionsChange: (value: number) => void;
+}) {
+  return (
+    <div className="grid max-w-4xl gap-5 py-5">
+      <MemoryExtractionSetting
+        enabled={memoryExtractionEnabled}
+        onChange={onMemoryExtractionChange}
+      />
+      <ParallelSessionsSetting
+        value={maxConcurrentSessions}
+        onChange={onMaxConcurrentSessionsChange}
+      />
     </div>
   );
 }

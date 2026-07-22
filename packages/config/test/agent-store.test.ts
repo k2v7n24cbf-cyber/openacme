@@ -4,7 +4,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import matter from "gray-matter";
 import { createAgentStore } from "../src/agent-store.js";
-import type { AgentDefinition } from "../src/schema.js";
+import {
+  AgentDefinitionSchema,
+  type AgentDefinition,
+} from "../src/schema.js";
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openacme-agent-store-"));
@@ -31,6 +34,7 @@ function makeAgent(
     mcpDisabled: [],
     skills: [],
     memoryExtractionEnabled: true,
+    maxConcurrentSessions: 1,
     probeIntervalMs: 30 * 60 * 1000,
     paths: [],
   };
@@ -114,6 +118,68 @@ describe("file-based AgentStore (folder + AGENT.md)", () => {
     store.upsert(original);
     const loaded = store.get("foo");
     expect(loaded).toEqual(original);
+  });
+
+  it("defaults maxConcurrentSessions to 1", () => {
+    const parsed = AgentDefinitionSchema.parse({
+      id: "foo",
+      name: "Foo",
+      persona: "Helpful.",
+    });
+    expect(parsed.maxConcurrentSessions).toBe(1);
+  });
+
+  it("rejects maxConcurrentSessions below 1", () => {
+    expect(() =>
+      AgentDefinitionSchema.parse({
+        id: "foo",
+        name: "Foo",
+        persona: "Helpful.",
+        maxConcurrentSessions: 0,
+      })
+    ).toThrow();
+  });
+
+  it("rejects maxConcurrentSessions above 5", () => {
+    expect(() =>
+      AgentDefinitionSchema.parse({
+        id: "foo",
+        name: "Foo",
+        persona: "Helpful.",
+        maxConcurrentSessions: 6,
+      })
+    ).toThrow();
+  });
+
+  it("persists maxConcurrentSessions in AGENT.md frontmatter", () => {
+    const store = createAgentStore(dir);
+    const agent = { ...makeAgent("parallel"), maxConcurrentSessions: 3 };
+    store.upsert(agent);
+
+    const raw = fs.readFileSync(
+      path.join(dir, "parallel", "AGENT.md"),
+      "utf-8"
+    );
+    const { data } = matter(raw);
+    expect(data.maxConcurrentSessions).toBe(3);
+    expect(store.get("parallel")?.maxConcurrentSessions).toBe(3);
+  });
+
+  it("parses existing AGENT.md files without maxConcurrentSessions", () => {
+    fs.mkdirSync(path.join(dir, "legacy"), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "legacy", "AGENT.md"),
+      matter.stringify("Helpful.\n", {
+        name: "Legacy",
+        tools: ["shell"],
+        mcpServers: {},
+        skills: [],
+      })
+    );
+
+    const store = createAgentStore(dir);
+    const def = store.get("legacy");
+    expect(def?.maxConcurrentSessions).toBe(1);
   });
 
   it("list returns all agents in id-sorted order", () => {

@@ -21,7 +21,7 @@ describe("resolveSubagentModel", () => {
     expect(
       resolveSubagentModel(base("openrouter", "anthropic/claude-opus-4.7")).model
     ).toBe("anthropic/claude-haiku-4.5");
-    expect(resolveSubagentModel(base("openai", "gpt-5.5")).model).toBe("gpt-5.2");
+    expect(resolveSubagentModel(base("openai", "gpt-5.5")).model).toBe("gpt-5.5");
     expect(resolveSubagentModel(base("google", "gemini-3.1-pro-preview")).model).toBe(
       "gemini-3.1-flash-lite"
     );

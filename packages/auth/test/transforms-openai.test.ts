@@ -7,10 +7,10 @@ import {
 const parse = (b: unknown) => JSON.parse(b as string);
 
 describe("normalizeCodexModel", () => {
-  it("returns the gpt-5.2 fallback for empty/undefined input", () => {
-    expect(normalizeCodexModel(undefined)).toBe("gpt-5.2");
-    expect(normalizeCodexModel("")).toBe("gpt-5.2");
-    expect(normalizeCodexModel("   ")).toBe("gpt-5.2");
+  it("returns the gpt-5.5 fallback for empty/undefined input", () => {
+    expect(normalizeCodexModel(undefined)).toBe("gpt-5.5");
+    expect(normalizeCodexModel("")).toBe("gpt-5.5");
+    expect(normalizeCodexModel("   ")).toBe("gpt-5.5");
   });
 
   it("strips a provider prefix", () => {
@@ -25,8 +25,8 @@ describe("normalizeCodexModel", () => {
   });
 
   it("passes plain IDs through unchanged", () => {
-    // Verified against a live ChatGPT Plus account: rewriting these names is
-    // what previously broke the integration. Keep this contract.
+    // Keep explicit model IDs stable; validation happens before this
+    // transport-level normalizer.
     expect(normalizeCodexModel("gpt-5.5")).toBe("gpt-5.5");
     expect(normalizeCodexModel("gpt-5.2")).toBe("gpt-5.2");
     expect(normalizeCodexModel("gpt-5-codex")).toBe("gpt-5-codex");

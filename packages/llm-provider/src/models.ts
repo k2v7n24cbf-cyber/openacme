@@ -18,12 +18,9 @@ export interface ModelPreset {
  */
 export const MODEL_PRESETS: Record<Provider, ModelPreset[]> = {
   openai: [
-    // ChatGPT subscription users: only gpt-5.5 and gpt-5.2 are verified to
-    // work via the Codex backend. Everything else (mini/pro/codex/-pro/o3)
-    // returns "model is not supported when using Codex with a ChatGPT
-    // account" on standard ChatGPT Plus plans.
+    // ChatGPT subscription users: gpt-5.5 is the current supported Codex
+    // backend default. Other OpenAI model IDs can be entered through Custom.
     { id: "gpt-5.5", label: "GPT-5.5", hint: "frontier (recommended)" },
-    { id: "gpt-5.2", label: "GPT-5.2", hint: "previous gen, broader availability" },
   ],
   anthropic: [
     { id: "claude-opus-4-8", label: "Claude Opus 4.8", hint: "most capable" },

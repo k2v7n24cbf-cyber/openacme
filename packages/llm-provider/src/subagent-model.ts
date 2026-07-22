@@ -11,9 +11,9 @@ const CHEAP_MODEL_BY_PROVIDER: Record<string, string> = {
   anthropic: "claude-haiku-4-5",
   // Claude-family id so the OpenRouter wire-level cache injection still applies.
   openrouter: "anthropic/claude-haiku-4.5",
-  // ChatGPT OAuth (Codex backend) rejects mini/codex models; 5.2 is the
-  // cheaper option verified to work on both OAuth and API-key auth.
-  openai: "gpt-5.2",
+  // ChatGPT OAuth rejects gpt-5.2 for some accounts; keep aux jobs on the
+  // supported default instead of downgrading them into a 400.
+  openai: "gpt-5.5",
   google: "gemini-3.1-flash-lite",
   // ollama/custom: no safe guess about what's installed — keep the main model.
 };

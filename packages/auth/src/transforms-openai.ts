@@ -25,11 +25,11 @@
  * Strip provider prefixes (`openai/...`) and trim. Pass everything else
  * through unchanged — the ChatGPT backend's accepted model set varies per
  * account and we don't want to silently rewrite a working name into one the
- * user's plan rejects. Verified by live probing on a ChatGPT Plus account:
- * `gpt-5.2` and `gpt-5.5` work; remapping them away breaks them.
+ * user's plan rejects. Use the current supported default only when the caller
+ * omitted a model entirely.
  */
 export function normalizeCodexModel(model: string | undefined): string {
-  if (!model || !model.trim()) return "gpt-5.2";
+  if (!model || !model.trim()) return "gpt-5.5";
   const id = model.includes("/") ? model.split("/").pop()! : model;
   return id.trim();
 }

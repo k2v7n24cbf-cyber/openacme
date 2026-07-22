@@ -4,7 +4,7 @@ Branch: `agent/parallel-dispatcher-plan`
 
 Worktree: `/private/tmp/openacme-parallel-plan`
 
-Status: implementation in progress. Slices 1-5 are implemented and validated; Slice 6 manual `.openacme-dev` smoke remains.
+Status: complete. Slices 1-6 are implemented and validated.
 
 Dev data dir prepared for manual platform smoke:
 

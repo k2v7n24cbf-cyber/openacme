@@ -6,8 +6,8 @@
 - Worktree: `/private/tmp/openacme-parallel-plan`
 - Dev data dir: `/private/tmp/openacme-parallel-plan/.openacme-dev`
 - Dev port: `127.0.0.1:3457`
-- Current slice: Slice 6 - Manual `.openacme-dev` Smoke And Documentation
-- Last verified command: `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts`; `pnpm --filter @openacme/server test -- dispatcher.test.ts app-routes.test.ts`; `pnpm --filter @openacme/server check-types`
+- Current slice: complete
+- Last verified command: `OPENACME_DATA_DIR=/private/tmp/openacme-parallel-plan/.openacme-dev pnpm --filter @openacme/server dev`; `curl -sS http://127.0.0.1:3457/api/health`; `curl -sS -X POST http://127.0.0.1:3457/api/agents ... maxConcurrentSessions=3`; Playwright UI snapshot on `/agents?id=parallel-smoke&tab=settings`; `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts`; `pnpm --filter @openacme/server test -- dispatcher.test.ts app-routes.test.ts`; `pnpm --filter @openacme/server check-types`
 
 ## Standing Decisions
 
@@ -65,15 +65,14 @@
 
 - Goal: verify the feature manually on port `3457` using only `.openacme-dev`.
 - Red tests: not applicable.
-- Implementation: pending.
-- Validation: pending.
-- Status: pending.
+- Implementation: added `.openacme-dev/` to `.gitignore` so local smoke state never lands in PR commits.
+- Validation: started local dev server with `OPENACME_DATA_DIR=/private/tmp/openacme-parallel-plan/.openacme-dev` on `127.0.0.1:3457`; `/api/health` returned ok; created `parallel-smoke` through `/api/agents` with `maxConcurrentSessions: 3`; verified `/api/agents/parallel-smoke` returns `maxConcurrentSessions: 3`; verified `.openacme-dev/agents/parallel-smoke/AGENT.md` frontmatter contains `maxConcurrentSessions: 3`; verified in Playwright that `/agents?id=parallel-smoke&tab=settings` renders the `Parallel sessions` combobox with value `3` and the shared-state warning.
+- Status: complete.
 
 ## Open Risks
 
-- This worktree currently has no `node_modules`; validation may need dependency installation before tests can run.
-- Full `pnpm check-types` currently stops in baseline workspace package-resolution errors for packages such as `@openacme/tasks` resolving `@openacme/config/logger`; narrow package checks are reliable after dependency install.
+- Full `pnpm check-types` still stops in baseline `@openacme/cli` package-resolution/type errors during the commit hook (`@openacme/server` cannot be resolved from CLI sources, plus existing implicit-any/type shape errors). The targeted package checks used for this feature pass.
 
 ## Next Action
 
-Commit Slice 5, then run Slice 6 manual `.openacme-dev` smoke on port `3457` without touching `~/.openacme`.
+Commit Slice 6 documentation/ignore update, then review final branch diff before deciding whether to push or open PR.

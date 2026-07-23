@@ -35,12 +35,16 @@ afterEach(async () => {
 
 async function createAgent(
   id = "parallel",
-  maxConcurrentSessions: number | null = 2
+  maxConcurrentSessions: number | null = 2,
+  extra: Record<string, unknown> = {}
 ): Promise<void> {
   await c.createAgent(
     id,
     id,
-    maxConcurrentSessions == null ? {} : { maxConcurrentSessions }
+    {
+      ...(maxConcurrentSessions == null ? {} : { maxConcurrentSessions }),
+      ...extra,
+    }
   );
 }
 
@@ -77,6 +81,15 @@ async function postChat(
       },
     ],
   });
+  expect(res.status).toBe(200);
+  return (await res.json()) as Record<string, unknown>;
+}
+
+async function postTaskComment(
+  taskId: string,
+  body: string
+): Promise<Record<string, unknown>> {
+  const res = await c.post(`/api/tasks/${taskId}/comments`, { body });
   expect(res.status).toBe(200);
   return (await res.json()) as Record<string, unknown>;
 }
@@ -892,6 +905,143 @@ describe("parallel dispatcher (e2e)", () => {
     sseTask.close();
     sseUser.close();
   });
+
+  it("prioritizes a new direct prompt before user task comments and autonomous task wakes", async () => {
+    await createAgent("priority-new", 1, {
+      parallelSchedulingPolicy: "lane_first",
+    });
+    const busy = srv.manager.sessionStore.create("priority-new");
+    const commentSession = srv.manager.sessionStore.create("priority-new");
+    const taskSession = srv.manager.sessionStore.create("priority-new");
+    const directSessionId = randomUUID();
+    const sseBusy = await openSessionStream(busy.id);
+    const sseComment = await openSessionStream(commentSession.id);
+    const sseTask = await openSessionStream(taskSession.id);
+    const sseDirect = await openSessionStream(directSessionId);
+
+    deliverUserMessage("priority-new", busy.id, "busy [[mock:slow]]");
+    await sseBusy.waitFor(isState("running"), 8_000);
+
+    const commentTask = await srv.manager.taskStore.create({
+      title: "comment anchor",
+      assignee: "priority-new",
+      created_by: "user",
+      session_id: commentSession.id,
+      status: "done",
+    });
+    await postTaskComment(
+      commentTask.id,
+      "task comment [[mock:slow-anywhere]] should run after direct prompt"
+    );
+    await srv.manager.taskStore.create({
+      title: "autonomous lane [[mock:slow-anywhere]] should run after comment",
+      assignee: "priority-new",
+      created_by: "user",
+      session_id: taskSession.id,
+    });
+
+    const queued = await postChat(
+      "priority-new",
+      directSessionId,
+      "new prompt [[mock:slow-anywhere]] should run first"
+    );
+    expect(queued).toMatchObject({
+      queued: true,
+      queuedReason: "agent_capacity",
+    });
+
+    await sseBusy.waitFor(isState("idle"), 15_000);
+    await sseDirect.waitFor(isState("running"), 8_000);
+    expect(stateCount(sseComment, "running")).toBe(0);
+    expect(stateCount(sseTask, "running")).toBe(0);
+
+    await sseDirect.waitFor(isState("idle"), 15_000);
+    await sseComment.waitFor(isState("running"), 8_000);
+    expect(stateCount(sseTask, "running")).toBe(0);
+
+    await sseComment.waitFor(isState("idle"), 15_000);
+    await sseTask.waitFor(isState("running"), 8_000);
+    await sseTask.waitFor(isState("idle"), 15_000);
+
+    sseBusy.close();
+    sseComment.close();
+    sseTask.close();
+    sseDirect.close();
+  });
+
+  for (const policy of ["lane_first", "chain_first"] as const) {
+    for (const sessionKind of ["new", "existing"] as const) {
+      for (const arrivalOrder of ["comment_first", "message_first"] as const) {
+        it(`${policy} prioritizes ${sessionKind} direct messages over task comments when ${arrivalOrder}`, async () => {
+          const agentId = `priority-${policy.replace("_", "-")}-${sessionKind}-${arrivalOrder.replace("_", "-")}`;
+          await createAgent(agentId, 1, {
+            parallelSchedulingPolicy: policy,
+          });
+          const busy = srv.manager.sessionStore.create(agentId);
+          const commentSession = srv.manager.sessionStore.create(agentId);
+          const directSessionId =
+            sessionKind === "existing" ? srv.manager.sessionStore.create(agentId).id : randomUUID();
+          if (sessionKind === "existing") {
+            srv.manager.messageStore.append(directSessionId, {
+              id: randomUUID(),
+              role: "user",
+              parts: [{ type: "text", text: "existing session history" }],
+            });
+          }
+          const sseBusy = await openSessionStream(busy.id);
+          const sseComment = await openSessionStream(commentSession.id);
+          const sseDirect = await openSessionStream(directSessionId);
+
+          deliverUserMessage(agentId, busy.id, "busy [[mock:slow]]");
+          await sseBusy.waitFor(isState("running"), 8_000);
+
+          const commentTask = await srv.manager.taskStore.create({
+            title: `comment anchor ${arrivalOrder}`,
+            assignee: agentId,
+            created_by: "user",
+            session_id: commentSession.id,
+            status: "done",
+          });
+          const writeComment = () =>
+            postTaskComment(
+              commentTask.id,
+              `task comment ${arrivalOrder} [[mock:slow-anywhere]]`
+            );
+          const writeMessage = () =>
+            postChat(
+              agentId,
+              directSessionId,
+              `${sessionKind} direct message ${arrivalOrder} [[mock:slow-anywhere]]`
+            );
+
+          let messageResult: Record<string, unknown>;
+          if (arrivalOrder === "comment_first") {
+            await writeComment();
+            messageResult = await writeMessage();
+          } else {
+            messageResult = await writeMessage();
+            await writeComment();
+          }
+          expect(messageResult).toMatchObject({
+            queued: true,
+            queuedReason: "agent_capacity",
+          });
+
+          await sseBusy.waitFor(isState("idle"), 15_000);
+          await sseDirect.waitFor(isState("running"), 8_000);
+          expect(stateCount(sseComment, "running")).toBe(0);
+
+          await sseDirect.waitFor(isState("idle"), 15_000);
+          await sseComment.waitFor(isState("running"), 8_000);
+          await sseComment.waitFor(isState("idle"), 15_000);
+
+          sseBusy.close();
+          sseComment.close();
+          sseDirect.close();
+        });
+      }
+    }
+  }
 
   it("preserves order for multiple queued user messages in the same session", async () => {
     await createAgent("parallel", 1);

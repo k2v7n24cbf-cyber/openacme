@@ -303,17 +303,19 @@ export class Dispatcher {
 
       // If the inbox has rows pointing at a specific session, prefer
       // that session as the spawn target. user_message rows always
-      // carry relatedSession; system_notices set it for task events
-      // that have a bound session. Spawning the "wrong" session would
-      // leave the relevant inbox row addressed-but-not-drainable.
+      // carry relatedSession. Human-authored task comments are a second
+      // priority tier: they are user attention, but direct chat/prompt
+      // messages still win when both arrive together.
       const targetedSessions = pending.targetedSessionIds;
       const userMessageSessions = pending.userMessageSessionIds;
+      const userTaskCommentSessions = pending.userTaskCommentSessionIds;
 
       const sessions = this.sessionStore.listActive(agentId);
       const ordered = this.orderSessionsForScheduling(sessions, {
         policy: schedulingPolicy,
         targetedSessions,
         userMessageSessions,
+        userTaskCommentSessions,
       });
       let agentWideAssigned = false;
 
@@ -359,14 +361,22 @@ export class Dispatcher {
       policy: ParallelSchedulingPolicy;
       targetedSessions: Set<string>;
       userMessageSessions: Set<string>;
+      userTaskCommentSessions: Set<string>;
     }
   ): ReturnType<SessionStore["listActive"]> {
     const indexed = sessions.map((session, index) => ({ session, index }));
     indexed.sort((a, b) => {
-      // Human/user traffic always wins over autonomous task-chain policy.
+      // Direct human/user traffic always wins over every autonomous
+      // task-chain policy and over task-comment wakes.
       const aUser = opts.userMessageSessions.has(a.session.id) ? 1 : 0;
       const bUser = opts.userMessageSessions.has(b.session.id) ? 1 : 0;
       if (aUser !== bUser) return bUser - aUser;
+
+      // Human task comments are user attention too, but can wait behind
+      // direct prompt/chat messages.
+      const aComment = opts.userTaskCommentSessions.has(a.session.id) ? 1 : 0;
+      const bComment = opts.userTaskCommentSessions.has(b.session.id) ? 1 : 0;
+      if (aComment !== bComment) return bComment - aComment;
 
       if (opts.policy === "lane_first") {
         const aLast = this.lastRunSequenceBySession.get(a.session.id) ?? 0;

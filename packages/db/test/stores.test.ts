@@ -378,6 +378,56 @@ describe("InboxStore — session-aware claim", () => {
     expect(summary.hasAgentWide).toBe(true);
   });
 
+  it("summarizes user-authored task comment sessions separately", () => {
+    inbox.deliver({
+      agentId: "agent-a",
+      kind: "system_notice",
+      source: "system",
+      sourceId: null,
+      relatedSession: "human-comment",
+      relatedTask: "task-1",
+      payload: {
+        eventKind: "comment_added",
+        payload: {
+          author: "system:user",
+          excerpt: "please prioritize this task",
+        },
+      },
+    });
+    inbox.deliver({
+      agentId: "agent-a",
+      kind: "system_notice",
+      source: "system",
+      sourceId: "agent-a",
+      relatedSession: "agent-comment",
+      relatedTask: "task-2",
+      payload: {
+        eventKind: "comment_added",
+        payload: {
+          author: "agent-a",
+          excerpt: "agent wrote this",
+        },
+      },
+    });
+    inbox.deliver({
+      agentId: "agent-a",
+      kind: "system_notice",
+      source: "system",
+      sourceId: null,
+      relatedSession: "status-change",
+      relatedTask: "task-3",
+      payload: {
+        eventKind: "status_changed",
+        payload: { author: "system:user" },
+      },
+    });
+
+    const summary = inbox.pendingSummaryFor("agent-a");
+    expect([...summary.userTaskCommentSessionIds]).toEqual([
+      "human-comment",
+    ]);
+  });
+
   it("cancels a queued user message only for the matching session", () => {
     inbox.deliver({
       agentId: "agent-a",

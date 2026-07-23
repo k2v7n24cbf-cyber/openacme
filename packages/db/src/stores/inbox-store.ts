@@ -46,6 +46,7 @@ export interface InboxPendingSummary {
   total: number;
   targetedSessionIds: Set<string>;
   userMessageSessionIds: Set<string>;
+  userTaskCommentSessionIds: Set<string>;
   hasAgentWide: boolean;
 }
 
@@ -73,6 +74,27 @@ function parseRow(row: AgentInboxRow): InboxRow {
     payload,
     createdAt: row.createdAt,
   };
+}
+
+function isUserTaskCommentNotice(row: {
+  kind: string;
+  payload: string | null;
+}): boolean {
+  if (row.kind !== "system_notice" || !row.payload) return false;
+  try {
+    const payload = JSON.parse(row.payload) as
+      | {
+          eventKind?: unknown;
+          payload?: { author?: unknown } | null;
+        }
+      | null;
+    return (
+      payload?.eventKind === "comment_added" &&
+      payload.payload?.author === "system:user"
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -151,18 +173,23 @@ export function createInboxStore(db: WasmDatabase) {
         .select({
           kind: agentInbox.kind,
           relatedSession: agentInbox.relatedSession,
+          payload: agentInbox.payload,
         })
         .from(agentInbox)
         .where(eq(agentInbox.agentId, agentId))
         .all();
       const targetedSessionIds = new Set<string>();
       const userMessageSessionIds = new Set<string>();
+      const userTaskCommentSessionIds = new Set<string>();
       let hasAgentWide = false;
       for (const row of rows) {
         if (row.relatedSession) {
           targetedSessionIds.add(row.relatedSession);
           if (row.kind === "user_message") {
             userMessageSessionIds.add(row.relatedSession);
+          }
+          if (isUserTaskCommentNotice(row)) {
+            userTaskCommentSessionIds.add(row.relatedSession);
           }
         } else {
           hasAgentWide = true;
@@ -172,6 +199,7 @@ export function createInboxStore(db: WasmDatabase) {
         total: rows.length,
         targetedSessionIds,
         userMessageSessionIds,
+        userTaskCommentSessionIds,
         hasAgentWide,
       };
     },

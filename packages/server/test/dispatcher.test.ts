@@ -497,6 +497,104 @@ describe("Dispatcher spawn rule", () => {
     await d.drain(5_000);
   });
 
+  for (const policy of ["lane_first", "chain_first"] as const) {
+    it(`${policy} prioritizes direct messages before user task comments before autonomous task wakes`, async () => {
+      const gate = deferredTurns();
+      const { manager, calls } = fakeManager(
+        [
+          {
+            id: "a1",
+            maxConcurrentSessions: 1,
+            parallelSchedulingPolicy: policy,
+          },
+        ],
+        async (sessionId) => {
+          inboxStore.claimForSession({
+            agentId: "a1",
+            sessionId,
+            includeAgentWide: true,
+          });
+          for (const task of taskStore.list({
+            session_id: sessionId,
+            status: "open",
+          })) {
+            await taskStore.update(task.id, { status: "done" });
+          }
+          await gate.turn(sessionId);
+        }
+      );
+      const active = await makeBoundTask("a1");
+
+      const d = makeDispatcher(manager);
+      await d.start();
+      expect(calls).toEqual([{ agentId: "a1", sessionId: active.session.id }]);
+
+      const commentSession = sessionStore.create("a1");
+      inboxStore.deliver({
+        agentId: "a1",
+        kind: "system_notice",
+        source: "system",
+        sourceId: null,
+        relatedTask: "task-comment",
+        relatedSession: commentSession.id,
+        payload: {
+          eventKind: "comment_added",
+          payload: {
+            author: "system:user",
+            excerpt: "please look at this task comment",
+          },
+        },
+      });
+      const taskSession = sessionStore.create("a1");
+      await taskStore.create({
+        title: "autonomous task should run after comment",
+        assignee: "a1",
+        created_by: "user",
+        session_id: taskSession.id,
+      });
+      const userSession = sessionStore.create("a1");
+      inboxStore.deliver({
+        agentId: "a1",
+        kind: "user_message",
+        source: "user",
+        sourceId: "direct-user",
+        relatedSession: userSession.id,
+        payload: {
+          id: "direct-user",
+          role: "user",
+          parts: [{ type: "text", text: "direct user goes first" }],
+        },
+      });
+      d.kick("test_user_comment_task_priority");
+
+      gate.release.get(active.session.id)?.();
+      await vi.waitFor(() => expect(d.isRunning(active.session.id)).toBe(false));
+      await (d as unknown as { tickSafe(): Promise<void> }).tickSafe();
+      await vi.waitFor(() => expect(calls).toHaveLength(2));
+      expect(calls[1]).toEqual({ agentId: "a1", sessionId: userSession.id });
+
+      gate.release.get(userSession.id)?.();
+      await vi.waitFor(() => expect(d.isRunning(userSession.id)).toBe(false));
+      await (d as unknown as { tickSafe(): Promise<void> }).tickSafe();
+      await vi.waitFor(() => expect(calls).toHaveLength(3));
+      expect(calls[2]).toEqual({
+        agentId: "a1",
+        sessionId: commentSession.id,
+      });
+
+      gate.release.get(commentSession.id)?.();
+      await vi.waitFor(() =>
+        expect(d.isRunning(commentSession.id)).toBe(false)
+      );
+      await (d as unknown as { tickSafe(): Promise<void> }).tickSafe();
+      await vi.waitFor(() => expect(calls).toHaveLength(4));
+      expect(calls[3]).toEqual({ agentId: "a1", sessionId: taskSession.id });
+
+      gate.release.get(taskSession.id)?.();
+      await d.drain(5_000);
+    });
+  }
+
   it("lane_first starts unrun task lanes before continuing a hot chain", async () => {
     const { manager, calls } = fakeManager(
       [

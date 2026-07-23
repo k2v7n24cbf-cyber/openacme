@@ -6,8 +6,8 @@
 - Worktree: `/private/tmp/openacme-parallel-plan`
 - Dev data dir: `/private/tmp/openacme-parallel-plan/.openacme-dev`
 - Dev port: `127.0.0.1:3457`
-- Current slice: Slice 11 complete; ready to commit.
-- Last verified command: `pnpm --filter @openacme/config test -- agent-store.test.ts`; `pnpm --filter @openacme/db test -- stores.test.ts`; `pnpm --filter @openacme/server test -- dispatcher.test.ts app-routes.test.ts`; `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts`; `pnpm --filter @openacme/config build`; `pnpm --filter @openacme/db build`; `pnpm --filter @openacme/server build`; `pnpm --filter web build`; `pnpm --filter web test:e2e -- agent-edit.spec.ts`
+- Current slice: Slice 12 complete; ready to commit.
+- Last verified command: `pnpm --filter @openacme/db test -- stores.test.ts`; `pnpm --filter @openacme/db build`; `pnpm --filter @openacme/server test -- dispatcher.test.ts app-routes.test.ts`; `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts`; `pnpm --filter @openacme/db check-types`; `pnpm --filter @openacme/server check-types`; `pnpm --filter @openacme/server build`
 
 ## Standing Decisions
 
@@ -18,7 +18,7 @@
 - Initial supported range is `1..5`.
 - Default `parallelSchedulingPolicy` is `lane_first`, shown in Agent Settings as `Start task lanes first`.
 - Optional `parallelSchedulingPolicy: "chain_first"` is shown as `Clear task chains first`.
-- Direct user-message sessions always get the next available slot before autonomous task-chain wakes, regardless of task scheduling policy.
+- Priority order is direct prompt/chat user messages first, human task comments second, then autonomous task wakes ordered by the selected task scheduling policy.
 - Do not touch `~/.openacme`.
 - Do not deploy or restart production during this feature build.
 
@@ -145,18 +145,35 @@
   - `pnpm --filter web test:e2e -- agent-edit.spec.ts` passed 2/2.
 - Status: complete.
 
+### Slice 12 - Priority Permutation Coverage
+
+- Goal: strengthen the scheduling contract around user-originated work under both task scheduling policies.
+- Priority contract:
+  - New prompt sessions and existing chat messages are direct `user_message` inbox rows and always run first when capacity frees.
+  - Human task comments from `/api/tasks/:id/comments` are user attention signals and run before autonomous task wakes.
+  - Direct messages outrank human task comments when both arrive together; the task comment can wait.
+  - After direct messages and human task comments are handled, `lane_first` or `chain_first` decides autonomous task ordering.
+- Red tests: DB summary lacked user task-comment session classification; dispatcher had only direct `user_message` priority; HTTP task comments delivered inbox rows but did not kick the dispatcher.
+- Implementation: added `userTaskCommentSessionIds` to inbox pending summary; dispatcher now orders direct messages, then human task comments, then the configured autonomous policy; task-event inbox delivery kicks the dispatcher immediately.
+- Validation:
+  - `pnpm --filter @openacme/db test -- stores.test.ts` passed 26/26.
+  - `pnpm --filter @openacme/server test -- dispatcher.test.ts app-routes.test.ts` passed 51/51.
+  - `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts` passed 32/32.
+  - `pnpm --filter @openacme/db check-types`, `pnpm --filter @openacme/server check-types`, and `pnpm --filter @openacme/server build` passed.
+- Status: complete.
+
 ## Open Risks
 
 - Full `pnpm check-types` still stops in baseline `@openacme/cli` package-resolution/type errors during the commit hook (`@openacme/server` cannot be resolved from CLI sources, plus existing implicit-any/type shape errors). The targeted package checks used for this feature pass.
-- The scheduler now exposes explicit task scheduling policies, but this is still an in-memory daemon policy rather than a durable global ready queue. The load harness was not rerun across both policies after Slice 11; targeted unit and real daemon e2e coverage prove ordering behavior and user-message preemption.
+- The scheduler now exposes explicit task scheduling policies and a user-signal priority tier, but this is still an in-memory daemon policy rather than a durable global ready queue. The load harness was not rerun across both policies after Slice 12; targeted unit and real daemon e2e coverage prove ordering behavior, direct-message preemption, and human task-comment priority.
 
 ## Additional Coverage Backlog
 
 - Priority 1: complete in Slice 10.
 - Priority 2: complete in Slice 10.
 - Priority 3: complete in Slice 10.
-- Fairness/load: partially addressed in Slice 11 with explicit `lane_first` and `chain_first` policies plus focused tests. A future load harness can compare first-start latency across both policies.
+- Fairness/load: partially addressed with explicit `lane_first` and `chain_first` policies plus priority permutation tests. A future load harness can compare first-start latency across both policies.
 
 ## Next Action
 
-Commit and push Slice 11 on `agent/parallel-dispatcher-plan`; do not deploy or restart production unless explicitly requested later.
+Commit and push Slice 12 on `agent/parallel-dispatcher-plan`; do not deploy or restart production unless explicitly requested later.

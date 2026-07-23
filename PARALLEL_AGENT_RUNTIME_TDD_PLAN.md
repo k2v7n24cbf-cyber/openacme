@@ -4,7 +4,7 @@ Branch: `agent/parallel-dispatcher-plan`
 
 Worktree: `/private/tmp/openacme-parallel-plan`
 
-Status: complete. Slices 1-11 are implemented and validated.
+Status: complete. Slices 1-12 are implemented and validated.
 
 Dev data dir prepared for manual platform smoke:
 
@@ -115,7 +115,8 @@ Core invariants:
 - An agent id has at most `maxConcurrentSessions` active sessions.
 - Interactive runs count against the same cap as autonomous runs.
 - `maxConcurrentSessions` is resolved from the canonical agent definition at scheduling time.
-- Direct user-message sessions get priority over autonomous task scheduling in every policy.
+- Direct user-message sessions get priority over task comments and autonomous task scheduling in every policy.
+- Human-authored task comments get priority over autonomous task scheduling, but wait behind direct user messages.
 - Existing public APIs continue to expose canonical `agentId` only.
 
 Dispatcher tick behavior:
@@ -127,6 +128,7 @@ Dispatcher tick behavior:
 5. Read pending inbox summary for the agent, but use session-aware targeting for spawn choice.
 6. Order candidate sessions:
    - queued direct user messages first
+   - then human-authored task comments
    - then `lane_first`: sessions with no or older recent run sequence first
    - or `chain_first`: targeted/hot chain sessions first
 7. Walk ordered active sessions and enqueue up to `available` distinct sessions.
@@ -153,6 +155,7 @@ pendingSummaryFor(agentId: string): {
   total: number;
   targetedSessionIds: Set<string>;
   userMessageSessionIds: Set<string>;
+  userTaskCommentSessionIds: Set<string>;
   hasAgentWide: boolean;
 }
 ```
@@ -632,6 +635,8 @@ setting:
 - `Clear task chains first` (`chain_first`): preserves hot-chain priority so
   existing dependency chains finish sooner.
 - Direct user-message sessions always preempt both autonomous task policies.
+- Human task comments are a second priority tier: they preempt autonomous task
+  policies but can wait behind direct prompt/chat messages.
 
 Validation:
 
@@ -642,6 +647,8 @@ Validation:
 - Real server e2e covers direct user-message priority over autonomous task
   wakes.
 - Web Playwright e2e covers Settings save/reload for the scheduling policy.
+- Slice 12 expands this with both policies, new/existing direct sessions, and
+  comment-first/message-first arrival orders.
 
 ### Priority 3: UI/Smoke Automation
 
@@ -711,6 +718,54 @@ Acceptance:
 - `Clear task chains first` is selectable and persisted.
 - Direct user sessions are prioritized ahead of task chains in every mode.
 - No synthetic agent ids are introduced.
+
+### Slice 12: Priority Permutation Coverage
+
+Owner files:
+
+- `packages/db/src/stores/inbox-store.ts`
+- `packages/server/src/dispatcher.ts`
+- `packages/server/src/agent-manager.ts`
+- focused DB, dispatcher, route, and real-server e2e tests
+
+Tasks:
+
+1. Classify human-authored task comments separately from generic system notices.
+2. Order dispatcher candidates as direct user messages, then human task comments, then autonomous task policy.
+3. Kick the dispatcher when task-event fan-out delivers inbox rows, so human task comments do not wait for the periodic tick.
+4. Add tests for both `lane_first` and `chain_first`.
+5. Add tests for new prompt sessions and existing chat sessions.
+6. Add tests for comment-first and message-first arrival order while capacity is full.
+7. Add a combined real-server case where new direct prompt beats a human task comment and the task comment beats an autonomous task wake.
+
+Tests first:
+
+- DB summary test for `userTaskCommentSessionIds`.
+- Dispatcher unit test for direct message > human task comment > autonomous task wake under both policies.
+- Route test proving HTTP task comments kick the dispatcher.
+- Real daemon e2e matrix:
+  - `lane_first` / `chain_first`
+  - new / existing direct session
+  - comment-first / message-first arrival
+
+Validation:
+
+```sh
+pnpm --filter @openacme/db test -- stores.test.ts
+pnpm --filter @openacme/db build
+pnpm --filter @openacme/server test -- dispatcher.test.ts app-routes.test.ts
+pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts
+pnpm --filter @openacme/db check-types
+pnpm --filter @openacme/server check-types
+pnpm --filter @openacme/server build
+```
+
+Acceptance:
+
+- Direct user messages always win over human task comments.
+- Human task comments always win over autonomous task wakes.
+- Both scheduling policies preserve those priority tiers.
+- New prompt sessions and existing chat sessions both receive direct-message priority.
 
 ## Implementation Slices For Sub-Agents
 

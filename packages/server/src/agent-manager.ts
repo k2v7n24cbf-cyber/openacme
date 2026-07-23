@@ -386,6 +386,7 @@ export class AgentManager {
         this.isTaskAssignmentWakeReady(taskForEvent);
 
       if (deliverToInbox) {
+        let delivered = 0;
         for (const agentId of recipients) {
           try {
             this.inboxStore.deliver({
@@ -401,12 +402,16 @@ export class AgentManager {
                 payload: event.payload,
               },
             });
+            delivered++;
           } catch (e) {
             log.warn(
               { err: e, eventId: event.id, agentId },
               "inboxStore.deliver failed — signal lost for this agent"
             );
           }
+        }
+        if (delivered > 0) {
+          this.dispatcher.kick("task_event");
         }
       }
 

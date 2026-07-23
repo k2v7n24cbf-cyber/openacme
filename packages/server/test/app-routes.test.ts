@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigSchema } from "@openacme/config";
 import { createApp } from "../src/app.js";
 import type { AgentManager } from "../src/agent-manager.js";
@@ -515,6 +515,35 @@ describe("tasks", () => {
       `/api/tasks/${encodeURIComponent("../escape")}`
     );
     expect(malformed.status).toBe(400);
+  });
+
+  it("kicks the dispatcher when a human task comment creates an inbox wake", async () => {
+    await createAgent("helper");
+    const session = manager.sessionStore.create("helper");
+    const task = await manager.taskStore.create({
+      title: "Comment wake target",
+      assignee: "helper",
+      created_by: "user",
+      session_id: session.id,
+      status: "done",
+    });
+    const kick = vi.spyOn(manager.dispatcher, "kick");
+
+    const res = await req(`/api/tasks/${task.id}/comments`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ body: "please look at this" }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(kick).toHaveBeenCalledWith("task_event");
+    const pending = manager.inboxStore.pendingFor("helper");
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      kind: "system_notice",
+      relatedTask: task.id,
+      relatedSession: session.id,
+    });
   });
 });
 

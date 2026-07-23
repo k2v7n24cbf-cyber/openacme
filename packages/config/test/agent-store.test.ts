@@ -35,6 +35,7 @@ function makeAgent(
     skills: [],
     memoryExtractionEnabled: true,
     maxConcurrentSessions: 1,
+    parallelSchedulingPolicy: "lane_first",
     probeIntervalMs: 30 * 60 * 1000,
     paths: [],
   };
@@ -129,6 +130,26 @@ describe("file-based AgentStore (folder + AGENT.md)", () => {
     expect(parsed.maxConcurrentSessions).toBe(1);
   });
 
+  it("defaults parallelSchedulingPolicy to lane_first", () => {
+    const parsed = AgentDefinitionSchema.parse({
+      id: "foo",
+      name: "Foo",
+      persona: "Helpful.",
+    });
+    expect(parsed.parallelSchedulingPolicy).toBe("lane_first");
+  });
+
+  it("rejects invalid parallelSchedulingPolicy values", () => {
+    expect(() =>
+      AgentDefinitionSchema.parse({
+        id: "foo",
+        name: "Foo",
+        persona: "Helpful.",
+        parallelSchedulingPolicy: "random",
+      })
+    ).toThrow();
+  });
+
   it("rejects maxConcurrentSessions below 1", () => {
     expect(() =>
       AgentDefinitionSchema.parse({
@@ -165,6 +186,26 @@ describe("file-based AgentStore (folder + AGENT.md)", () => {
     expect(store.get("parallel")?.maxConcurrentSessions).toBe(3);
   });
 
+  it("persists parallelSchedulingPolicy in AGENT.md frontmatter", () => {
+    const store = createAgentStore(dir);
+    const agent = {
+      ...makeAgent("parallel"),
+      maxConcurrentSessions: 3,
+      parallelSchedulingPolicy: "chain_first" as const,
+    };
+    store.upsert(agent);
+
+    const raw = fs.readFileSync(
+      path.join(dir, "parallel", "AGENT.md"),
+      "utf-8"
+    );
+    const { data } = matter(raw);
+    expect(data.parallelSchedulingPolicy).toBe("chain_first");
+    expect(store.get("parallel")?.parallelSchedulingPolicy).toBe(
+      "chain_first"
+    );
+  });
+
   it("parses existing AGENT.md files without maxConcurrentSessions", () => {
     fs.mkdirSync(path.join(dir, "legacy"), { recursive: true });
     fs.writeFileSync(
@@ -180,6 +221,7 @@ describe("file-based AgentStore (folder + AGENT.md)", () => {
     const store = createAgentStore(dir);
     const def = store.get("legacy");
     expect(def?.maxConcurrentSessions).toBe(1);
+    expect(def?.parallelSchedulingPolicy).toBe("lane_first");
   });
 
   it("list returns all agents in id-sorted order", () => {

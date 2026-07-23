@@ -142,29 +142,49 @@ describe("agents CRUD", () => {
   });
 
   it("persists and validates per-agent parallel session setting", async () => {
-    await createAgent("helper", "Helper", { maxConcurrentSessions: 3 });
+    await createAgent("helper", "Helper", {
+      maxConcurrentSessions: 3,
+      parallelSchedulingPolicy: "chain_first",
+    });
 
     let res = await req("/api/agents/helper");
     expect(res.status).toBe(200);
-    expect((await res.json()).maxConcurrentSessions).toBe(3);
+    let body = await res.json();
+    expect(body.maxConcurrentSessions).toBe(3);
+    expect(body.parallelSchedulingPolicy).toBe("chain_first");
 
     res = await req("/api/agents/helper", {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ maxConcurrentSessions: 5 }),
+      body: JSON.stringify({
+        maxConcurrentSessions: 5,
+        parallelSchedulingPolicy: "lane_first",
+      }),
     });
     expect(res.status).toBe(200);
-    expect((await res.json()).maxConcurrentSessions).toBe(5);
+    body = await res.json();
+    expect(body.maxConcurrentSessions).toBe(5);
+    expect(body.parallelSchedulingPolicy).toBe("lane_first");
 
     const agentFile = path.join(dataDir, "agents", "helper", "AGENT.md");
     expect(readFileSync(agentFile, "utf8")).toContain(
       "maxConcurrentSessions: 5"
+    );
+    expect(readFileSync(agentFile, "utf8")).toContain(
+      "parallelSchedulingPolicy: lane_first"
     );
 
     res = await req("/api/agents/helper", {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ maxConcurrentSessions: 0 }),
+    });
+    expect(res.status).toBe(400);
+
+    res = await req("/api/agents/helper", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ parallelSchedulingPolicy: "random" }),
     });
     expect(res.status).toBe(400);
 
@@ -184,6 +204,7 @@ describe("agents CRUD", () => {
     await createAgent("helper", "Helper", {
       memoryExtractionEnabled: false,
       maxConcurrentSessions: 3,
+      parallelSchedulingPolicy: "chain_first",
     });
 
     let res = await req("/api/agents/helper", {
@@ -195,16 +216,21 @@ describe("agents CRUD", () => {
     let body = await res.json();
     expect(body.memoryExtractionEnabled).toBe(false);
     expect(body.maxConcurrentSessions).toBe(4);
+    expect(body.parallelSchedulingPolicy).toBe("chain_first");
 
     res = await req("/api/agents/helper", {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ memoryExtractionEnabled: true }),
+      body: JSON.stringify({
+        memoryExtractionEnabled: true,
+        parallelSchedulingPolicy: "lane_first",
+      }),
     });
     expect(res.status).toBe(200);
     body = await res.json();
     expect(body.memoryExtractionEnabled).toBe(true);
     expect(body.maxConcurrentSessions).toBe(4);
+    expect(body.parallelSchedulingPolicy).toBe("lane_first");
   });
 
   it("rejects invalid definitions and unknown ids", async () => {

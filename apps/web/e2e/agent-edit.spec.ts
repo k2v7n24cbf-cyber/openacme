@@ -28,6 +28,13 @@ test("edit an agent's parallel session setting and persist it", async ({ page })
 
   await parallel.click();
   await page.getByRole("option", { name: "3", exact: true }).click();
+  const policy = page.getByRole("combobox", { name: "Task scheduling" });
+  await expect(policy).toBeVisible();
+  await expect(policy).toContainText("Start task lanes first");
+  await policy.click();
+  await page
+    .getByRole("option", { name: "Clear task chains first", exact: true })
+    .click();
   await expect(
     page.getByText(/Parallel sessions share this agent's workspace/)
   ).toBeVisible();
@@ -38,6 +45,9 @@ test("edit an agent's parallel session setting and persist it", async ({ page })
     name: "Parallel sessions",
   });
   await expect(reloaded).toContainText("3");
+  await expect(
+    page.getByRole("combobox", { name: "Task scheduling" })
+  ).toContainText("Clear task chains first");
   await expect(
     page.getByText(/Parallel sessions share this agent's workspace/)
   ).toBeVisible();

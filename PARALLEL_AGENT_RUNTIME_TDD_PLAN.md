@@ -4,7 +4,7 @@ Branch: `agent/parallel-dispatcher-plan`
 
 Worktree: `/private/tmp/openacme-parallel-plan`
 
-Status: complete. Slices 1-6 are implemented and validated.
+Status: complete. Slices 1-11 are implemented and validated.
 
 Dev data dir prepared for manual platform smoke:
 
@@ -79,17 +79,18 @@ Tool/browser/workspace race risks are real but out of scope for runtime correctn
 
 ## Target Design
 
-Add a per-agent setting:
+Add per-agent settings:
 
 ```ts
 maxConcurrentSessions?: number // default 1, min 1, max initial cap 5
+parallelSchedulingPolicy?: "lane_first" | "chain_first" // default lane_first
 ```
 
 Recommended schema placement:
 
-- `packages/config/src/schema.ts`: `AgentDefinitionSchema.maxConcurrentSessions`
+- `packages/config/src/schema.ts`: `AgentDefinitionSchema.maxConcurrentSessions` and `parallelSchedulingPolicy`
 - `packages/config/src/agent-store.ts`: no special work expected; frontmatter serialization should carry the field automatically
-- `apps/web/app/routes/agents.tsx`: Settings tab control near memory extraction
+- `apps/web/app/routes/agents.tsx`: Settings tab controls near memory extraction
 
 Runtime state:
 
@@ -114,6 +115,7 @@ Core invariants:
 - An agent id has at most `maxConcurrentSessions` active sessions.
 - Interactive runs count against the same cap as autonomous runs.
 - `maxConcurrentSessions` is resolved from the canonical agent definition at scheduling time.
+- Direct user-message sessions get priority over autonomous task scheduling in every policy.
 - Existing public APIs continue to expose canonical `agentId` only.
 
 Dispatcher tick behavior:
@@ -123,8 +125,12 @@ Dispatcher tick behavior:
 3. If `available <= 0`, skip this agent and remember it may need a post-run kick.
 4. Bind unbound ready tasks as today.
 5. Read pending inbox summary for the agent, but use session-aware targeting for spawn choice.
-6. Walk ordered active sessions and enqueue up to `available` distinct sessions.
-7. Never enqueue a session already in `runningSessions` or `interactiveBusy`.
+6. Order candidate sessions:
+   - queued direct user messages first
+   - then `lane_first`: sessions with no or older recent run sequence first
+   - or `chain_first`: targeted/hot chain sessions first
+7. Walk ordered active sessions and enqueue up to `available` distinct sessions.
+8. Never enqueue a session already in `runningSessions` or `interactiveBusy`.
 
 Inbox semantics:
 
@@ -146,6 +152,7 @@ claimForSession(input: {
 pendingSummaryFor(agentId: string): {
   total: number;
   targetedSessionIds: Set<string>;
+  userMessageSessionIds: Set<string>;
   hasAgentWide: boolean;
 }
 ```
@@ -171,7 +178,11 @@ UI behavior:
   - warning visible when value > 1:
     - sessions can run concurrently
     - workspace, browser, tool-host, MCP, email, and memory are shared for this agent
+    - user messages are prioritized before autonomous task scheduling
     - use only for agents whose tasks are safe to overlap
+  - task scheduling select visible when value > 1:
+    - `Start task lanes first` maps to `lane_first` and is the default
+    - `Clear task chains first` maps to `chain_first`
 - Do not auto-disable tools in this milestone. The user explicitly owns race-risk decisions for parallel agents.
 
 ## TDD Rule
@@ -214,6 +225,9 @@ Tests:
 3. `AgentDefinitionSchema rejects values above the initial supported cap`.
 4. `AgentStore persists maxConcurrentSessions in AGENT.md frontmatter`.
 5. Existing AGENT.md files without the field still parse.
+6. `AgentDefinitionSchema defaults parallelSchedulingPolicy to lane_first`.
+7. `AgentDefinitionSchema rejects invalid parallelSchedulingPolicy`.
+8. `AgentStore persists parallelSchedulingPolicy in AGENT.md frontmatter`.
 
 Acceptance:
 
@@ -254,6 +268,9 @@ Tests:
 8. Failure parking is scoped to the failing session and does not block another active session for the same agent.
 9. `drain()` waits for all active run promises, not one promise per agent.
 10. Post-run kick is per agent or otherwise safe when multiple agents/runs finish out of order.
+11. Queued direct user messages are scheduled before autonomous task wakes when capacity frees.
+12. `lane_first` starts unrun task lanes before continuing a hot chain.
+13. `chain_first` continues a hot task chain before starting an unrun lane.
 
 Acceptance:
 
@@ -351,6 +368,7 @@ Test:
 Acceptance:
 
 - `/api/chat` cannot bypass the configured agent cap.
+- Queued direct user messages preempt autonomous task wakes when capacity frees.
 
 ### E2E: Tool Result Wake
 
@@ -601,21 +619,29 @@ A manual deterministic-stub dev load test was run in the
 - 2 home/dispatcher mismatch poll samples were observed as transient race
   windows.
 
-The important gap is fairness: lanes 1-5 started immediately, while lanes 6-7
-first started about 9.9s later. The current dispatcher keeps the cap correct,
-but the first ready sessions can dominate capacity across chained work. This is
-not a data-safety bug, but it is a scheduler-quality issue.
+The load test exposed a scheduling-quality gap: lanes 1-5 started immediately,
+while lanes 6-7 first started about 9.9s later. The dispatcher kept the cap
+correct, but the first ready sessions could dominate capacity across chained
+work.
 
-If fairness is in scope, add a Slice 11 with:
+Slice 11 addressed the product-visible part of this gap with an explicit agent
+setting:
 
-1. A deterministic fairness regression test that seeds more ready sessions than
-   capacity and records first-start order/latency.
-2. A scheduler policy decision: oldest-ready-session, per-session round-robin,
-   or explicit ready queue.
-3. Acceptance that no ready session can be starved across repeated dependency
-   unlocks while other sessions keep reacquiring slots.
-4. A load harness that reports capacity max, duplicate run count, per-lane
-   completion, and first-start latency distribution.
+- `Start task lanes first` (`lane_first`, default): gives never-run/older-run
+  sessions priority so ready lanes can get an initial turn.
+- `Clear task chains first` (`chain_first`): preserves hot-chain priority so
+  existing dependency chains finish sooner.
+- Direct user-message sessions always preempt both autonomous task policies.
+
+Validation:
+
+- Config/schema and AGENT.md persistence tests cover defaults, rejection, and
+  round-trip behavior.
+- Dispatcher unit tests cover user-message priority, `lane_first`, and
+  `chain_first`.
+- Real server e2e covers direct user-message priority over autonomous task
+  wakes.
+- Web Playwright e2e covers Settings save/reload for the scheduling policy.
 
 ### Priority 3: UI/Smoke Automation
 
@@ -636,6 +662,55 @@ If fairness is in scope, add a Slice 11 with:
       frontmatter path.
 
 Status: implemented in Slice 10 and validated.
+
+### Slice 11: Task Scheduling Policy
+
+Owner files:
+
+- `packages/config/src/schema.ts`
+- `packages/db/src/stores/inbox-store.ts`
+- `packages/server/src/dispatcher.ts`
+- `apps/web/app/routes/agents.tsx`
+- focused config, db, server, e2e, and web tests
+
+Tasks:
+
+1. Add `parallelSchedulingPolicy` to the agent schema, defaulting to `lane_first`.
+2. Add an Agent Settings select shown when `Parallel sessions > 1`.
+3. Extend inbox pending summary to identify sessions with queued user messages.
+4. Order scheduler candidates so user-message sessions always come first.
+5. Implement `lane_first` and `chain_first` ordering for autonomous task wakes.
+6. Persist and validate the setting through API and AGENT.md frontmatter.
+
+Tests first:
+
+- Config default/reject/persist tests.
+- DB pending summary test for `userMessageSessionIds`.
+- Server route create/update/partial-preserve tests.
+- Dispatcher tests for user-message preemption and both scheduling policies.
+- Real server e2e for direct user-message priority over task wakes.
+- Web Playwright save/reload coverage for the policy select.
+
+Validation:
+
+```sh
+pnpm --filter @openacme/config test -- agent-store.test.ts
+pnpm --filter @openacme/db test -- stores.test.ts
+pnpm --filter @openacme/server test -- dispatcher.test.ts app-routes.test.ts
+pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts
+pnpm --filter @openacme/config build
+pnpm --filter @openacme/db build
+pnpm --filter @openacme/server build
+pnpm --filter web build
+pnpm --filter web test:e2e -- agent-edit.spec.ts
+```
+
+Acceptance:
+
+- Default behavior is `Start task lanes first`.
+- `Clear task chains first` is selectable and persisted.
+- Direct user sessions are prioritized ahead of task chains in every mode.
+- No synthetic agent ids are introduced.
 
 ## Implementation Slices For Sub-Agents
 

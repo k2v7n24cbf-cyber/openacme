@@ -849,6 +849,50 @@ describe("parallel dispatcher (e2e)", () => {
     sseB.close();
   });
 
+  it("prioritizes a queued user message over autonomous task wakes", async () => {
+    await createAgent("parallel", 1);
+    const busy = srv.manager.sessionStore.create("parallel");
+    const taskSession = srv.manager.sessionStore.create("parallel");
+    const userSession = srv.manager.sessionStore.create("parallel");
+    const sseBusy = await openSessionStream(busy.id);
+    const sseTask = await openSessionStream(taskSession.id);
+    const sseUser = await openSessionStream(userSession.id);
+
+    deliverUserMessage("parallel", busy.id, "busy [[mock:slow-long]]");
+    await sseBusy.waitFor(isState("running"), 8_000);
+    await srv.manager.taskStore.create({
+      title: "Autonomous task should wait",
+      assignee: "parallel",
+      created_by: "user",
+      session_id: taskSession.id,
+    });
+    srv.manager.dispatcher.kick("e2e_user_priority_task_waiting");
+
+    const taskRunningBefore = stateCount(sseTask, "running");
+    const queued = await postChat(
+      "parallel",
+      userSession.id,
+      "direct user [[mock:text:user first]]"
+    );
+    expect(queued).toMatchObject({
+      queued: true,
+      queuedReason: "agent_capacity",
+    });
+
+    await sseBusy.waitFor(isState("idle"), 20_000);
+    await sseUser.waitFor(isState("running"), 8_000);
+    expect(stateCount(sseTask, "running")).toBe(taskRunningBefore);
+    await sseUser.waitFor(isState("idle"), 12_000);
+    await waitForAssistantText(userSession.id, "user first");
+
+    await sseTask.waitFor(isState("running"), 8_000);
+    await sseTask.waitFor(isState("idle"), 12_000);
+
+    sseBusy.close();
+    sseTask.close();
+    sseUser.close();
+  });
+
   it("preserves order for multiple queued user messages in the same session", async () => {
     await createAgent("parallel", 1);
     const sessionId = randomUUID();

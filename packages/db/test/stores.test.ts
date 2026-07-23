@@ -374,6 +374,7 @@ describe("InboxStore — session-aware claim", () => {
     const summary = inbox.pendingSummaryFor("agent-a");
     expect(summary.total).toBe(3);
     expect([...summary.targetedSessionIds].sort()).toEqual(["s1", "s2"]);
+    expect([...summary.userMessageSessionIds].sort()).toEqual(["s1"]);
     expect(summary.hasAgentWide).toBe(true);
   });
 

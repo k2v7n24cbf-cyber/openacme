@@ -45,6 +45,7 @@ export interface InboxClaimInput {
 export interface InboxPendingSummary {
   total: number;
   targetedSessionIds: Set<string>;
+  userMessageSessionIds: Set<string>;
   hasAgentWide: boolean;
 }
 
@@ -148,20 +149,29 @@ export function createInboxStore(db: WasmDatabase) {
     pendingSummaryFor(agentId: string): InboxPendingSummary {
       const rows = orm
         .select({
+          kind: agentInbox.kind,
           relatedSession: agentInbox.relatedSession,
         })
         .from(agentInbox)
         .where(eq(agentInbox.agentId, agentId))
         .all();
       const targetedSessionIds = new Set<string>();
+      const userMessageSessionIds = new Set<string>();
       let hasAgentWide = false;
       for (const row of rows) {
-        if (row.relatedSession) targetedSessionIds.add(row.relatedSession);
-        else hasAgentWide = true;
+        if (row.relatedSession) {
+          targetedSessionIds.add(row.relatedSession);
+          if (row.kind === "user_message") {
+            userMessageSessionIds.add(row.relatedSession);
+          }
+        } else {
+          hasAgentWide = true;
+        }
       }
       return {
         total: rows.length,
         targetedSessionIds,
+        userMessageSessionIds,
         hasAgentWide,
       };
     },

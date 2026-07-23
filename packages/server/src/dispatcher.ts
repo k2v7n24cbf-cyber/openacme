@@ -40,6 +40,7 @@ const log = createLogger("server.dispatcher");
 const DEFAULT_TICK_MS = 60_000;
 /** Park-on-failure backoff. Same value the old TaskScheduler used. */
 const PARK_BACKOFF_MS = 5 * 60_000;
+type ParallelSchedulingPolicy = "lane_first" | "chain_first";
 
 export interface DispatcherOptions {
   taskStore: TaskStore;
@@ -90,6 +91,10 @@ export class Dispatcher {
    *  active-session state. */
   private tickInFlight: Promise<void> | null = null;
   private tickAgain = false;
+  /** Monotonic in-memory sequence used by `lane_first` scheduling to
+   *  prefer sessions that have not yet had a turn in this daemon run. */
+  private runSequence = 0;
+  private lastRunSequenceBySession = new Map<string, number>();
 
   constructor(opts: DispatcherOptions) {
     this.taskStore = opts.taskStore;
@@ -256,6 +261,12 @@ export class Dispatcher {
       : 1;
   }
 
+  private parallelSchedulingPolicy(agentDef: unknown): ParallelSchedulingPolicy {
+    const raw = (agentDef as { parallelSchedulingPolicy?: unknown })
+      .parallelSchedulingPolicy;
+    return raw === "chain_first" ? "chain_first" : "lane_first";
+  }
+
   private activeSessionIdsForAgent(agentId: string): Set<string> {
     const ids = new Set(this.activeByAgent.get(agentId) ?? []);
     for (const sessionId of this.interactiveBusy) {
@@ -278,6 +289,7 @@ export class Dispatcher {
     for (const agentDef of agents) {
       const agentId = agentDef.id;
       const limit = this.maxConcurrentSessions(agentDef);
+      const schedulingPolicy = this.parallelSchedulingPolicy(agentDef);
       let available = limit - this.activeSessionIdsForAgent(agentId).size;
 
       // First, allocate sessions for any unbound ready tasks assigned
@@ -295,14 +307,14 @@ export class Dispatcher {
       // that have a bound session. Spawning the "wrong" session would
       // leave the relevant inbox row addressed-but-not-drainable.
       const targetedSessions = pending.targetedSessionIds;
+      const userMessageSessions = pending.userMessageSessionIds;
 
       const sessions = this.sessionStore.listActive(agentId);
-      // Sort: targeted sessions first, then everyone else by recency
-      // (listActive already returns by updated desc).
-      const ordered = [
-        ...sessions.filter((s) => targetedSessions.has(s.id)),
-        ...sessions.filter((s) => !targetedSessions.has(s.id)),
-      ];
+      const ordered = this.orderSessionsForScheduling(sessions, {
+        policy: schedulingPolicy,
+        targetedSessions,
+        userMessageSessions,
+      });
       let agentWideAssigned = false;
 
       for (const session of ordered) {
@@ -339,6 +351,37 @@ export class Dispatcher {
         }
       }
     }
+  }
+
+  private orderSessionsForScheduling(
+    sessions: ReturnType<SessionStore["listActive"]>,
+    opts: {
+      policy: ParallelSchedulingPolicy;
+      targetedSessions: Set<string>;
+      userMessageSessions: Set<string>;
+    }
+  ): ReturnType<SessionStore["listActive"]> {
+    const indexed = sessions.map((session, index) => ({ session, index }));
+    indexed.sort((a, b) => {
+      // Human/user traffic always wins over autonomous task-chain policy.
+      const aUser = opts.userMessageSessions.has(a.session.id) ? 1 : 0;
+      const bUser = opts.userMessageSessions.has(b.session.id) ? 1 : 0;
+      if (aUser !== bUser) return bUser - aUser;
+
+      if (opts.policy === "lane_first") {
+        const aLast = this.lastRunSequenceBySession.get(a.session.id) ?? 0;
+        const bLast = this.lastRunSequenceBySession.get(b.session.id) ?? 0;
+        if (aLast !== bLast) return aLast - bLast;
+      } else {
+        const aTargeted = opts.targetedSessions.has(a.session.id) ? 1 : 0;
+        const bTargeted = opts.targetedSessions.has(b.session.id) ? 1 : 0;
+        if (aTargeted !== bTargeted) return bTargeted - aTargeted;
+      }
+
+      // Preserve the store's recency order for ties.
+      return a.index - b.index;
+    });
+    return indexed.map(({ session }) => session);
   }
 
   /**
@@ -481,6 +524,7 @@ export class Dispatcher {
     }
 
     this.runningSessions.add(sessionId);
+    this.lastRunSequenceBySession.set(sessionId, ++this.runSequence);
     let active = this.activeByAgent.get(agentId);
     if (!active) {
       active = new Set<string>();

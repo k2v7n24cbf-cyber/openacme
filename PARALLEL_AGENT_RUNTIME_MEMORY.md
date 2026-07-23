@@ -6,8 +6,8 @@
 - Worktree: `/private/tmp/openacme-parallel-plan`
 - Dev data dir: `/private/tmp/openacme-parallel-plan/.openacme-dev`
 - Dev port: `127.0.0.1:3457`
-- Current slice: complete
-- Last verified command: `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts`; `pnpm --filter @openacme/server test -- dispatcher.test.ts app-routes.test.ts`; `pnpm --filter @openacme/db test -- stores.test.ts`; `pnpm --filter web test:e2e -- agent-edit.spec.ts`; `pnpm --filter @openacme/server check-types`; `pnpm --filter @openacme/db check-types`; `pnpm --filter web check-types`
+- Current slice: Slice 11 complete; ready to commit.
+- Last verified command: `pnpm --filter @openacme/config test -- agent-store.test.ts`; `pnpm --filter @openacme/db test -- stores.test.ts`; `pnpm --filter @openacme/server test -- dispatcher.test.ts app-routes.test.ts`; `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts`; `pnpm --filter @openacme/config build`; `pnpm --filter @openacme/db build`; `pnpm --filter @openacme/server build`; `pnpm --filter web build`; `pnpm --filter web test:e2e -- agent-edit.spec.ts`
 
 ## Standing Decisions
 
@@ -16,6 +16,9 @@
 - Treat workspace, browser, tool-host, MCP, email, and memory races as documented opt-in risk, not as isolation work in this milestone.
 - Default `maxConcurrentSessions` is `1`.
 - Initial supported range is `1..5`.
+- Default `parallelSchedulingPolicy` is `lane_first`, shown in Agent Settings as `Start task lanes first`.
+- Optional `parallelSchedulingPolicy: "chain_first"` is shown as `Clear task chains first`.
+- Direct user-message sessions always get the next available slot before autonomous task-chain wakes, regardless of task scheduling policy.
 - Do not touch `~/.openacme`.
 - Do not deploy or restart production during this feature build.
 
@@ -124,18 +127,36 @@
 - Home/dispatcher mismatch: 2 transient poll samples saw a race window; not persistent.
 - Important finding: fairness is weak. Lanes 1-5 started immediately; lanes 6-7 first started around 9.9s later. The dispatcher enforced capacity correctly, but the first five ready sessions dominated capacity across their chains. If parallelism graduates beyond an advanced/unsafe feature, the scheduler needs an explicit fairness contract such as oldest-ready-session ordering or a per-session/lane fairness queue.
 
+### Slice 11 - Task Scheduling Policy
+
+- Goal: make task-chain scheduling explicit in Agent Settings without reducing responsiveness to direct user sessions.
+- Product names:
+  - `Start task lanes first`: default `lane_first` policy; prefers sessions with no or older recent run sequence so newly ready lanes get a first turn before hot chains reacquire every slot.
+  - `Clear task chains first`: optional `chain_first` policy; preserves targeted-session priority so existing task chains can finish sooner.
+- Invariant: queued direct user messages outrank both task scheduling policies.
+- Red tests: config rejected/persisted policy tests failed before schema support; DB pending summary lacked targeted user-message ids; server route and dispatcher policy tests failed before implementation; UI e2e lacked coverage for the new Settings select.
+- Implementation: added `parallelSchedulingPolicy` to the agent schema and Settings UI; extended inbox pending summary with `userMessageSessionIds`; added dispatcher session ordering with user-message priority first, then `lane_first` or `chain_first`; persisted policy through API and AGENT.md frontmatter.
+- Validation:
+  - `pnpm --filter @openacme/config test -- agent-store.test.ts` passed 24/24.
+  - `pnpm --filter @openacme/db test -- stores.test.ts` passed 25/25.
+  - `pnpm --filter @openacme/server test -- dispatcher.test.ts app-routes.test.ts` passed 48/48.
+  - `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts` passed 23/23.
+  - `pnpm --filter @openacme/config build`, `pnpm --filter @openacme/db build`, `pnpm --filter @openacme/server build`, and `pnpm --filter web build` passed.
+  - `pnpm --filter web test:e2e -- agent-edit.spec.ts` passed 2/2.
+- Status: complete.
+
 ## Open Risks
 
 - Full `pnpm check-types` still stops in baseline `@openacme/cli` package-resolution/type errors during the commit hook (`@openacme/server` cannot be resolved from CLI sources, plus existing implicit-any/type shape errors). The targeted package checks used for this feature pass.
-- Scheduler fairness is not solved. Current correctness tests prove capacity, isolation, wake routing, and completion, but the load test showed late lanes can wait nearly 10s while the first ready lanes keep reacquiring capacity across dependency chains.
+- The scheduler now exposes explicit task scheduling policies, but this is still an in-memory daemon policy rather than a durable global ready queue. The load harness was not rerun across both policies after Slice 11; targeted unit and real daemon e2e coverage prove ordering behavior and user-message preemption.
 
 ## Additional Coverage Backlog
 
 - Priority 1: complete in Slice 10.
 - Priority 2: complete in Slice 10.
 - Priority 3: complete in Slice 10.
-- Fairness/load: pending. Add a deterministic server test or load harness that seeds more ready sessions than capacity and asserts first-start latency / round-robin behavior once a fairness policy is designed.
+- Fairness/load: partially addressed in Slice 11 with explicit `lane_first` and `chain_first` policies plus focused tests. A future load harness can compare first-start latency across both policies.
 
 ## Next Action
 
-Design Slice 11 for scheduler fairness if it is in scope for this PR; otherwise mark fairness as a known follow-up risk before review.
+Commit and push Slice 11 on `agent/parallel-dispatcher-plan`; do not deploy or restart production unless explicitly requested later.

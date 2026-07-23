@@ -23,7 +23,7 @@ afterEach(() => {
 async function call(
   name: string,
   args: Record<string, unknown>,
-  ctx: { agentId?: string; sessionId?: string } = {}
+  ctx: { agentId?: string; sessionId?: string } = {},
 ): Promise<{ ok: boolean; [k: string]: unknown }> {
   const tool = registry.get(name);
   if (!tool) throw new Error(`${name} not registered`);
@@ -31,7 +31,7 @@ async function call(
   const out = ctx.agentId
     ? await toolCallContext.run(
         { agentId: ctx.agentId, sessionId: ctx.sessionId ?? "" },
-        exec
+        exec,
       )
     : await exec();
   return JSON.parse(out);
@@ -42,12 +42,20 @@ describe("task_create", () => {
     const r = await call(
       "task_create",
       { title: "do the thing", assignee: "me" },
-      { agentId: "me" }
+      { agentId: "me", sessionId: "origin-session" },
     );
     expect(r.ok).toBe(true);
-    const task = (r as { task: { created_by: string; assignee: string } })
-      .task;
+    const task = (
+      r as {
+        task: {
+          created_by: string;
+          created_in_session_id: string;
+          assignee: string;
+        };
+      }
+    ).task;
     expect(task.created_by).toBe("me");
+    expect(task.created_in_session_id).toBe("origin-session");
     expect(task.assignee).toBe("me");
   });
 
@@ -60,7 +68,7 @@ describe("task_create", () => {
     const r = await call(
       "task_create",
       { title: "Who should do this?", team: "website" },
-      { agentId: "founder-agent" }
+      { agentId: "founder-agent" },
     );
     expect(r.ok).toBe(true);
     const task = (r as { task: { assignee: string; team: string } }).task;
@@ -70,7 +78,7 @@ describe("task_create", () => {
     const miss = await call(
       "task_create",
       { title: "Nobody home", team: "growth" },
-      { agentId: "founder-agent" }
+      { agentId: "founder-agent" },
     );
     expect(miss.ok).toBe(false);
     expect(String(miss.error)).toMatch(/has no manager/);
@@ -89,7 +97,7 @@ describe("task_create", () => {
     const r = await call(
       "task_create",
       { title: "x", assignee: "me" },
-      { agentId: "me", sessionId: "s1" }
+      { agentId: "me", sessionId: "s1" },
     );
     expect(r.ok).toBe(true);
     expect((r as { task: { session_id: string } }).task.session_id).toBe("s1");
@@ -99,11 +107,11 @@ describe("task_create", () => {
     const r = await call(
       "task_create",
       { title: "x", assignee: "me", session: "fresh" },
-      { agentId: "me", sessionId: "s1" }
+      { agentId: "me", sessionId: "s1" },
     );
     expect(r.ok).toBe(true);
     expect(
-      (r as { task: { session_id: string | null } }).task.session_id
+      (r as { task: { session_id: string | null } }).task.session_id,
     ).toBeNull();
   });
 
@@ -111,11 +119,11 @@ describe("task_create", () => {
     const r = await call(
       "task_create",
       { title: "y", assignee: "you" },
-      { agentId: "me", sessionId: "s1" }
+      { agentId: "me", sessionId: "s1" },
     );
     expect(r.ok).toBe(true);
     expect(
-      (r as { task: { session_id: string | null } }).task.session_id
+      (r as { task: { session_id: string | null } }).task.session_id,
     ).toBeNull();
   });
 
@@ -123,7 +131,7 @@ describe("task_create", () => {
     const r = await call(
       "task_create",
       { title: "y", assignee: "you", session: "current" },
-      { agentId: "me", sessionId: "s1" }
+      { agentId: "me", sessionId: "s1" },
     );
     expect(r.ok).toBe(false);
     expect(String(r.error)).toMatch(/only valid when assignee == you/);
@@ -133,11 +141,11 @@ describe("task_create", () => {
     const r = await call(
       "task_create",
       { title: "y", assignee: "you", session: "abc-123-explicit" },
-      { agentId: "me", sessionId: "s1" }
+      { agentId: "me", sessionId: "s1" },
     );
     expect(r.ok).toBe(true);
     expect((r as { task: { session_id: string } }).task.session_id).toBe(
-      "abc-123-explicit"
+      "abc-123-explicit",
     );
   });
 
@@ -145,7 +153,7 @@ describe("task_create", () => {
     const r = await call(
       "task_create",
       { title: "x", assignee: "me", depends_on: ["missing"] },
-      { agentId: "me" }
+      { agentId: "me" },
     );
     expect(r.ok).toBe(false);
     expect(String(r.error)).toMatch(/unknown_deps/);
@@ -194,7 +202,7 @@ describe("task_list", () => {
     const r = await call(
       "task_list",
       { assignee: "alice", status: "in_progress" },
-      { agentId: "bob" }
+      { agentId: "bob" },
     );
     expect(r.ok).toBe(true);
     expect((r as { tasks: unknown[] }).tasks).toHaveLength(1);
@@ -212,16 +220,12 @@ describe("task_view", () => {
     const r = await call("task_view", { id: t.id }, { agentId: "me" });
     expect(r.ok).toBe(true);
     expect((r as { task: { body: string } }).task.body.trim()).toBe(
-      "Detailed description"
+      "Detailed description",
     );
   });
 
   it("returns ok:false when not found", async () => {
-    const r = await call(
-      "task_view",
-      { id: "missing" },
-      { agentId: "me" }
-    );
+    const r = await call("task_view", { id: "missing" }, { agentId: "me" });
     expect(r.ok).toBe(false);
   });
 });
@@ -238,7 +242,7 @@ describe("task_update", () => {
     const r = await call(
       "task_update",
       { id: t.id, status: "done" },
-      { agentId: "me" }
+      { agentId: "me" },
     );
     expect(r.ok).toBe(true);
     const reread = store.get(t.id)!;
@@ -256,11 +260,11 @@ describe("task_update", () => {
     const r = await call(
       "task_update",
       { id: t.id, assignee: "other" },
-      { agentId: "me" }
+      { agentId: "me" },
     );
     expect(r.ok).toBe(true);
     expect(
-      (r as { task: { session_id: string | null } }).task.session_id
+      (r as { task: { session_id: string | null } }).task.session_id,
     ).toBeNull();
   });
 
@@ -274,11 +278,11 @@ describe("task_update", () => {
     const r = await call(
       "task_update",
       { id: t.id, session_id: null },
-      { agentId: "me" }
+      { agentId: "me" },
     );
     expect(r.ok).toBe(true);
     expect(
-      (r as { task: { session_id: string | null } }).task.session_id
+      (r as { task: { session_id: string | null } }).task.session_id,
     ).toBeNull();
   });
 
@@ -300,7 +304,7 @@ describe("task_update", () => {
     const r = await call(
       "task_update",
       { id: b.id, status: "in_progress" },
-      { agentId: "me" }
+      { agentId: "me" },
     );
     expect(r.ok).toBe(false);
     expect(String(r.error)).toMatch(/session_busy/);
@@ -316,10 +320,14 @@ describe("recurrence via tools", () => {
         assignee: "me",
         recurrence: { kind: "interval", every_ms: 60_000, session: "reuse" },
       },
-      { agentId: "me" }
+      { agentId: "me" },
     );
     expect(r.ok).toBe(true);
-    const task = (r as { task: { recurrence: unknown; runs: number; last_run_at: string | null } }).task;
+    const task = (
+      r as {
+        task: { recurrence: unknown; runs: number; last_run_at: string | null };
+      }
+    ).task;
     expect(task.recurrence).toEqual({
       kind: "interval",
       every_ms: 60_000,
@@ -337,16 +345,18 @@ describe("recurrence via tools", () => {
         assignee: "me",
         recurrence: { kind: "interval", every_ms: 60_000, session: "fresh" },
       },
-      { agentId: "me" }
+      { agentId: "me" },
     );
     const id = (created as { task: { id: string } }).task.id;
     const updated = await call(
       "task_update",
       { id, recurrence: null },
-      { agentId: "me" }
+      { agentId: "me" },
     );
     expect(updated.ok).toBe(true);
-    expect((updated as { task: { recurrence: unknown } }).task.recurrence).toBeNull();
+    expect(
+      (updated as { task: { recurrence: unknown } }).task.recurrence,
+    ).toBeNull();
   });
 
   it("task_update on a recurring task done returns status: open and bumps runs", async () => {
@@ -357,16 +367,20 @@ describe("recurrence via tools", () => {
         assignee: "me",
         recurrence: { kind: "interval", every_ms: 60_000, session: "reuse" },
       },
-      { agentId: "me" }
+      { agentId: "me" },
     );
     const id = (created as { task: { id: string } }).task.id;
     const closed = await call(
       "task_update",
       { id, status: "done" },
-      { agentId: "me" }
+      { agentId: "me" },
     );
     expect(closed.ok).toBe(true);
-    const t = (closed as { task: { status: string; runs: number; last_run_at: string | null } }).task;
+    const t = (
+      closed as {
+        task: { status: string; runs: number; last_run_at: string | null };
+      }
+    ).task;
     expect(t.status).toBe("open");
     expect(t.runs).toBe(1);
     expect(t.last_run_at).toBeTruthy();
@@ -380,7 +394,7 @@ describe("recurrence via tools", () => {
         assignee: "me",
         recurrence: { kind: "cron", expr: "not a cron", session: "fresh" },
       },
-      { agentId: "me" }
+      { agentId: "me" },
     );
     expect(r.ok).toBe(false);
     expect(String(r.error)).toMatch(/invalid_input/);
@@ -457,7 +471,7 @@ describe("task_comment / task_comments", () => {
     const r = await call(
       "task_comment",
       { id: "ghost", body: "hi" },
-      { agentId: "me" }
+      { agentId: "me" },
     );
     expect(r.ok).toBe(false);
     expect(String(r.error)).toMatch(/not found/i);
@@ -465,11 +479,15 @@ describe("task_comment / task_comments", () => {
 
   it("any agent can leave a generic (untagged) comment", async () => {
     const { store: s } = makeWiredStore(dir);
-    const t = await s.create({ title: "x", assignee: "alice", created_by: "bob" });
+    const t = await s.create({
+      title: "x",
+      assignee: "alice",
+      created_by: "bob",
+    });
     const r = await call(
       "task_comment",
       { id: t.id, body: "FYI looking into this" },
-      { agentId: "bob" }
+      { agentId: "bob" },
     );
     expect(r.ok).toBe(true);
     const c = (r as { comment: Comment }).comment;
@@ -479,12 +497,16 @@ describe("task_comment / task_comments", () => {
 
   it("only the assignee can leave a result comment", async () => {
     const { store: s } = makeWiredStore(dir);
-    const t = await s.create({ title: "x", assignee: "alice", created_by: "bob" });
+    const t = await s.create({
+      title: "x",
+      assignee: "alice",
+      created_by: "bob",
+    });
 
     const denied = await call(
       "task_comment",
       { id: t.id, body: "the answer", kind: "result" },
-      { agentId: "bob" }
+      { agentId: "bob" },
     );
     expect(denied.ok).toBe(false);
     expect(String(denied.error)).toMatch(/Only the assignee/);
@@ -492,7 +514,7 @@ describe("task_comment / task_comments", () => {
     const allowed = await call(
       "task_comment",
       { id: t.id, body: "the answer", kind: "result" },
-      { agentId: "alice" }
+      { agentId: "alice" },
     );
     expect(allowed.ok).toBe(true);
     expect((allowed as { comment: Comment }).comment.kind).toBe("result");
@@ -500,12 +522,16 @@ describe("task_comment / task_comments", () => {
 
   it("maps mode comment/result to stored comment kind", async () => {
     const { store: s } = makeWiredStore(dir);
-    const t = await s.create({ title: "x", assignee: "alice", created_by: "bob" });
+    const t = await s.create({
+      title: "x",
+      assignee: "alice",
+      created_by: "bob",
+    });
 
     const ordinary = await call(
       "task_comment",
       { id: t.id, body: "progress", mode: "comment" },
-      { agentId: "alice" }
+      { agentId: "alice" },
     );
     expect(ordinary.ok).toBe(true);
     expect((ordinary as { comment: Comment }).comment.kind).toBeNull();
@@ -513,7 +539,7 @@ describe("task_comment / task_comments", () => {
     const result = await call(
       "task_comment",
       { id: t.id, body: "the answer", mode: "result" },
-      { agentId: "alice" }
+      { agentId: "alice" },
     );
     expect(result.ok).toBe(true);
     expect((result as { comment: Comment }).comment.kind).toBe("result");
@@ -532,7 +558,7 @@ describe("task_comment / task_comments", () => {
       "task_comment",
       // @ts-expect-error — deliberately probing the tool's schema gate
       { id: t.id, body: "shouldn't be system", kind: "system" },
-      { agentId: "a" }
+      { agentId: "a" },
     );
     if (r.ok) {
       const c = (r as { comment: Comment }).comment;
@@ -546,20 +572,12 @@ describe("task_comment / task_comments", () => {
   it("lists comments oldest-first and supports kinds filter", async () => {
     const { store: s } = makeWiredStore(dir);
     const t = await s.create({ title: "x", assignee: "a", created_by: "a" });
-    await call(
-      "task_comment",
-      { id: t.id, body: "first" },
-      { agentId: "a" }
-    );
-    await call(
-      "task_comment",
-      { id: t.id, body: "second" },
-      { agentId: "a" }
-    );
+    await call("task_comment", { id: t.id, body: "first" }, { agentId: "a" });
+    await call("task_comment", { id: t.id, body: "second" }, { agentId: "a" });
     await call(
       "task_comment",
       { id: t.id, body: "the answer", kind: "result" },
-      { agentId: "a" }
+      { agentId: "a" },
     );
 
     const all = await call("task_comments", { id: t.id }, { agentId: "a" });
@@ -571,7 +589,7 @@ describe("task_comment / task_comments", () => {
     const onlyResult = await call(
       "task_comments",
       { id: t.id, kinds: ["result"] },
-      { agentId: "a" }
+      { agentId: "a" },
     );
     const r = (onlyResult as { comments: Comment[] }).comments;
     expect(r).toHaveLength(1);
@@ -586,7 +604,7 @@ describe("task_update soft-warn on done-without-result", () => {
     const r = await call(
       "task_update",
       { id: t.id, status: "done" },
-      { agentId: "a" }
+      { agentId: "a" },
     );
     expect(r.ok).toBe(true);
     expect(String(r.warning ?? "")).toMatch(/result comment/i);
@@ -598,12 +616,12 @@ describe("task_update soft-warn on done-without-result", () => {
     await call(
       "task_comment",
       { id: t.id, body: "ans", kind: "result" },
-      { agentId: "a" }
+      { agentId: "a" },
     );
     const r = await call(
       "task_update",
       { id: t.id, status: "done" },
-      { agentId: "a" }
+      { agentId: "a" },
     );
     expect(r.ok).toBe(true);
     expect(r.warning).toBeUndefined();
@@ -615,7 +633,7 @@ describe("task_update soft-warn on done-without-result", () => {
     const r = await call(
       "task_update",
       { id: t.id, status: "in_progress" },
-      { agentId: "a" }
+      { agentId: "a" },
     );
     expect(r.ok).toBe(true);
     expect(r.warning).toBeUndefined();
@@ -629,7 +647,7 @@ describe("task_update soft-warn on done-without-result", () => {
     const r = await call(
       "task_update",
       { id: t.id, status: "done" },
-      { agentId: "b" }
+      { agentId: "b" },
     );
     expect(r.ok).toBe(true);
     expect(r.warning).toBeUndefined();

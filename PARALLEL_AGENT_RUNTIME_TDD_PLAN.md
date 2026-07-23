@@ -587,6 +587,36 @@ Status: implemented in Slice 10 and validated.
 
 Status: implemented in Slice 10 and validated.
 
+## Load/Fairness Finding
+
+A manual deterministic-stub dev load test was run in the
+`agent/parallel-dispatcher-plan` worktree:
+
+- 42 tasks seeded as 7 lanes x 6 dependency chain depth.
+- Agent `maxConcurrentSessions = 5`.
+- All 42 tasks completed in 17.4s.
+- Capacity held: `maxDispatcherRunning=5`, `maxHomeRunning=5`.
+- Duplicate run count was 0.
+- All lanes completed 6/6.
+- 2 home/dispatcher mismatch poll samples were observed as transient race
+  windows.
+
+The important gap is fairness: lanes 1-5 started immediately, while lanes 6-7
+first started about 9.9s later. The current dispatcher keeps the cap correct,
+but the first ready sessions can dominate capacity across chained work. This is
+not a data-safety bug, but it is a scheduler-quality issue.
+
+If fairness is in scope, add a Slice 11 with:
+
+1. A deterministic fairness regression test that seeds more ready sessions than
+   capacity and records first-start order/latency.
+2. A scheduler policy decision: oldest-ready-session, per-session round-robin,
+   or explicit ready queue.
+3. Acceptance that no ready session can be starved across repeated dependency
+   unlocks while other sessions keep reacquiring slots.
+4. A load harness that reports capacity max, duplicate run count, per-lane
+   completion, and first-start latency distribution.
+
 ### Priority 3: UI/Smoke Automation
 
 11. Agent Settings tab browser regression

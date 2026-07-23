@@ -112,16 +112,30 @@
   - `pnpm --filter @openacme/server check-types`, `pnpm --filter @openacme/db check-types`, and `pnpm --filter web check-types` passed.
 - Status: complete.
 
+### Dev Load Test - 7 Lanes x 6 Task Chains
+
+- Test location: run manually in the `agent/parallel-dispatcher-plan` worktree against a local deterministic-stub Hono daemon.
+- Shape: 42 seeded tasks; 7 independent lanes x 6 dependency chain depth; agent `maxConcurrentSessions = 5`.
+- Startup state: `open=42`, `ready=7`, `blocked=0`. On this branch, dependency-waiting tasks are not stored as `blocked`; readiness is computed during scheduler tick.
+- Completion: 42/42 tasks reached `done` in 17.4s.
+- Capacity: `maxDispatcherRunning=5`, `maxHomeRunning=5`.
+- Duplicate runs: 0.
+- Lane completion: all lanes completed 6/6.
+- Home/dispatcher mismatch: 2 transient poll samples saw a race window; not persistent.
+- Important finding: fairness is weak. Lanes 1-5 started immediately; lanes 6-7 first started around 9.9s later. The dispatcher enforced capacity correctly, but the first five ready sessions dominated capacity across their chains. If parallelism graduates beyond an advanced/unsafe feature, the scheduler needs an explicit fairness contract such as oldest-ready-session ordering or a per-session/lane fairness queue.
+
 ## Open Risks
 
 - Full `pnpm check-types` still stops in baseline `@openacme/cli` package-resolution/type errors during the commit hook (`@openacme/server` cannot be resolved from CLI sources, plus existing implicit-any/type shape errors). The targeted package checks used for this feature pass.
+- Scheduler fairness is not solved. Current correctness tests prove capacity, isolation, wake routing, and completion, but the load test showed late lanes can wait nearly 10s while the first ready lanes keep reacquiring capacity across dependency chains.
 
 ## Additional Coverage Backlog
 
 - Priority 1: complete in Slice 10.
 - Priority 2: complete in Slice 10.
 - Priority 3: complete in Slice 10.
+- Fairness/load: pending. Add a deterministic server test or load harness that seeds more ready sessions than capacity and asserts first-start latency / round-robin behavior once a fairness policy is designed.
 
 ## Next Action
 
-Review the expanded test diff, then commit and push Slice 10.
+Design Slice 11 for scheduler fairness if it is in scope for this PR; otherwise mark fairness as a known follow-up risk before review.

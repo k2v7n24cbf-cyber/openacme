@@ -7,7 +7,7 @@
 - Dev data dir: `/private/tmp/openacme-parallel-plan/.openacme-dev`
 - Dev port: `127.0.0.1:3457`
 - Current slice: complete
-- Last verified command: `OPENACME_DATA_DIR=/private/tmp/openacme-parallel-plan/.openacme-dev pnpm --filter @openacme/server dev`; `curl -sS http://127.0.0.1:3457/api/health`; `curl -sS -X POST http://127.0.0.1:3457/api/agents ... maxConcurrentSessions=3`; Playwright UI snapshot on `/agents?id=parallel-smoke&tab=settings`; `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts`; `pnpm --filter @openacme/server test -- dispatcher.test.ts app-routes.test.ts`; `pnpm --filter @openacme/server check-types`
+- Last verified command: `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts`; `pnpm --filter @openacme/server test -- dispatcher.test.ts app-routes.test.ts`; `pnpm --filter @openacme/server check-types`
 
 ## Standing Decisions
 
@@ -69,10 +69,18 @@
 - Validation: started local dev server with `OPENACME_DATA_DIR=/private/tmp/openacme-parallel-plan/.openacme-dev` on `127.0.0.1:3457`; `/api/health` returned ok; created `parallel-smoke` through `/api/agents` with `maxConcurrentSessions: 3`; verified `/api/agents/parallel-smoke` returns `maxConcurrentSessions: 3`; verified `.openacme-dev/agents/parallel-smoke/AGENT.md` frontmatter contains `maxConcurrentSessions: 3`; verified in Playwright that `/agents?id=parallel-smoke&tab=settings` renders the `Parallel sessions` combobox with value `3` and the shared-state warning.
 - Status: complete.
 
+### Slice 7 - Simultaneous Chat And Dependency Regression Tests
+
+- Goal: add real e2e coverage for simultaneous `/api/chat` sends into different sessions and task dependency gating.
+- Red tests: simultaneous different-session chat coverage was missing; the new dependency e2e failed because a dependency-blocked `task_assigned` event delivered a system_notice inbox row and `hasInbox` bypassed the task readiness predicate.
+- Implementation: added a 3-way simultaneous `/api/chat` e2e where `maxConcurrentSessions: 2` starts two sessions and queues one with `queuedReason: "agent_capacity"`; added a dependent-task e2e that proves no wake before the dependency is done and a wake after it is done; suppressed `task_assigned` inbox delivery when the assigned task is not wake-ready because of dependencies or future `start_at`.
+- Validation: `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts` passed 10/10; `pnpm --filter @openacme/server test -- dispatcher.test.ts app-routes.test.ts` passed 33/33; `pnpm --filter @openacme/server check-types` passed.
+- Status: complete.
+
 ## Open Risks
 
 - Full `pnpm check-types` still stops in baseline `@openacme/cli` package-resolution/type errors during the commit hook (`@openacme/server` cannot be resolved from CLI sources, plus existing implicit-any/type shape errors). The targeted package checks used for this feature pass.
 
 ## Next Action
 
-Commit Slice 6 documentation/ignore update, then review final branch diff before deciding whether to push or open PR.
+Commit and push the regression coverage update to `origin/agent/parallel-dispatcher-plan`.

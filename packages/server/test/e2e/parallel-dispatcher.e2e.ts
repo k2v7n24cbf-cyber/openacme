@@ -281,6 +281,87 @@ describe("parallel dispatcher (e2e)", () => {
     sseC.close();
   });
 
+  it("reserves capacity for simultaneous different-session chat sends", async () => {
+    await createAgent("parallel", 2);
+    const sessionIds = [randomUUID(), randomUUID(), randomUUID()];
+    const streams = new Map<string, SSEHandle>();
+    for (const sessionId of sessionIds) {
+      streams.set(sessionId, await openSessionStream(sessionId));
+    }
+
+    const results = await Promise.all(
+      sessionIds.map((sessionId, index) =>
+        postChat(
+          "parallel",
+          sessionId,
+          `${String.fromCharCode(65 + index)} ${
+            index < 2
+              ? "[[mock:slow-long]]"
+              : "[[mock:text:simultaneous queued]]"
+          }`
+        )
+      )
+    );
+
+    const started = results
+      .filter((result) => result.queued !== true)
+      .map((result) => result.sessionId as string);
+    const queued = results
+      .filter((result) => result.queued === true)
+      .map((result) => result.sessionId as string);
+
+    expect(started).toHaveLength(2);
+    expect(queued).toHaveLength(1);
+    expect(results.filter((result) => result.queuedReason === "agent_capacity"))
+      .toHaveLength(1);
+
+    await Promise.all(
+      started.map((sessionId) =>
+        streams.get(sessionId)!.waitFor(isState("running"), 8_000)
+      )
+    );
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(stateCount(streams.get(queued[0]!)!, "running")).toBe(0);
+
+    await Promise.race(
+      started.map((sessionId) =>
+        streams.get(sessionId)!.waitFor(isState("idle"), 15_000)
+      )
+    );
+    await streams.get(queued[0]!)!.waitFor(isState("running"), 8_000);
+    await streams.get(queued[0]!)!.waitFor(isState("idle"), 12_000);
+    await waitForAssistantText(queued[0]!, "simultaneous queued");
+  });
+
+  it("holds a dependent task until its dependency is done", async () => {
+    await createAgent("parallel", 2);
+    const session = srv.manager.sessionStore.create("parallel");
+    const sse = await openSessionStream(session.id);
+    const dependency = await srv.manager.taskStore.create({
+      title: "Upstream dependency",
+      assignee: "ghost",
+      created_by: "user",
+    });
+
+    await srv.manager.taskStore.create({
+      title: "Dependent work",
+      assignee: "parallel",
+      created_by: "user",
+      session_id: session.id,
+      depends_on: [dependency.id],
+    });
+    srv.manager.dispatcher.kick("e2e_dependency_blocked");
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(stateCount(sse, "running")).toBe(0);
+
+    await srv.manager.taskStore.update(dependency.id, { status: "done" });
+    srv.manager.dispatcher.kick("e2e_dependency_done");
+
+    await sse.waitFor(isState("running"), 8_000);
+    await sse.waitFor(isState("idle"), 12_000);
+  });
+
   it("wakes the same session after a detached process tool completes", async () => {
     await createAgent("parallel", 1);
     const sessionId = randomUUID();

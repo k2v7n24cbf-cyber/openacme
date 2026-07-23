@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConfigSchema } from "@openacme/config";
 import { createApp } from "../src/app.js";
 import type { AgentManager } from "../src/agent-manager.js";
+import { repairTaskSourceSessions } from "../src/task-source-provenance.js";
 import type { Hono } from "hono";
 
 /**
@@ -45,7 +46,8 @@ afterEach(async () => {
 function req(p: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set("host", "127.0.0.1");
-  if (!headers.has("authorization")) headers.set("authorization", `Bearer ${authToken}`);
+  if (!headers.has("authorization"))
+    headers.set("authorization", `Bearer ${authToken}`);
   return app.request(`http://127.0.0.1${p}`, { ...init, headers });
 }
 
@@ -67,10 +69,7 @@ const PNG_BYTES = Uint8Array.from([
 
 async function uploadFile(filename = "pix.png") {
   const form = new FormData();
-  form.append(
-    "files",
-    new File([PNG_BYTES], filename, { type: "image/png" })
-  );
+  form.append("files", new File([PNG_BYTES], filename, { type: "image/png" }));
   const res = await req("/api/uploads", {
     method: "POST",
     body: form,
@@ -224,7 +223,7 @@ describe("chat validation", () => {
       "attachments",
       "__pending__",
       att.pendingId,
-      att.filename
+      att.filename,
     );
     expect(existsSync(pendingPath)).toBe(true);
   });
@@ -244,16 +243,14 @@ describe("attachments", () => {
     // routing; %2F-embedded dots survive to the param decode and hit
     // the route's own containment check.
     const res = await req(
-      "/api/attachments/a%2F..%2F..%2F..%2Fsecret/x/config.yaml"
+      "/api/attachments/a%2F..%2F..%2F..%2Fsecret/x/config.yaml",
     );
     expect(res.status).toBe(400);
     expect((await res.json()).error).toMatch(/escapes root/);
   });
 
   it("404s for unknown attachments", async () => {
-    const res = await req(
-      "/api/attachments/no-session/no-att/missing.txt"
-    );
+    const res = await req("/api/attachments/no-session/no-att/missing.txt");
     expect(res.status).toBe(404);
   });
 });
@@ -296,16 +293,150 @@ describe("sessions", () => {
 
     await createAgent();
     const session = manager.sessionStore.create("helper");
-    const res = await req(
-      `/api/sessions/${session.id}/queued/m1`,
-      { method: "DELETE" }
-    );
+    const res = await req(`/api/sessions/${session.id}/queued/m1`, {
+      method: "DELETE",
+    });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, cancelled: 0 });
   });
 });
 
 describe("tasks", () => {
+  it("resolves historical source sessions from task tool messages", async () => {
+    await createAgent();
+    const source = manager.sessionStore.create("helper", {
+      id: "source-session",
+      title: "Coordinator",
+    });
+    const worker = manager.sessionStore.create("helper", {
+      id: "worker-session",
+      title: "Worker",
+    });
+    const first = await manager.taskStore.create({
+      title: "First historical task",
+      assignee: "helper",
+      created_by: "helper",
+    });
+    const second = await manager.taskStore.create({
+      title: "Second historical task",
+      assignee: "helper",
+      created_by: "helper",
+    });
+
+    manager.messageStore.append(worker.id, {
+      id: "worker-message",
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-task_update",
+          output: JSON.stringify({ ok: true, task: { id: first.id } }),
+        },
+      ],
+    });
+    manager.messageStore.append(source.id, {
+      id: "source-message",
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-task_create",
+          output: JSON.stringify({ ok: true, task: { id: first.id } }),
+        },
+        {
+          type: "tool-task_create",
+          output: JSON.stringify({ ok: true, task: { id: second.id } }),
+        },
+      ],
+    });
+
+    const res = await req(
+      `/api/tasks/source-sessions?ids=${first.id},${second.id}`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      tasks: Record<string, string>;
+      sessions: Array<{ id: string; title: string; taskIds: string[] }>;
+    };
+    expect(body.tasks).toEqual({
+      [first.id]: source.id,
+      [second.id]: source.id,
+    });
+    expect(body.sessions).toEqual([
+      {
+        ...source,
+        taskIds: [first.id, second.id],
+      },
+    ]);
+  });
+
+  it("repairs missing task source sessions from task_create messages only", async () => {
+    await createAgent("helper", "Helper");
+    const source = manager.sessionStore.create("helper", "Planning session");
+    const worker = manager.sessionStore.create("helper", "Worker session");
+    const created = await manager.taskStore.create({
+      title: "Created historically",
+      assignee: "helper",
+      created_by: "helper",
+    });
+    const updatedOnly = await manager.taskStore.create({
+      title: "Only updated historically",
+      assignee: "helper",
+      created_by: "helper",
+    });
+
+    manager.messageStore.append(worker.id, {
+      id: "worker-update-message",
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-task_update",
+          output: JSON.stringify({ ok: true, task: { id: updatedOnly.id } }),
+        },
+      ],
+    });
+    manager.messageStore.append(source.id, {
+      id: "source-create-message",
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-task_create",
+          output: JSON.stringify({ ok: true, task: { id: created.id } }),
+        },
+      ],
+    });
+
+    const dryRun = await repairTaskSourceSessions({
+      taskStore: manager.taskStore,
+      messageStore: manager.messageStore,
+    });
+    expect(dryRun).toMatchObject({
+      dryRun: true,
+      missingBefore: 2,
+      resolved: 1,
+      updated: 0,
+      unresolved: 1,
+    });
+    expect(manager.taskStore.get(created.id)?.created_in_session_id).toBeNull();
+
+    const applied = await repairTaskSourceSessions({
+      taskStore: manager.taskStore,
+      messageStore: manager.messageStore,
+      dryRun: false,
+    });
+    expect(applied).toMatchObject({
+      dryRun: false,
+      missingBefore: 2,
+      resolved: 1,
+      updated: 1,
+      unresolved: 1,
+    });
+    const repaired = manager.taskStore.get(created.id);
+    expect(repaired?.created_in_session_id).toBe(source.id);
+    expect(repaired?.updated_at).toBe(created.updated_at);
+    expect(
+      manager.taskStore.get(updatedOnly.id)?.created_in_session_id,
+    ).toBeNull();
+  });
+
   it("lists (body stripped), fetches, patches, comments, deletes", async () => {
     const task = await manager.taskStore.create({
       title: "Ship it",
@@ -373,7 +504,7 @@ describe("tasks", () => {
     expect([400, 404]).toContain(notFound.status);
 
     const malformed = await req(
-      `/api/tasks/${encodeURIComponent("../escape")}`
+      `/api/tasks/${encodeURIComponent("../escape")}`,
     );
     expect(malformed.status).toBe(400);
   });

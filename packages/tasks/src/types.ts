@@ -82,6 +82,9 @@ export const TaskFrontmatterSchema = z
      */
     session_id: z.string().min(1).nullable().default(null),
     created_by: z.string().min(1),
+    // The conversation/session that issued task_create. Distinct from
+    // session_id, which is the session where this task itself runs.
+    created_in_session_id: z.string().min(1).nullable().default(null),
     parent_id: TaskIdSchema.nullable().default(null),
     depends_on: z.array(TaskIdSchema).default([]),
     start_at: NullableIso.default(null),
@@ -112,6 +115,7 @@ export interface TaskCreate {
    *  Stored tasks always end up with a concrete assignee. */
   assignee?: string;
   created_by: string;
+  created_in_session_id?: string | null;
   body?: string;
   session_id?: string | null;
   parent_id?: string | null;

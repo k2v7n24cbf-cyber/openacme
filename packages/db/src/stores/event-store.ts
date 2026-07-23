@@ -63,7 +63,7 @@ export function createEventStore(db: WasmDatabase) {
     append(input: EventInput): TaskEventRow {
       if (!input.taskId && !input.sessionId) {
         throw new Error(
-          "EventStore.append: at least one of (taskId, sessionId) must be set"
+          "EventStore.append: at least one of (taskId, sessionId) must be set",
         );
       }
       const row = orm
@@ -75,7 +75,8 @@ export function createEventStore(db: WasmDatabase) {
           agentId: input.agentId,
           actor: input.actor ?? null,
           kind: input.kind,
-          payload: input.payload !== undefined ? JSON.stringify(input.payload) : null,
+          payload:
+            input.payload !== undefined ? JSON.stringify(input.payload) : null,
         })
         .returning()
         .get();
@@ -119,7 +120,7 @@ export function createEventStore(db: WasmDatabase) {
     recentForTasks(
       taskIds: string[],
       sinceTs: number,
-      limit = 20
+      limit = 20,
     ): TaskEventRow[] {
       if (taskIds.length === 0) return [];
       return orm
@@ -128,12 +129,31 @@ export function createEventStore(db: WasmDatabase) {
         .where(
           and(
             inArray(taskEvents.taskId, taskIds),
-            gt(taskEvents.createdAt, sinceTs)
-          )
+            gt(taskEvents.createdAt, sinceTs),
+          ),
         )
         .orderBy(desc(taskEvents.createdAt), sql`rowid desc`)
         .limit(limit)
         .all();
+    },
+
+    latestByTask(taskIds: string[]): Map<string, number> {
+      if (taskIds.length === 0) return new Map();
+      const rows = orm
+        .select({
+          taskId: taskEvents.taskId,
+          createdAt: sql<number>`max(${taskEvents.createdAt})`,
+        })
+        .from(taskEvents)
+        .where(inArray(taskEvents.taskId, taskIds))
+        .groupBy(taskEvents.taskId)
+        .all();
+      const out = new Map<string, number>();
+      for (const row of rows) {
+        if (!row.taskId) continue;
+        out.set(row.taskId, row.createdAt);
+      }
+      return out;
     },
 
     /**
@@ -144,7 +164,7 @@ export function createEventStore(db: WasmDatabase) {
     recentForSession(
       sessionId: string,
       sinceTs: number,
-      limit = 20
+      limit = 20,
     ): TaskEventRow[] {
       return orm
         .select()
@@ -152,8 +172,8 @@ export function createEventStore(db: WasmDatabase) {
         .where(
           and(
             eq(taskEvents.sessionId, sessionId),
-            gt(taskEvents.createdAt, sinceTs)
-          )
+            gt(taskEvents.createdAt, sinceTs),
+          ),
         )
         .orderBy(desc(taskEvents.createdAt), sql`rowid desc`)
         .limit(limit)

@@ -87,6 +87,7 @@ const TaskCreateInputSchema = z.object({
   title: z.string().min(1).max(500),
   assignee: z.string().min(1),
   created_by: z.string().min(1),
+  created_in_session_id: z.string().min(1).nullable().optional(),
   body: z.string().optional(),
   session_id: z.string().min(1).nullable().optional(),
   parent_id: TaskIdSchema.nullable().optional(),
@@ -196,9 +197,14 @@ export class TaskStore {
   private readonly commentStore: CommentStorePort | null;
   private readonly eventStore: EventStorePort | null;
   private readonly validateSession: ((id: string) => boolean) | null;
-  private readonly resolveTeamManager: ((teamId: string) => string | null) | null;
+  private readonly resolveTeamManager:
+    | ((teamId: string) => string | null)
+    | null;
 
-  constructor(readonly tasksDir: string, options: TaskStoreOptions = {}) {
+  constructor(
+    readonly tasksDir: string,
+    options: TaskStoreOptions = {},
+  ) {
     this.commentStore = options.commentStore ?? null;
     this.eventStore = options.eventStore ?? null;
     this.validateSession = options.validateSession ?? null;
@@ -230,7 +236,10 @@ export class TaskStore {
       if (next.id !== t.id) fs.rmSync(this.filePath(t.id), { force: true });
     }
     this.writeSeqSync(seq);
-    log.info({ renumbered: Object.fromEntries(mapping) }, "renumbered task ids");
+    log.info(
+      { renumbered: Object.fromEntries(mapping) },
+      "renumbered task ids",
+    );
   }
 
   /** Highest sequence number ever allocated: counter file ⊔ ids on disk.
@@ -239,10 +248,7 @@ export class TaskStore {
   private lastAllocated(): number {
     let fromFile = 0;
     try {
-      const raw = fs.readFileSync(
-        path.join(this.tasksDir, SEQ_FILE),
-        "utf-8"
-      );
+      const raw = fs.readFileSync(path.join(this.tasksDir, SEQ_FILE), "utf-8");
       const n = Number.parseInt(raw.trim(), 10);
       if (Number.isFinite(n) && n > 0) fromFile = n;
     } catch (e) {
@@ -268,7 +274,7 @@ export class TaskStore {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const tmp = path.join(
       path.dirname(file),
-      `${TMP_PREFIX}${randomBytes(8).toString("hex")}.tmp`
+      `${TMP_PREFIX}${randomBytes(8).toString("hex")}.tmp`,
     );
     fs.writeFileSync(tmp, content, "utf-8");
     fs.renameSync(tmp, file);
@@ -282,7 +288,7 @@ export class TaskStore {
     if (!SAFE_ID.test(id)) {
       throw new TaskStoreError(
         "invalid_id",
-        `Invalid task id ${JSON.stringify(id)}: must match ${SAFE_ID}`
+        `Invalid task id ${JSON.stringify(id)}: must match ${SAFE_ID}`,
       );
     }
     return path.join(this.tasksDir, `${id}.md`);
@@ -333,9 +339,7 @@ export class TaskStore {
     const all = this.list();
     const byId = new Map(all.map((t) => [t.id, t]));
     const sessionTasks = all.filter((t) => t.session_id === sessionId);
-    const eligible = sessionTasks.filter((t) =>
-      isQueueEligible(t, byId, now)
-    );
+    const eligible = sessionTasks.filter((t) => isQueueEligible(t, byId, now));
     return eligible.sort((a, b) => a.created_at.localeCompare(b.created_at));
   }
 
@@ -343,7 +347,7 @@ export class TaskStore {
   nextEligibleFor(sessionId: string, now: Date = new Date()): Task | null {
     const queue = this.queueFor(sessionId, now);
     const head = queue.find(
-      (t) => t.status === "open" || t.status === "blocked"
+      (t) => t.status === "open" || t.status === "blocked",
     );
     return head ?? null;
   }
@@ -354,7 +358,7 @@ export class TaskStore {
     if (!input.assignee && !input.team) {
       throw new TaskStoreError(
         "invalid_input",
-        "assignee is required (or set `team` to route the task to that team's manager)"
+        "assignee is required (or set `team` to route the task to that team's manager)",
       );
     }
     // Team-addressed creation: no assignee + a team resolves to the
@@ -365,7 +369,7 @@ export class TaskStore {
       if (!manager) {
         throw new TaskStoreError(
           "no_team_manager",
-          `assignee is required — team ${JSON.stringify(input.team)} has no manager to route to`
+          `assignee is required — team ${JSON.stringify(input.team)} has no manager to route to`,
         );
       }
       input = { ...input, assignee: manager };
@@ -374,7 +378,7 @@ export class TaskStore {
     if (!parsed.success) {
       throw new TaskStoreError(
         "invalid_input",
-        `Invalid task create input: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`
+        `Invalid task create input: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
       );
     }
     input = parsed.data as TaskCreate;
@@ -396,7 +400,7 @@ export class TaskStore {
       if (input.parent_id && !byId.has(input.parent_id)) {
         throw new TaskStoreError(
           "unknown_parent",
-          `parent_id ${JSON.stringify(input.parent_id)} not found`
+          `parent_id ${JSON.stringify(input.parent_id)} not found`,
         );
       }
 
@@ -407,7 +411,7 @@ export class TaskStore {
       ) {
         throw new TaskStoreError(
           "unknown_session",
-          `session_id ${JSON.stringify(input.session_id)} does not exist`
+          `session_id ${JSON.stringify(input.session_id)} does not exist`,
         );
       }
 
@@ -437,12 +441,13 @@ export class TaskStore {
         status === "in_progress" &&
         input.session_id &&
         all.some(
-          (t) => t.session_id === input.session_id && t.status === "in_progress"
+          (t) =>
+            t.session_id === input.session_id && t.status === "in_progress",
         )
       ) {
         throw new TaskStoreError(
           "session_busy",
-          `Another task is already in_progress in session ${input.session_id}`
+          `Another task is already in_progress in session ${input.session_id}`,
         );
       }
 
@@ -469,6 +474,7 @@ export class TaskStore {
         assignee,
         session_id: input.session_id ?? null,
         created_by: input.created_by,
+        created_in_session_id: input.created_in_session_id ?? null,
         parent_id: input.parent_id ?? null,
         depends_on: deps,
         start_at: startAt,
@@ -509,13 +515,13 @@ export class TaskStore {
   async update(
     id: string,
     patch: TaskUpdate,
-    opts?: { actor?: string | null }
+    opts?: { actor?: string | null },
   ): Promise<Task> {
     const parsed = TaskUpdateInputSchema.safeParse(patch);
     if (!parsed.success) {
       throw new TaskStoreError(
         "invalid_input",
-        `Invalid task update input: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`
+        `Invalid task update input: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
       );
     }
     patch = parsed.data as TaskUpdate;
@@ -535,7 +541,7 @@ export class TaskStore {
         patch.assignee !== undefined && patch.assignee !== existing.assignee;
       const explicitSession = Object.prototype.hasOwnProperty.call(
         patch,
-        "session_id"
+        "session_id",
       );
 
       let nextSessionId = existing.session_id;
@@ -557,7 +563,7 @@ export class TaskStore {
       ) {
         throw new TaskStoreError(
           "unknown_session",
-          `session_id ${JSON.stringify(nextSessionId)} does not exist`
+          `session_id ${JSON.stringify(nextSessionId)} does not exist`,
         );
       }
 
@@ -584,24 +590,21 @@ export class TaskStore {
           (t) =>
             t.id !== id &&
             t.session_id === nextSessionId &&
-            t.status === "in_progress"
+            t.status === "in_progress",
         );
         if (conflict) {
           throw new TaskStoreError(
             "session_busy",
-            `Session ${nextSessionId} already has an in_progress task (${conflict.id})`
+            `Session ${nextSessionId} already has an in_progress task (${conflict.id})`,
           );
         }
       }
 
       // Block transitions to in_progress when deps aren't satisfied.
-      if (
-        nextStatus === "in_progress" &&
-        !depsSatisfied(nextDeps, byId, id)
-      ) {
+      if (nextStatus === "in_progress" && !depsSatisfied(nextDeps, byId, id)) {
         throw new TaskStoreError(
           "deps_unsatisfied",
-          `Cannot start task ${id}: not all dependencies are done`
+          `Cannot start task ${id}: not all dependencies are done`,
         );
       }
 
@@ -610,11 +613,8 @@ export class TaskStore {
       const effectiveRecurrence: Recurrence | null =
         patch.recurrence !== undefined
           ? patch.recurrence
-          : existing.recurrence ?? null;
-      if (
-        patch.recurrence !== undefined &&
-        patch.recurrence !== null
-      ) {
+          : (existing.recurrence ?? null);
+      if (patch.recurrence !== undefined && patch.recurrence !== null) {
         const v = validateRecurrence(patch.recurrence, new Date());
         if (!v.ok) {
           throw new TaskStoreError("invalid_input", v.message);
@@ -637,7 +637,7 @@ export class TaskStore {
         updated_at: now,
         closed_at:
           nextStatus === "done" || nextStatus === "canceled"
-            ? existing.closed_at ?? now
+            ? (existing.closed_at ?? now)
             : null,
         recurrence: effectiveRecurrence,
         runs: existing.runs ?? 0,
@@ -650,11 +650,7 @@ export class TaskStore {
       // turns leave the task blocked (scheduler set it that way) so a
       // failing recurring task doesn't loop forever.
       let didReset = false;
-      if (
-        isClosing &&
-        nextStatus === "done" &&
-        effectiveRecurrence
-      ) {
+      if (isClosing && nextStatus === "done" && effectiveRecurrence) {
         // Every successful done counts as a completion, whether or not
         // it produces a future fire — so `count: N` yields exactly N.
         const completedRuns = next.runs + 1;
@@ -666,18 +662,16 @@ export class TaskStore {
         const startAtMs = next.start_at ? Date.parse(next.start_at) : NaN;
         const fromMs = Math.max(
           nowDate.getTime(),
-          Number.isFinite(startAtMs) ? startAtMs + 1 : 0
+          Number.isFinite(startAtMs) ? startAtMs + 1 : 0,
         );
         const nextFire = computeNextFire(
           effectiveRecurrence,
           new Date(fromMs),
-          completedRuns
+          completedRuns,
         );
         if (nextFire) {
           const resetSessionId =
-            effectiveRecurrence.session === "fresh"
-              ? null
-              : next.session_id;
+            effectiveRecurrence.session === "fresh" ? null : next.session_id;
           // Always `open` — the dispatcher's readiness predicate will
           // skip it on the next tick if deps regressed or `start_at`
           // hasn't passed yet. No stored `blocked` for dep-blocked.
@@ -735,9 +729,37 @@ export class TaskStore {
     });
   }
 
+  async backfillCreatedInSessionId(
+    id: string,
+    createdInSessionId: string,
+  ): Promise<{ task: Task; changed: boolean }> {
+    if (!createdInSessionId.trim()) {
+      throw new TaskStoreError(
+        "invalid_input",
+        "created_in_session_id must be a non-empty string",
+      );
+    }
+    return this.withMutex(id, async () => {
+      const existing = this.get(id);
+      if (!existing) {
+        throw new TaskStoreError("not_found", `Task ${id} not found`);
+      }
+      if (existing.created_in_session_id) {
+        return { task: existing, changed: false };
+      }
+      const next: Task = {
+        ...existing,
+        created_in_session_id: createdInSessionId,
+      };
+      await this.writeFile(next);
+      this.fireOnChange();
+      return { task: next, changed: true };
+    });
+  }
+
   async delete(
     id: string,
-    opts?: { force?: boolean; actor?: string | null }
+    opts?: { force?: boolean; actor?: string | null },
   ): Promise<void> {
     return this.withMutex(id, async () => {
       const existing = this.get(id);
@@ -748,7 +770,7 @@ export class TaskStore {
       if (dependents.length > 0 && !opts?.force) {
         throw new TaskStoreError(
           "has_dependents",
-          `Task ${id} has ${dependents.length} dependent(s). Pass force to cascade.`
+          `Task ${id} has ${dependents.length} dependent(s). Pass force to cascade.`,
         );
       }
       try {
@@ -783,9 +805,7 @@ export class TaskStore {
           try {
             await this.delete(dep.id, { force: true, actor: opts?.actor });
           } catch (e) {
-            if (
-              !(e instanceof TaskStoreError && e.code === "not_found")
-            ) {
+            if (!(e instanceof TaskStoreError && e.code === "not_found")) {
               throw e;
             }
           }
@@ -816,7 +836,7 @@ export class TaskStore {
     await this.update(
       input.id,
       { status: "blocked", start_at: retryAtIso },
-      { actor: "system:scheduler" }
+      { actor: "system:scheduler" },
     );
     await this.addComment({
       taskId: input.id,
@@ -829,7 +849,10 @@ export class TaskStore {
   async sweepStale(now: Date = new Date()): Promise<string[]> {
     const stale = this.list({ status: "in_progress" }).filter((t) => {
       const updated = Date.parse(t.updated_at);
-      return Number.isFinite(updated) && now.getTime() - updated > STALE_IN_PROGRESS_MS;
+      return (
+        Number.isFinite(updated) &&
+        now.getTime() - updated > STALE_IN_PROGRESS_MS
+      );
     });
     const reset: string[] = [];
     for (const t of stale) {
@@ -851,7 +874,7 @@ export class TaskStore {
     agentId: string,
     currentSessionId: string,
     sessionExistsFn: (sid: string) => boolean,
-    now: Date = new Date()
+    now: Date = new Date(),
   ): string {
     return renderForPromptPure(
       {
@@ -862,7 +885,7 @@ export class TaskStore {
       agentId,
       currentSessionId,
       sessionExistsFn,
-      now
+      now,
     );
   }
 
@@ -877,15 +900,12 @@ export class TaskStore {
 
   // ── Internals ─────────────────────────────────────────────────────
 
-  private assertDepsExist(
-    deps: string[],
-    byId: Map<string, Task>
-  ): void {
+  private assertDepsExist(deps: string[], byId: Map<string, Task>): void {
     const missing = deps.filter((d) => !byId.has(d));
     if (missing.length > 0) {
       throw new TaskStoreError(
         "unknown_deps",
-        `Unknown dependency id(s): ${missing.join(", ")}`
+        `Unknown dependency id(s): ${missing.join(", ")}`,
       );
     }
   }
@@ -893,7 +913,7 @@ export class TaskStore {
   private assertNoCycle(
     selfId: string,
     deps: string[],
-    byId: Map<string, Task>
+    byId: Map<string, Task>,
   ): void {
     // DFS — does any path from a dep land back on selfId?
     const visited = new Set<string>();
@@ -903,7 +923,7 @@ export class TaskStore {
       if (cur === selfId) {
         throw new TaskStoreError(
           "cycle",
-          `Cycle detected in depends_on graph involving ${selfId}`
+          `Cycle detected in depends_on graph involving ${selfId}`,
         );
       }
       if (visited.has(cur)) continue;
@@ -920,7 +940,7 @@ export class TaskStore {
     await fsp.mkdir(dir, { recursive: true });
     const tmp = path.join(
       dir,
-      `${TMP_PREFIX}${randomBytes(8).toString("hex")}.tmp`
+      `${TMP_PREFIX}${randomBytes(8).toString("hex")}.tmp`,
     );
     let fh: fsp.FileHandle | null = null;
     try {
@@ -956,7 +976,7 @@ export class TaskStore {
     await fsp.mkdir(dir, { recursive: true });
     const tmp = path.join(
       dir,
-      `${TMP_PREFIX}${randomBytes(8).toString("hex")}.tmp`
+      `${TMP_PREFIX}${randomBytes(8).toString("hex")}.tmp`,
     );
     try {
       const fh = await fsp.open(tmp, "w");
@@ -983,8 +1003,8 @@ export class TaskStore {
       id,
       result.then(
         () => undefined,
-        () => undefined
-      )
+        () => undefined,
+      ),
     );
     return result;
   }
@@ -1021,7 +1041,7 @@ export class TaskStore {
     if (!task) {
       throw new TaskStoreError(
         "not_found",
-        `Cannot comment: task ${input.taskId} not found`
+        `Cannot comment: task ${input.taskId} not found`,
       );
     }
     const comment = this.commentStore.add(input);
@@ -1062,6 +1082,11 @@ export class TaskStore {
   commentCounts(taskIds: string[]): Map<string, number> {
     if (!this.commentStore) return new Map();
     return this.commentStore.countByTask(taskIds);
+  }
+
+  latestEventTimes(taskIds: string[]): Map<string, number> {
+    if (!this.eventStore?.latestByTask) return new Map();
+    return this.eventStore.latestByTask(taskIds);
   }
 
   // ── Events ────────────────────────────────────────────────────────
@@ -1116,7 +1141,7 @@ export class TaskStore {
     sessionId: string,
     agentId: string,
     sinceTs: number,
-    opts?: { limit?: number; excludeActor?: string }
+    opts?: { limit?: number; excludeActor?: string },
   ): TaskEvent[] {
     if (!this.eventStore) return [];
     const ids = this.involvedTaskIds(sessionId, agentId);
@@ -1137,7 +1162,7 @@ export class TaskStore {
     agentId: string,
     sinceTs: number,
     now: Date = new Date(),
-    opts?: { limit?: number; excludeActor?: string }
+    opts?: { limit?: number; excludeActor?: string },
   ): string {
     const events = this.recentEventsForSession(sessionId, agentId, sinceTs, {
       limit: opts?.limit ?? 20,
@@ -1161,7 +1186,7 @@ function isFutureStart(startAt: string | null, now: Date): boolean {
 function depsSatisfied(
   deps: string[],
   byId: Map<string, TaskFrontmatter>,
-  ignoreId?: string
+  ignoreId?: string,
 ): boolean {
   for (const d of deps) {
     if (d === ignoreId) continue;
@@ -1175,7 +1200,7 @@ function depsSatisfied(
 function isQueueEligible(
   task: Task,
   byId: Map<string, Task>,
-  now: Date
+  now: Date,
 ): boolean {
   if (task.status === "done" || task.status === "canceled") return false;
   if (!depsSatisfied(task.depends_on, byId, task.id)) return false;
@@ -1195,9 +1220,10 @@ function matchesFilter(task: Task, filter?: TaskListFilter): boolean {
     return false;
   if (filter.team !== undefined && task.team !== filter.team) return false;
   if (filter.status !== undefined) {
-    const wanted = Array.isArray(filter.status) ? filter.status : [filter.status];
+    const wanted = Array.isArray(filter.status)
+      ? filter.status
+      : [filter.status];
     if (!wanted.includes(task.status)) return false;
   }
   return true;
 }
-

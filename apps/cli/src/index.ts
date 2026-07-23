@@ -55,6 +55,7 @@ import {
   agentsCatalogCommand,
   agentsImportCommand,
 } from "./commands/agents.js";
+import { tasksRepairSourceSessionsCommand } from "./commands/tasks.js";
 import { updateCommand } from "./commands/update.js";
 import { showBanner } from "./tui/banner.js";
 
@@ -409,6 +410,30 @@ agents
   .option("--name <name>", "Override the template's display name")
   .action((templateId: string, opts: { dataDir?: string; id?: string; name?: string }) =>
     agentsImportCommand(templateId, opts)
+  );
+
+const tasks = program
+  .command("tasks")
+  .description("Inspect and repair task data");
+
+tasks
+  .command("repair-source-sessions")
+  .description("Backfill missing task created_in_session_id fields from historical task_create messages")
+  .option("-d, --data-dir <path>", "Data directory (default: ~/.openacme)")
+  .option("--apply", "Write the backfilled values (default: dry-run)")
+  .option("--json", "Emit the repair summary as JSON")
+  .option(
+    "--limit <n>",
+    "Max recent task-tool messages to scan (default: 5000)",
+    (v) => parseInt(v, 10),
+  )
+  .action(
+    (opts: {
+      dataDir?: string;
+      apply?: boolean;
+      json?: boolean;
+      limit?: number;
+    }) => tasksRepairSourceSessionsCommand(opts),
   );
 
 program

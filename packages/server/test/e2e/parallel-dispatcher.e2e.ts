@@ -35,9 +35,13 @@ afterEach(async () => {
 
 async function createAgent(
   id = "parallel",
-  maxConcurrentSessions = 2
+  maxConcurrentSessions: number | null = 2
 ): Promise<void> {
-  await c.createAgent(id, id, { maxConcurrentSessions });
+  await c.createAgent(
+    id,
+    id,
+    maxConcurrentSessions == null ? {} : { maxConcurrentSessions }
+  );
 }
 
 function stateCount(sse: SSEHandle, state: "running" | "idle"): number {
@@ -117,6 +121,27 @@ async function waitForAssistantText(
   );
 }
 
+async function homeRunningIds(): Promise<Set<string>> {
+  const home = await c.json("/api/home");
+  return new Set(
+    (home.running as Array<{ sessionId: string }>).map((row) => row.sessionId)
+  );
+}
+
+async function waitForHomeRunningIds(
+  expected: Set<string>,
+  timeoutMs = 8_000
+): Promise<void> {
+  await waitUntil(
+    async () => {
+      const running = await homeRunningIds();
+      if (running.size !== expected.size) return false;
+      return [...expected].every((id) => running.has(id));
+    },
+    { timeoutMs, intervalMs: 50 }
+  );
+}
+
 function eventDataIncludes(sse: SSEHandle, text: string): boolean {
   return sse.events.some((event: SSEEvent) =>
     JSON.stringify(event.data).includes(text)
@@ -130,6 +155,44 @@ async function openSessionStream(sessionId: string): Promise<SSEHandle> {
 }
 
 describe("parallel dispatcher (e2e)", () => {
+  it("keeps the default agent capacity at one active session", async () => {
+    await createAgent("serial", null);
+    const a = srv.manager.sessionStore.create("serial");
+    const b = srv.manager.sessionStore.create("serial");
+    const streams = new Map<string, SSEHandle>([
+      [a.id, await openSessionStream(a.id)],
+      [b.id, await openSessionStream(b.id)],
+    ]);
+
+    deliverUserMessage("serial", a.id, "A [[mock:slow]]");
+    deliverUserMessage("serial", b.id, "B [[mock:slow]]");
+
+    let firstRunning = "";
+    await waitUntil(
+      async () => {
+        const running = await homeRunningIds();
+        const serialRunning = [a.id, b.id].filter((id) => running.has(id));
+        if (serialRunning.length !== 1) return false;
+        firstRunning = serialRunning[0]!;
+        return true;
+      },
+      { timeoutMs: 8_000, intervalMs: 50 }
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    let running = await homeRunningIds();
+    expect([a.id, b.id].filter((id) => running.has(id))).toHaveLength(1);
+
+    const second = firstRunning === a.id ? b.id : a.id;
+    await streams.get(firstRunning)!.waitFor(isState("idle"), 15_000);
+    await streams.get(second)!.waitFor(isState("running"), 8_000);
+    await streams.get(second)!.waitFor(isState("idle"), 12_000);
+
+    running = await homeRunningIds();
+    expect(running.has(a.id)).toBe(false);
+    expect(running.has(b.id)).toBe(false);
+  });
+
   it("runs task wakes for two sessions of one agent in parallel and reports both as running", async () => {
     await createAgent("parallel", 2);
     const a = srv.manager.sessionStore.create("parallel");
@@ -156,11 +219,7 @@ describe("parallel dispatcher (e2e)", () => {
       sseB.waitFor(isState("running"), 8_000),
     ]);
 
-    const home = await c.json("/api/home");
-    const runningIds = new Set(
-      (home.running as Array<{ sessionId: string }>).map((row) => row.sessionId)
-    );
-    expect(runningIds).toEqual(new Set([a.id, b.id]));
+    await waitForHomeRunningIds(new Set([a.id, b.id]));
 
     await Promise.all([
       sseA.waitFor(isState("idle"), 15_000),
@@ -244,6 +303,28 @@ describe("parallel dispatcher (e2e)", () => {
     sse.close();
   });
 
+  it("queues same-session chat sent during an autonomous turn", async () => {
+    await createAgent("parallel", 1);
+    const session = srv.manager.sessionStore.create("parallel");
+    const sse = await openSessionStream(session.id);
+
+    deliverUserMessage("parallel", session.id, "autonomous [[mock:slow]]");
+    await sse.waitFor(isState("running"), 8_000);
+
+    const queued = await postChat(
+      "parallel",
+      session.id,
+      "follow-up [[mock:text:autonomous queued reply]]"
+    );
+    expect(queued).toMatchObject({ queued: true });
+    expect(queued.queuedReason).toBeUndefined();
+
+    await waitForStateCount(sse, "idle", 1, 15_000);
+    await waitForStateCount(sse, "running", 2, 8_000);
+    await waitForStateCount(sse, "idle", 2, 12_000);
+    await waitForAssistantText(session.id, "autonomous queued reply");
+  });
+
   it("starts a different session when capacity is available and queues another when full", async () => {
     await createAgent("parallel", 2);
     const a = randomUUID();
@@ -279,6 +360,34 @@ describe("parallel dispatcher (e2e)", () => {
     sseA.close();
     sseB.close();
     sseC.close();
+  });
+
+  it("counts an interactive run against autonomous task capacity", async () => {
+    await createAgent("parallel", 1);
+    const chatSession = randomUUID();
+    const taskSession = srv.manager.sessionStore.create("parallel");
+    const sseChat = await openSessionStream(chatSession);
+    const sseTask = await openSessionStream(taskSession.id);
+
+    const chat = await postChat("parallel", chatSession, "chat [[mock:slow]]");
+    expect(chat.queued).toBeUndefined();
+    await sseChat.waitFor(isState("running"), 8_000);
+
+    await srv.manager.taskStore.create({
+      title: "Task waits for interactive capacity",
+      assignee: "parallel",
+      created_by: "user",
+      session_id: taskSession.id,
+    });
+    srv.manager.dispatcher.kick("e2e_interactive_blocks_task");
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(stateCount(sseTask, "running")).toBe(0);
+    await waitForHomeRunningIds(new Set([chatSession]));
+
+    await sseChat.waitFor(isState("idle"), 15_000);
+    await sseTask.waitFor(isState("running"), 8_000);
+    await sseTask.waitFor(isState("idle"), 12_000);
   });
 
   it("reserves capacity for simultaneous different-session chat sends", async () => {
@@ -357,6 +466,53 @@ describe("parallel dispatcher (e2e)", () => {
 
     await srv.manager.taskStore.update(dependency.id, { status: "done" });
     srv.manager.dispatcher.kick("e2e_dependency_done");
+
+    await sse.waitFor(isState("running"), 8_000);
+    await sse.waitFor(isState("idle"), 12_000);
+  });
+
+  it("does not wake a dependent task when its dependency is canceled", async () => {
+    await createAgent("parallel", 2);
+    const session = srv.manager.sessionStore.create("parallel");
+    const sse = await openSessionStream(session.id);
+    const dependency = await srv.manager.taskStore.create({
+      title: "Canceled dependency",
+      assignee: "ghost",
+      created_by: "user",
+    });
+
+    await srv.manager.taskStore.create({
+      title: "Dependent work blocked by canceled dependency",
+      assignee: "parallel",
+      created_by: "user",
+      session_id: session.id,
+      depends_on: [dependency.id],
+    });
+    await srv.manager.taskStore.update(dependency.id, { status: "canceled" });
+    srv.manager.dispatcher.kick("e2e_dependency_canceled");
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(stateCount(sse, "running")).toBe(0);
+  });
+
+  it("does not wake a future-start task assignment until start_at clears", async () => {
+    await createAgent("parallel", 2);
+    const session = srv.manager.sessionStore.create("parallel");
+    const sse = await openSessionStream(session.id);
+    const task = await srv.manager.taskStore.create({
+      title: "Future task",
+      assignee: "parallel",
+      created_by: "user",
+      session_id: session.id,
+      start_at: new Date(Date.now() + 60_000).toISOString(),
+    });
+    srv.manager.dispatcher.kick("e2e_future_start_blocked");
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(stateCount(sse, "running")).toBe(0);
+
+    await srv.manager.taskStore.update(task.id, { start_at: null });
+    srv.manager.dispatcher.kick("e2e_future_start_cleared");
 
     await sse.waitFor(isState("running"), 8_000);
     await sse.waitFor(isState("idle"), 12_000);

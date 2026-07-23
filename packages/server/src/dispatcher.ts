@@ -85,6 +85,11 @@ export class Dispatcher {
   /** An agent had more eligible work than free slots. Run one pass as
    *  soon as any of that agent's active turns frees a slot. */
   private kickAfterRunAgents = new Set<string>();
+  /** Serialize scheduler passes. `kick()` can be called from many inbox/event
+   *  paths at once; overlapping ticks would compute capacity from stale
+   *  active-session state. */
+  private tickInFlight: Promise<void> | null = null;
+  private tickAgain = false;
 
   constructor(opts: DispatcherOptions) {
     this.taskStore = opts.taskStore;
@@ -214,11 +219,33 @@ export class Dispatcher {
 
   private async tickSafe(): Promise<void> {
     if (!this.running) return;
-    try {
-      await this.tick();
-    } catch (e) {
-      log.warn({ err: e }, "dispatcher tick failed");
+    if (this.tickInFlight) {
+      this.tickAgain = true;
+      await this.tickInFlight;
+      return;
     }
+
+    const run = this.drainTickQueue();
+    this.tickInFlight = run;
+    try {
+      await run;
+    } finally {
+      if (this.tickInFlight === run) {
+        this.tickInFlight = null;
+      }
+    }
+  }
+
+  private async drainTickQueue(): Promise<void> {
+    do {
+      this.tickAgain = false;
+      if (!this.running) return;
+      try {
+        await this.tick();
+      } catch (e) {
+        log.warn({ err: e }, "dispatcher tick failed");
+      }
+    } while (this.running && this.tickAgain);
   }
 
   private maxConcurrentSessions(agentDef: unknown): number {

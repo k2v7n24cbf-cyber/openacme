@@ -77,10 +77,18 @@
 - Validation: `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts` passed 10/10; `pnpm --filter @openacme/server test -- dispatcher.test.ts app-routes.test.ts` passed 33/33; `pnpm --filter @openacme/server check-types` passed.
 - Status: complete.
 
+### Slice 8 - Expanded Parallel Runtime Test Matrix
+
+- Goal: broaden the real-platform test matrix to cover default capacity, mixed interactive/autonomous accounting, same-session autonomous chat queueing, dependency terminal states, future start gates, API validation, and dispatcher reentrant kicks.
+- Red tests: the expanded default-capacity e2e failed because two rapid inbox deliveries called `dispatcher.kick()` concurrently; overlapping ticks computed `available=1` before either tick recorded its active session, allowing default `maxConcurrentSessions: 1` to be exceeded.
+- Implementation: serialized dispatcher ticks with a small in-flight tick queue; added a unit regression for concurrent kicks; added API route coverage for `maxConcurrentSessions` create/update persistence and invalid range rejection; expanded `parallel-dispatcher.e2e.ts` from 10 to 15 real server tests.
+- Validation: `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts` passed 15/15; `pnpm --filter @openacme/server test -- dispatcher.test.ts app-routes.test.ts` passed 35/35; `pnpm --filter @openacme/server check-types` passed.
+- Status: complete.
+
 ## Open Risks
 
 - Full `pnpm check-types` still stops in baseline `@openacme/cli` package-resolution/type errors during the commit hook (`@openacme/server` cannot be resolved from CLI sources, plus existing implicit-any/type shape errors). The targeted package checks used for this feature pass.
 
 ## Next Action
 
-Commit and push the regression coverage update to `origin/agent/parallel-dispatcher-plan`.
+Commit and push the expanded test matrix update to `origin/agent/parallel-dispatcher-plan`.

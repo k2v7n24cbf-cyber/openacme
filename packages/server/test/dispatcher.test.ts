@@ -267,6 +267,45 @@ describe("Dispatcher spawn rule", () => {
     await d.drain(5_000);
   });
 
+  it("serializes concurrent kicks before capacity accounting", async () => {
+    const gate = deferredTurns();
+    const { manager, calls } = fakeManager(["a1"], gate.turn);
+    const a = sessionStore.create("a1");
+    const b = sessionStore.create("a1");
+
+    const d = makeDispatcher(manager);
+    await d.start();
+    expect(calls).toEqual([]);
+
+    inboxStore.deliver({
+      agentId: "a1",
+      kind: "user_message",
+      source: "user",
+      sourceId: "a",
+      relatedSession: a.id,
+      payload: { id: "a", role: "user", parts: [{ type: "text", text: "a" }] },
+    });
+    inboxStore.deliver({
+      agentId: "a1",
+      kind: "user_message",
+      source: "user",
+      sourceId: "b",
+      relatedSession: b.id,
+      payload: { id: "b", role: "user", parts: [{ type: "text", text: "b" }] },
+    });
+
+    d.kick("test_a");
+    d.kick("test_b");
+    await (d as unknown as { tickSafe(): Promise<void> }).tickSafe();
+
+    expect(calls).toHaveLength(1);
+    expect([a.id, b.id]).toContain(calls[0]!.sessionId);
+    expect(d.runningSessionIds()).toEqual([calls[0]!.sessionId]);
+
+    gate.release.get(calls[0]!.sessionId)?.();
+    await d.drain(5_000);
+  });
+
   it("starts up to maxConcurrentSessions distinct sessions for one agent", async () => {
     const gate = deferredTurns();
     const { manager, calls } = fakeManager(

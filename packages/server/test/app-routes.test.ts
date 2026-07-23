@@ -141,6 +141,45 @@ describe("agents CRUD", () => {
     );
   });
 
+  it("persists and validates per-agent parallel session setting", async () => {
+    await createAgent("helper", "Helper", { maxConcurrentSessions: 3 });
+
+    let res = await req("/api/agents/helper");
+    expect(res.status).toBe(200);
+    expect((await res.json()).maxConcurrentSessions).toBe(3);
+
+    res = await req("/api/agents/helper", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ maxConcurrentSessions: 5 }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).maxConcurrentSessions).toBe(5);
+
+    const agentFile = path.join(dataDir, "agents", "helper", "AGENT.md");
+    expect(readFileSync(agentFile, "utf8")).toContain(
+      "maxConcurrentSessions: 5"
+    );
+
+    res = await req("/api/agents/helper", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ maxConcurrentSessions: 0 }),
+    });
+    expect(res.status).toBe(400);
+
+    res = await req("/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: "too-parallel",
+        name: "Too Parallel",
+        maxConcurrentSessions: 6,
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   it("rejects invalid definitions and unknown ids", async () => {
     const bad = await req("/api/agents", {
       method: "POST",

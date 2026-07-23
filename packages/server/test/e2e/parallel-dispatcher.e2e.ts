@@ -667,4 +667,289 @@ describe("parallel dispatcher (e2e)", () => {
     sseA.close();
     sseB.close();
   });
+
+  it("holds an agent-wide notice at capacity and claims it once after a slot frees", async () => {
+    await createAgent("parallel", 2);
+    const a = srv.manager.sessionStore.create("parallel");
+    const b = srv.manager.sessionStore.create("parallel");
+    const sseA = await openSessionStream(a.id);
+    const sseB = await openSessionStream(b.id);
+
+    deliverUserMessage("parallel", a.id, "A [[mock:slow-long]]");
+    deliverUserMessage("parallel", b.id, "B [[mock:slow-long]]");
+    await Promise.all([
+      sseA.waitFor(isState("running"), 8_000),
+      sseB.waitFor(isState("running"), 8_000),
+    ]);
+    await waitForHomeRunningIds(new Set([a.id, b.id]));
+
+    const aRunningBefore = stateCount(sseA, "running");
+    const bRunningBefore = stateCount(sseB, "running");
+    srv.manager.inboxStore.deliver({
+      agentId: "parallel",
+      kind: "system_notice",
+      source: "system",
+      sourceId: "test",
+      relatedSession: null,
+      payload: {
+        eventKind: "agent_wide_after_capacity",
+        payload: { marker: "wide-capacity" },
+      },
+    });
+    srv.manager.dispatcher.kick("e2e_agent_wide_at_capacity");
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(stateCount(sseA, "running")).toBe(aRunningBefore);
+    expect(stateCount(sseB, "running")).toBe(bRunningBefore);
+
+    await waitUntil(
+      async () => {
+        const aHistory = JSON.stringify(await c.messages(a.id));
+        const bHistory = JSON.stringify(await c.messages(b.id));
+        const claims =
+          (aHistory.includes("agent_wide_after_capacity") ? 1 : 0) +
+          (bHistory.includes("agent_wide_after_capacity") ? 1 : 0);
+        return claims === 1;
+      },
+      { timeoutMs: 20_000, intervalMs: 100 }
+    );
+    await waitUntil(
+      async () => (await homeRunningIds()).size === 0,
+      { timeoutMs: 20_000, intervalMs: 100 }
+    );
+
+    const aHistory = JSON.stringify(await c.messages(a.id));
+    const bHistory = JSON.stringify(await c.messages(b.id));
+    const claims =
+      (aHistory.includes("agent_wide_after_capacity") ? 1 : 0) +
+      (bHistory.includes("agent_wide_after_capacity") ? 1 : 0);
+    expect(claims).toBe(1);
+
+    sseA.close();
+    sseB.close();
+  });
+
+  it("keeps real task comment events isolated to their related session", async () => {
+    await createAgent("parallel", 2);
+    const a = srv.manager.sessionStore.create("parallel");
+    const b = srv.manager.sessionStore.create("parallel");
+    const sseA = await openSessionStream(a.id);
+    const sseB = await openSessionStream(b.id);
+    const task = await srv.manager.taskStore.create({
+      title: "Task event belongs to B",
+      assignee: "parallel",
+      created_by: "user",
+      session_id: b.id,
+    });
+
+    deliverUserMessage("parallel", a.id, "A [[mock:slow]]");
+    deliverUserMessage("parallel", b.id, "B [[mock:slow]]");
+    await Promise.all([
+      sseA.waitFor(isState("running"), 8_000),
+      sseB.waitFor(isState("running"), 8_000),
+    ]);
+
+    await srv.manager.taskStore.addComment({
+      taskId: task.id,
+      author: "user",
+      kind: "result",
+      body: "task event only for session b",
+    });
+
+    await Promise.all([
+      sseA.waitFor(isState("idle"), 15_000),
+      sseB.waitFor(isState("idle"), 15_000),
+    ]);
+    await waitForStateCount(sseB, "running", 2, 8_000);
+    await waitForStateCount(sseB, "idle", 2, 12_000);
+
+    const aHistory = JSON.stringify(await c.messages(a.id));
+    const bHistory = JSON.stringify(await c.messages(b.id));
+    expect(aHistory).not.toContain("task event only for session b");
+    expect(bHistory).toContain("task event only for session b");
+
+    sseA.close();
+    sseB.close();
+  });
+
+  it("keeps process completion wakes in the launching session while another session runs", async () => {
+    await createAgent("parallel", 2);
+    const a = randomUUID();
+    const b = srv.manager.sessionStore.create("parallel");
+    const sseA = await openSessionStream(a);
+    const sseB = await openSessionStream(b.id);
+    const args = {
+      action: "run",
+      command: "node -e \"setTimeout(()=>console.log('done'), 500)\"",
+      waitMs: 0,
+      timeoutMs: 5_000,
+    };
+
+    deliverUserMessage("parallel", b.id, "B [[mock:slow-long]]");
+    await sseB.waitFor(isState("running"), 8_000);
+    await postChat(
+      "parallel",
+      a,
+      `[[mock:tool:process:${JSON.stringify(args)}]]`
+    );
+
+    await waitForStateCount(sseA, "idle", 1, 20_000);
+    await waitForStateCount(sseA, "running", 2, 12_000);
+    await waitForStateCount(sseA, "idle", 2, 12_000);
+    expect(eventDataIncludes(sseA, "process_completed")).toBe(true);
+
+    await sseB.waitFor(isState("idle"), 20_000);
+    const aHistory = JSON.stringify(await c.messages(a));
+    const bHistory = JSON.stringify(await c.messages(b.id));
+    expect(aHistory).toContain("process_completed");
+    expect(bHistory).not.toContain("process_completed");
+
+    sseA.close();
+    sseB.close();
+  });
+
+  it("frees agent capacity after aborting an interactive turn", async () => {
+    await createAgent("parallel", 1);
+    const a = randomUUID();
+    const b = randomUUID();
+    const sseA = await openSessionStream(a);
+    const sseB = await openSessionStream(b);
+
+    const first = await postChat("parallel", a, "A [[mock:slow-long]]");
+    expect(first.queued).toBeUndefined();
+    await sseA.waitFor(isState("running"), 8_000);
+
+    const queued = await postChat(
+      "parallel",
+      b,
+      "B [[mock:text:after abort]]"
+    );
+    expect(queued).toMatchObject({
+      queued: true,
+      queuedReason: "agent_capacity",
+    });
+    expect(stateCount(sseB, "running")).toBe(0);
+
+    await waitUntil(
+      async () => {
+        const res = await c.req(`/api/sessions/${a}/active-turn`, {
+          method: "DELETE",
+        });
+        return res.status === 200;
+      },
+      { timeoutMs: 3_000, intervalMs: 100 }
+    );
+
+    await sseA.waitFor(isState("idle"), 12_000);
+    await sseB.waitFor(isState("running"), 8_000);
+    await sseB.waitFor(isState("idle"), 12_000);
+    await waitForAssistantText(b, "after abort");
+
+    sseA.close();
+    sseB.close();
+  });
+
+  it("preserves order for multiple queued user messages in the same session", async () => {
+    await createAgent("parallel", 1);
+    const sessionId = randomUUID();
+    const sse = await openSessionStream(sessionId);
+
+    await postChat("parallel", sessionId, "first [[mock:slow]]");
+    await sse.waitFor(isState("running"), 8_000);
+    const second = await postChat(
+      "parallel",
+      sessionId,
+      "second [[mock:text:second reply]]"
+    );
+    const third = await postChat(
+      "parallel",
+      sessionId,
+      "third [[mock:text:third reply]]"
+    );
+    expect(second).toMatchObject({ queued: true });
+    expect(third).toMatchObject({ queued: true });
+
+    await waitForStateCount(sse, "idle", 1, 15_000);
+    await waitForStateCount(sse, "running", 2, 8_000);
+    await waitForStateCount(sse, "idle", 2, 12_000);
+    await waitForAssistantText(sessionId, "third reply");
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(stateCount(sse, "running")).toBe(2);
+
+    const userTexts = (await c.messages(sessionId))
+      .filter((message) => message.role === "user")
+      .map((message) => assistantText(message.parts));
+    expect(userTexts).toEqual([
+      "first [[mock:slow]]",
+      "second [[mock:text:second reply]]",
+      "third [[mock:text:third reply]]",
+    ]);
+
+    sse.close();
+  });
+
+  it("does not let one agent's capacity block another agent", async () => {
+    await c.createAgent("busy", "busy", { maxConcurrentSessions: 1 });
+    await c.createAgent("free", "free", { maxConcurrentSessions: 1 });
+    const busySession = srv.manager.sessionStore.create("busy");
+    const freeSession = srv.manager.sessionStore.create("free");
+    const sseBusy = await openSessionStream(busySession.id);
+    const sseFree = await openSessionStream(freeSession.id);
+
+    deliverUserMessage("busy", busySession.id, "busy [[mock:slow-long]]");
+    await sseBusy.waitFor(isState("running"), 8_000);
+    deliverUserMessage("free", freeSession.id, "free [[mock:slow]]");
+    await sseFree.waitFor(isState("running"), 8_000);
+    await waitForHomeRunningIds(new Set([busySession.id, freeSession.id]));
+
+    await Promise.all([
+      sseBusy.waitFor(isState("idle"), 20_000),
+      sseFree.waitFor(isState("idle"), 12_000),
+    ]);
+
+    sseBusy.close();
+    sseFree.close();
+  });
+
+  it("keeps a deferred targeted wake queued while capacity is full", async () => {
+    await createAgent("parallel", 1);
+    const deferred = srv.manager.sessionStore.create("parallel");
+    const busy = srv.manager.sessionStore.create("parallel");
+    const sseDeferred = await openSessionStream(deferred.id);
+    const sseBusy = await openSessionStream(busy.id);
+    srv.manager.sessionStore.setDeferUntil(
+      deferred.id,
+      Math.floor(Date.now() / 1000) + 3600
+    );
+
+    deliverUserMessage("parallel", busy.id, "busy [[mock:slow-long]]");
+    await sseBusy.waitFor(isState("running"), 8_000);
+    srv.manager.inboxStore.deliver({
+      agentId: "parallel",
+      kind: "system_notice",
+      source: "system",
+      sourceId: "test",
+      relatedSession: deferred.id,
+      payload: {
+        eventKind: "deferred_after_capacity",
+        payload: { marker: "defer-capacity" },
+      },
+    });
+    srv.manager.dispatcher.kick("e2e_defer_at_capacity");
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(stateCount(sseDeferred, "running")).toBe(0);
+
+    await sseBusy.waitFor(isState("idle"), 20_000);
+    await sseDeferred.waitFor(isState("running"), 8_000);
+    await sseDeferred.waitFor(isState("idle"), 12_000);
+
+    const deferredHistory = JSON.stringify(await c.messages(deferred.id));
+    const busyHistory = JSON.stringify(await c.messages(busy.id));
+    expect(deferredHistory).toContain("deferred_after_capacity");
+    expect(busyHistory).not.toContain("deferred_after_capacity");
+
+    sseDeferred.close();
+    sseBusy.close();
+  });
 });

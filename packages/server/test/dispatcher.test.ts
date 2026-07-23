@@ -464,6 +464,28 @@ describe("Dispatcher spawn rule", () => {
     expect(d.runningSessionIds()).toEqual([interactive.id]);
   });
 
+  it("observes maxConcurrentSessions updates without restart", async () => {
+    const gate = deferredTurns();
+    const agentDef: FakeAgentDef = { id: "a1", maxConcurrentSessions: 1 };
+    const { manager, calls } = fakeManager([agentDef], gate.turn);
+    await makeBoundTask("a1");
+    await makeBoundTask("a1");
+
+    const d = makeDispatcher(manager);
+    await d.start();
+
+    expect(calls).toHaveLength(1);
+    agentDef.maxConcurrentSessions = 2;
+    d.kick("test_capacity_update");
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(new Set(d.runningSessionIds())).toEqual(
+      new Set(calls.map((call) => call.sessionId))
+    );
+
+    for (const call of calls) gate.release.get(call.sessionId)?.();
+    await d.drain(5_000);
+  });
+
   it("binds unbound ready tasks to a fresh session and spawns it", async () => {
     const { manager, calls } = fakeManager(["a1"]);
     const task = await taskStore.create({
@@ -573,6 +595,37 @@ describe("Dispatcher failure handling", () => {
       "Unsupported model gpt-5.2 for OpenAI OAuth"
     );
     expect(comments.at(-1)?.body).not.toContain("[object Object]");
+  });
+
+  it("parks only the failing session when parallel turns overlap", async () => {
+    const gate = deferredTurns();
+    const failing = await makeBoundTask("a1");
+    const survivor = await makeBoundTask("a1");
+    const { manager, calls } = fakeManager(
+      [{ id: "a1", maxConcurrentSessions: 2 }],
+      async (sessionId) => {
+        if (sessionId === failing.session.id) {
+          const task = taskStore.list({ session_id: sessionId })[0];
+          if (task) await taskStore.update(task.id, { status: "in_progress" });
+          throw new Error("fail one session");
+        }
+        await gate.turn(sessionId);
+      }
+    );
+
+    const d = makeDispatcher(manager);
+    await d.start();
+
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    await vi.waitFor(() =>
+      expect(taskStore.get(failing.task.id)?.status).toBe("blocked")
+    );
+    expect(taskStore.get(survivor.task.id)?.status).toBe("open");
+    expect(d.isRunning(survivor.session.id)).toBe(true);
+    expect(d.isRunning(failing.session.id)).toBe(false);
+
+    gate.release.get(survivor.session.id)?.();
+    await d.drain(5_000);
   });
 
   it("does not park any task when a failed turn claimed no in_progress task", async () => {

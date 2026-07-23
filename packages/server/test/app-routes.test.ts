@@ -180,6 +180,33 @@ describe("agents CRUD", () => {
     expect(res.status).toBe(400);
   });
 
+  it("preserves memory extraction and parallel settings across partial updates", async () => {
+    await createAgent("helper", "Helper", {
+      memoryExtractionEnabled: false,
+      maxConcurrentSessions: 3,
+    });
+
+    let res = await req("/api/agents/helper", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ maxConcurrentSessions: 4 }),
+    });
+    expect(res.status).toBe(200);
+    let body = await res.json();
+    expect(body.memoryExtractionEnabled).toBe(false);
+    expect(body.maxConcurrentSessions).toBe(4);
+
+    res = await req("/api/agents/helper", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ memoryExtractionEnabled: true }),
+    });
+    expect(res.status).toBe(200);
+    body = await res.json();
+    expect(body.memoryExtractionEnabled).toBe(true);
+    expect(body.maxConcurrentSessions).toBe(4);
+  });
+
   it("rejects invalid definitions and unknown ids", async () => {
     const bad = await req("/api/agents", {
       method: "POST",

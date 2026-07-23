@@ -376,6 +376,47 @@ describe("InboxStore — session-aware claim", () => {
     expect([...summary.targetedSessionIds].sort()).toEqual(["s1", "s2"]);
     expect(summary.hasAgentWide).toBe(true);
   });
+
+  it("cancels a queued user message only for the matching session", () => {
+    inbox.deliver({
+      agentId: "agent-a",
+      kind: "user_message",
+      source: "user",
+      sourceId: "same-message-id",
+      relatedSession: "s1",
+      payload: { id: "same-message-id", role: "user", parts: [] },
+    });
+    const second = inbox.deliver({
+      agentId: "agent-a",
+      kind: "user_message",
+      source: "user",
+      sourceId: "same-message-id",
+      relatedSession: "s2",
+      payload: { id: "same-message-id", role: "user", parts: [] },
+    });
+    const otherAgent = inbox.deliver({
+      agentId: "agent-b",
+      kind: "user_message",
+      source: "user",
+      sourceId: "same-message-id",
+      relatedSession: "s1",
+      payload: { id: "same-message-id", role: "user", parts: [] },
+    });
+
+    const cancelled = inbox.cancelQueuedUserMessage({
+      agentId: "agent-a",
+      messageId: "same-message-id",
+      sessionId: "s1",
+    });
+
+    expect(cancelled).toBe(1);
+    expect(inbox.pendingFor("agent-a").map((row) => row.id)).toEqual([
+      second,
+    ]);
+    expect(inbox.pendingFor("agent-b").map((row) => row.id)).toEqual([
+      otherAgent,
+    ]);
+  });
 });
 
 describe("EventStore — unresolvedPingsBySession (inbox resolution rule)", () => {

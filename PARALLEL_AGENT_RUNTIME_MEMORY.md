@@ -7,7 +7,7 @@
 - Dev data dir: `/private/tmp/openacme-parallel-plan/.openacme-dev`
 - Dev port: `127.0.0.1:3457`
 - Current slice: complete
-- Last verified command: `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts`; `pnpm --filter @openacme/server test -- dispatcher.test.ts app-routes.test.ts`; `pnpm --filter @openacme/server check-types`
+- Last verified command: `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts`; `pnpm --filter @openacme/server test -- dispatcher.test.ts app-routes.test.ts`; `pnpm --filter @openacme/db test -- stores.test.ts`; `pnpm --filter web test:e2e -- agent-edit.spec.ts`; `pnpm --filter @openacme/server check-types`; `pnpm --filter @openacme/db check-types`; `pnpm --filter web check-types`
 
 ## Standing Decisions
 
@@ -94,28 +94,34 @@
 - Validation: `pnpm --filter @openacme/server test -- dispatcher.test.ts` passed 24/24; `pnpm --filter @openacme/server test -- app-routes.test.ts` passed 18/18; `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts` passed 15/15; `pnpm --filter @openacme/server check-types` passed.
 - Status: complete.
 
+### Slice 10 - Additional Parallel Coverage Expansion
+
+- Goal: turn the remaining high-value coverage backlog into actual tests and run them.
+- Implementation:
+  - `packages/db/test/stores.test.ts`: added queued user-message cancel scoping by `(agentId, messageId, sessionId)`.
+  - `packages/server/test/dispatcher.test.ts`: added runtime `maxConcurrentSessions` update coverage and parallel failure isolation.
+  - `packages/server/test/app-routes.test.ts`: added partial update preservation for `memoryExtractionEnabled` and `maxConcurrentSessions`.
+  - `packages/server/test/e2e/parallel-dispatcher.e2e.ts`: expanded from 15 to 22 real-platform tests, adding agent-wide-at-capacity, real task comment event isolation, process completion isolation while another session runs, interactive abort capacity release, multiple same-session queued message ordering, multi-agent capacity independence, and deferred targeted wake queued behind capacity.
+  - `apps/web/e2e/agent-edit.spec.ts`: added Playwright coverage for the Agent Settings tab `Parallel sessions` control, warning, save, and reload persistence.
+- Validation:
+  - `pnpm --filter @openacme/db test -- stores.test.ts` passed 25/25.
+  - `pnpm --filter @openacme/server test -- dispatcher.test.ts` passed 26/26.
+  - `pnpm --filter @openacme/server test -- app-routes.test.ts` passed 19/19.
+  - `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts` passed 22/22.
+  - `pnpm --filter web test:e2e -- agent-edit.spec.ts` passed 2/2 after installing the missing local Playwright Chromium binary.
+  - `pnpm --filter @openacme/server check-types`, `pnpm --filter @openacme/db check-types`, and `pnpm --filter web check-types` passed.
+- Status: complete.
+
 ## Open Risks
 
 - Full `pnpm check-types` still stops in baseline `@openacme/cli` package-resolution/type errors during the commit hook (`@openacme/server` cannot be resolved from CLI sources, plus existing implicit-any/type shape errors). The targeted package checks used for this feature pass.
 
 ## Additional Coverage Backlog
 
-- Priority 1 before PR review:
-  - Add `cancelQueuedUserMessage` session-scoping coverage in `packages/db/test/stores.test.ts`.
-  - Add dispatcher parallel failure isolation: with two active sessions, one failing turn parks only its own claimed task.
-  - Add e2e for agent-wide inbox notice arriving while capacity is full, then single-claiming after a slot frees.
-  - Add dispatcher/e2e coverage that changing `maxConcurrentSessions` at runtime is observed without a daemon restart.
-- Priority 2:
-  - Real task-tool result isolation while two same-agent sessions run.
-  - Process completion isolation while another same-agent session is running.
-  - Interactive abort frees capacity and lets queued work start.
-  - Two same-session queued user messages preserve order and do not create duplicate active turns.
-  - One agent at capacity does not block another agent's ready work.
-  - Deferred targeted inbox wake remains queued while capacity is full, then still bypasses defer after a slot frees.
-- Priority 3:
-  - Automated browser regression for the Agent Settings tab `Parallel sessions` control and warning.
-  - API regression that partial Settings updates preserve both `memoryExtractionEnabled` and `maxConcurrentSessions`.
+- Priority 1: complete in Slice 10.
+- Priority 2: complete in Slice 10.
+- Priority 3: complete in Slice 10.
 
 ## Next Action
 
-Start the next TDD coverage slice from the Priority 1 backlog.
+Review the expanded test diff, then commit and push Slice 10.

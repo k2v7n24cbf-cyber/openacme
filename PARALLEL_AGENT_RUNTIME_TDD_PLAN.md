@@ -531,6 +531,8 @@ for behavior the current implementation already intends to preserve.
    - Why: settings are runtime-facing; persistence alone does not prove the
      scheduler observes the new value.
 
+Status: implemented in Slice 10 and validated.
+
 ### Priority 2: Strong Regression Coverage
 
 5. Real task-tool result isolation under parallel sessions
@@ -583,6 +585,8 @@ for behavior the current implementation already intends to preserve.
     - Why: current e2e proves targeted inbox bypasses defer with available
       capacity, not while queued behind capacity.
 
+Status: implemented in Slice 10 and validated.
+
 ### Priority 3: UI/Smoke Automation
 
 11. Agent Settings tab browser regression
@@ -600,6 +604,8 @@ for behavior the current implementation already intends to preserve.
     - Expected: partial updates do not reset the other field.
     - Why: both controls share the same settings surface and AGENT.md
       frontmatter path.
+
+Status: implemented in Slice 10 and validated.
 
 ## Implementation Slices For Sub-Agents
 

@@ -4,9 +4,9 @@
  * smaller state model:
  *
  *   - One `setInterval(60_000)` tick is the autonomous floor.
- *   - Per-agent serial chain (`Map<agentId, Promise>`) ensures one
- *     turn at a time per agent.
- *   - Spawn rule: chain free AND (inbox rows OR in_progress OR ready
+ *   - Per-agent capacity (`maxConcurrentSessions`, default 1) bounds
+ *     how many distinct sessions can run for one canonical agent.
+ *   - Spawn rule: capacity free AND (inbox rows OR in_progress OR ready
  *     open OR only-blocked tasks).
  *   - `sessions.defer_until` honoured — skips routine spawns while
  *     active, bypassed by new inbox rows.
@@ -23,8 +23,8 @@
  *   - heartbeat probes / `probeArmed` cron registry
  *   - `armed` cron registry for `start_at` (tick reads `start_at` ≤ now)
  *   - echo filter (moved to inbox-delivery boundary in AgentManager)
- *   - `wakeRequestedDuringTurn` (chain pickup handles in-flight
- *     events naturally — they sit in inbox until the chain frees up)
+ *   - `wakeRequestedDuringTurn` (capacity pickup handles in-flight
+ *     events naturally — they sit in inbox until a slot frees up)
  */
 
 import type { TaskStore, Task } from "@openacme/tasks";
@@ -40,6 +40,7 @@ const log = createLogger("server.dispatcher");
 const DEFAULT_TICK_MS = 60_000;
 /** Park-on-failure backoff. Same value the old TaskScheduler used. */
 const PARK_BACKOFF_MS = 5 * 60_000;
+type ParallelSchedulingPolicy = "lane_first" | "chain_first";
 
 export interface DispatcherOptions {
   taskStore: TaskStore;
@@ -62,8 +63,10 @@ export class Dispatcher {
   private readonly now: () => Date;
   private readonly tickIntervalMs: number;
 
-  /** Per-agent serial chain — only one turn at a time per agent. */
-  private chains = new Map<string, Promise<void>>();
+  /** Autonomous turns currently in flight, keyed by session id. */
+  private activeTurns = new Map<string, Promise<void>>();
+  /** Active autonomous session ids by canonical agent id. */
+  private activeByAgent = new Map<string, Set<string>>();
   /** Sessions currently running a turn (autonomous OR interactive).
    *  Powers `runningSessionIds()` for the home view. */
   private runningSessions = new Set<string>();
@@ -80,9 +83,18 @@ export class Dispatcher {
   /** True between `start()` and `stop()`. */
   private running = false;
   private timer: NodeJS.Timeout | null = null;
-  /** A signal arrived while an agent chain was busy. Run one pass as
-   *  soon as the chain frees so the inbox row is picked up promptly. */
-  private kickAfterChain = false;
+  /** An agent had more eligible work than free slots. Run one pass as
+   *  soon as any of that agent's active turns frees a slot. */
+  private kickAfterRunAgents = new Set<string>();
+  /** Serialize scheduler passes. `kick()` can be called from many inbox/event
+   *  paths at once; overlapping ticks would compute capacity from stale
+   *  active-session state. */
+  private tickInFlight: Promise<void> | null = null;
+  private tickAgain = false;
+  /** Monotonic in-memory sequence used by `lane_first` scheduling to
+   *  prefer sessions that have not yet had a turn in this daemon run. */
+  private runSequence = 0;
+  private lastRunSequenceBySession = new Map<string, number>();
 
   constructor(opts: DispatcherOptions) {
     this.taskStore = opts.taskStore;
@@ -113,21 +125,21 @@ export class Dispatcher {
   }
 
   /**
-   * Await any in-flight turn chains. Use during graceful shutdown
+   * Await any in-flight autonomous turns. Use during graceful shutdown
    * (CLI exit, daemon stop) after `stop()`. Same shape as the old
    * scheduler — bounded by `timeoutMs` so a turn stuck on a slow
    * LLM call doesn't block exit indefinitely.
    */
   async drain(timeoutMs = 5_000): Promise<void> {
-    const chains = [...this.chains.values()];
-    if (chains.length === 0) return;
+    const turns = [...this.activeTurns.values()];
+    if (turns.length === 0) return;
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<void>((resolve) => {
       timer = setTimeout(() => resolve(), timeoutMs);
       if (typeof timer.unref === "function") timer.unref();
     });
     await Promise.race([
-      Promise.allSettled(chains).then(() => undefined),
+      Promise.allSettled(turns).then(() => undefined),
       timeout,
     ]);
     if (timer) clearTimeout(timer);
@@ -162,6 +174,20 @@ export class Dispatcher {
   }
 
   /**
+   * True when starting a new turn for this session would respect both
+   * same-session serialization and the agent's configured capacity.
+   */
+  canStartRun(agentId: string, sessionId: string): boolean {
+    if (this.isRunning(sessionId)) return false;
+    const def = this.agentManager.getAgentDef(agentId);
+    if (!def) return false;
+    return (
+      this.activeSessionIdsForAgent(agentId).size <
+      this.maxConcurrentSessions(def)
+    );
+  }
+
+  /**
    * `/api/chat` calls this when it starts driving a turn directly
    * (via `runChatTurn`). The dispatcher's tick skips sessions in
    * this set so we don't try to spawn an autonomous turn into the
@@ -186,7 +212,9 @@ export class Dispatcher {
    *  Used after server-side completion signals land in the inbox. */
   kick(reason = "manual"): void {
     if (!this.running) return;
-    if (this.chains.size > 0) this.kickAfterChain = true;
+    for (const agentId of this.activeByAgent.keys()) {
+      this.kickAfterRunAgents.add(agentId);
+    }
     this.tickSafe().catch((e) =>
       log.warn({ err: e, reason }, "dispatcher kick threw")
     );
@@ -196,17 +224,63 @@ export class Dispatcher {
 
   private async tickSafe(): Promise<void> {
     if (!this.running) return;
-    try {
-      await this.tick();
-    } catch (e) {
-      log.warn({ err: e }, "dispatcher tick failed");
+    if (this.tickInFlight) {
+      this.tickAgain = true;
+      await this.tickInFlight;
+      return;
     }
+
+    const run = this.drainTickQueue();
+    this.tickInFlight = run;
+    try {
+      await run;
+    } finally {
+      if (this.tickInFlight === run) {
+        this.tickInFlight = null;
+      }
+    }
+  }
+
+  private async drainTickQueue(): Promise<void> {
+    do {
+      this.tickAgain = false;
+      if (!this.running) return;
+      try {
+        await this.tick();
+      } catch (e) {
+        log.warn({ err: e }, "dispatcher tick failed");
+      }
+    } while (this.running && this.tickAgain);
+  }
+
+  private maxConcurrentSessions(agentDef: unknown): number {
+    const raw = (agentDef as { maxConcurrentSessions?: unknown })
+      .maxConcurrentSessions;
+    return typeof raw === "number" && Number.isFinite(raw)
+      ? Math.max(1, Math.min(5, Math.trunc(raw)))
+      : 1;
+  }
+
+  private parallelSchedulingPolicy(agentDef: unknown): ParallelSchedulingPolicy {
+    const raw = (agentDef as { parallelSchedulingPolicy?: unknown })
+      .parallelSchedulingPolicy;
+    return raw === "chain_first" ? "chain_first" : "lane_first";
+  }
+
+  private activeSessionIdsForAgent(agentId: string): Set<string> {
+    const ids = new Set(this.activeByAgent.get(agentId) ?? []);
+    for (const sessionId of this.interactiveBusy) {
+      const session = this.sessionStore.get(sessionId);
+      if (session?.agentId === agentId) ids.add(sessionId);
+    }
+    return ids;
   }
 
   /**
    * One pass over the board. Walks every agent; for each agent whose
-   * chain is free, finds the first session that has work and spawns
-   * a turn for it. State-checking only — no event routing, no debounce.
+   * capacity has room, finds sessions that have work and spawns turns
+   * up to the configured limit. State-checking only — no event routing,
+   * no debounce.
    */
   private async tick(): Promise<void> {
     const agents = this.agentManager.listAgents();
@@ -214,7 +288,9 @@ export class Dispatcher {
 
     for (const agentDef of agents) {
       const agentId = agentDef.id;
-      if (this.chains.has(agentId)) continue;
+      const limit = this.maxConcurrentSessions(agentDef);
+      const schedulingPolicy = this.parallelSchedulingPolicy(agentDef);
+      let available = limit - this.activeSessionIdsForAgent(agentId).size;
 
       // First, allocate sessions for any unbound ready tasks assigned
       // to this agent. The old scheduler did this on every relevant
@@ -223,29 +299,34 @@ export class Dispatcher {
       // mean the spawn loop below (per-session) never sees them.
       await this.bindUnboundTasks(agentId, nowMs);
 
-      const pending = this.inboxStore.pendingFor(agentId);
-      const inboxCount = pending.length;
+      const pending = this.inboxStore.pendingSummaryFor(agentId);
 
       // If the inbox has rows pointing at a specific session, prefer
       // that session as the spawn target. user_message rows always
-      // carry relatedSession; system_notices set it for task events
-      // that have a bound session. Spawning the "wrong" session would
-      // leave the relevant inbox row addressed-but-not-drainable.
-      const targetedSessions = new Set<string>();
-      for (const row of pending) {
-        if (row.relatedSession) targetedSessions.add(row.relatedSession);
-      }
+      // carry relatedSession. Human-authored task comments are a second
+      // priority tier: they are user attention, but direct chat/prompt
+      // messages still win when both arrive together.
+      const targetedSessions = pending.targetedSessionIds;
+      const userMessageSessions = pending.userMessageSessionIds;
+      const userTaskCommentSessions = pending.userTaskCommentSessionIds;
 
       const sessions = this.sessionStore.listActive(agentId);
-      // Sort: targeted sessions first, then everyone else by recency
-      // (listActive already returns by updated desc).
-      const ordered = [
-        ...sessions.filter((s) => targetedSessions.has(s.id)),
-        ...sessions.filter((s) => !targetedSessions.has(s.id)),
-      ];
+      const ordered = this.orderSessionsForScheduling(sessions, {
+        policy: schedulingPolicy,
+        targetedSessions,
+        userMessageSessions,
+        userTaskCommentSessions,
+      });
+      let agentWideAssigned = false;
 
       for (const session of ordered) {
+        if (this.runningSessions.has(session.id)) continue;
         if (this.interactiveBusy.has(session.id)) continue;
+
+        const hasTargetedInbox = targetedSessions.has(session.id);
+        const hasAgentWideInbox =
+          pending.hasAgentWide && !agentWideAssigned;
+        const hasInbox = hasTargetedInbox || hasAgentWideInbox;
 
         // Defer check — skip routine spawns until `defer_until`.
         // New inbox rows bypass: defer is "no routine checks," not
@@ -253,17 +334,64 @@ export class Dispatcher {
         if (
           session.deferUntil != null &&
           session.deferUntil * 1000 > nowMs &&
-          inboxCount === 0
+          !hasInbox
         ) {
           continue;
         }
 
-        if (this.shouldSpawn(session.id, nowMs, inboxCount)) {
-          this.enqueueTurn(agentId, session.id);
-          break; // one session per agent per tick (chain is per-agent)
+        if (this.shouldSpawn(session.id, nowMs, hasInbox)) {
+          if (available <= 0) {
+            if (limit > 1 || hasInbox) {
+              this.kickAfterRunAgents.add(agentId);
+            }
+            break;
+          }
+          if (this.enqueueTurn(agentId, session.id)) {
+            available--;
+            if (pending.hasAgentWide) agentWideAssigned = true;
+          }
         }
       }
     }
+  }
+
+  private orderSessionsForScheduling(
+    sessions: ReturnType<SessionStore["listActive"]>,
+    opts: {
+      policy: ParallelSchedulingPolicy;
+      targetedSessions: Set<string>;
+      userMessageSessions: Set<string>;
+      userTaskCommentSessions: Set<string>;
+    }
+  ): ReturnType<SessionStore["listActive"]> {
+    const indexed = sessions.map((session, index) => ({ session, index }));
+    indexed.sort((a, b) => {
+      // Direct human/user traffic always wins over every autonomous
+      // task-chain policy and over task-comment wakes.
+      const aUser = opts.userMessageSessions.has(a.session.id) ? 1 : 0;
+      const bUser = opts.userMessageSessions.has(b.session.id) ? 1 : 0;
+      if (aUser !== bUser) return bUser - aUser;
+
+      // Human task comments are user attention too, but can wait behind
+      // direct prompt/chat messages.
+      const aComment = opts.userTaskCommentSessions.has(a.session.id) ? 1 : 0;
+      const bComment = opts.userTaskCommentSessions.has(b.session.id) ? 1 : 0;
+      if (aComment !== bComment) return bComment - aComment;
+
+      if (opts.policy === "lane_first") {
+        const aLast = this.lastRunSequenceBySession.get(a.session.id) ?? 0;
+        const bLast = this.lastRunSequenceBySession.get(b.session.id) ?? 0;
+        if (aLast !== bLast) return aLast - bLast;
+      } else {
+        const aTargeted = opts.targetedSessions.has(a.session.id) ? 1 : 0;
+        const bTargeted = opts.targetedSessions.has(b.session.id) ? 1 : 0;
+        if (aTargeted !== bTargeted) return bTargeted - aTargeted;
+      }
+
+      // Preserve the store's recency order for ties.
+      return a.index - b.index;
+    });
+    return indexed.map(({ session }) => session);
   }
 
   /**
@@ -276,7 +404,18 @@ export class Dispatcher {
   private async bindUnboundTasks(agentId: string, nowMs: number): Promise<void> {
     const tasks = this.taskStore.list({ assignee: agentId });
     for (const t of tasks) {
-      if (t.session_id) continue;
+      if (t.session_id) {
+        if (this.sessionStore.get(t.session_id)) continue;
+        try {
+          await this.taskStore.update(t.id, { session_id: null });
+        } catch (e) {
+          log.warn(
+            { err: e, taskId: t.id, sessionId: t.session_id, agentId },
+            "bindUnboundTasks: failed to clear dangling session binding"
+          );
+          continue;
+        }
+      }
       if (t.status !== "open") continue;
       if (!isStartReady(t.start_at, nowMs)) continue;
       if (!this.depsSatisfied(t)) continue;
@@ -314,9 +453,9 @@ export class Dispatcher {
   private shouldSpawn(
     sessionId: string,
     nowMs: number,
-    inboxCount: number
+    hasInbox: boolean
   ): boolean {
-    if (inboxCount > 0) return true;
+    if (hasInbox) return true;
     const tasks = this.taskStore.list({ session_id: sessionId });
     let hasReady = false;
     let hasBlocked = false;
@@ -329,7 +468,7 @@ export class Dispatcher {
         // calling task_update(done) each cycle) gets re-woken every 60s
         // — ~30 wasted LLM calls per intended 30-min interval. Real
         // signals (inbox row, cross-agent comment) still bypass: that's
-        // handled above by `inboxCount > 0`.
+        // handled above by `hasInbox`.
         if (
           t.recurrence?.kind === "interval" &&
           t.last_run_at != null
@@ -380,8 +519,9 @@ export class Dispatcher {
    * for the rest of the window. Only an explicit `defer_session` call
    * (or natural expiry) changes it.
    */
-  private enqueueTurn(agentId: string, sessionId: string): void {
-    if (this.chains.has(agentId)) return;
+  private enqueueTurn(agentId: string, sessionId: string): boolean {
+    if (this.runningSessions.has(sessionId)) return false;
+    if (this.interactiveBusy.has(sessionId)) return false;
     if (!this.agentExists(agentId)) {
       if (!this.missingAgentsLogged.has(agentId)) {
         this.missingAgentsLogged.add(agentId);
@@ -390,10 +530,17 @@ export class Dispatcher {
           "agent referenced by sessions/tasks but no longer exists — wakes skipped"
         );
       }
-      return;
+      return false;
     }
 
     this.runningSessions.add(sessionId);
+    this.lastRunSequenceBySession.set(sessionId, ++this.runSequence);
+    let active = this.activeByAgent.get(agentId);
+    if (!active) {
+      active = new Set<string>();
+      this.activeByAgent.set(agentId, active);
+    }
+    active.add(sessionId);
     if (this.broadcaster) {
       this.broadcaster.broadcast(sessionId, {
         kind: "session_state",
@@ -402,25 +549,28 @@ export class Dispatcher {
     }
 
     const promise = this.runTurn(agentId, sessionId).finally(() => {
-      this.chains.delete(agentId);
+      this.activeTurns.delete(sessionId);
       this.runningSessions.delete(sessionId);
+      const activeForAgent = this.activeByAgent.get(agentId);
+      activeForAgent?.delete(sessionId);
+      if (activeForAgent?.size === 0) this.activeByAgent.delete(agentId);
       if (this.broadcaster) {
         this.broadcaster.broadcast(sessionId, {
           kind: "session_state",
           state: "idle",
         });
       }
-      if (this.kickAfterChain) {
-        this.kickAfterChain = false;
+      if (this.kickAfterRunAgents.delete(agentId)) {
         this.tickSafe().catch((e) =>
           log.warn(
             { err: e, sessionId },
-            "post-chain dispatcher kick threw"
+            "post-run dispatcher kick threw"
           )
         );
       }
     });
-    this.chains.set(agentId, promise);
+    this.activeTurns.set(sessionId, promise);
+    return true;
   }
 
   private async runTurn(

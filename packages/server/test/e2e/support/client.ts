@@ -26,8 +26,12 @@ export function makeClient(baseUrl: string, token: string = e2eToken()) {
     });
   }
 
-  async function createAgent(id: string, name = id): Promise<void> {
-    const res = await post("/api/agents", { id, name });
+  async function createAgent(
+    id: string,
+    name = id,
+    extra: Record<string, unknown> = {}
+  ): Promise<void> {
+    const res = await post("/api/agents", { id, name, ...extra });
     expect(res.status, `create agent ${id}`).toBe(201);
   }
 

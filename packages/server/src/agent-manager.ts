@@ -71,7 +71,7 @@ import {
 import { ToolHostManager } from "@openacme/tool-host";
 import * as fs from "node:fs";
 import { MemoryStore } from "@openacme/memory";
-import { TaskStore } from "@openacme/tasks";
+import { TaskStore, type Task } from "@openacme/tasks";
 import {
   BrowserManager,
   createBrowserProvider,
@@ -363,8 +363,10 @@ export class AgentManager {
     //   2. Broadcaster — SSE fan-out to subscribed UI tabs.
     this.eventStore.onEmit((event) => {
       const recipients = new Set<string>();
+      let taskForEvent: Task | null = null;
       if (event.taskId) {
         const task = this.taskStore.get(event.taskId);
+        taskForEvent = task ?? null;
         if (task) {
           if (task.assignee) recipients.add(task.assignee);
           if (task.created_by) recipients.add(task.created_by);
@@ -378,26 +380,38 @@ export class AgentManager {
       }
       if (event.actor) recipients.delete(event.actor);
 
-      for (const agentId of recipients) {
-        try {
-          this.inboxStore.deliver({
-            agentId,
-            kind: "system_notice",
-            source: "system",
-            sourceId: event.actor ?? null,
-            relatedTask: event.taskId ?? null,
-            relatedSession: event.sessionId ?? null,
-            payload: {
-              eventKind: event.kind,
-              eventId: event.id,
-              payload: event.payload,
-            },
-          });
-        } catch (e) {
-          log.warn(
-            { err: e, eventId: event.id, agentId },
-            "inboxStore.deliver failed — signal lost for this agent"
-          );
+      const deliverToInbox =
+        event.kind !== "task_assigned" ||
+        taskForEvent == null ||
+        this.isTaskAssignmentWakeReady(taskForEvent);
+
+      if (deliverToInbox) {
+        let delivered = 0;
+        for (const agentId of recipients) {
+          try {
+            this.inboxStore.deliver({
+              agentId,
+              kind: "system_notice",
+              source: "system",
+              sourceId: event.actor ?? null,
+              relatedTask: event.taskId ?? null,
+              relatedSession: event.sessionId ?? null,
+              payload: {
+                eventKind: event.kind,
+                eventId: event.id,
+                payload: event.payload,
+              },
+            });
+            delivered++;
+          } catch (e) {
+            log.warn(
+              { err: e, eventId: event.id, agentId },
+              "inboxStore.deliver failed — signal lost for this agent"
+            );
+          }
+        }
+        if (delivered > 0) {
+          this.dispatcher.kick("task_event");
         }
       }
 
@@ -1337,6 +1351,19 @@ export class AgentManager {
     this.agentStore.upsert(provisioned);
     this.agents.delete(agentId);
     return provisioned.browser;
+  }
+
+  private isTaskAssignmentWakeReady(task: Task): boolean {
+    if (task.status === "in_progress") return true;
+    if (task.status !== "open") return false;
+    if (task.start_at != null) {
+      const startMs = Date.parse(task.start_at);
+      if (Number.isFinite(startMs) && startMs > Date.now()) return false;
+    }
+    return task.depends_on.every((depId) => {
+      const dependency = this.taskStore.get(depId);
+      return dependency?.status === "done";
+    });
   }
 
   /**

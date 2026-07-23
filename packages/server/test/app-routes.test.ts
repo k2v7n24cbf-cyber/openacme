@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigSchema } from "@openacme/config";
 import { createApp } from "../src/app.js";
 import type { AgentManager } from "../src/agent-manager.js";
@@ -49,11 +49,15 @@ function req(p: string, init: RequestInit = {}): Promise<Response> {
   return app.request(`http://127.0.0.1${p}`, { ...init, headers });
 }
 
-async function createAgent(id = "helper", name = "Helper") {
+async function createAgent(
+  id = "helper",
+  name = "Helper",
+  extra: Record<string, unknown> = {}
+) {
   const res = await req("/api/agents", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ id, name }),
+    body: JSON.stringify({ id, name, ...extra }),
   });
   expect(res.status).toBe(201);
   return (await res.json()) as { id: string };
@@ -135,6 +139,98 @@ describe("agents CRUD", () => {
     expect(readFileSync(agentFile, "utf8")).toContain(
       "memoryExtractionEnabled: false",
     );
+  });
+
+  it("persists and validates per-agent parallel session setting", async () => {
+    await createAgent("helper", "Helper", {
+      maxConcurrentSessions: 3,
+      parallelSchedulingPolicy: "chain_first",
+    });
+
+    let res = await req("/api/agents/helper");
+    expect(res.status).toBe(200);
+    let body = await res.json();
+    expect(body.maxConcurrentSessions).toBe(3);
+    expect(body.parallelSchedulingPolicy).toBe("chain_first");
+
+    res = await req("/api/agents/helper", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        maxConcurrentSessions: 5,
+        parallelSchedulingPolicy: "lane_first",
+      }),
+    });
+    expect(res.status).toBe(200);
+    body = await res.json();
+    expect(body.maxConcurrentSessions).toBe(5);
+    expect(body.parallelSchedulingPolicy).toBe("lane_first");
+
+    const agentFile = path.join(dataDir, "agents", "helper", "AGENT.md");
+    expect(readFileSync(agentFile, "utf8")).toContain(
+      "maxConcurrentSessions: 5"
+    );
+    expect(readFileSync(agentFile, "utf8")).toContain(
+      "parallelSchedulingPolicy: lane_first"
+    );
+
+    res = await req("/api/agents/helper", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ maxConcurrentSessions: 0 }),
+    });
+    expect(res.status).toBe(400);
+
+    res = await req("/api/agents/helper", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ parallelSchedulingPolicy: "random" }),
+    });
+    expect(res.status).toBe(400);
+
+    res = await req("/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: "too-parallel",
+        name: "Too Parallel",
+        maxConcurrentSessions: 6,
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("preserves memory extraction and parallel settings across partial updates", async () => {
+    await createAgent("helper", "Helper", {
+      memoryExtractionEnabled: false,
+      maxConcurrentSessions: 3,
+      parallelSchedulingPolicy: "chain_first",
+    });
+
+    let res = await req("/api/agents/helper", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ maxConcurrentSessions: 4 }),
+    });
+    expect(res.status).toBe(200);
+    let body = await res.json();
+    expect(body.memoryExtractionEnabled).toBe(false);
+    expect(body.maxConcurrentSessions).toBe(4);
+    expect(body.parallelSchedulingPolicy).toBe("chain_first");
+
+    res = await req("/api/agents/helper", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        memoryExtractionEnabled: true,
+        parallelSchedulingPolicy: "lane_first",
+      }),
+    });
+    expect(res.status).toBe(200);
+    body = await res.json();
+    expect(body.memoryExtractionEnabled).toBe(true);
+    expect(body.maxConcurrentSessions).toBe(4);
+    expect(body.parallelSchedulingPolicy).toBe("lane_first");
   });
 
   it("rejects invalid definitions and unknown ids", async () => {
@@ -227,6 +323,49 @@ describe("chat validation", () => {
       att.filename
     );
     expect(existsSync(pendingPath)).toBe(true);
+  });
+
+  it("queues a different session when the agent is at interactive capacity", async () => {
+    await createAgent("helper", "Helper", { maxConcurrentSessions: 1 });
+    const busy = manager.sessionStore.create("helper");
+    manager.dispatcher.markInteractiveBusy(busy.id);
+    const sessionId = "22222222-2222-4222-8222-222222222222";
+    const messageId = "msg-capacity";
+
+    const res = await req("/api/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        agentId: "helper",
+        sessionId,
+        messages: [
+          {
+            id: messageId,
+            role: "user",
+            parts: [{ type: "text", text: "queue me" }],
+          },
+        ],
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({
+      sessionId,
+      userMessageId: messageId,
+      queued: true,
+      queuedReason: "agent_capacity",
+    });
+    expect(body.assistantMessageId).toBeUndefined();
+    const pending = manager.inboxStore.pendingFor("helper");
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      kind: "user_message",
+      source: "user",
+      sourceId: messageId,
+      relatedSession: sessionId,
+    });
+    expect(manager.messageStore.getHistory(sessionId)).toEqual([]);
   });
 });
 
@@ -376,6 +515,35 @@ describe("tasks", () => {
       `/api/tasks/${encodeURIComponent("../escape")}`
     );
     expect(malformed.status).toBe(400);
+  });
+
+  it("kicks the dispatcher when a human task comment creates an inbox wake", async () => {
+    await createAgent("helper");
+    const session = manager.sessionStore.create("helper");
+    const task = await manager.taskStore.create({
+      title: "Comment wake target",
+      assignee: "helper",
+      created_by: "user",
+      session_id: session.id,
+      status: "done",
+    });
+    const kick = vi.spyOn(manager.dispatcher, "kick");
+
+    const res = await req(`/api/tasks/${task.id}/comments`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ body: "please look at this" }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(kick).toHaveBeenCalledWith("task_event");
+    const pending = manager.inboxStore.pendingFor("helper");
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      kind: "system_notice",
+      relatedTask: task.id,
+      relatedSession: session.id,
+    });
   });
 });
 

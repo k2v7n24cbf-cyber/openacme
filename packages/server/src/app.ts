@@ -583,20 +583,7 @@ export async function createApp(
       activeTurns.has(effectiveSessionId) ||
       manager.dispatcher.isRunning(effectiveSessionId);
 
-    // Mid-turn send semantics: if a turn is already running for this
-    // session, DON'T abort. Queue the user message to the inbox WITHOUT
-    // persisting to chat history yet — the autonomous turn that fires
-    // after the current turn ends will drain the inbox and persist the
-    // user message at the natural end of history (after the in-flight
-    // turn's assistant lands). Without deferred persist, history ends
-    // up [user1, user2, assistant1] which confuses the model on the
-    // follow-up turn — the model sees its own assistant as the last
-    // turn and won't naturally respond to the still-pending user2.
-    //
-    // UI: the page's optimistic update already shows the queued
-    // message; the persisted version arrives via broadcaster after
-    // drain with the same id so the optimistic row upserts in place.
-    if (inFlight) {
+    const queueUserMessage = (queuedReason?: "agent_capacity") => {
       if (!lastUser || lastUser.role !== "user") {
         return c.json({ error: "no_user_message" }, 400);
       }
@@ -624,13 +611,38 @@ export async function createApp(
         messageId: lastUser.id,
         parts: lastUser.parts as unknown[],
       });
+      if (queuedReason === "agent_capacity") {
+        manager.dispatcher.kick("chat_capacity_queue");
+      }
       return c.json({
         sessionId: effectiveSessionId,
         userMessageId: lastUser.id,
         // assistantMessageId omitted — the queued message will get
         // its own assistant id assigned by the autonomous turn.
         queued: true,
+        ...(queuedReason ? { queuedReason } : {}),
       });
+    };
+
+    // Mid-turn send semantics: if a turn is already running for this
+    // session, DON'T abort. Queue the user message to the inbox WITHOUT
+    // persisting to chat history yet — the autonomous turn that fires
+    // after the current turn ends will drain the inbox and persist the
+    // user message at the natural end of history (after the in-flight
+    // turn's assistant lands). Without deferred persist, history ends
+    // up [user1, user2, assistant1] which confuses the model on the
+    // follow-up turn — the model sees its own assistant as the last
+    // turn and won't naturally respond to the still-pending user2.
+    //
+    // UI: the page's optimistic update already shows the queued
+    // message; the persisted version arrives via broadcaster after
+    // drain with the same id so the optimistic row upserts in place.
+    if (inFlight) {
+      return queueUserMessage();
+    }
+
+    if (!manager.dispatcher.canStartRun(agentId, effectiveSessionId)) {
+      return queueUserMessage("agent_capacity");
     }
 
     // Standard interactive path — no turn running. Persist + broadcast

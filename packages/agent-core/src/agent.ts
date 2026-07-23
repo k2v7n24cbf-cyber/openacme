@@ -546,26 +546,28 @@ export class Agent {
         status: "open",
       })[0];
 
-    // Drain the per-agent inbox. Every event emit fans out a row here
+    // Claim this session's inbox rows. Every event emit fans out a row here
     // (see AgentManager's `eventStore.onEmit` hook, with same-agent
-    // echo suppression at the delivery boundary). Anything the agent
-    // should know about since its last turn is in this list. The rows
-    // are hard-deleted once we've materialized them into chat history
-    // below — the inbox is staging, the chat is the audit.
+    // echo suppression at the delivery boundary). The claim hard-deletes
+    // deliverable rows from the staging table before returning them; task
+    // events remain the durable audit log.
     let pendingInbox: InboxRow[] = [];
     try {
-      pendingInbox = this.inboxStore.pendingFor(this.config.id);
+      pendingInbox = this.inboxStore.claimForSession({
+        agentId: this.config.id,
+        sessionId: opts.sessionId,
+        includeAgentWide: true,
+      });
     } catch (e) {
       log.warn(
         { err: e, agentId: this.config.id, sessionId: opts.sessionId },
-        "inboxStore.pendingFor failed; turn will run without inbox content"
+        "inboxStore.claimForSession failed; turn will run without inbox content"
       );
     }
 
-    // Filter inbox rows to those for THIS session: user_messages with a
-    // matching relatedSession get persisted as real user-role chat rows
-    // here. user_messages for OTHER sessions stay in the inbox (different
-    // session's turn drains them). system_notices ride along regardless.
+    // User messages for THIS session get persisted as real user-role chat
+    // rows here. Rows for other sessions were never claimed and remain in
+    // the inbox for their own turns.
     const queuedUserMessagesForThisSession = pendingInbox.filter(
       (i) =>
         i.kind === "user_message" && i.relatedSession === opts.sessionId
@@ -706,7 +708,6 @@ export class Agent {
     // resolution rule honest about ordering, and lets SSE-subscribed
     // tabs render the wake row at the same instant the assistant
     // stream starts. Skipped entirely when there's no wake row.
-    let persistSucceeded = userMessage === null;
     if (userMessage) {
       try {
         this.messageStore.append(sessionId, {
@@ -715,7 +716,6 @@ export class Agent {
           parts: userMessage.parts as unknown[],
           metadata: { kind: "autonomous_event" },
         });
-        persistSucceeded = true;
         this.broadcaster?.broadcast(sessionId, {
           kind: "messages_appended",
           messages: [
@@ -729,37 +729,6 @@ export class Agent {
         });
       } catch (e) {
         log.warn({ err: e }, "runAutonomous: failed to pre-persist auto user message");
-      }
-    }
-
-    // Hard-delete rows we've handled. We've handled:
-    //   - All queued user_messages for THIS session (persisted above).
-    //   - system_notice rows once the wake row is persisted (or if
-    //     there is no wake row because we skipped it; either way the
-    //     system_notice is reflected in the prompt or correctly judged
-    //     unneeded).
-    // user_messages addressed to OTHER sessions stay in the inbox so
-    // their session's turn picks them up.
-    const idsToDelete: number[] = [];
-    for (const row of pendingInbox) {
-      if (row.kind === "user_message") {
-        if (row.relatedSession === opts.sessionId) idsToDelete.push(row.id);
-        // else: leave for other session
-      } else {
-        // system_notice — drained whether or not the wake row landed,
-        // since we either rendered it into a persisted wake row or
-        // deliberately skipped (e.g., would have been redundant).
-        if (persistSucceeded) idsToDelete.push(row.id);
-      }
-    }
-    if (idsToDelete.length > 0) {
-      try {
-        this.inboxStore.deleteDelivered(idsToDelete);
-      } catch (e) {
-        log.warn(
-          { err: e, count: idsToDelete.length },
-          "inboxStore.deleteDelivered failed; rows may re-deliver"
-        );
       }
     }
 
@@ -833,18 +802,14 @@ export class Agent {
       if (stepOpts.stepNumber === 0) return undefined;
       if (injectionCount >= MAX_INJECTIONS) return undefined;
       try {
-        const fresh = turnInboxStore.pendingFor(turnAgentId);
+        const fresh = turnInboxStore.claimForSession({
+          agentId: turnAgentId,
+          sessionId: turnSessionId,
+          includeAgentWide: true,
+        });
         if (fresh.length === 0) return undefined;
         const formatted = renderInboxItems(fresh);
         if (!formatted) return undefined;
-        try {
-          turnInboxStore.deleteDelivered(fresh.map((r) => r.id));
-        } catch (e) {
-          log.warn(
-            { err: e, sessionId: turnSessionId },
-            "mid-turn inbox delete failed; rows may re-inject"
-          );
-        }
         injectionCount++;
         return {
           messages: [

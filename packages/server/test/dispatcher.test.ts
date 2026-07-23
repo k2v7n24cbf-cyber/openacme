@@ -10,6 +10,7 @@ import {
   createInboxStore,
 } from "@openacme/db";
 import { TaskStore } from "@openacme/tasks";
+import { AutonomousTurnTimeout } from "@openacme/agent-core";
 import { Dispatcher } from "../src/dispatcher.js";
 import type { AgentManager } from "../src/agent-manager.js";
 
@@ -21,16 +22,24 @@ import type { AgentManager } from "../src/agent-manager.js";
  */
 
 type TurnCall = { agentId: string; sessionId: string };
+type FakeAgentDef = {
+  id: string;
+  maxConcurrentSessions?: number;
+  parallelSchedulingPolicy?: "lane_first" | "chain_first";
+};
 
 function fakeManager(
-  agentIds: string[],
+  agentDefs: Array<string | FakeAgentDef>,
   turn: (sessionId: string) => Promise<void> = async () => {}
 ): { manager: AgentManager; calls: TurnCall[] } {
   const calls: TurnCall[] = [];
+  const defs = agentDefs.map((agent) =>
+    typeof agent === "string" ? { id: agent } : agent
+  );
   const manager = {
-    listAgents: () => agentIds.map((id) => ({ id })),
+    listAgents: () => defs,
     getAgentDef: (id: string) =>
-      agentIds.includes(id) ? { id } : null,
+      defs.find((agent) => agent.id === id) ?? null,
     getAgent: (id: string) => ({
       runAutonomous: async ({ sessionId }: { sessionId: string }) => {
         calls.push({ agentId: id, sessionId });
@@ -39,6 +48,13 @@ function fakeManager(
     }),
   } as unknown as AgentManager;
   return { manager, calls };
+}
+
+function deferredTurns() {
+  const release = new Map<string, () => void>();
+  const turn = (sessionId: string) =>
+    new Promise<void>((resolve) => release.set(sessionId, resolve));
+  return { turn, release };
 }
 
 let dataDir: string;
@@ -121,6 +137,27 @@ describe("Dispatcher spawn rule", () => {
     expect(calls).toEqual([{ agentId: "a1", sessionId: session.id }]);
   });
 
+  it("does not pre-mark a task in_progress before the agent claims it", async () => {
+    const gate = deferredTurns();
+    const { manager, calls } = fakeManager(["a1"], gate.turn);
+    const task = await taskStore.create({
+      title: "wake-only",
+      assignee: "a1",
+      created_by: "user",
+    });
+
+    const d = makeDispatcher(manager);
+    await d.start();
+
+    expect(calls).toHaveLength(1);
+    const observed = taskStore.get(task.id);
+    expect(observed?.status).toBe("open");
+    expect(observed?.session_id).toBe(calls[0]!.sessionId);
+
+    gate.release.get(calls[0]!.sessionId)?.();
+    await d.drain(5_000);
+  });
+
   it("does not spawn when the only task has a future start_at", async () => {
     const { manager, calls } = fakeManager(["a1"]);
     await makeBoundTask("a1", {
@@ -153,6 +190,71 @@ describe("Dispatcher spawn rule", () => {
     await taskStore.update(dep.id, { status: "done" });
     await tick(d);
     expect(calls).toHaveLength(1);
+  });
+
+  it("leaves unbound dependent tasks unallocated until dependencies are done", async () => {
+    const { manager, calls } = fakeManager(["a1"]);
+    const dep = await taskStore.create({
+      title: "dep",
+      assignee: "a1",
+      created_by: "user",
+    });
+    const dependent = await taskStore.create({
+      title: "dependent",
+      assignee: "a1",
+      created_by: "user",
+      depends_on: [dep.id],
+    });
+
+    const d = makeDispatcher(manager);
+    await d.start();
+    await d.drain(5_000);
+
+    expect(taskStore.get(dependent.id)?.session_id).toBeNull();
+    expect(calls.map((call) => call.sessionId)).not.toContain(
+      taskStore.get(dependent.id)?.session_id
+    );
+
+    for (const task of taskStore.list({ session_id: calls[0]?.sessionId })) {
+      await taskStore.update(task.id, { status: "done" });
+    }
+    await taskStore.update(dep.id, { status: "done" });
+    await tick(d);
+
+    expect(taskStore.get(dependent.id)?.session_id).toBeTruthy();
+    expect(calls).toHaveLength(2);
+  });
+
+  it("wakes a same-agent dependent in another session after dependency closes", async () => {
+    const { manager, calls } = fakeManager(["a1"]);
+    const s1 = sessionStore.create("a1");
+    const s2 = sessionStore.create("a1");
+    const blocker = await taskStore.create({
+      title: "blocker",
+      assignee: "a1",
+      created_by: "a1",
+      session_id: s1.id,
+      status: "in_progress",
+    });
+    await taskStore.create({
+      title: "dependent",
+      assignee: "a1",
+      created_by: "a1",
+      session_id: s2.id,
+      depends_on: [blocker.id],
+    });
+
+    const d = makeDispatcher(manager);
+    await d.start();
+    await d.drain(5_000);
+    expect(calls).toEqual([{ agentId: "a1", sessionId: s1.id }]);
+
+    await taskStore.update(blocker.id, { status: "done" }, { actor: "a1" });
+    await tick(d);
+    expect(calls).toEqual([
+      { agentId: "a1", sessionId: s1.id },
+      { agentId: "a1", sessionId: s2.id },
+    ]);
   });
 
   it("wakes on a pending inbox row even with no tasks", async () => {
@@ -240,6 +342,511 @@ describe("Dispatcher spawn rule", () => {
     );
   });
 
+  it("keeps default maxConcurrentSessions at one active session", async () => {
+    const gate = deferredTurns();
+    const { manager, calls } = fakeManager(["a1"], gate.turn);
+    const a = await makeBoundTask("a1");
+    const b = await makeBoundTask("a1");
+
+    const d = makeDispatcher(manager);
+    await d.start();
+
+    expect(calls).toHaveLength(1);
+    expect([a.session.id, b.session.id]).toContain(calls[0]?.sessionId);
+    expect(d.runningSessionIds()).toEqual([calls[0]!.sessionId]);
+    gate.release.get(calls[0]!.sessionId)?.();
+    await d.drain(5_000);
+  });
+
+  it("serializes concurrent kicks before capacity accounting", async () => {
+    const gate = deferredTurns();
+    const { manager, calls } = fakeManager(["a1"], gate.turn);
+    const a = sessionStore.create("a1");
+    const b = sessionStore.create("a1");
+
+    const d = makeDispatcher(manager);
+    await d.start();
+    expect(calls).toEqual([]);
+
+    inboxStore.deliver({
+      agentId: "a1",
+      kind: "user_message",
+      source: "user",
+      sourceId: "a",
+      relatedSession: a.id,
+      payload: { id: "a", role: "user", parts: [{ type: "text", text: "a" }] },
+    });
+    inboxStore.deliver({
+      agentId: "a1",
+      kind: "user_message",
+      source: "user",
+      sourceId: "b",
+      relatedSession: b.id,
+      payload: { id: "b", role: "user", parts: [{ type: "text", text: "b" }] },
+    });
+
+    d.kick("test_a");
+    d.kick("test_b");
+    await (d as unknown as { tickSafe(): Promise<void> }).tickSafe();
+
+    expect(calls).toHaveLength(1);
+    expect([a.id, b.id]).toContain(calls[0]!.sessionId);
+    expect(d.runningSessionIds()).toEqual([calls[0]!.sessionId]);
+
+    gate.release.get(calls[0]!.sessionId)?.();
+    await d.drain(5_000);
+  });
+
+  it("starts up to maxConcurrentSessions distinct sessions for one agent", async () => {
+    const gate = deferredTurns();
+    const { manager, calls } = fakeManager(
+      [{ id: "a1", maxConcurrentSessions: 2 }],
+      gate.turn
+    );
+    const a = await makeBoundTask("a1");
+    const b = await makeBoundTask("a1");
+
+    const d = makeDispatcher(manager);
+    await d.start();
+
+    expect(calls).toHaveLength(2);
+    expect(new Set(calls.map((call) => call.sessionId))).toEqual(
+      new Set([a.session.id, b.session.id])
+    );
+    expect(new Set(d.runningSessionIds())).toEqual(
+      new Set([a.session.id, b.session.id])
+    );
+    expect(d.isRunning(a.session.id)).toBe(true);
+    expect(d.isRunning(b.session.id)).toBe(true);
+    for (const call of calls) gate.release.get(call.sessionId)?.();
+    await d.drain(5_000);
+  });
+
+  it("backfills another ready session when a capacity slot frees", async () => {
+    const gate = deferredTurns();
+    const { manager, calls } = fakeManager(
+      [{ id: "a1", maxConcurrentSessions: 2 }],
+      gate.turn
+    );
+    const a = await makeBoundTask("a1");
+    const b = await makeBoundTask("a1");
+    const c = await makeBoundTask("a1");
+
+    const d = makeDispatcher(manager);
+    await d.start();
+
+    expect(calls).toHaveLength(2);
+    const firstFinished = calls[0]!.sessionId;
+    for (const task of taskStore.list({
+      session_id: firstFinished,
+      status: "open",
+    })) {
+      await taskStore.update(task.id, { status: "done" });
+    }
+    gate.release.get(firstFinished)?.();
+    await vi.waitFor(() => expect(calls).toHaveLength(3));
+    expect(new Set(calls.map((call) => call.sessionId))).toEqual(
+      new Set([a.session.id, b.session.id, c.session.id])
+    );
+    for (const call of calls) gate.release.get(call.sessionId)?.();
+    await d.drain(5_000);
+  });
+
+  it("prioritizes queued user messages over task wakes when capacity frees", async () => {
+    const gate = deferredTurns();
+    const { manager, calls } = fakeManager(
+      [{ id: "a1", maxConcurrentSessions: 1 }],
+      gate.turn
+    );
+    const user = sessionStore.create("a1");
+    const taskEvent = sessionStore.create("a1");
+    const active = await makeBoundTask("a1");
+
+    const d = makeDispatcher(manager);
+    await d.start();
+    expect(calls).toEqual([{ agentId: "a1", sessionId: active.session.id }]);
+
+    inboxStore.deliver({
+      agentId: "a1",
+      kind: "system_notice",
+      source: "system",
+      sourceId: "task",
+      relatedSession: taskEvent.id,
+      payload: { eventKind: "comment_added" },
+    });
+    inboxStore.deliver({
+      agentId: "a1",
+      kind: "user_message",
+      source: "user",
+      sourceId: "user",
+      relatedSession: user.id,
+      payload: {
+        id: "user",
+        role: "user",
+        parts: [{ type: "text", text: "respond first" }],
+      },
+    });
+    d.kick("test_user_priority");
+
+    await taskStore.update(active.task.id, { status: "done" });
+    gate.release.get(active.session.id)?.();
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[1]).toEqual({ agentId: "a1", sessionId: user.id });
+
+    gate.release.get(user.id)?.();
+    await d.drain(5_000);
+  });
+
+  for (const policy of ["lane_first", "chain_first"] as const) {
+    it(`${policy} prioritizes direct messages before user task comments before autonomous task wakes`, async () => {
+      const gate = deferredTurns();
+      const { manager, calls } = fakeManager(
+        [
+          {
+            id: "a1",
+            maxConcurrentSessions: 1,
+            parallelSchedulingPolicy: policy,
+          },
+        ],
+        async (sessionId) => {
+          inboxStore.claimForSession({
+            agentId: "a1",
+            sessionId,
+            includeAgentWide: true,
+          });
+          for (const task of taskStore.list({
+            session_id: sessionId,
+            status: "open",
+          })) {
+            await taskStore.update(task.id, { status: "done" });
+          }
+          await gate.turn(sessionId);
+        }
+      );
+      const active = await makeBoundTask("a1");
+
+      const d = makeDispatcher(manager);
+      await d.start();
+      expect(calls).toEqual([{ agentId: "a1", sessionId: active.session.id }]);
+
+      const commentSession = sessionStore.create("a1");
+      inboxStore.deliver({
+        agentId: "a1",
+        kind: "system_notice",
+        source: "system",
+        sourceId: null,
+        relatedTask: "task-comment",
+        relatedSession: commentSession.id,
+        payload: {
+          eventKind: "comment_added",
+          payload: {
+            author: "system:user",
+            excerpt: "please look at this task comment",
+          },
+        },
+      });
+      const taskSession = sessionStore.create("a1");
+      await taskStore.create({
+        title: "autonomous task should run after comment",
+        assignee: "a1",
+        created_by: "user",
+        session_id: taskSession.id,
+      });
+      const userSession = sessionStore.create("a1");
+      inboxStore.deliver({
+        agentId: "a1",
+        kind: "user_message",
+        source: "user",
+        sourceId: "direct-user",
+        relatedSession: userSession.id,
+        payload: {
+          id: "direct-user",
+          role: "user",
+          parts: [{ type: "text", text: "direct user goes first" }],
+        },
+      });
+      d.kick("test_user_comment_task_priority");
+
+      gate.release.get(active.session.id)?.();
+      await vi.waitFor(() => expect(d.isRunning(active.session.id)).toBe(false));
+      await (d as unknown as { tickSafe(): Promise<void> }).tickSafe();
+      await vi.waitFor(() => expect(calls).toHaveLength(2));
+      expect(calls[1]).toEqual({ agentId: "a1", sessionId: userSession.id });
+
+      gate.release.get(userSession.id)?.();
+      await vi.waitFor(() => expect(d.isRunning(userSession.id)).toBe(false));
+      await (d as unknown as { tickSafe(): Promise<void> }).tickSafe();
+      await vi.waitFor(() => expect(calls).toHaveLength(3));
+      expect(calls[2]).toEqual({
+        agentId: "a1",
+        sessionId: commentSession.id,
+      });
+
+      gate.release.get(commentSession.id)?.();
+      await vi.waitFor(() =>
+        expect(d.isRunning(commentSession.id)).toBe(false)
+      );
+      await (d as unknown as { tickSafe(): Promise<void> }).tickSafe();
+      await vi.waitFor(() => expect(calls).toHaveLength(4));
+      expect(calls[3]).toEqual({ agentId: "a1", sessionId: taskSession.id });
+
+      gate.release.get(taskSession.id)?.();
+      await d.drain(5_000);
+    });
+
+    it(`${policy} drains all direct-message sessions before user task comments`, async () => {
+      const gate = deferredTurns();
+      const { manager, calls } = fakeManager(
+        [
+          {
+            id: "a1",
+            maxConcurrentSessions: 1,
+            parallelSchedulingPolicy: policy,
+          },
+        ],
+        async (sessionId) => {
+          inboxStore.claimForSession({
+            agentId: "a1",
+            sessionId,
+            includeAgentWide: true,
+          });
+          await gate.turn(sessionId);
+        }
+      );
+      const active = await makeBoundTask("a1");
+
+      const d = makeDispatcher(manager);
+      await d.start();
+      expect(calls).toEqual([{ agentId: "a1", sessionId: active.session.id }]);
+
+      const firstUser = sessionStore.create("a1");
+      const commentSession = sessionStore.create("a1");
+      const secondUser = sessionStore.create("a1");
+      inboxStore.deliver({
+        agentId: "a1",
+        kind: "user_message",
+        source: "user",
+        sourceId: "first-direct",
+        relatedSession: firstUser.id,
+        payload: {
+          id: "first-direct",
+          role: "user",
+          parts: [{ type: "text", text: "first direct" }],
+        },
+      });
+      inboxStore.deliver({
+        agentId: "a1",
+        kind: "system_notice",
+        source: "system",
+        sourceId: null,
+        relatedTask: "task-comment",
+        relatedSession: commentSession.id,
+        payload: {
+          eventKind: "comment_added",
+          payload: {
+            author: "system:user",
+            excerpt: "comment between direct messages",
+          },
+        },
+      });
+      inboxStore.deliver({
+        agentId: "a1",
+        kind: "user_message",
+        source: "user",
+        sourceId: "second-direct",
+        relatedSession: secondUser.id,
+        payload: {
+          id: "second-direct",
+          role: "user",
+          parts: [{ type: "text", text: "second direct" }],
+        },
+      });
+      d.kick("test_multiple_direct_before_comment");
+
+      gate.release.get(active.session.id)?.();
+      await vi.waitFor(() => expect(d.isRunning(active.session.id)).toBe(false));
+      await (d as unknown as { tickSafe(): Promise<void> }).tickSafe();
+      await vi.waitFor(() => expect(calls).toHaveLength(2));
+      expect([firstUser.id, secondUser.id]).toContain(calls[1]!.sessionId);
+
+      gate.release.get(calls[1]!.sessionId)?.();
+      await vi.waitFor(() => expect(d.isRunning(calls[1]!.sessionId)).toBe(false));
+      await (d as unknown as { tickSafe(): Promise<void> }).tickSafe();
+      await vi.waitFor(() => expect(calls).toHaveLength(3));
+      expect(new Set([calls[1]!.sessionId, calls[2]!.sessionId])).toEqual(
+        new Set([firstUser.id, secondUser.id])
+      );
+
+      gate.release.get(calls[2]!.sessionId)?.();
+      await vi.waitFor(() => expect(d.isRunning(calls[2]!.sessionId)).toBe(false));
+      await (d as unknown as { tickSafe(): Promise<void> }).tickSafe();
+      await vi.waitFor(() => expect(calls).toHaveLength(4));
+      expect(calls[3]).toEqual({
+        agentId: "a1",
+        sessionId: commentSession.id,
+      });
+
+      gate.release.get(commentSession.id)?.();
+      await d.drain(5_000);
+    });
+  }
+
+  it("lane_first starts unrun task lanes before continuing a hot chain", async () => {
+    const { manager, calls } = fakeManager(
+      [
+        {
+          id: "a1",
+          maxConcurrentSessions: 1,
+          parallelSchedulingPolicy: "lane_first",
+        },
+      ],
+      async (sessionId) => {
+        for (const task of taskStore.list({
+          session_id: sessionId,
+          status: "open",
+        })) {
+          await taskStore.update(task.id, { status: "done" });
+        }
+        if (sessionId === chain.id && calls.length === 1) {
+          sessionStore.touch(sessionId);
+          await taskStore.create({
+            title: "chain step 2",
+            assignee: "a1",
+            created_by: "user",
+            session_id: sessionId,
+          });
+        }
+      }
+    );
+    const lane = sessionStore.create("a1");
+    await taskStore.create({
+      title: "lane step 1",
+      assignee: "a1",
+      created_by: "user",
+      session_id: lane.id,
+    });
+    const chain = sessionStore.create("a1");
+    await taskStore.create({
+      title: "chain step 1",
+      assignee: "a1",
+      created_by: "user",
+      session_id: chain.id,
+    });
+    db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(
+      1,
+      lane.id
+    );
+    db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(
+      2,
+      chain.id
+    );
+
+    const d = makeDispatcher(manager);
+    await d.start();
+    await d.drain(5_000);
+    expect(calls.map((call) => call.sessionId)).toEqual([chain.id]);
+
+    await tick(d);
+    expect(calls.map((call) => call.sessionId)).toEqual([chain.id, lane.id]);
+  });
+
+  it("chain_first continues a hot task chain before starting an unrun lane", async () => {
+    const { manager, calls } = fakeManager(
+      [
+        {
+          id: "a1",
+          maxConcurrentSessions: 1,
+          parallelSchedulingPolicy: "chain_first",
+        },
+      ],
+      async (sessionId) => {
+        for (const task of taskStore.list({
+          session_id: sessionId,
+          status: "open",
+        })) {
+          await taskStore.update(task.id, { status: "done" });
+        }
+        if (sessionId === chain.id && calls.length === 1) {
+          sessionStore.touch(sessionId);
+          await taskStore.create({
+            title: "chain step 2",
+            assignee: "a1",
+            created_by: "user",
+            session_id: sessionId,
+          });
+        }
+      }
+    );
+    const lane = sessionStore.create("a1");
+    await taskStore.create({
+      title: "lane step 1",
+      assignee: "a1",
+      created_by: "user",
+      session_id: lane.id,
+    });
+    const chain = sessionStore.create("a1");
+    await taskStore.create({
+      title: "chain step 1",
+      assignee: "a1",
+      created_by: "user",
+      session_id: chain.id,
+    });
+    db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(
+      1,
+      lane.id
+    );
+    db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(
+      2,
+      chain.id
+    );
+
+    const d = makeDispatcher(manager);
+    await d.start();
+    await d.drain(5_000);
+    expect(calls.map((call) => call.sessionId)).toEqual([chain.id]);
+
+    await tick(d);
+    expect(calls.map((call) => call.sessionId)).toEqual([chain.id, chain.id]);
+  });
+
+  it("counts interactive-busy sessions toward agent capacity", async () => {
+    const { manager, calls } = fakeManager([
+      { id: "a1", maxConcurrentSessions: 1 },
+    ]);
+    const interactive = sessionStore.create("a1");
+    await makeBoundTask("a1");
+
+    const d = makeDispatcher(manager);
+    d.markInteractiveBusy(interactive.id);
+    await d.start();
+    await d.drain(5_000);
+
+    expect(calls).toEqual([]);
+    expect(d.runningSessionIds()).toEqual([interactive.id]);
+  });
+
+  it("observes maxConcurrentSessions updates without restart", async () => {
+    const gate = deferredTurns();
+    const agentDef: FakeAgentDef = { id: "a1", maxConcurrentSessions: 1 };
+    const { manager, calls } = fakeManager([agentDef], gate.turn);
+    await makeBoundTask("a1");
+    await makeBoundTask("a1");
+
+    const d = makeDispatcher(manager);
+    await d.start();
+
+    expect(calls).toHaveLength(1);
+    agentDef.maxConcurrentSessions = 2;
+    d.kick("test_capacity_update");
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(new Set(d.runningSessionIds())).toEqual(
+      new Set(calls.map((call) => call.sessionId))
+    );
+
+    for (const call of calls) gate.release.get(call.sessionId)?.();
+    await d.drain(5_000);
+  });
+
   it("binds unbound ready tasks to a fresh session and spawns it", async () => {
     const { manager, calls } = fakeManager(["a1"]);
     const task = await taskStore.create({
@@ -259,6 +866,28 @@ describe("Dispatcher spawn rule", () => {
     ]);
     const session = sessionStore.get(bound!.session_id!);
     expect(session?.title).toBe("Write the launch post");
+  });
+
+  it("clears dangling session bindings before rebinding ready work", async () => {
+    const { manager, calls } = fakeManager(["a1"]);
+    const ghost = sessionStore.create("a1");
+    const task = await taskStore.create({
+      title: "orphaned binding",
+      assignee: "a1",
+      created_by: "user",
+      session_id: ghost.id,
+    });
+    sessionStore.delete(ghost.id);
+
+    const d = makeDispatcher(manager);
+    await d.start();
+    await d.drain(5_000);
+
+    const rebound = taskStore.get(task.id);
+    expect(rebound?.session_id).toBeTruthy();
+    expect(rebound?.session_id).not.toBe(ghost.id);
+    expect(sessionStore.get(rebound!.session_id!)).not.toBeNull();
+    expect(calls).toEqual([{ agentId: "a1", sessionId: rebound!.session_id }]);
   });
 });
 
@@ -282,6 +911,24 @@ describe("Dispatcher failure handling", () => {
     // Park backoff is 5 minutes.
     expect(retryAt).toBeGreaterThan(Date.now() + 4 * 60_000);
     expect(retryAt).toBeLessThan(Date.now() + 6 * 60_000);
+  });
+
+  it("parks timeout failures with a timeout-specific scheduler comment", async () => {
+    const { manager } = fakeManager(["a1"], async (sessionId) => {
+      const task = taskStore.list({ session_id: sessionId })[0];
+      if (task) await taskStore.update(task.id, { status: "in_progress" });
+      throw new AutonomousTurnTimeout("synthetic timeout");
+    });
+    const { task } = await makeBoundTask("a1");
+
+    const d = makeDispatcher(manager);
+    await d.start();
+    await d.drain(5_000);
+
+    const parked = taskStore.get(task.id);
+    expect(parked?.status).toBe("blocked");
+    const comments = taskStore.listComments(task.id, { kinds: ["system"] });
+    expect(comments.at(-1)?.body).toContain("timeout");
   });
 
   it("parks plain object turn errors with a readable provider message", async () => {
@@ -309,6 +956,65 @@ describe("Dispatcher failure handling", () => {
       "Unsupported model gpt-5.2 for OpenAI OAuth"
     );
     expect(comments.at(-1)?.body).not.toContain("[object Object]");
+  });
+
+  it("parks only the failing session when parallel turns overlap", async () => {
+    const gate = deferredTurns();
+    const failing = await makeBoundTask("a1");
+    const survivor = await makeBoundTask("a1");
+    const { manager, calls } = fakeManager(
+      [{ id: "a1", maxConcurrentSessions: 2 }],
+      async (sessionId) => {
+        if (sessionId === failing.session.id) {
+          const task = taskStore.list({ session_id: sessionId })[0];
+          if (task) await taskStore.update(task.id, { status: "in_progress" });
+          throw new Error("fail one session");
+        }
+        await gate.turn(sessionId);
+      }
+    );
+
+    const d = makeDispatcher(manager);
+    await d.start();
+
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    await vi.waitFor(() =>
+      expect(taskStore.get(failing.task.id)?.status).toBe("blocked")
+    );
+    expect(taskStore.get(survivor.task.id)?.status).toBe("open");
+    expect(d.isRunning(survivor.session.id)).toBe(true);
+    expect(d.isRunning(failing.session.id)).toBe(false);
+
+    gate.release.get(survivor.session.id)?.();
+    await d.drain(5_000);
+  });
+
+  it("does not park any task when a failed turn claimed no in_progress task", async () => {
+    const { manager, calls } = fakeManager(["a1"], async () => {
+      throw new Error("no claim");
+    });
+    const { task } = await makeBoundTask("a1");
+
+    const d = makeDispatcher(manager);
+    await d.start();
+    await d.drain(5_000);
+
+    expect(calls).toHaveLength(1);
+    expect(taskStore.get(task.id)?.status).toBe("open");
+    const comments = taskStore.listComments(task.id, { kinds: ["system"] });
+    expect(comments).toHaveLength(0);
+  });
+
+  it("leaves tasks open when the referenced agent is unavailable", async () => {
+    const { manager, calls } = fakeManager([]);
+    const { task } = await makeBoundTask("ghost");
+
+    const d = makeDispatcher(manager);
+    await d.start();
+    await d.drain(5_000);
+
+    expect(calls).toEqual([]);
+    expect(taskStore.get(task.id)?.status).toBe("open");
   });
 
   it("startup sweep resets stale in_progress tasks to open", async () => {

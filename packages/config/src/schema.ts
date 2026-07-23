@@ -305,6 +305,15 @@ export const AgentDefinitionSchema = z.object({
   // the explicit `memory` tool remain available; false only disables automatic
   // extraction from conversation turns.
   memoryExtractionEnabled: z.boolean().default(true),
+  // Maximum number of distinct sessions this canonical agent may run at the
+  // same time. The same session is still serialized by the dispatcher.
+  maxConcurrentSessions: z.number().int().min(1).max(5).default(1),
+  // How autonomous task sessions are ordered when more ready sessions exist
+  // than this agent has capacity for. Direct user messages always outrank
+  // both policies.
+  parallelSchedulingPolicy: z
+    .enum(["lane_first", "chain_first"])
+    .default("lane_first"),
   // Heartbeat / failsafe probe cadence (milliseconds). When an
   // autonomous turn ends with eligible non-terminal work AND the agent
   // didn't call `sleep` to set a per-turn override, the scheduler will

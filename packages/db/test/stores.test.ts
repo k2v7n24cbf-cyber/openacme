@@ -3,6 +3,7 @@ import { WasmDatabase } from "../src/wasm/adapter.js";
 import { applySchema } from "../src/connection.js";
 import { createSessionStore } from "../src/stores/session-store.js";
 import { createMessageStore } from "../src/stores/message-store.js";
+import { createInboxStore } from "../src/stores/inbox-store.js";
 
 function freshDb() {
   const db = new WasmDatabase(":memory:");
@@ -234,6 +235,238 @@ describe("MessageStore — appendMany and ordering", () => {
     expect(messages.search("result-keyword-abc").length).toBe(0);
     // Text parts still hit.
     expect(messages.search("calling").length).toBeGreaterThan(0);
+  });
+});
+
+describe("InboxStore — session-aware claim", () => {
+  let inbox: ReturnType<typeof createInboxStore>;
+
+  beforeEach(() => {
+    inbox = createInboxStore(freshDb());
+  });
+
+  it("claims only user messages targeted to the requested session", () => {
+    const s1 = inbox.deliver({
+      agentId: "agent-a",
+      kind: "user_message",
+      source: "user",
+      sourceId: "u1",
+      relatedSession: "s1",
+      payload: { id: "u1", role: "user", parts: [] },
+    });
+    inbox.deliver({
+      agentId: "agent-a",
+      kind: "user_message",
+      source: "user",
+      sourceId: "u2",
+      relatedSession: "s2",
+      payload: { id: "u2", role: "user", parts: [] },
+    });
+
+    const claimed = inbox.claimForSession({
+      agentId: "agent-a",
+      sessionId: "s1",
+    });
+    expect(claimed.map((r) => r.id)).toEqual([s1]);
+    expect(inbox.pendingFor("agent-a").map((r) => r.relatedSession)).toEqual([
+      "s2",
+    ]);
+  });
+
+  it("claims only system notices targeted to the requested session", () => {
+    const s1 = inbox.deliver({
+      agentId: "agent-a",
+      kind: "system_notice",
+      source: "system",
+      sourceId: "task",
+      relatedSession: "s1",
+      payload: { eventKind: "task_updated" },
+    });
+    inbox.deliver({
+      agentId: "agent-a",
+      kind: "system_notice",
+      source: "system",
+      sourceId: "task",
+      relatedSession: "s2",
+      payload: { eventKind: "task_updated" },
+    });
+
+    const claimed = inbox.claimForSession({
+      agentId: "agent-a",
+      sessionId: "s1",
+    });
+    expect(claimed.map((r) => r.id)).toEqual([s1]);
+    expect(inbox.pendingFor("agent-a").map((r) => r.relatedSession)).toEqual([
+      "s2",
+    ]);
+  });
+
+  it("claims agent-wide notices once", () => {
+    const wide = inbox.deliver({
+      agentId: "agent-a",
+      kind: "system_notice",
+      source: "system",
+      sourceId: "scheduler",
+      relatedSession: null,
+      payload: { eventKind: "notice" },
+    });
+
+    const first = inbox.claimForSession({
+      agentId: "agent-a",
+      sessionId: "s1",
+      includeAgentWide: true,
+    });
+    const second = inbox.claimForSession({
+      agentId: "agent-a",
+      sessionId: "s2",
+      includeAgentWide: true,
+    });
+
+    expect(first.map((r) => r.id)).toEqual([wide]);
+    expect(second).toEqual([]);
+  });
+
+  it("can exclude agent-wide notices", () => {
+    inbox.deliver({
+      agentId: "agent-a",
+      kind: "system_notice",
+      source: "system",
+      sourceId: "scheduler",
+      relatedSession: null,
+      payload: { eventKind: "notice" },
+    });
+
+    const claimed = inbox.claimForSession({
+      agentId: "agent-a",
+      sessionId: "s1",
+      includeAgentWide: false,
+    });
+    expect(claimed).toEqual([]);
+    expect(inbox.countFor("agent-a")).toBe(1);
+  });
+
+  it("summarizes pending targeted sessions and agent-wide presence", () => {
+    inbox.deliver({
+      agentId: "agent-a",
+      kind: "user_message",
+      source: "user",
+      sourceId: "u1",
+      relatedSession: "s1",
+      payload: { id: "u1", role: "user", parts: [] },
+    });
+    inbox.deliver({
+      agentId: "agent-a",
+      kind: "system_notice",
+      source: "system",
+      sourceId: "task",
+      relatedSession: "s2",
+      payload: { eventKind: "task_updated" },
+    });
+    inbox.deliver({
+      agentId: "agent-a",
+      kind: "system_notice",
+      source: "system",
+      sourceId: "scheduler",
+      relatedSession: null,
+      payload: { eventKind: "notice" },
+    });
+
+    const summary = inbox.pendingSummaryFor("agent-a");
+    expect(summary.total).toBe(3);
+    expect([...summary.targetedSessionIds].sort()).toEqual(["s1", "s2"]);
+    expect([...summary.userMessageSessionIds].sort()).toEqual(["s1"]);
+    expect(summary.hasAgentWide).toBe(true);
+  });
+
+  it("summarizes user-authored task comment sessions separately", () => {
+    inbox.deliver({
+      agentId: "agent-a",
+      kind: "system_notice",
+      source: "system",
+      sourceId: null,
+      relatedSession: "human-comment",
+      relatedTask: "task-1",
+      payload: {
+        eventKind: "comment_added",
+        payload: {
+          author: "system:user",
+          excerpt: "please prioritize this task",
+        },
+      },
+    });
+    inbox.deliver({
+      agentId: "agent-a",
+      kind: "system_notice",
+      source: "system",
+      sourceId: "agent-a",
+      relatedSession: "agent-comment",
+      relatedTask: "task-2",
+      payload: {
+        eventKind: "comment_added",
+        payload: {
+          author: "agent-a",
+          excerpt: "agent wrote this",
+        },
+      },
+    });
+    inbox.deliver({
+      agentId: "agent-a",
+      kind: "system_notice",
+      source: "system",
+      sourceId: null,
+      relatedSession: "status-change",
+      relatedTask: "task-3",
+      payload: {
+        eventKind: "status_changed",
+        payload: { author: "system:user" },
+      },
+    });
+
+    const summary = inbox.pendingSummaryFor("agent-a");
+    expect([...summary.userTaskCommentSessionIds]).toEqual([
+      "human-comment",
+    ]);
+  });
+
+  it("cancels a queued user message only for the matching session", () => {
+    inbox.deliver({
+      agentId: "agent-a",
+      kind: "user_message",
+      source: "user",
+      sourceId: "same-message-id",
+      relatedSession: "s1",
+      payload: { id: "same-message-id", role: "user", parts: [] },
+    });
+    const second = inbox.deliver({
+      agentId: "agent-a",
+      kind: "user_message",
+      source: "user",
+      sourceId: "same-message-id",
+      relatedSession: "s2",
+      payload: { id: "same-message-id", role: "user", parts: [] },
+    });
+    const otherAgent = inbox.deliver({
+      agentId: "agent-b",
+      kind: "user_message",
+      source: "user",
+      sourceId: "same-message-id",
+      relatedSession: "s1",
+      payload: { id: "same-message-id", role: "user", parts: [] },
+    });
+
+    const cancelled = inbox.cancelQueuedUserMessage({
+      agentId: "agent-a",
+      messageId: "same-message-id",
+      sessionId: "s1",
+    });
+
+    expect(cancelled).toBe(1);
+    expect(inbox.pendingFor("agent-a").map((row) => row.id)).toEqual([
+      second,
+    ]);
+    expect(inbox.pendingFor("agent-b").map((row) => row.id)).toEqual([
+      otherAgent,
+    ]);
   });
 });
 

@@ -93,6 +93,8 @@ interface Agent {
   tools: string[];
   skills: string[];
   memoryExtractionEnabled?: boolean;
+  maxConcurrentSessions?: number;
+  parallelSchedulingPolicy?: ParallelSchedulingPolicy;
   mcpServers?: Record<string, MCPServerConfigDto>;
   mcpDisabled?: string[];
   managed?: boolean;
@@ -163,9 +165,13 @@ interface FormState {
   tools: string[];
   skills: string[];
   memoryExtractionEnabled: boolean;
+  maxConcurrentSessions: number;
+  parallelSchedulingPolicy: ParallelSchedulingPolicy;
   mcpServers: Record<string, MCPServerConfigDto>;
   mcpDisabled: string[];
 }
+
+type ParallelSchedulingPolicy = "lane_first" | "chain_first";
 
 const CUSTOM_MODEL = "__custom__";
 
@@ -182,9 +188,29 @@ const FALLBACK_FORM: FormState = {
   tools: [],
   skills: [],
   memoryExtractionEnabled: true,
+  maxConcurrentSessions: 1,
+  parallelSchedulingPolicy: "lane_first",
   mcpServers: {},
   mcpDisabled: [],
 };
+
+const PARALLEL_SESSION_OPTIONS = [1, 2, 3, 4, 5] as const;
+const PARALLEL_SCHEDULING_POLICIES: Array<{
+  value: ParallelSchedulingPolicy;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "lane_first",
+    label: "Start task lanes first",
+    description: "Give each ready lane a first turn before continuing chains.",
+  },
+  {
+    value: "chain_first",
+    label: "Clear task chains first",
+    description: "Favor hot chains so existing lanes finish sooner.",
+  },
+];
 
 // Lazy: emoji data is sizeable and only needed once the picker opens.
 const EmojiPicker = lazy(() => import("emoji-picker-react"));
@@ -507,6 +533,8 @@ function AgentsPage() {
     tools: formData.tools,
     skills: formData.skills,
     memoryExtractionEnabled: formData.memoryExtractionEnabled,
+    maxConcurrentSessions: formData.maxConcurrentSessions,
+    parallelSchedulingPolicy: formData.parallelSchedulingPolicy,
     mcpServers: formData.mcpServers,
     mcpDisabled: formData.mcpDisabled,
   });
@@ -664,6 +692,9 @@ function AgentsPage() {
       tools: selectedAgent.tools,
       skills: selectedAgent.skills ?? [],
       memoryExtractionEnabled: selectedAgent.memoryExtractionEnabled ?? true,
+      maxConcurrentSessions: selectedAgent.maxConcurrentSessions ?? 1,
+      parallelSchedulingPolicy:
+        selectedAgent.parallelSchedulingPolicy ?? "lane_first",
       mcpServers: selectedAgent.mcpServers ?? {},
       mcpDisabled: selectedAgent.mcpDisabled ?? [],
     });
@@ -749,6 +780,8 @@ function AgentsPage() {
             // installed workforce-wide separately, not gated per-agent.
             skills: [],
             memoryExtractionEnabled: true,
+            maxConcurrentSessions: 1,
+            parallelSchedulingPolicy: "lane_first",
             mcpServers: tpl.agentFields.mcpServers ?? {},
             mcpDisabled: tpl.agentFields.mcpDisabled ?? [],
           });
@@ -802,6 +835,9 @@ function AgentsPage() {
           tools: found.tools,
           skills: found.skills ?? [],
           memoryExtractionEnabled: found.memoryExtractionEnabled ?? true,
+          maxConcurrentSessions: found.maxConcurrentSessions ?? 1,
+          parallelSchedulingPolicy:
+            found.parallelSchedulingPolicy ?? "lane_first",
           mcpServers: found.mcpServers ?? {},
           mcpDisabled: found.mcpDisabled ?? [],
         });
@@ -1117,6 +1153,22 @@ function AgentsPage() {
                           setFormData((prev) => ({
                             ...prev,
                             memoryExtractionEnabled,
+                          }))
+                        }
+                      />
+                      <ParallelSessionsSetting
+                        value={formData.maxConcurrentSessions}
+                        onChange={(maxConcurrentSessions) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            maxConcurrentSessions,
+                          }))
+                        }
+                        schedulingPolicy={formData.parallelSchedulingPolicy}
+                        onSchedulingPolicyChange={(parallelSchedulingPolicy) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            parallelSchedulingPolicy,
                           }))
                         }
                       />
@@ -1658,6 +1710,8 @@ interface AgentDraft {
   auth: "api_key" | "oauth";
   cacheTtl: CacheTtl;
   memoryExtractionEnabled: boolean;
+  maxConcurrentSessions: number;
+  parallelSchedulingPolicy: ParallelSchedulingPolicy;
 }
 
 function draftFromAgent(agent: Agent): AgentDraft {
@@ -1671,6 +1725,8 @@ function draftFromAgent(agent: Agent): AgentDraft {
     auth: agent.model.auth ?? "api_key",
     cacheTtl: agent.model.cacheTtl ?? "5m",
     memoryExtractionEnabled: agent.memoryExtractionEnabled ?? true,
+    maxConcurrentSessions: agent.maxConcurrentSessions ?? 1,
+    parallelSchedulingPolicy: agent.parallelSchedulingPolicy ?? "lane_first",
   };
 }
 
@@ -1722,6 +1778,8 @@ function AgentDetail({
         cacheTtl: draft.cacheTtl,
       },
       memoryExtractionEnabled: draft.memoryExtractionEnabled,
+      maxConcurrentSessions: draft.maxConcurrentSessions,
+      parallelSchedulingPolicy: draft.parallelSchedulingPolicy,
       ...tabSlice,
     }),
     [agent, draft, tabSlice]
@@ -1737,7 +1795,9 @@ function AgentDetail({
       draft.model !== saved.model ||
       draft.auth !== saved.auth ||
       draft.cacheTtl !== saved.cacheTtl ||
-      draft.memoryExtractionEnabled !== saved.memoryExtractionEnabled
+      draft.memoryExtractionEnabled !== saved.memoryExtractionEnabled ||
+      draft.maxConcurrentSessions !== saved.maxConcurrentSessions ||
+      draft.parallelSchedulingPolicy !== saved.parallelSchedulingPolicy
     : JSON.stringify(draft) !== JSON.stringify(saved);
   // Detail is ruled sections on the pane, not a floating card — one shared
   // measure with the skills + tasks detail panes.
@@ -1812,6 +1872,9 @@ function AgentDetail({
                   ? {
                       model,
                       memoryExtractionEnabled: draft.memoryExtractionEnabled,
+                      maxConcurrentSessions: draft.maxConcurrentSessions,
+                      parallelSchedulingPolicy:
+                        draft.parallelSchedulingPolicy,
                     }
                   : {
                       name: draft.name,
@@ -1820,6 +1883,9 @@ function AgentDetail({
                       persona: draft.persona,
                       model,
                       memoryExtractionEnabled: draft.memoryExtractionEnabled,
+                      maxConcurrentSessions: draft.maxConcurrentSessions,
+                      parallelSchedulingPolicy:
+                        draft.parallelSchedulingPolicy,
                     },
                 "Agent"
               );
@@ -1881,9 +1947,17 @@ function AgentDetail({
         </TabsContent>
         <TabsContent value="settings">
           <AgentSettingsTab
-            enabled={draft.memoryExtractionEnabled}
-            onChange={(memoryExtractionEnabled) =>
+            memoryExtractionEnabled={draft.memoryExtractionEnabled}
+            onMemoryExtractionChange={(memoryExtractionEnabled) =>
               setDraft({ ...draft, memoryExtractionEnabled })
+            }
+            maxConcurrentSessions={draft.maxConcurrentSessions}
+            onMaxConcurrentSessionsChange={(maxConcurrentSessions) =>
+              setDraft({ ...draft, maxConcurrentSessions })
+            }
+            schedulingPolicy={draft.parallelSchedulingPolicy}
+            onSchedulingPolicyChange={(parallelSchedulingPolicy) =>
+              setDraft({ ...draft, parallelSchedulingPolicy })
             }
           />
         </TabsContent>
@@ -2482,16 +2556,112 @@ function MemoryExtractionSetting({
   );
 }
 
-function AgentSettingsTab({
-  enabled,
+function ParallelSessionsSetting({
+  value,
   onChange,
+  schedulingPolicy,
+  onSchedulingPolicyChange,
 }: {
-  enabled: boolean;
-  onChange: (enabled: boolean) => void;
+  value: number;
+  onChange: (value: number) => void;
+  schedulingPolicy: ParallelSchedulingPolicy;
+  onSchedulingPolicyChange: (value: ParallelSchedulingPolicy) => void;
+}) {
+  const selectedPolicy =
+    PARALLEL_SCHEDULING_POLICIES.find(
+      (policy) => policy.value === schedulingPolicy
+    ) ?? PARALLEL_SCHEDULING_POLICIES[0]!;
+
+  return (
+    <div className="grid gap-3 border-t border-paper-rule pt-4">
+      <div>
+        <Label htmlFor="parallel-sessions">Parallel sessions</Label>
+        <p className="mt-1 text-[12px] leading-relaxed text-ink-soft">
+          Limit how many distinct sessions this agent can run at the same time.
+        </p>
+      </div>
+      <div className="max-w-xs">
+        <Select
+          value={String(value)}
+          onValueChange={(next) => onChange(Number.parseInt(next, 10))}
+        >
+          <SelectTrigger id="parallel-sessions">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {PARALLEL_SESSION_OPTIONS.map((option) => (
+              <SelectItem key={option} value={String(option)}>
+                {option}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      {value > 1 && (
+        <>
+          <div className="grid max-w-sm gap-2">
+            <Label htmlFor="parallel-scheduling-policy">
+              Task scheduling
+            </Label>
+            <Select
+              value={schedulingPolicy}
+              onValueChange={(next) =>
+                onSchedulingPolicyChange(next as ParallelSchedulingPolicy)
+              }
+            >
+              <SelectTrigger id="parallel-scheduling-policy">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PARALLEL_SCHEDULING_POLICIES.map((policy) => (
+                  <SelectItem key={policy.value} value={policy.value}>
+                    {policy.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-[12px] leading-relaxed text-ink-soft">
+              {selectedPolicy.description}
+            </p>
+          </div>
+          <div className="max-w-2xl border border-amber-300 bg-amber-50 px-3 py-3 text-[12px] leading-relaxed text-amber-900">
+            Parallel sessions share this agent&apos;s workspace, browser,
+            tool-host, MCP clients, email identity, and memory namespace. User
+            messages are prioritized before autonomous task scheduling.
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function AgentSettingsTab({
+  memoryExtractionEnabled,
+  onMemoryExtractionChange,
+  maxConcurrentSessions,
+  onMaxConcurrentSessionsChange,
+  schedulingPolicy,
+  onSchedulingPolicyChange,
+}: {
+  memoryExtractionEnabled: boolean;
+  onMemoryExtractionChange: (enabled: boolean) => void;
+  maxConcurrentSessions: number;
+  onMaxConcurrentSessionsChange: (value: number) => void;
+  schedulingPolicy: ParallelSchedulingPolicy;
+  onSchedulingPolicyChange: (value: ParallelSchedulingPolicy) => void;
 }) {
   return (
-    <div className="max-w-4xl py-5">
-      <MemoryExtractionSetting enabled={enabled} onChange={onChange} />
+    <div className="grid max-w-4xl gap-5 py-5">
+      <MemoryExtractionSetting
+        enabled={memoryExtractionEnabled}
+        onChange={onMemoryExtractionChange}
+      />
+      <ParallelSessionsSetting
+        value={maxConcurrentSessions}
+        onChange={onMaxConcurrentSessionsChange}
+        schedulingPolicy={schedulingPolicy}
+        onSchedulingPolicyChange={onSchedulingPolicyChange}
+      />
     </div>
   );
 }

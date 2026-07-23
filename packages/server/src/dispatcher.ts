@@ -351,7 +351,18 @@ export class Dispatcher {
   private async bindUnboundTasks(agentId: string, nowMs: number): Promise<void> {
     const tasks = this.taskStore.list({ assignee: agentId });
     for (const t of tasks) {
-      if (t.session_id) continue;
+      if (t.session_id) {
+        if (this.sessionStore.get(t.session_id)) continue;
+        try {
+          await this.taskStore.update(t.id, { session_id: null });
+        } catch (e) {
+          log.warn(
+            { err: e, taskId: t.id, sessionId: t.session_id, agentId },
+            "bindUnboundTasks: failed to clear dangling session binding"
+          );
+          continue;
+        }
+      }
       if (t.status !== "open") continue;
       if (!isStartReady(t.start_at, nowMs)) continue;
       if (!this.depsSatisfied(t)) continue;

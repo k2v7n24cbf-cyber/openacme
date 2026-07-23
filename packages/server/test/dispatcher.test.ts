@@ -10,6 +10,7 @@ import {
   createInboxStore,
 } from "@openacme/db";
 import { TaskStore } from "@openacme/tasks";
+import { AutonomousTurnTimeout } from "@openacme/agent-core";
 import { Dispatcher } from "../src/dispatcher.js";
 import type { AgentManager } from "../src/agent-manager.js";
 
@@ -132,6 +133,27 @@ describe("Dispatcher spawn rule", () => {
     expect(calls).toEqual([{ agentId: "a1", sessionId: session.id }]);
   });
 
+  it("does not pre-mark a task in_progress before the agent claims it", async () => {
+    const gate = deferredTurns();
+    const { manager, calls } = fakeManager(["a1"], gate.turn);
+    const task = await taskStore.create({
+      title: "wake-only",
+      assignee: "a1",
+      created_by: "user",
+    });
+
+    const d = makeDispatcher(manager);
+    await d.start();
+
+    expect(calls).toHaveLength(1);
+    const observed = taskStore.get(task.id);
+    expect(observed?.status).toBe("open");
+    expect(observed?.session_id).toBe(calls[0]!.sessionId);
+
+    gate.release.get(calls[0]!.sessionId)?.();
+    await d.drain(5_000);
+  });
+
   it("does not spawn when the only task has a future start_at", async () => {
     const { manager, calls } = fakeManager(["a1"]);
     await makeBoundTask("a1", {
@@ -164,6 +186,71 @@ describe("Dispatcher spawn rule", () => {
     await taskStore.update(dep.id, { status: "done" });
     await tick(d);
     expect(calls).toHaveLength(1);
+  });
+
+  it("leaves unbound dependent tasks unallocated until dependencies are done", async () => {
+    const { manager, calls } = fakeManager(["a1"]);
+    const dep = await taskStore.create({
+      title: "dep",
+      assignee: "a1",
+      created_by: "user",
+    });
+    const dependent = await taskStore.create({
+      title: "dependent",
+      assignee: "a1",
+      created_by: "user",
+      depends_on: [dep.id],
+    });
+
+    const d = makeDispatcher(manager);
+    await d.start();
+    await d.drain(5_000);
+
+    expect(taskStore.get(dependent.id)?.session_id).toBeNull();
+    expect(calls.map((call) => call.sessionId)).not.toContain(
+      taskStore.get(dependent.id)?.session_id
+    );
+
+    for (const task of taskStore.list({ session_id: calls[0]?.sessionId })) {
+      await taskStore.update(task.id, { status: "done" });
+    }
+    await taskStore.update(dep.id, { status: "done" });
+    await tick(d);
+
+    expect(taskStore.get(dependent.id)?.session_id).toBeTruthy();
+    expect(calls).toHaveLength(2);
+  });
+
+  it("wakes a same-agent dependent in another session after dependency closes", async () => {
+    const { manager, calls } = fakeManager(["a1"]);
+    const s1 = sessionStore.create("a1");
+    const s2 = sessionStore.create("a1");
+    const blocker = await taskStore.create({
+      title: "blocker",
+      assignee: "a1",
+      created_by: "a1",
+      session_id: s1.id,
+      status: "in_progress",
+    });
+    await taskStore.create({
+      title: "dependent",
+      assignee: "a1",
+      created_by: "a1",
+      session_id: s2.id,
+      depends_on: [blocker.id],
+    });
+
+    const d = makeDispatcher(manager);
+    await d.start();
+    await d.drain(5_000);
+    expect(calls).toEqual([{ agentId: "a1", sessionId: s1.id }]);
+
+    await taskStore.update(blocker.id, { status: "done" }, { actor: "a1" });
+    await tick(d);
+    expect(calls).toEqual([
+      { agentId: "a1", sessionId: s1.id },
+      { agentId: "a1", sessionId: s2.id },
+    ]);
   });
 
   it("wakes on a pending inbox row even with no tasks", async () => {
@@ -397,6 +484,28 @@ describe("Dispatcher spawn rule", () => {
     const session = sessionStore.get(bound!.session_id!);
     expect(session?.title).toBe("Write the launch post");
   });
+
+  it("clears dangling session bindings before rebinding ready work", async () => {
+    const { manager, calls } = fakeManager(["a1"]);
+    const ghost = sessionStore.create("a1");
+    const task = await taskStore.create({
+      title: "orphaned binding",
+      assignee: "a1",
+      created_by: "user",
+      session_id: ghost.id,
+    });
+    sessionStore.delete(ghost.id);
+
+    const d = makeDispatcher(manager);
+    await d.start();
+    await d.drain(5_000);
+
+    const rebound = taskStore.get(task.id);
+    expect(rebound?.session_id).toBeTruthy();
+    expect(rebound?.session_id).not.toBe(ghost.id);
+    expect(sessionStore.get(rebound!.session_id!)).not.toBeNull();
+    expect(calls).toEqual([{ agentId: "a1", sessionId: rebound!.session_id }]);
+  });
 });
 
 describe("Dispatcher failure handling", () => {
@@ -419,6 +528,24 @@ describe("Dispatcher failure handling", () => {
     // Park backoff is 5 minutes.
     expect(retryAt).toBeGreaterThan(Date.now() + 4 * 60_000);
     expect(retryAt).toBeLessThan(Date.now() + 6 * 60_000);
+  });
+
+  it("parks timeout failures with a timeout-specific scheduler comment", async () => {
+    const { manager } = fakeManager(["a1"], async (sessionId) => {
+      const task = taskStore.list({ session_id: sessionId })[0];
+      if (task) await taskStore.update(task.id, { status: "in_progress" });
+      throw new AutonomousTurnTimeout("synthetic timeout");
+    });
+    const { task } = await makeBoundTask("a1");
+
+    const d = makeDispatcher(manager);
+    await d.start();
+    await d.drain(5_000);
+
+    const parked = taskStore.get(task.id);
+    expect(parked?.status).toBe("blocked");
+    const comments = taskStore.listComments(task.id, { kinds: ["system"] });
+    expect(comments.at(-1)?.body).toContain("timeout");
   });
 
   it("parks plain object turn errors with a readable provider message", async () => {
@@ -446,6 +573,34 @@ describe("Dispatcher failure handling", () => {
       "Unsupported model gpt-5.2 for OpenAI OAuth"
     );
     expect(comments.at(-1)?.body).not.toContain("[object Object]");
+  });
+
+  it("does not park any task when a failed turn claimed no in_progress task", async () => {
+    const { manager, calls } = fakeManager(["a1"], async () => {
+      throw new Error("no claim");
+    });
+    const { task } = await makeBoundTask("a1");
+
+    const d = makeDispatcher(manager);
+    await d.start();
+    await d.drain(5_000);
+
+    expect(calls).toHaveLength(1);
+    expect(taskStore.get(task.id)?.status).toBe("open");
+    const comments = taskStore.listComments(task.id, { kinds: ["system"] });
+    expect(comments).toHaveLength(0);
+  });
+
+  it("leaves tasks open when the referenced agent is unavailable", async () => {
+    const { manager, calls } = fakeManager([]);
+    const { task } = await makeBoundTask("ghost");
+
+    const d = makeDispatcher(manager);
+    await d.start();
+    await d.drain(5_000);
+
+    expect(calls).toEqual([]);
+    expect(taskStore.get(task.id)?.status).toBe("open");
   });
 
   it("startup sweep resets stale in_progress tasks to open", async () => {

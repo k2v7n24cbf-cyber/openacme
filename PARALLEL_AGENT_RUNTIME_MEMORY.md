@@ -85,10 +85,19 @@
 - Validation: `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts` passed 15/15; `pnpm --filter @openacme/server test -- dispatcher.test.ts app-routes.test.ts` passed 35/35; `pnpm --filter @openacme/server check-types` passed.
 - Status: complete.
 
+### Slice 9 - Legacy Scheduler Contract Coverage
+
+- Goal: review the old `TaskScheduler` test cases from `fdd3df8` and port still-relevant runtime contracts into the current dispatcher tests.
+- Red tests: dangling `session_id` cleanup from the old orphaned-session scheduler test was missing in the tick dispatcher; an open task bound to a deleted session could remain invisible instead of being rebound.
+- Implementation: dispatcher now clears missing session bindings during `bindUnboundTasks` and then rebinds ready open work; added dispatcher tests for no pre-marking before agent claim, unbound dependency allocation gates, same-agent cross-session dependency wake after close, dangling session cleanup, timeout park comments, no-claim failure no-park, and unavailable-agent no-park.
+- Retired old-only contracts: debounce/rate-limit wake windows, per-session watchdog no-claim streaks, croner arm registry, and event-tree-specific echo routing were intentionally removed by the tick-based dispatcher design; their active equivalents are covered by inbox targeting, dependency readiness, capacity/backfill, defer, and tick serialization tests.
+- Validation: `pnpm --filter @openacme/server test -- dispatcher.test.ts` passed 24/24; `pnpm --filter @openacme/server test -- app-routes.test.ts` passed 18/18; `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts` passed 15/15; `pnpm --filter @openacme/server check-types` passed.
+- Status: complete.
+
 ## Open Risks
 
 - Full `pnpm check-types` still stops in baseline `@openacme/cli` package-resolution/type errors during the commit hook (`@openacme/server` cannot be resolved from CLI sources, plus existing implicit-any/type shape errors). The targeted package checks used for this feature pass.
 
 ## Next Action
 
-Commit and push the expanded test matrix update to `origin/agent/parallel-dispatcher-plan`.
+Commit and push the legacy scheduler coverage update to `origin/agent/parallel-dispatcher-plan`.

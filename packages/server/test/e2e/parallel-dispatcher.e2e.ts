@@ -1040,8 +1040,146 @@ describe("parallel dispatcher (e2e)", () => {
           sseDirect.close();
         });
       }
+
+      it(`${policy} prioritizes ${sessionKind} direct messages over task comments during simultaneous arrival`, async () => {
+        const agentId = `simul-${policy.replace("_", "-")}-${sessionKind}`;
+        await createAgent(agentId, 1, {
+          parallelSchedulingPolicy: policy,
+        });
+        const busy = srv.manager.sessionStore.create(agentId);
+        const commentSession = srv.manager.sessionStore.create(agentId);
+        const directSessionId =
+          sessionKind === "existing"
+            ? srv.manager.sessionStore.create(agentId).id
+            : randomUUID();
+        if (sessionKind === "existing") {
+          srv.manager.messageStore.append(directSessionId, {
+            id: randomUUID(),
+            role: "user",
+            parts: [{ type: "text", text: "existing simultaneous history" }],
+          });
+        }
+        const sseBusy = await openSessionStream(busy.id);
+        const sseComment = await openSessionStream(commentSession.id);
+        const sseDirect = await openSessionStream(directSessionId);
+
+        deliverUserMessage(agentId, busy.id, "busy [[mock:slow]]");
+        await sseBusy.waitFor(isState("running"), 8_000);
+
+        const commentTask = await srv.manager.taskStore.create({
+          title: "simultaneous comment anchor",
+          assignee: agentId,
+          created_by: "user",
+          session_id: commentSession.id,
+          status: "done",
+        });
+
+        const [, messageResult] = await Promise.all([
+          postTaskComment(
+            commentTask.id,
+            "simultaneous task comment [[mock:slow-anywhere]]"
+          ),
+          postChat(
+            agentId,
+            directSessionId,
+            `${sessionKind} simultaneous direct message [[mock:slow-anywhere]]`
+          ),
+        ]);
+        expect(messageResult).toMatchObject({
+          queued: true,
+          queuedReason: "agent_capacity",
+        });
+
+        await sseBusy.waitFor(isState("idle"), 15_000);
+        await sseDirect.waitFor(isState("running"), 8_000);
+        expect(stateCount(sseComment, "running")).toBe(0);
+
+        await sseDirect.waitFor(isState("idle"), 15_000);
+        await sseComment.waitFor(isState("running"), 8_000);
+        await sseComment.waitFor(isState("idle"), 15_000);
+
+        sseBusy.close();
+        sseComment.close();
+        sseDirect.close();
+      });
     }
   }
+
+  it("runs every queued direct-message session before a pending human task comment", async () => {
+    await createAgent("priority-many-direct", 1, {
+      parallelSchedulingPolicy: "lane_first",
+    });
+    const busy = srv.manager.sessionStore.create("priority-many-direct");
+    const firstDirect = randomUUID();
+    const secondDirect = randomUUID();
+    const commentSession = srv.manager.sessionStore.create(
+      "priority-many-direct"
+    );
+    const sseBusy = await openSessionStream(busy.id);
+    const sseFirst = await openSessionStream(firstDirect);
+    const sseSecond = await openSessionStream(secondDirect);
+    const sseComment = await openSessionStream(commentSession.id);
+
+    deliverUserMessage("priority-many-direct", busy.id, "busy [[mock:slow]]");
+    await sseBusy.waitFor(isState("running"), 8_000);
+
+    const firstQueued = await postChat(
+      "priority-many-direct",
+      firstDirect,
+      "first direct [[mock:slow-anywhere]]"
+    );
+    expect(firstQueued).toMatchObject({
+      queued: true,
+      queuedReason: "agent_capacity",
+    });
+
+    const commentTask = await srv.manager.taskStore.create({
+      title: "comment between direct messages",
+      assignee: "priority-many-direct",
+      created_by: "user",
+      session_id: commentSession.id,
+      status: "done",
+    });
+    await postTaskComment(
+      commentTask.id,
+      "human task comment between direct messages [[mock:slow-anywhere]]"
+    );
+
+    const secondQueued = await postChat(
+      "priority-many-direct",
+      secondDirect,
+      "second direct [[mock:slow-anywhere]]"
+    );
+    expect(secondQueued).toMatchObject({
+      queued: true,
+      queuedReason: "agent_capacity",
+    });
+
+    await sseBusy.waitFor(isState("idle"), 15_000);
+    await waitUntil(
+      async () =>
+        stateCount(sseFirst, "running") + stateCount(sseSecond, "running") ===
+        1,
+      { timeoutMs: 8_000, intervalMs: 50 }
+    );
+    expect(stateCount(sseComment, "running")).toBe(0);
+
+    const firstStarted = stateCount(sseFirst, "running") > 0;
+    const firstDirectSse = firstStarted ? sseFirst : sseSecond;
+    const secondDirectSse = firstStarted ? sseSecond : sseFirst;
+    await firstDirectSse.waitFor(isState("idle"), 15_000);
+    await secondDirectSse.waitFor(isState("running"), 8_000);
+    expect(stateCount(sseComment, "running")).toBe(0);
+
+    await secondDirectSse.waitFor(isState("idle"), 15_000);
+    await sseComment.waitFor(isState("running"), 8_000);
+    await sseComment.waitFor(isState("idle"), 15_000);
+
+    sseBusy.close();
+    sseFirst.close();
+    sseSecond.close();
+    sseComment.close();
+  });
 
   it("preserves order for multiple queued user messages in the same session", async () => {
     await createAgent("parallel", 1);

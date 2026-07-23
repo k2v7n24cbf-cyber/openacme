@@ -4,7 +4,7 @@ Branch: `agent/parallel-dispatcher-plan`
 
 Worktree: `/private/tmp/openacme-parallel-plan`
 
-Status: complete. Slices 1-12 are implemented and validated.
+Status: complete. Slices 1-13 are implemented and validated.
 
 Dev data dir prepared for manual platform smoke:
 
@@ -766,6 +766,34 @@ Acceptance:
 - Human task comments always win over autonomous task wakes.
 - Both scheduling policies preserve those priority tiers.
 - New prompt sessions and existing chat sessions both receive direct-message priority.
+
+### Slice 13: Extended Priority Test Cases
+
+Owner files:
+
+- `packages/server/test/dispatcher.test.ts`
+- `packages/server/test/e2e/parallel-dispatcher.e2e.ts`
+
+Tasks:
+
+1. Add dispatcher coverage for multiple direct-message sessions queued around a human task comment under both policies.
+2. Add real daemon e2e coverage for simultaneous HTTP arrival of a task comment and direct message.
+3. Cover simultaneous arrival for `lane_first` and `chain_first`.
+4. Cover simultaneous arrival for both new direct sessions and existing chat sessions.
+5. Add real daemon e2e coverage where multiple direct-message sessions run before a pending human task comment.
+
+Validation:
+
+```sh
+pnpm --filter @openacme/server test -- dispatcher.test.ts
+pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts
+```
+
+Acceptance:
+
+- All queued direct-message sessions outrank human task comments.
+- Simultaneous comment/message HTTP arrival preserves direct-message priority.
+- Both policies preserve the priority tier before applying task-chain scheduling.
 
 ## Implementation Slices For Sub-Agents
 

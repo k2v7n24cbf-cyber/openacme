@@ -593,6 +593,102 @@ describe("Dispatcher spawn rule", () => {
       gate.release.get(taskSession.id)?.();
       await d.drain(5_000);
     });
+
+    it(`${policy} drains all direct-message sessions before user task comments`, async () => {
+      const gate = deferredTurns();
+      const { manager, calls } = fakeManager(
+        [
+          {
+            id: "a1",
+            maxConcurrentSessions: 1,
+            parallelSchedulingPolicy: policy,
+          },
+        ],
+        async (sessionId) => {
+          inboxStore.claimForSession({
+            agentId: "a1",
+            sessionId,
+            includeAgentWide: true,
+          });
+          await gate.turn(sessionId);
+        }
+      );
+      const active = await makeBoundTask("a1");
+
+      const d = makeDispatcher(manager);
+      await d.start();
+      expect(calls).toEqual([{ agentId: "a1", sessionId: active.session.id }]);
+
+      const firstUser = sessionStore.create("a1");
+      const commentSession = sessionStore.create("a1");
+      const secondUser = sessionStore.create("a1");
+      inboxStore.deliver({
+        agentId: "a1",
+        kind: "user_message",
+        source: "user",
+        sourceId: "first-direct",
+        relatedSession: firstUser.id,
+        payload: {
+          id: "first-direct",
+          role: "user",
+          parts: [{ type: "text", text: "first direct" }],
+        },
+      });
+      inboxStore.deliver({
+        agentId: "a1",
+        kind: "system_notice",
+        source: "system",
+        sourceId: null,
+        relatedTask: "task-comment",
+        relatedSession: commentSession.id,
+        payload: {
+          eventKind: "comment_added",
+          payload: {
+            author: "system:user",
+            excerpt: "comment between direct messages",
+          },
+        },
+      });
+      inboxStore.deliver({
+        agentId: "a1",
+        kind: "user_message",
+        source: "user",
+        sourceId: "second-direct",
+        relatedSession: secondUser.id,
+        payload: {
+          id: "second-direct",
+          role: "user",
+          parts: [{ type: "text", text: "second direct" }],
+        },
+      });
+      d.kick("test_multiple_direct_before_comment");
+
+      gate.release.get(active.session.id)?.();
+      await vi.waitFor(() => expect(d.isRunning(active.session.id)).toBe(false));
+      await (d as unknown as { tickSafe(): Promise<void> }).tickSafe();
+      await vi.waitFor(() => expect(calls).toHaveLength(2));
+      expect([firstUser.id, secondUser.id]).toContain(calls[1]!.sessionId);
+
+      gate.release.get(calls[1]!.sessionId)?.();
+      await vi.waitFor(() => expect(d.isRunning(calls[1]!.sessionId)).toBe(false));
+      await (d as unknown as { tickSafe(): Promise<void> }).tickSafe();
+      await vi.waitFor(() => expect(calls).toHaveLength(3));
+      expect(new Set([calls[1]!.sessionId, calls[2]!.sessionId])).toEqual(
+        new Set([firstUser.id, secondUser.id])
+      );
+
+      gate.release.get(calls[2]!.sessionId)?.();
+      await vi.waitFor(() => expect(d.isRunning(calls[2]!.sessionId)).toBe(false));
+      await (d as unknown as { tickSafe(): Promise<void> }).tickSafe();
+      await vi.waitFor(() => expect(calls).toHaveLength(4));
+      expect(calls[3]).toEqual({
+        agentId: "a1",
+        sessionId: commentSession.id,
+      });
+
+      gate.release.get(commentSession.id)?.();
+      await d.drain(5_000);
+    });
   }
 
   it("lane_first starts unrun task lanes before continuing a hot chain", async () => {

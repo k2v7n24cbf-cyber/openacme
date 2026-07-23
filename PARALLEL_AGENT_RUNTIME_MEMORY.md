@@ -6,8 +6,8 @@
 - Worktree: `/private/tmp/openacme-parallel-plan`
 - Dev data dir: `/private/tmp/openacme-parallel-plan/.openacme-dev`
 - Dev port: `127.0.0.1:3457`
-- Current slice: Slice 12 complete; ready to commit.
-- Last verified command: `pnpm --filter @openacme/db test -- stores.test.ts`; `pnpm --filter @openacme/db build`; `pnpm --filter @openacme/server test -- dispatcher.test.ts app-routes.test.ts`; `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts`; `pnpm --filter @openacme/db check-types`; `pnpm --filter @openacme/server check-types`; `pnpm --filter @openacme/server build`
+- Current slice: Slice 13 complete; ready to commit.
+- Last verified command: `pnpm --filter @openacme/server test -- dispatcher.test.ts`; `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts`
 
 ## Standing Decisions
 
@@ -162,6 +162,19 @@
   - `pnpm --filter @openacme/db check-types`, `pnpm --filter @openacme/server check-types`, and `pnpm --filter @openacme/server build` passed.
 - Status: complete.
 
+### Slice 13 - Extended Priority Test Cases
+
+- Goal: extend test coverage beyond one-message/one-comment permutations without changing the product contract.
+- Added coverage:
+  - Dispatcher unit coverage for both `lane_first` and `chain_first` where two direct-message sessions are queued around a human task comment; both direct-message sessions must run before the comment.
+  - Real daemon e2e coverage for simultaneous HTTP arrival using `Promise.all` for task comment plus direct message.
+  - Simultaneous e2e covers both policies and both new/existing direct sessions.
+  - Real daemon e2e coverage where two queued direct-message sessions run before a pending human task comment.
+- Validation:
+  - `pnpm --filter @openacme/server test -- dispatcher.test.ts` passed 33/33.
+  - `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/parallel-dispatcher.e2e.ts` passed 37/37.
+- Status: complete.
+
 ## Open Risks
 
 - Full `pnpm check-types` still stops in baseline `@openacme/cli` package-resolution/type errors during the commit hook (`@openacme/server` cannot be resolved from CLI sources, plus existing implicit-any/type shape errors). The targeted package checks used for this feature pass.
@@ -176,4 +189,4 @@
 
 ## Next Action
 
-Commit and push Slice 12 on `agent/parallel-dispatcher-plan`; do not deploy or restart production unless explicitly requested later.
+Commit and push Slice 13 on `agent/parallel-dispatcher-plan`; do not deploy or restart production unless explicitly requested later.

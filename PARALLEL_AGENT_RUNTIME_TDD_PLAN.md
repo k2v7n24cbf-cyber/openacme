@@ -484,6 +484,123 @@ OPENACME_DATA_DIR="$PWD/.openacme-dev" pnpm dev
 7. Send a third message at capacity and confirm it queues, then drains.
 8. Stop dev server. Do not start or restart the user's production daemon.
 
+## Additional Coverage Candidates
+
+These cases were identified after comparing the current dispatcher/inbox/e2e
+suite against the retired `TaskScheduler` tests and the new parallel runtime
+contracts. They are not new product requirements; they are regression coverage
+for behavior the current implementation already intends to preserve.
+
+### Priority 1: Add Before PR Review
+
+1. `cancelQueuedUserMessage` session scoping
+   - File: `packages/db/test/stores.test.ts`
+   - Scenario: two queued `user_message` rows share the same `(agentId,
+     sourceId)` but belong to different `relatedSession` values.
+   - Expected: cancelling one session deletes only that session's row.
+   - Why: this was listed in the original inbox matrix but is not currently
+     asserted. It protects queue-chip cancel behavior under parallel sessions.
+
+2. Parallel failure isolation
+   - File: `packages/server/test/dispatcher.test.ts`
+   - Scenario: agent has `maxConcurrentSessions: 2`; two sessions are running;
+     one turn throws after claiming an `in_progress` task, the other turn
+     completes normally or remains running.
+   - Expected: only the failing session's task is parked; the other session's
+     task is not parked, and active bookkeeping is cleaned up per session.
+   - Why: the plan explicitly requires failure parking to be scoped to the
+     failing session, but current tests only cover a single active session.
+
+3. Agent-wide inbox at capacity
+   - File: `packages/server/test/e2e/parallel-dispatcher.e2e.ts`
+   - Scenario: capacity is full with two slow sessions; an agent-wide notice
+     lands while both slots are occupied.
+   - Expected: no extra session starts while full; when a slot frees, exactly
+     one eligible session claims the notice.
+   - Why: current e2e proves single-claim when capacity is available, but not
+     the queued-at-capacity path.
+
+4. Runtime cap update is observed by dispatcher
+   - File: `packages/server/test/dispatcher.test.ts` or
+     `packages/server/test/e2e/parallel-dispatcher.e2e.ts`
+   - Scenario: an agent starts at `maxConcurrentSessions: 1`, one session is
+     running, then the setting is updated to `2` and another ready session is
+     kicked.
+   - Expected: dispatcher reads the fresh agent definition and starts the
+     second session without a daemon restart.
+   - Why: settings are runtime-facing; persistence alone does not prove the
+     scheduler observes the new value.
+
+### Priority 2: Strong Regression Coverage
+
+5. Real task-tool result isolation under parallel sessions
+   - File: `packages/server/test/e2e/parallel-dispatcher.e2e.ts`
+   - Scenario: two sessions of the same agent are running; a task result or
+     comment event with `relatedSession = B` lands mid-turn.
+   - Expected: session `A` never sees/deletes that event; session `B` later
+     consumes it.
+   - Why: synthetic inbox isolation exists, but this proves the real task event
+     fan-out path preserves the same boundary.
+
+6. Process completion isolation under parallel sessions
+   - File: `packages/server/test/e2e/parallel-dispatcher.e2e.ts`
+   - Scenario: session `A` launches a detached process while session `B` is
+     also running.
+   - Expected: `process_completed` wakes and persists only in session `A`.
+   - Why: current process wake test is single-session.
+
+7. Interactive abort frees capacity
+   - File: `packages/server/test/e2e/parallel-dispatcher.e2e.ts`
+   - Scenario: start a slow `/api/chat` turn at capacity, call
+     `/api/chat/:sessionId/abort`, then queue another session.
+   - Expected: the aborted session leaves running state and the queued session
+     can start.
+   - Why: abort currently clears `activeTurns`; the dispatcher capacity marker
+     is cleared by `runChatTurn` cleanup. This deserves coverage because stale
+     busy state would deadlock capacity.
+
+8. Same-session duplicate inbox rows preserve order
+   - File: `packages/agent-core/test/agent-inbox.test.ts` plus optional e2e.
+   - Scenario: two queued user messages for the same session arrive while the
+     session is running.
+   - Expected: after the follow-up turn, both messages are appended in inbox id
+     order and no duplicate parallel turn is started for that session.
+   - Why: current same-session tests cover one queued follow-up only.
+
+9. Multiple agents do not share capacity
+   - File: `packages/server/test/e2e/parallel-dispatcher.e2e.ts`
+   - Scenario: agent `A` is at capacity; agent `B` has ready work.
+   - Expected: `B` starts independently.
+   - Why: most tests focus on one canonical agent. This protects the global
+     tick serialization from accidentally becoming a global capacity lock.
+
+10. Defer plus capacity-full targeted wake
+    - File: `packages/server/test/e2e/parallel-dispatcher.e2e.ts`
+    - Scenario: deferred session `A` receives a targeted inbox row while agent
+      capacity is full.
+    - Expected: `A` does not run while full; once capacity frees, the targeted
+      inbox still bypasses defer and runs.
+    - Why: current e2e proves targeted inbox bypasses defer with available
+      capacity, not while queued behind capacity.
+
+### Priority 3: UI/Smoke Automation
+
+11. Agent Settings tab browser regression
+    - File: web e2e or Playwright smoke harness
+    - Scenario: open an agent Settings tab, change `Parallel sessions`, save,
+      reload, and verify the selected value and warning.
+    - Expected: the value persists and warning appears only when value > 1.
+    - Why: manual `.openacme-dev` smoke covered this, but no automated browser
+      test currently guards the UI.
+
+12. Settings save preserves memory extraction and parallel sessions together
+    - File: `packages/server/test/app-routes.test.ts`
+    - Scenario: update `memoryExtractionEnabled` and `maxConcurrentSessions`
+      in separate requests and together.
+    - Expected: partial updates do not reset the other field.
+    - Why: both controls share the same settings surface and AGENT.md
+      frontmatter path.
+
 ## Implementation Slices For Sub-Agents
 
 Each slice below should be run as a separate development task. The lead agent should merge slices only after their tests pass locally.

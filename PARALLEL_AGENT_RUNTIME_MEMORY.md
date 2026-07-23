@@ -98,6 +98,24 @@
 
 - Full `pnpm check-types` still stops in baseline `@openacme/cli` package-resolution/type errors during the commit hook (`@openacme/server` cannot be resolved from CLI sources, plus existing implicit-any/type shape errors). The targeted package checks used for this feature pass.
 
+## Additional Coverage Backlog
+
+- Priority 1 before PR review:
+  - Add `cancelQueuedUserMessage` session-scoping coverage in `packages/db/test/stores.test.ts`.
+  - Add dispatcher parallel failure isolation: with two active sessions, one failing turn parks only its own claimed task.
+  - Add e2e for agent-wide inbox notice arriving while capacity is full, then single-claiming after a slot frees.
+  - Add dispatcher/e2e coverage that changing `maxConcurrentSessions` at runtime is observed without a daemon restart.
+- Priority 2:
+  - Real task-tool result isolation while two same-agent sessions run.
+  - Process completion isolation while another same-agent session is running.
+  - Interactive abort frees capacity and lets queued work start.
+  - Two same-session queued user messages preserve order and do not create duplicate active turns.
+  - One agent at capacity does not block another agent's ready work.
+  - Deferred targeted inbox wake remains queued while capacity is full, then still bypasses defer after a slot frees.
+- Priority 3:
+  - Automated browser regression for the Agent Settings tab `Parallel sessions` control and warning.
+  - API regression that partial Settings updates preserve both `memoryExtractionEnabled` and `maxConcurrentSessions`.
+
 ## Next Action
 
-Commit and push the legacy scheduler coverage update to `origin/agent/parallel-dispatcher-plan`.
+Start the next TDD coverage slice from the Priority 1 backlog.

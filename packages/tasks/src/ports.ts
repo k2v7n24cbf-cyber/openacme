@@ -132,10 +132,5 @@ export interface TaskEvent {
 
 export interface EventStorePort {
   append(input: EventInput): unknown;
-  recentForTasks(
-    taskIds: string[],
-    sinceTs: number,
-    limit?: number,
-  ): TaskEvent[];
-  latestByTask?(taskIds: string[]): Map<string, number>;
+  recentForTasks(taskIds: string[], sinceTs: number, limit?: number): TaskEvent[];
 }

@@ -143,13 +143,6 @@ export {
   type SessionSummary,
 } from "./routes/home.js";
 export {
-  repairTaskSourceSessions,
-  resolveTaskSourceSessions,
-  type ResolvedTaskSourceSessions,
-  type TaskSourceRepairResult,
-  type TaskSourceMatch,
-} from "./task-source-provenance.js";
-export {
   SessionBroadcaster,
   type BroadcastEnvelope,
   type SessionBroadcastEvent,

@@ -68,10 +68,6 @@ export interface AgentOption {
 const GHOST_TRIGGER =
   "-ml-2 h-7 w-fit max-w-full border border-transparent bg-transparent px-2 text-sm text-ink transition-colors hover:bg-paper-sunk focus-visible:border-plot-red";
 
-function defaultApiUrl(path: string): string {
-  return `${API_BASE}${path}`;
-}
-
 function PropertyRow({
   label,
   children,
@@ -110,9 +106,8 @@ export interface TaskDetailPanelProps {
   onDeleteClick: () => void;
   /** When provided, renders a close X in the header (deselects). */
   onClose?: () => void;
-  apiUrl?: (path: string) => string;
-  readOnly?: boolean;
 }
+
 
 export function TaskDetailPanel({
   selected,
@@ -125,17 +120,10 @@ export function TaskDetailPanel({
   onSave,
   onDeleteClick,
   onClose,
-  apiUrl = defaultApiUrl,
-  readOnly = false,
 }: TaskDetailPanelProps) {
-  const taskById = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks]);
   const titleByDepId = useMemo(
     () => new Map(tasks.map((t) => [t.id, t.title])),
-    [tasks],
-  );
-  const dependents = useMemo(
-    () => tasks.filter((t) => t.depends_on.includes(selected.id)),
-    [tasks, selected.id],
+    [tasks]
   );
   const [copiedTask, setCopiedTask] = useState(false);
   const [copiedSession, setCopiedSession] = useState(false);
@@ -163,310 +151,268 @@ export function TaskDetailPanel({
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-6 md:py-5">
       <div className="mx-auto w-full max-w-3xl">
-        <div className="flex items-center justify-between gap-3 border-b border-paper-rule pb-3">
-          <div className="flex min-w-0 items-center gap-3">
-            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-              Task
-            </span>
+      <div className="flex items-center justify-between gap-3 border-b border-paper-rule pb-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+            Task
+          </span>
+          <button
+            type="button"
+            onClick={() => void copy(selected.id, setCopiedTask)}
+            title={`Copy ${selected.id}`}
+            aria-label="Copy task ID"
+            className="group flex items-center gap-1.5 font-mono text-[12px] tabular-nums text-ink-soft transition-colors hover:text-plot-red focus-visible:outline focus-visible:outline-1 focus-visible:outline-plot-red"
+          >
+            <span>{shortTaskId}</span>
+            {copiedTask ? (
+              <Check className="size-3 text-plot-red" />
+            ) : (
+              <Copy className="size-3 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
+            )}
+          </button>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button size="sm" variant="ghost-destructive" disabled={saving} onClick={onDeleteClick}>
+            <Trash2 className="size-4" />
+            Delete
+          </Button>
+          <Button size="sm" disabled={!dirty || saving} onClick={onSave}>
+            {saving ? (
+              <LoadingHairline inline />
+            ) : (
+              <Save className="size-4" />
+            )}
+            Save
+          </Button>
+          {onClose && (
             <button
               type="button"
-              onClick={() => void copy(selected.id, setCopiedTask)}
-              title={`Copy ${selected.id}`}
-              aria-label="Copy task ID"
-              className="group flex items-center gap-1.5 font-mono text-[12px] tabular-nums text-ink-soft transition-colors hover:text-plot-red focus-visible:outline focus-visible:outline-1 focus-visible:outline-plot-red"
+              onClick={onClose}
+              aria-label="Close"
+              className="ml-1 p-1 text-ink-soft transition-colors hover:text-plot-red focus-visible:outline focus-visible:outline-1 focus-visible:outline-plot-red"
             >
-              <span>{shortTaskId}</span>
-              {copiedTask ? (
-                <Check className="size-3 text-plot-red" />
-              ) : (
-                <Copy className="size-3 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
-              )}
+              <X className="size-4" />
             </button>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <Button
-              size="sm"
-              variant="ghost-destructive"
-              disabled={saving || readOnly}
-              title={readOnly ? "Read-only preview" : undefined}
-              onClick={onDeleteClick}
-            >
-              <Trash2 className="size-4" />
-              Delete
-            </Button>
-            <Button
-              size="sm"
-              disabled={!dirty || saving || readOnly}
-              title={readOnly ? "Read-only preview" : undefined}
-              onClick={onSave}
-            >
-              {saving ? (
-                <LoadingHairline inline />
-              ) : (
-                <Save className="size-4" />
-              )}
-              Save
-            </Button>
-            {onClose && (
-              <button
-                type="button"
-                onClick={onClose}
-                aria-label="Close"
-                className="ml-1 p-1 text-ink-soft transition-colors hover:text-plot-red focus-visible:outline focus-visible:outline-1 focus-visible:outline-plot-red"
-              >
-                <X className="size-4" />
-              </button>
-            )}
-          </div>
+          )}
         </div>
+      </div>
 
-        <div className="space-y-5 py-5">
-          {/* The task's one real heading — chromeless, edits in place. */}
-          <input
-            aria-label="Title"
-            value={draft.title}
-            readOnly={readOnly}
-            onChange={(e) => onChange({ ...draft, title: e.target.value })}
-            placeholder="Task title"
-            className={cn(
-              "w-full border-0 bg-transparent px-0 text-xl font-semibold leading-snug text-ink outline-none placeholder:text-ink-faint md:text-2xl",
-              readOnly && "cursor-default",
-            )}
-          />
+      <div className="space-y-5 py-5">
+        {/* The task's one real heading — chromeless, edits in place. */}
+        <input
+          aria-label="Title"
+          value={draft.title}
+          onChange={(e) => onChange({ ...draft, title: e.target.value })}
+          placeholder="Task title"
+          className="w-full border-0 bg-transparent px-0 text-xl font-semibold leading-snug text-ink outline-none placeholder:text-ink-faint md:text-2xl"
+        />
 
-          <div className="space-y-0.5">
-            <PropertyRow label="Status">
-              <Select
-                value={draft.status}
-                disabled={readOnly}
-                onValueChange={(v) =>
-                  onChange({ ...draft, status: v as TaskStatus })
-                }
+        <div className="space-y-0.5">
+          <PropertyRow label="Status">
+            <Select
+              value={draft.status}
+              onValueChange={(v) =>
+                onChange({ ...draft, status: v as TaskStatus })
+              }
+            >
+              <SelectTrigger
+                id="status"
+                size="sm"
+                className={cn(GHOST_TRIGGER, "data-[size=sm]:h-7")}
               >
-                <SelectTrigger
-                  id="status"
-                  size="sm"
-                  className={cn(GHOST_TRIGGER, "data-[size=sm]:h-7")}
-                >
-                  {/* SelectValue (not a bare Badge): Radix's item-aligned
+                {/* SelectValue (not a bare Badge): Radix's item-aligned
                     positioning needs the value node to anchor the popup. */}
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {STATUS_ORDER.map((s) => (
-                    <SelectItem key={s} value={s}>
-                      <Badge variant={STATUS_VARIANT[s]}>
-                        {STATUS_LABEL[s]}
-                      </Badge>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </PropertyRow>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {STATUS_ORDER.map((s) => (
+                  <SelectItem key={s} value={s}>
+                    <Badge variant={STATUS_VARIANT[s]}>{STATUS_LABEL[s]}</Badge>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </PropertyRow>
 
-            <PropertyRow label="Assignee">
-              {/* flex-1 gives the fit-content trigger a resolved available
+          <PropertyRow label="Assignee">
+            {/* flex-1 gives the fit-content trigger a resolved available
                 width; without it the nested truncate collapses to
                 min-content. */}
-              <div className="min-w-0 flex-1">
-                <AgentCombobox
-                  agents={agents}
-                  value={draft.assignee}
-                  disabled={readOnly}
-                  onChange={(id) => onChange({ ...draft, assignee: id })}
-                />
-                {!assigneeKnown && draft.assignee && (
-                  <p className="px-2 text-xs text-destructive">
-                    Current assignee no longer exists. Pick a known agent.
-                  </p>
-                )}
-              </div>
-            </PropertyRow>
-
-            <PropertyRow label="Deps">
-              <DependencyPicker
-                taskId={draft.id}
-                value={draft.depends_on}
-                tasks={tasks}
-                taskById={taskById}
-                disabled={readOnly}
-                onChange={(ids) => onChange({ ...draft, depends_on: ids })}
+            <div className="min-w-0 flex-1">
+              <AgentCombobox
+                agents={agents}
+                value={draft.assignee}
+                onChange={(id) => onChange({ ...draft, assignee: id })}
               />
-            </PropertyRow>
+              {!assigneeKnown && draft.assignee && (
+                <p className="px-2 text-xs text-destructive">
+                  Current assignee no longer exists. Pick a known agent.
+                </p>
+              )}
+            </div>
+          </PropertyRow>
 
-            <PropertyRow label="Start">
-              <DateTimePicker
-                ghost
-                id="start_at"
-                value={draft.start_at}
-                onChange={(iso) => onChange({ ...draft, start_at: iso })}
-                placeholder="Pick start"
-                className="-ml-2"
-                disabled={readOnly}
-              />
-            </PropertyRow>
+          <PropertyRow label="Start">
+            <DateTimePicker
+              ghost
+              id="start_at"
+              value={draft.start_at}
+              onChange={(iso) => onChange({ ...draft, start_at: iso })}
+              placeholder="Pick start"
+              className="-ml-2"
+            />
+          </PropertyRow>
 
-            <PropertyRow label="Due">
-              <DateTimePicker
-                ghost
-                id="due_at"
-                value={draft.due_at}
-                onChange={(iso) => onChange({ ...draft, due_at: iso })}
-                placeholder="Pick due"
-                className="-ml-2"
-                disabled={readOnly}
-              />
-            </PropertyRow>
+          <PropertyRow label="Due">
+            <DateTimePicker
+              ghost
+              id="due_at"
+              value={draft.due_at}
+              onChange={(iso) => onChange({ ...draft, due_at: iso })}
+              placeholder="Pick due"
+              className="-ml-2"
+            />
+          </PropertyRow>
 
-            <PropertyRow label="Session">
-              <SessionRow
-                sessionId={sessionId}
-                shortSession={shortSession}
-                copiedSession={copiedSession}
-                onCopy={() =>
-                  sessionId && void copy(sessionId, setCopiedSession)
-                }
-                onUnbind={() => onChange({ ...draft, session_id: null })}
-                readOnly={readOnly}
-              />
-            </PropertyRow>
+          <PropertyRow label="Session">
+            <SessionRow
+              sessionId={sessionId}
+              shortSession={shortSession}
+              copiedSession={copiedSession}
+              onCopy={() => sessionId && void copy(sessionId, setCopiedSession)}
+              onUnbind={() => onChange({ ...draft, session_id: null })}
+            />
+          </PropertyRow>
 
-            <PropertyRow label="Repeat">
-              <button
-                type="button"
-                onClick={() => setRecurrenceOpen((o) => !o)}
-                aria-expanded={recurrenceOpen}
+          <PropertyRow label="Repeat">
+            <button
+              type="button"
+              onClick={() => setRecurrenceOpen((o) => !o)}
+              aria-expanded={recurrenceOpen}
+              className={cn(
+                GHOST_TRIGGER,
+                "flex items-center gap-2",
+                !draft.recurrence && "text-ink-faint"
+              )}
+            >
+              <span className="truncate">
+                {draft.recurrence
+                  ? recurrenceSummary(draft.recurrence)
+                  : "None"}
+              </span>
+              <ChevronDown
                 className={cn(
-                  GHOST_TRIGGER,
-                  "flex items-center gap-2",
-                  !draft.recurrence && "text-ink-faint",
+                  "size-3.5 shrink-0 text-ink-faint transition-transform",
+                  recurrenceOpen && "rotate-180"
                 )}
-              >
-                <span className="truncate">
-                  {draft.recurrence
-                    ? recurrenceSummary(draft.recurrence)
-                    : "None"}
-                </span>
-                <ChevronDown
-                  className={cn(
-                    "size-3.5 shrink-0 text-ink-faint transition-transform",
-                    recurrenceOpen && "rotate-180",
-                  )}
-                />
-              </button>
-            </PropertyRow>
-          </div>
+              />
+            </button>
+          </PropertyRow>
+        </div>
 
-          {recurrenceOpen && (
-            <RecurrenceEditor
-              value={draft.recurrence}
-              onChange={(rec) => onChange({ ...draft, recurrence: rec })}
-              runs={selected.runs}
-              lastRunAt={selected.last_run_at}
-              nextStartAt={selected.start_at}
-              disabled={readOnly}
-            />
-          )}
+        {recurrenceOpen && (
+          <RecurrenceEditor
+            value={draft.recurrence}
+            onChange={(rec) => onChange({ ...draft, recurrence: rec })}
+            runs={selected.runs}
+            lastRunAt={selected.last_run_at}
+            nextStartAt={selected.start_at}
+          />
+        )}
 
-          <div className="border-t border-paper-rule pt-4">
-            <MarkdownEditor
-              value={draft.body ?? ""}
-              onChange={(md) => onChange({ ...draft, body: md })}
-              placeholder="Add a description — type / for blocks…"
-              contentClassName="min-h-[120px]"
-              editable={!readOnly}
-            />
-          </div>
-
-          <ActivityTimeline
-            taskId={selected.id}
-            agents={agents}
-            titleByDepId={titleByDepId}
-            apiUrl={apiUrl}
-            readOnly={readOnly}
+        <div className="border-t border-paper-rule pt-4">
+          <MarkdownEditor
+            value={draft.body ?? ""}
+            onChange={(md) => onChange({ ...draft, body: md })}
+            placeholder="Add a description — type / for blocks…"
+            contentClassName="min-h-[120px]"
           />
         </div>
 
-        {/* Audit metadata: closing ruled block. */}
-        <div className="grid grid-cols-[auto_1fr_auto_1fr] items-baseline gap-x-5 gap-y-1 border-t border-paper-rule pt-3 font-mono text-[12px] tabular-nums">
-          <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-            By
-          </span>
-          <span className="flex min-w-0 items-baseline gap-1.5 truncate text-ink-soft">
-            {agents.some((a) => a.id === selected.created_by) ? (
-              <AgentRef
-                id={selected.created_by}
-                label={selected.created_by}
-                className="truncate"
-              />
-            ) : (
-              <span className="truncate">{selected.created_by}</span>
-            )}
-            {selected.team && <span>· #{selected.team}</span>}
-          </span>
-          <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-            Created
-          </span>
-          <span
-            className="text-ink-soft"
-            title={formatDate(selected.created_at)}
-          >
-            {formatRelativeFromIso(selected.created_at)}
-          </span>
-          <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-            Updated
-          </span>
-          <span
-            className="text-ink-soft"
-            title={formatDate(selected.updated_at)}
-          >
-            {formatRelativeFromIso(selected.updated_at)}
-          </span>
-          {selected.closed_at && (
-            <>
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                Closed
-              </span>
-              <span
-                className="text-ink-soft"
-                title={formatDate(selected.closed_at)}
-              >
-                {formatRelativeFromIso(selected.closed_at)}
-              </span>
-            </>
+        <ActivityTimeline
+          taskId={selected.id}
+          agents={agents}
+          titleByDepId={titleByDepId}
+        />
+      </div>
+
+      {/* Audit metadata: closing ruled block. */}
+      <div className="grid grid-cols-[auto_1fr_auto_1fr] items-baseline gap-x-5 gap-y-1 border-t border-paper-rule pt-3 font-mono text-[12px] tabular-nums">
+        <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+          By
+        </span>
+        <span className="flex min-w-0 items-baseline gap-1.5 truncate text-ink-soft">
+          {agents.some((a) => a.id === selected.created_by) ? (
+            <AgentRef
+              id={selected.created_by}
+              label={selected.created_by}
+              className="truncate"
+            />
+          ) : (
+            <span className="truncate">{selected.created_by}</span>
           )}
-          {dependents.length > 0 && (
-            <>
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                Blocks
-              </span>
-              <span className="col-span-3 flex min-w-0 flex-wrap gap-x-3 gap-y-0.5 text-ink-soft">
-                {dependents.map((t) => (
-                  <span
-                    key={t.id}
-                    className="inline-flex items-baseline gap-1.5"
-                  >
-                    <span className="text-ink-soft">{`#${t.id}`}</span>
-                    <span className="truncate text-ink-faint">{t.title}</span>
+          {selected.team && <span>· #{selected.team}</span>}
+        </span>
+        <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+          Created
+        </span>
+        <span className="text-ink-soft" title={formatDate(selected.created_at)}>
+          {formatRelativeFromIso(selected.created_at)}
+        </span>
+        <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+          Updated
+        </span>
+        <span className="text-ink-soft" title={formatDate(selected.updated_at)}>
+          {formatRelativeFromIso(selected.updated_at)}
+        </span>
+        {selected.closed_at && (
+          <>
+            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+              Closed
+            </span>
+            <span
+              className="text-ink-soft"
+              title={formatDate(selected.closed_at)}
+            >
+              {formatRelativeFromIso(selected.closed_at)}
+            </span>
+          </>
+        )}
+        {selected.depends_on.length > 0 && (
+          <>
+            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+              Deps
+            </span>
+            <span className="col-span-3 flex min-w-0 flex-wrap gap-x-3 gap-y-0.5 text-ink-soft">
+              {selected.depends_on.map((id) => (
+                <span
+                  key={id}
+                  className="inline-flex items-baseline gap-1.5"
+                >
+                  <span className="text-ink-soft">{`#${id}`}</span>
+                  <span className="truncate text-ink-faint">
+                    {titleByDepId.get(id) ?? "(unknown)"}
                   </span>
-                ))}
-              </span>
-            </>
-          )}
-          {selected.parent_id && (
-            <>
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                Parent
-              </span>
-              <span className="col-span-3 inline-flex min-w-0 items-baseline gap-1.5 text-ink-soft">
-                <span>{`#${selected.parent_id}`}</span>
-                <span className="truncate text-ink-faint">
-                  {titleByDepId.get(selected.parent_id) ?? "(unknown)"}
                 </span>
+              ))}
+            </span>
+          </>
+        )}
+        {selected.parent_id && (
+          <>
+            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+              Parent
+            </span>
+            <span className="col-span-3 inline-flex min-w-0 items-baseline gap-1.5 text-ink-soft">
+              <span>{`#${selected.parent_id}`}</span>
+              <span className="truncate text-ink-faint">
+                {titleByDepId.get(selected.parent_id) ?? "(unknown)"}
               </span>
-            </>
-          )}
-        </div>
+            </span>
+          </>
+        )}
+      </div>
+
       </div>
     </div>
   );
@@ -483,14 +429,10 @@ function ActivityTimeline({
   taskId,
   agents,
   titleByDepId,
-  apiUrl,
-  readOnly,
 }: {
   taskId: string;
   agents: AgentOption[];
   titleByDepId: Map<string, string>;
-  apiUrl: (path: string) => string;
-  readOnly: boolean;
 }) {
   const [comments, setComments] = useState<Comment[]>([]);
   const [events, setEvents] = useState<TaskEvent[]>([]);
@@ -506,8 +448,10 @@ function ActivityTimeline({
     async function load(initial: boolean) {
       try {
         const [c, e] = await Promise.all([
-          fetch(apiUrl(`/api/tasks/${taskId}/comments`)).then((r) => r.json()),
-          fetch(apiUrl(`/api/tasks/${taskId}/events`)).then((r) => r.json()),
+          fetch(`${API_BASE}/api/tasks/${taskId}/comments`).then((r) =>
+            r.json()
+          ),
+          fetch(`${API_BASE}/api/tasks/${taskId}/events`).then((r) => r.json()),
         ]);
         if (cancelled) return;
         setComments((c.comments ?? []) as Comment[]);
@@ -524,13 +468,13 @@ function ActivityTimeline({
       cancelled = true;
       clearInterval(id);
     };
-  }, [taskId, apiUrl]);
+  }, [taskId]);
 
   async function postComment() {
-    if (readOnly || !draftBody.trim() || posting) return;
+    if (!draftBody.trim() || posting) return;
     setPosting(true);
     try {
-      const r = await fetch(apiUrl(`/api/tasks/${taskId}/comments`), {
+      const r = await fetch(`${API_BASE}/api/tasks/${taskId}/comments`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ body: draftBody }),
@@ -545,7 +489,7 @@ function ActivityTimeline({
           message?: string;
         };
         toast.error(
-          err.message ?? err.error ?? `Comment failed (HTTP ${r.status})`,
+          err.message ?? err.error ?? `Comment failed (HTTP ${r.status})`
         );
       }
     } catch {
@@ -561,10 +505,7 @@ function ActivityTimeline({
     return m;
   }, [agents]);
 
-  const items = useMemo(
-    () => mergeActivity(comments, events),
-    [comments, events],
-  );
+  const items = useMemo(() => mergeActivity(comments, events), [comments, events]);
 
   return (
     <section className="space-y-3 border-t border-paper-rule pt-5">
@@ -619,14 +560,12 @@ function ActivityTimeline({
         </ol>
       )}
 
-      {!readOnly && (
-        <Composer
-          draftBody={draftBody}
-          onChange={setDraftBody}
-          onPost={postComment}
-          posting={posting}
-        />
-      )}
+      <Composer
+        draftBody={draftBody}
+        onChange={setDraftBody}
+        onPost={postComment}
+        posting={posting}
+      />
     </section>
   );
 }
@@ -648,7 +587,7 @@ interface ResolvedAuthor {
 // surface it via the description, not the actor label.
 function resolveAuthor(
   id: string,
-  agentMap: Map<string, AgentOption>,
+  agentMap: Map<string, AgentOption>
 ): ResolvedAuthor {
   if (id === "system:user") return { kind: "user", handle: "user" };
   if (id.startsWith("system:")) return { kind: "system", handle: "system" };
@@ -662,16 +601,9 @@ function AuthorChip({ author }: { author: ResolvedAuthor }) {
     return (
       <span className="inline-flex items-center gap-1.5">
         {author.avatar && (
-          <AgentAvatar
-            avatar={author.avatar}
-            size="sm"
-            className="text-ink-soft"
-          />
+          <AgentAvatar avatar={author.avatar} size="sm" className="text-ink-soft" />
         )}
-        <AgentRef
-          id={author.handle}
-          className="font-mono text-[11px] text-ink"
-        />
+        <AgentRef id={author.handle} className="font-mono text-[11px] text-ink" />
       </span>
     );
   }
@@ -790,9 +722,7 @@ function EventRow({
   return (
     <div className="grid grid-cols-[12px_1fr] items-center gap-x-3">
       <div aria-hidden className="flex justify-center">
-        <span className="font-mono text-[11px] leading-none text-ink-faint">
-          ›
-        </span>
+        <span className="font-mono text-[11px] leading-none text-ink-faint">›</span>
       </div>
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[12px] tabular-nums text-ink-soft">
         {actor && (
@@ -800,7 +730,9 @@ function EventRow({
             <span
               className={cn(
                 "inline-flex items-center gap-1.5",
-                actor.kind === "agent" ? "text-ink" : "italic text-ink-soft",
+                actor.kind === "agent"
+                  ? "text-ink"
+                  : "italic text-ink-soft"
               )}
             >
               {actor.kind === "agent" && actor.avatar && (
@@ -837,7 +769,8 @@ function EventRow({
 // decide whether to prepend `@` (agents) or not (system actors).
 function resolveAgentHandle(id: string | undefined): string {
   if (!id) return "?";
-  if (id.startsWith("system:")) return id.slice("system:".length) || "system";
+  if (id.startsWith("system:"))
+    return id.slice("system:".length) || "system";
   return id;
 }
 
@@ -848,7 +781,7 @@ function resolveAgentHandle(id: string | undefined): string {
 function resolveEventActor(
   event: TaskEvent,
   payload: Record<string, unknown> | null,
-  agentMap: Map<string, AgentOption>,
+  agentMap: Map<string, AgentOption>
 ): ResolvedAuthor | null {
   if (event.actor) return resolveAuthor(event.actor, agentMap);
   if (event.kind === "task_assigned") {
@@ -874,7 +807,8 @@ function EventDescription({
     case "status_changed": {
       const from = (payload?.from as TaskStatus | undefined) ?? undefined;
       const to = (payload?.to as TaskStatus | undefined) ?? undefined;
-      if (!from || !to) return <span className="text-ink">status changed</span>;
+      if (!from || !to)
+        return <span className="text-ink">status changed</span>;
       return (
         <span className="flex flex-wrap items-center gap-1.5">
           <span className="text-[10px] uppercase tracking-[0.08em] text-ink-faint">
@@ -892,16 +826,16 @@ function EventDescription({
       return (
         <span className="flex flex-wrap items-baseline gap-1">
           <span className="text-ink-faint">dep</span>
-          <span className="text-ink-soft">{depId ? `#${depId}` : "?"}</span>
+          <span className="text-ink-soft">
+            {depId ? `#${depId}` : "?"}
+          </span>
           {depTitle && <span className="text-ink">{depTitle}</span>}
           <span className="text-ink-faint">done, now runnable</span>
         </span>
       );
     }
     case "task_assigned": {
-      const assignee = resolveAgentHandle(
-        payload?.assignee as string | undefined,
-      );
+      const assignee = resolveAgentHandle(payload?.assignee as string | undefined);
       return (
         <span>
           assigned to <span className="text-ink">@{assignee}</span>
@@ -991,7 +925,7 @@ type ActivityItem =
 
 function mergeActivity(
   comments: Comment[],
-  events: TaskEvent[],
+  events: TaskEvent[]
 ): ActivityItem[] {
   const items: ActivityItem[] = [];
   for (const c of comments) {
@@ -1006,7 +940,7 @@ function mergeActivity(
 }
 
 function parseEventPayload(
-  payload: string | null,
+  payload: string | null
 ): Record<string, unknown> | null {
   if (!payload) return null;
   try {
@@ -1017,260 +951,14 @@ function parseEventPayload(
   }
 }
 
-function DependencyPicker({
-  taskId,
-  value,
-  tasks,
-  taskById,
-  onChange,
-  disabled = false,
-}: {
-  taskId: string;
-  value: string[];
-  tasks: Task[];
-  taskById: Map<string, Task>;
-  onChange: (ids: string[]) => void;
-  disabled?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [highlight, setHighlight] = useState(0);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-  const listboxId = useId();
-  const selected = new Set(value);
-
-  const q = query.trim().toLowerCase();
-  const candidates = tasks.filter((t) => t.id !== taskId);
-  const filtered = q
-    ? candidates.filter((t) =>
-        `${t.title} #${t.id} ${t.assignee} ${t.team ?? ""}`
-          .toLowerCase()
-          .includes(q),
-      )
-    : candidates;
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    window.addEventListener("mousedown", onDown);
-    return () => window.removeEventListener("mousedown", onDown);
-  }, [open]);
-
-  useEffect(() => {
-    if (open) {
-      setQuery("");
-      setHighlight(0);
-      requestAnimationFrame(() => inputRef.current?.focus());
-    }
-  }, [open]);
-
-  useEffect(() => {
-    setHighlight((h) => Math.min(h, Math.max(0, filtered.length - 1)));
-  }, [filtered.length]);
-
-  useEffect(() => {
-    const el = listRef.current?.children[highlight] as HTMLElement | undefined;
-    el?.scrollIntoView({ block: "nearest" });
-  }, [highlight]);
-
-  const remove = (id: string) => {
-    if (disabled) return;
-    onChange(value.filter((v) => v !== id));
-  };
-  const toggle = (id: string) => {
-    if (disabled) return;
-    if (wouldCreateDependencyCycle(id, taskId, taskById)) return;
-    if (selected.has(id)) remove(id);
-    else onChange([...value, id]);
-  };
-
-  const onKey = (e: React.KeyboardEvent) => {
-    if (disabled) return;
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setHighlight((h) => Math.min(h + 1, filtered.length - 1));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setHighlight((h) => Math.max(h - 1, 0));
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      const pick = filtered[highlight];
-      if (pick) toggle(pick.id);
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      setOpen(false);
-    }
-  };
-
-  return (
-    <div ref={wrapRef} className="relative min-w-0 flex-1">
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => {
-          if (!disabled) setOpen((o) => !o);
-        }}
-        className={cn(
-          GHOST_TRIGGER,
-          "flex items-center justify-between gap-2 text-left outline-none",
-          value.length === 0 && "text-ink-faint",
-          disabled && "cursor-default hover:bg-transparent disabled:opacity-70",
-        )}
-        aria-expanded={open}
-        aria-haspopup="listbox"
-        aria-controls={open ? listboxId : undefined}
-      >
-        <span className="truncate">
-          {value.length === 0
-            ? "None"
-            : `${value.length} dependenc${value.length === 1 ? "y" : "ies"}`}
-        </span>
-        <ChevronDown className="size-4 shrink-0 text-ink-faint" />
-      </button>
-
-      {value.length > 0 && (
-        <div className="mt-1 flex min-w-0 flex-wrap gap-1.5">
-          {value.map((id) => {
-            const t = taskById.get(id);
-            return (
-              <span
-                key={id}
-                className="inline-flex max-w-full items-center gap-1 border border-paper-rule bg-paper-sunk px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-ink-soft"
-              >
-                <span className="shrink-0">#{id}</span>
-                <span className="truncate text-ink-faint">
-                  {t?.title ?? "missing"}
-                </span>
-                {!disabled && (
-                  <button
-                    type="button"
-                    onClick={() => remove(id)}
-                    aria-label={`Remove dependency ${id}`}
-                    className="shrink-0 text-ink-faint hover:text-plot-red focus-visible:outline focus-visible:outline-1 focus-visible:outline-plot-red"
-                  >
-                    <X className="size-3" />
-                  </button>
-                )}
-              </span>
-            );
-          })}
-        </div>
-      )}
-
-      {open && !disabled && (
-        <div className="absolute left-0 top-full z-50 mt-1 w-[min(28rem,calc(100vw-2rem))] border border-paper-rule bg-paper">
-          <div className="flex items-center gap-2 border-b border-paper-rule px-2.5 py-1.5">
-            <Search className="size-3.5 shrink-0 text-ink-faint" />
-            <input
-              ref={inputRef}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={onKey}
-              placeholder="Search tasks..."
-              role="combobox"
-              aria-expanded={open}
-              aria-controls={listboxId}
-              aria-autocomplete="list"
-              aria-activedescendant={
-                filtered.length > 0
-                  ? `${listboxId}-opt-${highlight}`
-                  : undefined
-              }
-              className="h-7 w-full bg-transparent text-sm text-ink outline-none placeholder:text-ink-faint"
-            />
-          </div>
-          <div
-            ref={listRef}
-            id={listboxId}
-            className="max-h-64 overflow-y-auto py-1"
-            role="listbox"
-          >
-            {filtered.length === 0 ? (
-              <div className="px-3 py-3 text-center font-mono text-[11px] uppercase tracking-[0.08em] text-ink-faint">
-                No matches
-              </div>
-            ) : (
-              filtered.map((t, i) => {
-                const isHi = i === highlight;
-                const isSel = selected.has(t.id);
-                const cycle = wouldCreateDependencyCycle(
-                  t.id,
-                  taskId,
-                  taskById,
-                );
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    id={`${listboxId}-opt-${i}`}
-                    role="option"
-                    aria-selected={isSel}
-                    disabled={cycle}
-                    onMouseEnter={() => setHighlight(i)}
-                    onClick={() => toggle(t.id)}
-                    className={cn(
-                      "flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-45",
-                      isHi ? "bg-paper-sunk text-ink" : "text-ink-soft",
-                    )}
-                  >
-                    <span className="flex min-w-0 items-baseline gap-2">
-                      <span className="font-mono text-[11px] tabular-nums text-ink-faint">
-                        #{t.id}
-                      </span>
-                      <span className="truncate">{t.title}</span>
-                    </span>
-                    <span className="flex shrink-0 items-center gap-2">
-                      {cycle && (
-                        <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-signal-amber">
-                          cycle
-                        </span>
-                      )}
-                      {isSel && <Check className="size-3.5 text-plot-red" />}
-                    </span>
-                  </button>
-                );
-              })
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function wouldCreateDependencyCycle(
-  candidateId: string,
-  taskId: string,
-  taskById: Map<string, Task>,
-): boolean {
-  const seen = new Set<string>();
-  const stack = [candidateId];
-  while (stack.length > 0) {
-    const id = stack.pop()!;
-    if (id === taskId) return true;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    const task = taskById.get(id);
-    if (!task) continue;
-    for (const depId of task.depends_on) stack.push(depId);
-  }
-  return false;
-}
-
 function AgentCombobox({
   agents,
   value,
   onChange,
-  disabled = false,
 }: {
   agents: AgentOption[];
   value: string;
   onChange: (id: string) => void;
-  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -1285,8 +973,7 @@ function AgentCombobox({
   const q = query.trim().toLowerCase();
   const filtered = q
     ? agents.filter(
-        (a) =>
-          a.name.toLowerCase().includes(q) || a.id.toLowerCase().includes(q),
+        (a) => a.name.toLowerCase().includes(q) || a.id.toLowerCase().includes(q)
       )
     : agents;
 
@@ -1321,13 +1008,11 @@ function AgentCombobox({
   }, [highlight]);
 
   const pick = (id: string) => {
-    if (disabled) return;
     onChange(id);
     setOpen(false);
   };
 
   const onKey = (e: React.KeyboardEvent) => {
-    if (disabled) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
       setHighlight((h) => Math.min(h + 1, filtered.length - 1));
@@ -1349,10 +1034,7 @@ function AgentCombobox({
       <button
         type="button"
         id="assignee"
-        disabled={disabled}
-        onClick={() => {
-          if (!disabled) setOpen((o) => !o);
-        }}
+        onClick={() => setOpen((o) => !o)}
         onKeyDown={(e) => {
           if (e.key === "Escape" && open) {
             e.preventDefault();
@@ -1362,8 +1044,7 @@ function AgentCombobox({
         className={cn(
           GHOST_TRIGGER,
           "flex items-center justify-between gap-2 text-left outline-none",
-          !selected && "text-ink-faint",
-          disabled && "cursor-default hover:bg-transparent disabled:opacity-70",
+          !selected && "text-ink-faint"
         )}
         aria-expanded={open}
         aria-haspopup="listbox"
@@ -1378,12 +1059,8 @@ function AgentCombobox({
           </span>
         ) : value ? (
           <span className="flex min-w-0 items-center gap-2">
-            <span className="truncate font-mono text-[12px]">
-              {value.slice(0, 8)}
-            </span>
-            <span className="font-mono text-[11px] text-ink-faint">
-              (unknown)
-            </span>
+            <span className="truncate font-mono text-[12px]">{value.slice(0, 8)}</span>
+            <span className="font-mono text-[11px] text-ink-faint">(unknown)</span>
           </span>
         ) : (
           <span className="text-ink-faint">Unassigned</span>
@@ -1391,7 +1068,7 @@ function AgentCombobox({
         <ChevronDown className="size-4 shrink-0 text-ink-faint" />
       </button>
 
-      {open && !disabled && (
+      {open && (
         <div className="absolute left-0 top-full z-50 mt-1 w-72 border border-paper-rule bg-paper">
           <div className="flex items-center gap-2 border-b border-paper-rule px-2.5 py-1.5">
             <Search className="size-3.5 shrink-0 text-ink-faint" />
@@ -1438,7 +1115,7 @@ function AgentCombobox({
                     onClick={() => pick(a.id)}
                     className={cn(
                       "flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm transition-colors",
-                      isHi ? "bg-paper-sunk text-ink" : "text-ink-soft",
+                      isHi ? "bg-paper-sunk text-ink" : "text-ink-soft"
                     )}
                   >
                     <span className="flex min-w-0 items-center gap-2">
@@ -1447,9 +1124,7 @@ function AgentCombobox({
                         {a.id.slice(0, 8)}
                       </span>
                     </span>
-                    {isSel && (
-                      <Check className="size-3.5 shrink-0 text-plot-red" />
-                    )}
+                    {isSel && <Check className="size-3.5 shrink-0 text-plot-red" />}
                   </button>
                 );
               })
@@ -1467,14 +1142,12 @@ function SessionRow({
   copiedSession,
   onCopy,
   onUnbind,
-  readOnly = false,
 }: {
   sessionId: string | null;
   shortSession: string | null;
   copiedSession: boolean;
   onCopy: () => void;
   onUnbind: () => void;
-  readOnly?: boolean;
 }) {
   if (!sessionId) {
     return (
@@ -1485,29 +1158,18 @@ function SessionRow({
   }
   return (
     <div className="group/session flex min-w-0 items-center gap-3">
-      {readOnly ? (
-        <span
-          className={cn(
-            GHOST_TRIGGER,
-            "flex cursor-default items-center gap-1.5 font-mono text-[12px] tabular-nums text-ink-soft hover:bg-transparent",
-          )}
-        >
-          <span>{shortSession}</span>
-        </span>
-      ) : (
-        <Link
-          to="/"
-          search={{ session: sessionId }}
-          title="Open this session in chat"
-          className={cn(
-            GHOST_TRIGGER,
-            "flex items-center gap-1.5 font-mono text-[12px] tabular-nums text-ink-soft hover:text-plot-red",
-          )}
-        >
-          <span>{shortSession}</span>
-          <ArrowUpRight className="size-3" />
-        </Link>
-      )}
+      <Link
+        to="/"
+        search={{ session: sessionId }}
+        title="Open this session in chat"
+        className={cn(
+          GHOST_TRIGGER,
+          "flex items-center gap-1.5 font-mono text-[12px] tabular-nums text-ink-soft hover:text-plot-red"
+        )}
+      >
+        <span>{shortSession}</span>
+        <ArrowUpRight className="size-3" />
+      </Link>
       <button
         type="button"
         onClick={onCopy}
@@ -1521,29 +1183,26 @@ function SessionRow({
           <Copy className="size-3" />
         )}
       </button>
-      {!readOnly && (
-        <button
-          type="button"
-          onClick={onUnbind}
-          title="Detach this session. A fresh one is assigned on the next run."
-          className="inline-flex items-center gap-1 font-mono text-[11px] uppercase tracking-[0.08em] text-ink-faint opacity-0 transition-all hover:text-plot-red focus-visible:opacity-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-plot-red group-hover/session:opacity-100"
-        >
-          <Unlink className="size-3" />
-          Unbind
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={onUnbind}
+        title="Detach this session. A fresh one is assigned on the next run."
+        className="inline-flex items-center gap-1 font-mono text-[11px] uppercase tracking-[0.08em] text-ink-faint opacity-0 transition-all hover:text-plot-red focus-visible:opacity-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-plot-red group-hover/session:opacity-100"
+      >
+        <Unlink className="size-3" />
+        Unbind
+      </button>
     </div>
   );
 }
 
 type RecurrenceKind = "none" | "cron" | "interval";
 
-const INTERVAL_UNITS: { value: "m" | "h" | "d"; label: string; ms: number }[] =
-  [
-    { value: "m", label: "min", ms: 60_000 },
-    { value: "h", label: "hr", ms: 3_600_000 },
-    { value: "d", label: "day", ms: 86_400_000 },
-  ];
+const INTERVAL_UNITS: { value: "m" | "h" | "d"; label: string; ms: number }[] = [
+  { value: "m", label: "min", ms: 60_000 },
+  { value: "h", label: "hr", ms: 3_600_000 },
+  { value: "d", label: "day", ms: 86_400_000 },
+];
 
 function msToInterval(ms: number): { n: number; unit: "m" | "h" | "d" } {
   if (ms > 0 && ms % 86_400_000 === 0) return { n: ms / 86_400_000, unit: "d" };
@@ -1562,14 +1221,12 @@ function RecurrenceEditor({
   runs,
   lastRunAt,
   nextStartAt,
-  disabled = false,
 }: {
   value: Recurrence | null;
   onChange: (rec: Recurrence | null) => void;
   runs: number;
   lastRunAt: string | null;
   nextStartAt: string | null;
-  disabled?: boolean;
 }) {
   const kind: RecurrenceKind = value ? value.kind : "none";
 
@@ -1602,11 +1259,7 @@ function RecurrenceEditor({
   return (
     <div className="space-y-3 bg-paper-sunk px-4 py-4">
       <SectionEyebrow rule={false}>Recurrence</SectionEyebrow>
-      <Select
-        value={kind}
-        disabled={disabled}
-        onValueChange={(v) => setKind(v as RecurrenceKind)}
-      >
+      <Select value={kind} onValueChange={(v) => setKind(v as RecurrenceKind)}>
         <SelectTrigger className="w-full">
           <SelectValue />
         </SelectTrigger>
@@ -1625,7 +1278,6 @@ function RecurrenceEditor({
               id="rec-expr"
               placeholder="0 9 * * 1-5"
               value={value.expr}
-              disabled={disabled}
               onChange={(e) => onChange({ ...value, expr: e.target.value })}
               className="font-mono"
             />
@@ -1640,7 +1292,6 @@ function RecurrenceEditor({
                 id="rec-tz"
                 placeholder="America/Los_Angeles"
                 value={value.tz ?? ""}
-                disabled={disabled}
                 onChange={(e) =>
                   onChange({ ...value, tz: e.target.value || null })
                 }
@@ -1650,7 +1301,6 @@ function RecurrenceEditor({
                 type="button"
                 variant="outline"
                 size="sm"
-                disabled={disabled}
                 onClick={() => {
                   try {
                     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -1672,7 +1322,6 @@ function RecurrenceEditor({
         <IntervalRow
           everyMs={value.every_ms}
           onChange={(ms) => onChange({ ...value, every_ms: ms })}
-          disabled={disabled}
         />
       )}
 
@@ -1686,7 +1335,6 @@ function RecurrenceEditor({
                 value={value.until ?? null}
                 onChange={(iso) => onChange({ ...value, until: iso })}
                 placeholder="No end date"
-                disabled={disabled}
               />
             </div>
             <div className="space-y-1.5">
@@ -1697,7 +1345,6 @@ function RecurrenceEditor({
                 min={1}
                 placeholder="(unlimited)"
                 value={value.count ?? ""}
-                disabled={disabled}
                 onChange={(e) =>
                   onChange({
                     ...value,
@@ -1712,7 +1359,6 @@ function RecurrenceEditor({
             <Label>Session strategy</Label>
             <Select
               value={value.session}
-              disabled={disabled}
               onValueChange={(v) =>
                 onChange({ ...value, session: v as RecurrenceSession })
               }
@@ -1770,11 +1416,9 @@ function RecurrenceEditor({
 function IntervalRow({
   everyMs,
   onChange,
-  disabled = false,
 }: {
   everyMs: number;
   onChange: (ms: number) => void;
-  disabled?: boolean;
 }) {
   const { n, unit } = msToInterval(everyMs);
   return (
@@ -1786,7 +1430,6 @@ function IntervalRow({
           type="number"
           min={1}
           value={n}
-          disabled={disabled}
           onChange={(e) =>
             onChange(intervalToMs(Number(e.target.value) || 1, unit))
           }
@@ -1794,7 +1437,6 @@ function IntervalRow({
         />
         <Select
           value={unit}
-          disabled={disabled}
           onValueChange={(v) => onChange(intervalToMs(n, v as "m" | "h" | "d"))}
         >
           <SelectTrigger className="w-32">

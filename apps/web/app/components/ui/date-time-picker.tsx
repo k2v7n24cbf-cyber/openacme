@@ -35,7 +35,6 @@ export function DateTimePicker({
   placeholder = "Pick a date",
   className,
   ghost = false,
-  disabled = false,
 }: {
   value: string | null;
   onChange: (iso: string | null) => void;
@@ -44,7 +43,6 @@ export function DateTimePicker({
   className?: string;
   /** Chromeless trigger — border only on focus, surface only on hover. */
   ghost?: boolean;
-  disabled?: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
 
@@ -71,26 +69,18 @@ export function DateTimePicker({
 
   return (
     <div className={cn("flex gap-2", className)}>
-      <Popover
-        open={disabled ? false : open}
-        onOpenChange={(next) => {
-          if (!disabled) setOpen(next);
-        }}
-      >
+      <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <button
             type="button"
             id={id}
             aria-label={current ? displayLabel(current) : placeholder}
-            disabled={disabled}
             className={cn(
               "flex items-center justify-between gap-2 border text-left text-sm outline-none transition-colors hover:bg-paper-sunk focus-visible:border-plot-red",
               ghost
                 ? "h-7 w-fit border-transparent bg-transparent px-2"
                 : "h-9 flex-1 border-paper-rule bg-paper px-3",
-              !current && "text-ink-faint",
-              disabled &&
-                "cursor-default hover:bg-transparent disabled:opacity-70",
+              !current && "text-ink-faint"
             )}
           >
             <span className="flex min-w-0 items-center gap-2">
@@ -99,7 +89,7 @@ export function DateTimePicker({
                 {current ? displayLabel(current) : placeholder}
               </span>
             </span>
-            {current && !disabled && (
+            {current && (
               <span
                 role="button"
                 tabIndex={0}

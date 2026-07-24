@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { API_BASE } from "./api";
 import type { HomePayload } from "./types";
 
+const HOME_SNAPSHOT_TIMEOUT_MS = 10_000;
+
 /**
  * Live workforce summary for the home page. Fetches the initial
  * snapshot from `GET /api/home`, then subscribes to `GET
@@ -29,17 +31,27 @@ export function useHomeStream(): {
   const refetchScheduled = useRef(false);
 
   const fetchSnapshot = useCallback(async () => {
+    const ctrl = new AbortController();
+    const timeout = window.setTimeout(() => ctrl.abort(), HOME_SNAPSHOT_TIMEOUT_MS);
     try {
       const res = await fetch(`${API_BASE}/api/home`, {
         credentials: "include",
+        signal: ctrl.signal,
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as HomePayload;
       setPayload(data);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(
+        e instanceof Error && e.name === "AbortError"
+          ? "Home request timed out"
+          : e instanceof Error
+            ? e.message
+            : String(e)
+      );
     } finally {
+      window.clearTimeout(timeout);
       setLoading(false);
     }
   }, []);
@@ -66,7 +78,7 @@ export function useHomeStream(): {
   );
 
   useEffect(() => {
-    refresh();
+    void refresh({ force: true });
   }, [refresh]);
 
   useEffect(() => {

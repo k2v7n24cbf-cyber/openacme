@@ -57,6 +57,8 @@ function deferredTurns() {
   return { turn, release };
 }
 
+type DeferredTurns = ReturnType<typeof deferredTurns>;
+
 let dataDir: string;
 let db: ReturnType<typeof createDatabase>;
 let sessionStore: ReturnType<typeof createSessionStore>;
@@ -108,6 +110,22 @@ async function tick(d: Dispatcher): Promise<void> {
   await d.drain(5_000);
 }
 
+async function waitForIdle(d: Dispatcher, sessionId: string): Promise<void> {
+  await vi.waitFor(() => expect(d.isRunning(sessionId)).toBe(false), {
+    timeout: 5_000,
+  });
+}
+
+async function releaseTurn(
+  gate: DeferredTurns,
+  sessionId: string
+): Promise<void> {
+  await vi.waitFor(() => expect(gate.release.has(sessionId)).toBe(true), {
+    timeout: 5_000,
+  });
+  gate.release.get(sessionId)!();
+}
+
 async function makeBoundTask(
   agentId: string,
   overrides: Record<string, unknown> = {}
@@ -154,7 +172,7 @@ describe("Dispatcher spawn rule", () => {
     expect(observed?.status).toBe("open");
     expect(observed?.session_id).toBe(calls[0]!.sessionId);
 
-    gate.release.get(calls[0]!.sessionId)?.();
+    await releaseTurn(gate, calls[0]!.sessionId);
     await d.drain(5_000);
   });
 
@@ -354,7 +372,7 @@ describe("Dispatcher spawn rule", () => {
     expect(calls).toHaveLength(1);
     expect([a.session.id, b.session.id]).toContain(calls[0]?.sessionId);
     expect(d.runningSessionIds()).toEqual([calls[0]!.sessionId]);
-    gate.release.get(calls[0]!.sessionId)?.();
+    await releaseTurn(gate, calls[0]!.sessionId);
     await d.drain(5_000);
   });
 
@@ -393,7 +411,7 @@ describe("Dispatcher spawn rule", () => {
     expect([a.id, b.id]).toContain(calls[0]!.sessionId);
     expect(d.runningSessionIds()).toEqual([calls[0]!.sessionId]);
 
-    gate.release.get(calls[0]!.sessionId)?.();
+    await releaseTurn(gate, calls[0]!.sessionId);
     await d.drain(5_000);
   });
 
@@ -418,7 +436,7 @@ describe("Dispatcher spawn rule", () => {
     );
     expect(d.isRunning(a.session.id)).toBe(true);
     expect(d.isRunning(b.session.id)).toBe(true);
-    for (const call of calls) gate.release.get(call.sessionId)?.();
+    for (const call of calls) await releaseTurn(gate, call.sessionId);
     await d.drain(5_000);
   });
 
@@ -443,12 +461,12 @@ describe("Dispatcher spawn rule", () => {
     })) {
       await taskStore.update(task.id, { status: "done" });
     }
-    gate.release.get(firstFinished)?.();
+    await releaseTurn(gate, firstFinished);
     await vi.waitFor(() => expect(calls).toHaveLength(3));
     expect(new Set(calls.map((call) => call.sessionId))).toEqual(
       new Set([a.session.id, b.session.id, c.session.id])
     );
-    for (const call of calls) gate.release.get(call.sessionId)?.();
+    for (const call of calls) await releaseTurn(gate, call.sessionId);
     await d.drain(5_000);
   });
 
@@ -489,11 +507,11 @@ describe("Dispatcher spawn rule", () => {
     d.kick("test_user_priority");
 
     await taskStore.update(active.task.id, { status: "done" });
-    gate.release.get(active.session.id)?.();
+    await releaseTurn(gate, active.session.id);
     await vi.waitFor(() => expect(calls).toHaveLength(2));
     expect(calls[1]).toEqual({ agentId: "a1", sessionId: user.id });
 
-    gate.release.get(user.id)?.();
+    await releaseTurn(gate, user.id);
     await d.drain(5_000);
   });
 
@@ -567,14 +585,14 @@ describe("Dispatcher spawn rule", () => {
       });
       d.kick("test_user_comment_task_priority");
 
-      gate.release.get(active.session.id)?.();
-      await vi.waitFor(() => expect(d.isRunning(active.session.id)).toBe(false));
+      await releaseTurn(gate, active.session.id);
+      await waitForIdle(d, active.session.id);
       await (d as unknown as { tickSafe(): Promise<void> }).tickSafe();
       await vi.waitFor(() => expect(calls).toHaveLength(2));
       expect(calls[1]).toEqual({ agentId: "a1", sessionId: userSession.id });
 
-      gate.release.get(userSession.id)?.();
-      await vi.waitFor(() => expect(d.isRunning(userSession.id)).toBe(false));
+      await releaseTurn(gate, userSession.id);
+      await waitForIdle(d, userSession.id);
       await (d as unknown as { tickSafe(): Promise<void> }).tickSafe();
       await vi.waitFor(() => expect(calls).toHaveLength(3));
       expect(calls[2]).toEqual({
@@ -582,15 +600,13 @@ describe("Dispatcher spawn rule", () => {
         sessionId: commentSession.id,
       });
 
-      gate.release.get(commentSession.id)?.();
-      await vi.waitFor(() =>
-        expect(d.isRunning(commentSession.id)).toBe(false)
-      );
+      await releaseTurn(gate, commentSession.id);
+      await waitForIdle(d, commentSession.id);
       await (d as unknown as { tickSafe(): Promise<void> }).tickSafe();
       await vi.waitFor(() => expect(calls).toHaveLength(4));
       expect(calls[3]).toEqual({ agentId: "a1", sessionId: taskSession.id });
 
-      gate.release.get(taskSession.id)?.();
+      await releaseTurn(gate, taskSession.id);
       await d.drain(5_000);
     });
 
@@ -663,22 +679,22 @@ describe("Dispatcher spawn rule", () => {
       });
       d.kick("test_multiple_direct_before_comment");
 
-      gate.release.get(active.session.id)?.();
-      await vi.waitFor(() => expect(d.isRunning(active.session.id)).toBe(false));
+      await releaseTurn(gate, active.session.id);
+      await waitForIdle(d, active.session.id);
       await (d as unknown as { tickSafe(): Promise<void> }).tickSafe();
       await vi.waitFor(() => expect(calls).toHaveLength(2));
       expect([firstUser.id, secondUser.id]).toContain(calls[1]!.sessionId);
 
-      gate.release.get(calls[1]!.sessionId)?.();
-      await vi.waitFor(() => expect(d.isRunning(calls[1]!.sessionId)).toBe(false));
+      await releaseTurn(gate, calls[1]!.sessionId);
+      await waitForIdle(d, calls[1]!.sessionId);
       await (d as unknown as { tickSafe(): Promise<void> }).tickSafe();
       await vi.waitFor(() => expect(calls).toHaveLength(3));
       expect(new Set([calls[1]!.sessionId, calls[2]!.sessionId])).toEqual(
         new Set([firstUser.id, secondUser.id])
       );
 
-      gate.release.get(calls[2]!.sessionId)?.();
-      await vi.waitFor(() => expect(d.isRunning(calls[2]!.sessionId)).toBe(false));
+      await releaseTurn(gate, calls[2]!.sessionId);
+      await waitForIdle(d, calls[2]!.sessionId);
       await (d as unknown as { tickSafe(): Promise<void> }).tickSafe();
       await vi.waitFor(() => expect(calls).toHaveLength(4));
       expect(calls[3]).toEqual({
@@ -686,7 +702,7 @@ describe("Dispatcher spawn rule", () => {
         sessionId: commentSession.id,
       });
 
-      gate.release.get(commentSession.id)?.();
+      await releaseTurn(gate, commentSession.id);
       await d.drain(5_000);
     });
   }
@@ -843,7 +859,7 @@ describe("Dispatcher spawn rule", () => {
       new Set(calls.map((call) => call.sessionId))
     );
 
-    for (const call of calls) gate.release.get(call.sessionId)?.();
+    for (const call of calls) await releaseTurn(gate, call.sessionId);
     await d.drain(5_000);
   });
 
@@ -985,7 +1001,7 @@ describe("Dispatcher failure handling", () => {
     expect(d.isRunning(survivor.session.id)).toBe(true);
     expect(d.isRunning(failing.session.id)).toBe(false);
 
-    gate.release.get(survivor.session.id)?.();
+    await releaseTurn(gate, survivor.session.id);
     await d.drain(5_000);
   });
 

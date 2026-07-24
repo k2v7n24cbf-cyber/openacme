@@ -12,6 +12,19 @@ describe("task tools (e2e)", () => {
   let srv: E2EServer;
   let c: ReturnType<typeof makeClient>;
 
+  async function chatAndWait(
+    agentId: string,
+    text: string
+  ): Promise<{ sessionId: string; userMessageId: string }> {
+    const result = await c.chat(agentId, text);
+    await waitUntil(
+      async () =>
+        (await c.messages(result.sessionId)).some((m) => m.role === "assistant"),
+      { timeoutMs: 15_000 }
+    );
+    return result;
+  }
+
   beforeAll(async () => {
     srv = await startE2EServer();
     c = makeClient(srv.baseUrl);
@@ -23,7 +36,10 @@ describe("task tools (e2e)", () => {
   });
 
   it("an agent creates a task assigned to a coworker", async () => {
-    await c.chat("helper", '[[mock:tool:task_create:{"title":"Ship the docs","assignee":"worker"}]]');
+    await chatAndWait(
+      "helper",
+      '[[mock:tool:task_create:{"title":"Ship the docs","assignee":"worker"}]]'
+    );
 
     await waitUntil(async () => {
       const { tasks } = await c.json("/api/tasks");
@@ -37,17 +53,26 @@ describe("task tools (e2e)", () => {
   });
 
   it("an agent advances and resolves a task through its lifecycle", async () => {
-    await c.chat("helper", '[[mock:tool:task_create:{"title":"Fix the bug","assignee":"helper"}]]');
+    await chatAndWait(
+      "helper",
+      '[[mock:tool:task_create:{"title":"Fix the bug","assignee":"helper"}]]'
+    );
     await waitUntil(async () => {
       const { tasks } = await c.json("/api/tasks");
       return tasks.some((t: any) => t.title === "Fix the bug");
     });
     const task = (await c.json("/api/tasks")).tasks.find((t: any) => t.title === "Fix the bug");
 
-    await c.chat("helper", `[[mock:tool:task_update:${JSON.stringify({ id: task.id, status: "in_progress" })}]]`);
+    await chatAndWait(
+      "helper",
+      `[[mock:tool:task_update:${JSON.stringify({ id: task.id, status: "in_progress" })}]]`
+    );
     await waitUntil(async () => (await c.json(`/api/tasks/${task.id}`)).task.status === "in_progress");
 
-    await c.chat("helper", `[[mock:tool:task_comment:${JSON.stringify({ id: task.id, body: "shipped it", mode: "result" })}]]`);
+    await chatAndWait(
+      "helper",
+      `[[mock:tool:task_comment:${JSON.stringify({ id: task.id, body: "shipped it", mode: "result" })}]]`
+    );
     await waitUntil(async () => {
       const { comments } = await c.json(`/api/tasks/${task.id}/comments`);
       return comments.some((cm: any) => cm.body.includes("shipped it"));

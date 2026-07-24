@@ -155,15 +155,27 @@ export interface ConfigModelUpdateResponse {
 export async function createApp(
   config: Config,
   opts?: { resolveModel?: ModelResolver; tickIntervalMs?: number }
-): Promise<{ app: Hono; manager: AgentManager }> {
+): Promise<{ app: Hono; manager: AgentManager; close: () => Promise<void> }> {
   const app = new Hono();
   const manager = new AgentManager(config, opts);
+
+  type ActiveTurn = {
+    controller: AbortController;
+    promise: Promise<void>;
+  };
 
   // Per-session abort handles for in-flight interactive turns. Survives
   // the HTTP request that initiated the turn — SSE-only streaming means
   // the POST returns before the agent finishes; cancel is the only
   // remaining path. Cleared on completion or DELETE active-turn.
-  const activeTurns = new Map<string, AbortController>();
+  const activeTurns = new Map<string, ActiveTurn>();
+
+  async function closeApp(): Promise<void> {
+    const turns = [...activeTurns.values()];
+    for (const turn of turns) turn.controller.abort();
+    await Promise.allSettled(turns.map((turn) => turn.promise));
+    await manager.close();
+  }
 
   // Middleware. CORS stays permissive (tunnels / reverse proxies depend on
   // it) but credentials-less: the default wildcard ACAO can't carry cookies,
@@ -674,7 +686,6 @@ export async function createApp(
     }
 
     const controller = new AbortController();
-    activeTurns.set(effectiveSessionId, controller);
     const signal = controller.signal;
 
     // Used for both the streamed `start` chunk and the final
@@ -682,18 +693,24 @@ export async function createApp(
     // upsert refer to the same row.
     const responseMessageId = randomUUID();
 
-    void runChatTurn({
+    const promise = runChatTurn({
       manager,
       agentId,
       sessionId: effectiveSessionId,
       committed,
       responseMessageId,
       signal,
-    }).finally(() => {
-      if (activeTurns.get(effectiveSessionId) === controller) {
-        activeTurns.delete(effectiveSessionId);
-      }
-    });
+    })
+      .catch((err) => {
+        log.warn({ err, sessionId: effectiveSessionId }, "runChatTurn failed");
+      })
+      .finally(() => {
+        if (activeTurns.get(effectiveSessionId)?.controller === controller) {
+          activeTurns.delete(effectiveSessionId);
+        }
+      });
+    activeTurns.set(effectiveSessionId, { controller, promise });
+    void promise;
 
     return c.json({
       sessionId: effectiveSessionId,
@@ -709,7 +726,7 @@ export async function createApp(
     const id = c.req.param("id");
     const ctrl = activeTurns.get(id);
     if (!ctrl) return c.json({ ok: false, reason: "no active turn" }, 404);
-    ctrl.abort();
+    ctrl.controller.abort();
     activeTurns.delete(id);
     return c.json({ ok: true });
   });
@@ -1767,7 +1784,7 @@ export async function createApp(
     );
   }
 
-  return { app, manager };
+  return { app, manager, close: closeApp };
 }
 
 /**

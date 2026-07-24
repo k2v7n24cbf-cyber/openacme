@@ -199,6 +199,7 @@ export class AgentManager {
   readonly broadcaster: SessionBroadcaster;
   private config: Config;
   private mcpClients = new Map<string, MCPClient>();
+  private closing = false;
   /** Worker-run stdio MCP servers per agent: last discovery snapshot +
    *  the daemon-side proxy tool names registered from it. `fromCache`
    *  marks snapshots served from the on-disk discovery cache (no worker
@@ -2109,6 +2110,7 @@ export class AgentManager {
    * metering failure cannot be allowed to break a turn.
    */
   private recordUsage(report: UsageReport): void {
+    if (this.closing) return;
     try {
       const t = report.tokens;
       const authMode = resolveAuthMode(report.model);
@@ -2170,6 +2172,7 @@ export class AgentManager {
         },
       });
     } catch (e) {
+      if (this.closing && isClosedDatabaseError(e)) return;
       log.warn({ err: e, agentId: report.agentId }, "usage record failed");
     }
   }
@@ -2251,6 +2254,7 @@ export class AgentManager {
     // in-process and a turn may have been kicked just before exit.
     this.dispatcher.stop();
     await this.dispatcher.drain();
+    this.closing = true;
     for (const [_, mcpClient] of this.mcpClients) {
       await mcpClient.disconnect();
     }
@@ -2260,6 +2264,14 @@ export class AgentManager {
     await this.emailManager.close();
     this.db.close();
   }
+}
+
+function isClosedDatabaseError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    message.includes("Database already closed") ||
+    message.includes("database connection is not open")
+  );
 }
 
 function hasOwn<T extends object>(obj: T, key: PropertyKey): boolean {

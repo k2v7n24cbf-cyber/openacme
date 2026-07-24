@@ -59,7 +59,7 @@ export async function startE2EServer(
       ...(opts.requireAuth ? { requireAuth: true } : {}),
     },
   });
-  const { app, manager } = await createApp(config, {
+  const { app, manager, close: closeApp } = await createApp(config, {
     resolveModel: () => createStubModel(),
     tickIntervalMs: opts.tickMs,
   });
@@ -97,7 +97,7 @@ export async function startE2EServer(
       // noise. They never affect assertions; this is purely for clean output.
       await new Promise((r) => setTimeout(r, 150));
       await new Promise<void>((r) => server.close(() => r()));
-      await manager.close();
+      await closeApp();
       rmSync(dataDir, { recursive: true, force: true });
     },
   };

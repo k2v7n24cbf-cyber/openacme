@@ -79,7 +79,7 @@
   /* Charts — functional, kept off-accent so plot-red stays exclusive */
   --chart-1: oklch(45% 0.005 280);
   --chart-2: oklch(60% 0.005 280);
-  --chart-3: oklch(72% 0.1 215);
+  --chart-3: oklch(72% 0.10 215);
   --chart-4: oklch(78% 0.14 75);
   --chart-5: oklch(58% 0.18 28);
 
@@ -158,7 +158,7 @@
 
   --chart-1: oklch(75% 0.005 75);
   --chart-2: oklch(58% 0.005 280);
-  --chart-3: oklch(72% 0.1 215);
+  --chart-3: oklch(72% 0.10 215);
   --chart-4: oklch(78% 0.14 75);
   --chart-5: oklch(62% 0.19 28);
 
@@ -275,11 +275,7 @@
     font-variant-numeric: tabular-nums;
   }
   /* Mono numerals always tabular — IDs, timestamps, durations, counts. */
-  code,
-  kbd,
-  samp,
-  pre,
-  .font-mono {
+  code, kbd, samp, pre, .font-mono {
     font-variant-numeric: tabular-nums;
     font-feature-settings: "tnum";
   }
@@ -356,8 +352,7 @@
       to bottom,
       transparent 0,
       transparent calc(var(--ruling-step) - 1px),
-      color-mix(in oklch, var(--paper-rule), transparent 65%)
-        calc(var(--ruling-step) - 1px),
+      color-mix(in oklch, var(--paper-rule), transparent 65%) calc(var(--ruling-step) - 1px),
       color-mix(in oklch, var(--paper-rule), transparent 65%) var(--ruling-step)
     );
   }
@@ -393,8 +388,7 @@
     height: 1px;
     width: 25%;
     background-color: var(--plot-red);
-    animation: loading-hairline var(--duration-pulse) var(--ease-out-quart)
-      infinite;
+    animation: loading-hairline var(--duration-pulse) var(--ease-out-quart) infinite;
   }
 
   /* Focus scribe-in: outline scribes outward from inside the element on
@@ -497,60 +491,33 @@
 }
 
 @keyframes pulse-live {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.45;
-  }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
 }
 
 @keyframes scribe-in {
-  from {
-    transform: scaleX(0);
-  }
-  to {
-    transform: scaleX(1);
-  }
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
 }
 
 @keyframes tick {
-  0% {
-    opacity: 0.35;
-  }
-  100% {
-    opacity: 1;
-  }
+  0%   { opacity: 0.35; }
+  100% { opacity: 1; }
 }
 
 @keyframes section-enter {
-  from {
-    opacity: 0;
-    transform: translateY(2px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes loading-hairline {
-  0% {
-    transform: translateX(-100%);
-  }
-  100% {
-    transform: translateX(400%);
-  }
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
 }
 
 @keyframes focus-scribe {
-  from {
-    outline-offset: -2px;
-  }
-  to {
-    outline-offset: 2px;
-  }
+  from { outline-offset: -2px; }
+  to   { outline-offset: 2px; }
 }
 
 /* Streaming cursor — a 2px plot-red bar. */
@@ -565,11 +532,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pulse-live,
-  .cursor-stream,
-  .scribe-in,
-  .tick,
-  .section-enter,
+  .pulse-live, .cursor-stream,
+  .scribe-in, .tick, .section-enter,
   .loading-hairline,
   .focus-scribe:focus-visible {
     animation: none;
@@ -634,10 +598,9 @@
   overflow-wrap: anywhere;
 }
 
-/* React Flow charts — base.css only; the paper/ink tokens supply the
-   theme. Handles exist for edge anchoring but are never shown. */
-.org-chart .react-flow__handle,
-.task-dependency-map .react-flow__handle {
+/* React Flow (org chart) — base.css only; the paper/ink tokens supply
+   the theme. Handles exist for edge anchoring but are never shown. */
+.org-chart .react-flow__handle {
   opacity: 0;
   width: 1px;
   height: 1px;
@@ -646,25 +609,20 @@
   border: none;
   pointer-events: none;
 }
-.org-chart .react-flow__edge-path,
-.task-dependency-map .react-flow__edge-path {
+.org-chart .react-flow__edge-path {
   stroke-width: 1;
 }
-.org-chart .react-flow__attribution,
-.task-dependency-map .react-flow__attribution {
+.org-chart .react-flow__attribution {
   background: transparent;
   font-family: var(--font-mono);
   font-size: 9px;
 }
-.org-chart .react-flow__attribution a,
-.task-dependency-map .react-flow__attribution a {
+.org-chart .react-flow__attribution a {
   color: var(--ink-faint);
 }
-.org-chart .react-flow__pane,
-.task-dependency-map .react-flow__pane {
+.org-chart .react-flow__pane {
   cursor: grab;
 }
-.org-chart .react-flow__pane.dragging,
-.task-dependency-map .react-flow__pane.dragging {
+.org-chart .react-flow__pane.dragging {
   cursor: grabbing;
 }

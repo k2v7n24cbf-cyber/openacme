@@ -7,20 +7,8 @@ import {
   type TaskStatus,
 } from "@openacme/tasks";
 import type { AgentManager } from "../agent-manager.js";
-import { resolveTaskSourceSessions } from "../task-source-provenance.js";
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
-const PREVIEW_ALLOWED_TASK_SOURCE_SESSIONS_PATH =
-  /^\/api\/tasks\/source-sessions$/;
-const PREVIEW_ALLOWED_TASK_PATH =
-  /^\/api\/tasks(?:\/[A-Za-z0-9][A-Za-z0-9_.-]*(?:\/(?:comments|events))?)?$/;
-const PREVIEW_ALLOWED_AGENT_PATH = /^\/api\/agents$/;
-const PREVIEW_ALLOWED_SESSION_MESSAGES_PATH =
-  /^\/api\/sessions\/[A-Za-z0-9][A-Za-z0-9_.-]*\/messages$/;
-const PREVIEW_ALLOWED_SESSION_PATH =
-  /^\/api\/sessions\/[A-Za-z0-9][A-Za-z0-9_.-]*$/;
-const PREVIEW_ALLOWED_USAGE_SUMMARY_PATH = /^\/api\/usage\/summary$/;
-const PREVIEW_ALLOWED_HOME_PATH = /^\/api\/home$/;
 
 function statusErrorCode(code: string): number {
   switch (code) {
@@ -47,80 +35,15 @@ function statusErrorCode(code: string): number {
 
 function asStatusFilter(v: string | undefined): TaskStatus[] | undefined {
   if (!v) return undefined;
-  const parts = v
-    .split(",")
-    .map((p) => p.trim())
-    .filter(Boolean);
+  const parts = v.split(",").map((p) => p.trim()).filter(Boolean);
   const valid = parts.filter((p): p is TaskStatus =>
-    (TASK_STATUSES as readonly string[]).includes(p),
+    (TASK_STATUSES as readonly string[]).includes(p)
   );
   if (valid.length === 0) return undefined;
   return valid;
 }
 
-function isLoopbackPreviewHost(hostname: string): boolean {
-  return (
-    hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1"
-  );
-}
-
-function previewTarget(
-  rawBase: string | null,
-  rawPath: string | null,
-): URL | null {
-  if (!rawBase || !rawPath) return null;
-  let base: URL;
-  let path: URL;
-  try {
-    base = new URL(rawBase);
-    path = new URL(rawPath, "http://preview.local");
-  } catch {
-    return null;
-  }
-  if (base.protocol !== "http:" && base.protocol !== "https:") return null;
-  if (!isLoopbackPreviewHost(base.hostname)) return null;
-  if (
-    !PREVIEW_ALLOWED_TASK_SOURCE_SESSIONS_PATH.test(path.pathname) &&
-    !PREVIEW_ALLOWED_TASK_PATH.test(path.pathname) &&
-    !PREVIEW_ALLOWED_AGENT_PATH.test(path.pathname) &&
-    !PREVIEW_ALLOWED_SESSION_PATH.test(path.pathname) &&
-    !PREVIEW_ALLOWED_SESSION_MESSAGES_PATH.test(path.pathname) &&
-    !PREVIEW_ALLOWED_USAGE_SUMMARY_PATH.test(path.pathname) &&
-    !PREVIEW_ALLOWED_HOME_PATH.test(path.pathname)
-  ) {
-    return null;
-  }
-  return new URL(`${path.pathname}${path.search}`, base.origin);
-}
-
 export function registerTaskRoutes(app: Hono, manager: AgentManager): void {
-  // GET-only same-origin proxy for the task board's local production preview.
-  // It avoids browser CORS while keeping the target narrow and read-only.
-  app.get("/api/task-preview", async (c) => {
-    const url = new URL(c.req.url);
-    const target = previewTarget(
-      url.searchParams.get("base"),
-      url.searchParams.get("path"),
-    );
-    if (!target) return c.json({ error: "invalid preview target" }, 400);
-    try {
-      const upstream = await fetch(target, {
-        headers: { accept: "application/json" },
-      });
-      const body = await upstream.arrayBuffer();
-      return new Response(body, {
-        status: upstream.status,
-        headers: {
-          "content-type":
-            upstream.headers.get("content-type") ?? "application/json",
-          "cache-control": "no-store",
-        },
-      });
-    } catch {
-      return c.json({ error: "preview upstream failed" }, 502);
-    }
-  });
-
   // GET /api/tasks
   app.get("/api/tasks", (c) => {
     const url = new URL(c.req.url);
@@ -131,7 +54,9 @@ export function registerTaskRoutes(app: Hono, manager: AgentManager): void {
     const status = asStatusFilter(url.searchParams.get("status") ?? undefined);
 
     const session_id =
-      session_id_raw === "null" ? null : (session_id_raw ?? undefined);
+      session_id_raw === "null"
+        ? null
+        : session_id_raw ?? undefined;
 
     const tasks = manager.taskStore.list({
       assignee,
@@ -142,40 +67,14 @@ export function registerTaskRoutes(app: Hono, manager: AgentManager): void {
     });
     // Bulk comment counts for the cards' badge — one query for all
     // visible tasks instead of N+1 from the client.
-    const taskIds = tasks.map((t) => t.id);
-    const counts = manager.taskStore.commentCounts(taskIds);
-    const latestEvents = manager.taskStore.latestEventTimes(taskIds);
+    const counts = manager.taskStore.commentCounts(tasks.map((t) => t.id));
     // Strip body for the list view; clients hit GET /:id for the body.
     return c.json({
       tasks: tasks.map(({ body: _body, ...rest }) => {
         void _body;
-        const updatedAt = Math.floor(Date.parse(rest.updated_at) / 1000);
-        const lastActivity = Math.max(
-          Number.isFinite(updatedAt) ? updatedAt : 0,
-          latestEvents.get(rest.id) ?? 0,
-        );
-        return {
-          ...rest,
-          comment_count: counts.get(rest.id) ?? 0,
-          last_activity_at: lastActivity,
-        };
+        return { ...rest, comment_count: counts.get(rest.id) ?? 0 };
       }),
     });
-  });
-
-  // GET /api/tasks/source-sessions?ids=1,2,3 — read-only historical/debug
-  // resolver for tasks created before created_in_session_id was persisted.
-  // The durable path is task frontmatter; use the repair command to backfill.
-  app.get("/api/tasks/source-sessions", (c) => {
-    const url = new URL(c.req.url);
-    const ids = parseTaskIdList(url.searchParams.get("ids"));
-    if (ids.length === 0) return c.json({ tasks: {}, sessions: [] });
-    const resolved = resolveTaskSourceSessions({
-      taskIds: ids,
-      messageStore: manager.messageStore,
-      sessionStore: manager.sessionStore,
-    });
-    return c.json({ tasks: resolved.tasks, sessions: resolved.sessions });
   });
 
   // GET /api/tasks/:id
@@ -263,7 +162,7 @@ export function registerTaskRoutes(app: Hono, manager: AgentManager): void {
       if (e instanceof TaskStoreError) {
         return c.json(
           { error: e.code, message: e.message },
-          statusErrorCode(e.code) as 400 | 404 | 409,
+          statusErrorCode(e.code) as 400 | 404 | 409
         );
       }
       throw e;
@@ -285,7 +184,7 @@ export function registerTaskRoutes(app: Hono, manager: AgentManager): void {
       if (e instanceof TaskStoreError) {
         return c.json(
           { error: e.code, message: e.message },
-          statusErrorCode(e.code) as 400 | 404 | 409,
+          statusErrorCode(e.code) as 400 | 404 | 409
         );
       }
       throw e;
@@ -358,7 +257,7 @@ export function registerTaskRoutes(app: Hono, manager: AgentManager): void {
           message:
             "HTTP comments are always untagged. result and system kinds are agent / system only.",
         },
-        400,
+        400
       );
     }
 
@@ -374,7 +273,7 @@ export function registerTaskRoutes(app: Hono, manager: AgentManager): void {
       if (e instanceof TaskStoreError) {
         return c.json(
           { error: e.code, message: e.message },
-          statusErrorCode(e.code) as 400 | 404 | 409,
+          statusErrorCode(e.code) as 400 | 404 | 409
         );
       }
       throw e;
@@ -409,23 +308,9 @@ function parseUintParam(raw: string | null): number | undefined {
 function clampLimit(
   raw: string | null,
   defaultValue: number,
-  max: number,
+  max: number
 ): number {
   const parsed = parseUintParam(raw);
   if (parsed === undefined || parsed === 0) return defaultValue;
   return Math.min(parsed, max);
-}
-
-function parseTaskIdList(raw: string | null): string[] {
-  if (!raw) return [];
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const part of raw.split(",")) {
-    const id = part.trim();
-    if (!SAFE_ID.test(id) || seen.has(id)) continue;
-    out.push(id);
-    seen.add(id);
-    if (out.length >= 500) break;
-  }
-  return out;
 }

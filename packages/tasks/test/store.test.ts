@@ -52,25 +52,6 @@ describe("TaskStore CRUD", () => {
     expect(updated.updated_at > t.updated_at).toBe(true);
   });
 
-  it("backfills created_in_session_id without bumping updated_at", async () => {
-    const t = await store.create({
-      title: "Historical task",
-      assignee: "a",
-      created_by: "a",
-    });
-    await new Promise((r) => setTimeout(r, 10));
-
-    const first = await store.backfillCreatedInSessionId(t.id, "source-1");
-    expect(first.changed).toBe(true);
-    expect(first.task.created_in_session_id).toBe("source-1");
-    expect(first.task.updated_at).toBe(t.updated_at);
-
-    const second = await store.backfillCreatedInSessionId(t.id, "source-2");
-    expect(second.changed).toBe(false);
-    expect(second.task.created_in_session_id).toBe("source-1");
-    expect(second.task.updated_at).toBe(t.updated_at);
-  });
-
   it("rejects update on missing id", async () => {
     await expect(
       store.update("does-not-exist", { title: "x" })

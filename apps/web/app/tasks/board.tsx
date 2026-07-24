@@ -50,20 +50,13 @@ export interface TasksBoardProps {
   selectedId: string | null;
   onPick: (id: string) => void;
   onMove: (id: string, target: TaskStatus) => void;
-  readOnly?: boolean;
 }
 
-export function TasksBoard({
-  tasks,
-  selectedId,
-  onPick,
-  onMove,
-  readOnly = false,
-}: TasksBoardProps) {
+export function TasksBoard({ tasks, selectedId, onPick, onMove }: TasksBoardProps) {
   const sensors = useSensors(
     // 6px slop separates a click-to-open from a drag; the old 4px fired
     // drags on near-stationary clicks, which read as the card "sticking".
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } })
   );
   // The id of the card currently being dragged — drives the floating
   // overlay and the source-card placeholder. Null at rest.
@@ -86,13 +79,11 @@ export function TasksBoard({
     : null;
 
   const handleDragStart = (e: DragStartEvent) => {
-    if (readOnly) return;
     setActiveId(e.active.id as string);
   };
 
   const handleDragEnd = (e: DragEndEvent) => {
     setActiveId(null);
-    if (readOnly) return;
     const id = e.active.id as string;
     const target = e.over?.id as string | undefined;
     if (!target) return;
@@ -121,8 +112,7 @@ export function TasksBoard({
             tasks={grouped.get(status) ?? []}
             selectedId={selectedId}
             onPick={onPick}
-            dragging={!readOnly && activeId !== null}
-            readOnly={readOnly}
+            dragging={activeId !== null}
           />
         ))}
       </div>
@@ -130,7 +120,7 @@ export function TasksBoard({
           — the source stays put as a dimmed placeholder. No sibling reflow,
           no transform lag on the real card. */}
       <DragOverlay dropAnimation={null}>
-        {!readOnly && activeTask ? (
+        {activeTask ? (
           <div className="rotate-1 cursor-grabbing shadow-[0_8px_24px_-6px_rgba(0,0,0,0.35)]">
             <CardInner task={activeTask} selected={false} />
           </div>
@@ -146,14 +136,12 @@ function BoardColumn({
   selectedId,
   onPick,
   dragging,
-  readOnly,
 }: {
   status: TaskStatus;
   tasks: Task[];
   selectedId: string | null;
   onPick: (id: string) => void;
   dragging: boolean;
-  readOnly: boolean;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: status });
   const tint = statusTint(status);
@@ -162,7 +150,7 @@ function BoardColumn({
       ref={setNodeRef}
       className={cn(
         "flex w-full shrink-0 flex-col border border-paper-rule bg-paper-sunk transition-colors md:w-72 xl:w-auto xl:min-w-0 xl:flex-1",
-        isOver && "border-plot-red bg-paper",
+        isOver && "border-plot-red bg-paper"
       )}
     >
       <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-paper-rule bg-paper px-3 py-2">
@@ -171,7 +159,7 @@ function BoardColumn({
           <span
             className={cn(
               "font-mono text-[11px] uppercase tracking-[0.08em]",
-              tint.label,
+              tint.label
             )}
           >
             {STATUS_LABEL[status]}
@@ -186,9 +174,7 @@ function BoardColumn({
         {tasks.length === 0 ? (
           <div className="flex flex-1 items-center justify-center px-2 py-6">
             {dragging && (
-              <span className="label-faceplate text-ink-faint">
-                accepts drops
-              </span>
+              <span className="label-faceplate text-ink-faint">accepts drops</span>
             )}
           </div>
         ) : (
@@ -198,7 +184,6 @@ function BoardColumn({
               task={t}
               selected={selectedId === t.id}
               onPick={onPick}
-              readOnly={readOnly}
             />
           ))
         )}
@@ -211,16 +196,13 @@ function BoardCard({
   task,
   selected,
   onPick,
-  readOnly,
 }: {
   task: Task;
   selected: boolean;
   onPick: (id: string) => void;
-  readOnly: boolean;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: task.id,
-    disabled: readOnly,
   });
 
   // No transform on the source — the DragOverlay owns the motion. The
@@ -235,9 +217,12 @@ function BoardCard({
           onPick(task.id);
         }
       }}
-      className={cn(!readOnly && "touch-none", isDragging && "opacity-40")}
-      {...(readOnly ? {} : attributes)}
-      {...(readOnly ? {} : listeners)}
+      className={cn(
+        "touch-none",
+        isDragging && "opacity-40"
+      )}
+      {...attributes}
+      {...listeners}
     >
       <CardInner task={task} selected={selected} />
     </div>
@@ -259,7 +244,7 @@ function CardInner({ task, selected }: { task: Task; selected: boolean }) {
     <div
       className={cn(
         "relative cursor-pointer border border-paper-rule bg-paper px-3.5 py-2 text-left transition-colors",
-        selected ? "bg-paper-sunk text-ink" : "hover:bg-paper-sunk",
+        selected ? "bg-paper-sunk text-ink" : "hover:bg-paper-sunk"
       )}
     >
       <ActiveMarker active={selected} />
@@ -267,7 +252,7 @@ function CardInner({ task, selected }: { task: Task; selected: boolean }) {
         <div className={cn("line-clamp-2 text-sm font-medium", titleClass)}>
           {task.title}
         </div>
-        {/* Card meta stays glanceable: who, urgency, declared gates.
+        {/* Card meta stays glanceable: who, urgency, why-not-running.
             Team, past starts, and comment counts live in the detail pane. */}
         <div className="flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[11px] tabular-nums text-ink-faint">
           <span>#{task.id}</span>
@@ -288,7 +273,7 @@ function CardInner({ task, selected }: { task: Task; selected: boolean }) {
               starts {formatRelativeFromIso(task.start_at)}
             </span>
           )}
-          {task.depends_on.length > 0 && (
+          {task.status === "blocked" && task.depends_on.length > 0 && (
             <span>
               {task.depends_on.length} dep
               {task.depends_on.length === 1 ? "" : "s"}

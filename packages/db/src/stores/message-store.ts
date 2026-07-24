@@ -1,6 +1,6 @@
 import type { WasmDatabase } from "../wasm/adapter.js";
 import { drizzle } from "../wasm/drizzle.js";
-import { asc, desc, eq, like, sql } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { messages, type NewMessageRow } from "../schema.js";
 
@@ -28,12 +28,6 @@ export interface SearchResult {
   rank: number;
 }
 
-export interface StoredMessagePartsRow {
-  sessionId: string;
-  parts: unknown[];
-  createdAt: number;
-}
-
 /**
  * Message store — drizzle ops on `messages`. One row per UIMessage;
  * `parts` is JSON-stringified on write, parsed on read.
@@ -49,7 +43,7 @@ export function createMessageStore(db: WasmDatabase) {
   const ftsSearchStmt = db.prepare(
     `SELECT content, session_id as sessionId, role, rank
      FROM fts_messages WHERE fts_messages MATCH ?
-     ORDER BY rank LIMIT ?`,
+     ORDER BY rank LIMIT ?`
   );
 
   // Per-agent variant: join through sessions to filter on agent_id.
@@ -62,7 +56,7 @@ export function createMessageStore(db: WasmDatabase) {
      FROM fts_messages fm
      JOIN sessions s ON s.id = fm.session_id
      WHERE fts_messages MATCH ? AND s.agent_id = ?
-     ORDER BY fm.rank LIMIT ?`,
+     ORDER BY fm.rank LIMIT ?`
   );
 
   function rowToMessage(row: {
@@ -84,13 +78,17 @@ export function createMessageStore(db: WasmDatabase) {
     };
   }
 
-  function toInsert(sessionId: string, m: StoredUIMessage): NewMessageRow {
+  function toInsert(
+    sessionId: string,
+    m: StoredUIMessage
+  ): NewMessageRow {
     return {
       id: m.id || randomUUID(),
       sessionId,
       role: m.role,
       parts: JSON.stringify(m.parts),
-      metadata: m.metadata !== undefined ? JSON.stringify(m.metadata) : null,
+      metadata:
+        m.metadata !== undefined ? JSON.stringify(m.metadata) : null,
     };
   }
 
@@ -109,7 +107,10 @@ export function createMessageStore(db: WasmDatabase) {
      * Bulk insert in one transaction. Used by the compression child
      * write so all-or-nothing failure is preserved.
      */
-    appendMany(sessionId: string, msgs: StoredUIMessage[]): StoredUIMessage[] {
+    appendMany(
+      sessionId: string,
+      msgs: StoredUIMessage[]
+    ): StoredUIMessage[] {
       return orm.transaction((tx) => {
         const out: StoredUIMessage[] = [];
         for (const m of msgs) {
@@ -141,38 +142,6 @@ export function createMessageStore(db: WasmDatabase) {
     },
 
     /**
-     * Recent assistant messages that contain task tool parts. Used by the
-     * task board's provenance resolver to backfill old tasks whose
-     * created_in_session_id was not persisted yet.
-     */
-    listTaskToolMessages(limit = 5000): StoredMessagePartsRow[] {
-      return orm
-        .select({
-          sessionId: messages.sessionId,
-          parts: messages.parts,
-          createdAt: messages.createdAt,
-        })
-        .from(messages)
-        .where(like(messages.parts, "%tool-task_%"))
-        .orderBy(desc(messages.createdAt), desc(sql`rowid`))
-        .limit(limit)
-        .all()
-        .flatMap((row) => {
-          try {
-            return [
-              {
-                sessionId: row.sessionId,
-                parts: JSON.parse(row.parts) as unknown[],
-                createdAt: row.createdAt,
-              },
-            ];
-          } catch {
-            return [];
-          }
-        });
-    },
-
-    /**
      * Full-text search using FTS5 with BM25 ranking. Pass `agentId` to scope
      * results to one agent's sessions (workforce-isolation default for the
      * `session_search` tool — an agent's long-term memory should not leak
@@ -185,7 +154,7 @@ export function createMessageStore(db: WasmDatabase) {
           return ftsSearchByAgentStmt.all(
             query,
             agentId,
-            limit,
+            limit
           ) as SearchResult[];
         }
         return ftsSearchStmt.all(query, limit) as SearchResult[];

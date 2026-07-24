@@ -22,9 +22,7 @@ const RecurrenceParamsSchema = z.discriminatedUnion("kind", [
       expr: z
         .string()
         .min(1)
-        .describe(
-          'Cron expression, e.g. "0 9 * * 1-5" (every weekday 9am).'
-        ),
+        .describe('Cron expression, e.g. "0 9 * * 1-5" (every weekday 9am).'),
       tz: z
         .string()
         .nullable()
@@ -47,7 +45,7 @@ const RecurrenceParamsSchema = z.discriminatedUnion("kind", [
         .default("fresh")
         .describe(
           '"fresh" (default) creates a new session for each fire — clean isolation. ' +
-            '"reuse" continues in the same session — context accumulates across fires.'
+            '"reuse" continues in the same session — context accumulates across fires.',
         ),
     })
     .strict(),
@@ -58,9 +56,7 @@ const RecurrenceParamsSchema = z.discriminatedUnion("kind", [
         .number()
         .int()
         .min(60_000)
-        .describe(
-          "Milliseconds between fires. Minimum 60000 (1 minute)."
-        ),
+        .describe("Milliseconds between fires. Minimum 60000 (1 minute)."),
       until: z.string().nullable().optional(),
       count: z.number().int().positive().nullable().optional(),
       session: z.enum(["fresh", "reuse"]).default("fresh"),
@@ -119,7 +115,9 @@ registry.register({
     status: z
       .union([z.enum(TASK_STATUSES), z.array(z.enum(TASK_STATUSES))])
       .optional()
-      .describe("Status filter. Defaults to non-terminal (open, in_progress, blocked)."),
+      .describe(
+        "Status filter. Defaults to non-terminal (open, in_progress, blocked).",
+      ),
     limit: z
       .number()
       .int()
@@ -144,7 +142,8 @@ registry.register({
     if (!assignee) {
       return JSON.stringify({
         ok: false,
-        error: "task_list requires an active agent context or explicit assignee.",
+        error:
+          "task_list requires an active agent context or explicit assignee.",
       });
     }
 
@@ -201,19 +200,19 @@ const TASK_CREATE_DESCRIPTION =
   "`team` and omit `assignee` — it lands on the team's manager to triage " +
   "(fails if the team has no manager).\n\n" +
   "`session` (where the work lives):\n" +
-  "- `\"current\"` — bind to YOUR current session. Only valid when assignee == you; otherwise rejected.\n" +
-  "- `\"fresh\"` — explicitly request a brand-new session. The scheduler allocates one when the task becomes ready.\n" +
+  '- `"current"` — bind to YOUR current session. Only valid when assignee == you; otherwise rejected.\n' +
+  '- `"fresh"` — explicitly request a brand-new session. The scheduler allocates one when the task becomes ready.\n' +
   "- A specific session uuid — bind to that session (advanced; you usually don't need this).\n" +
-  "- Omit it — smart default: `\"current\"` when self-assigning, `\"fresh\"` otherwise.\n\n" +
-  "When to choose: pass `\"current\"` for a task you intend to work on RIGHT NOW in this same turn. " +
-  "Pass `\"fresh\"` (or omit) for future work, or any cross-agent delegation. Picking wrong creates session races.\n\n" +
+  '- Omit it — smart default: `"current"` when self-assigning, `"fresh"` otherwise.\n\n' +
+  'When to choose: pass `"current"` for a task you intend to work on RIGHT NOW in this same turn. ' +
+  'Pass `"fresh"` (or omit) for future work, or any cross-agent delegation. Picking wrong creates session races.\n\n' +
   "Use `start_at` (ISO timestamp) to schedule a future autonomous start. " +
   "Use `depends_on` to gate this task on others (cycle-checked; unmet deps force `blocked`).\n\n" +
   "RECURRING TASKS: pass `recurrence` to fire on a schedule. When you mark a recurring " +
   "task `done` via task_update, it self-resets to `open` with the next fire time — the " +
-  "returned status will be `open`, not `done`. Use `status: \"canceled\"` to stop a " +
-  "recurrence permanently. Choose `recurrence.session: \"reuse\"` to keep context across " +
-  "fires (one ongoing session) or `\"fresh\"` (default) for clean isolation each fire.";
+  'returned status will be `open`, not `done`. Use `status: "canceled"` to stop a ' +
+  'recurrence permanently. Choose `recurrence.session: "reuse"` to keep context across ' +
+  'fires (one ongoing session) or `"fresh"` (default) for clean isolation each fire.';
 
 registry.register({
   name: "task_create",
@@ -228,23 +227,19 @@ registry.register({
       .describe(
         "Agent id to do the work. Omittable only when `team` is set and " +
           "that team has a manager — the task then lands on the manager " +
-          "for triage. Otherwise required."
+          "for triage. Otherwise required.",
       ),
     body: z
       .string()
       .optional()
-      .describe(
-        "Markdown description / acceptance criteria / working notes."
-      ),
+      .describe("Markdown description / acceptance criteria / working notes."),
     parent_id: TaskIdParam.optional().describe(
-      "Parent task id (for subtask hierarchy)."
+      "Parent task id (for subtask hierarchy).",
     ),
     depends_on: z
       .array(TaskIdParam)
       .optional()
-      .describe(
-        "Task ids that must reach `done` before this one can start."
-      ),
+      .describe("Task ids that must reach `done` before this one can start."),
     start_at: z
       .string()
       .optional()
@@ -252,21 +247,18 @@ registry.register({
         "ISO 8601 timestamp. LEAVE UNSET unless you have a wall-clock reason " +
           "(human asked for a specific time, or you're rate-limited and want to " +
           "back off). Don't set this just to defer normal handoff — leave it " +
-          "null and the assignee will pick up the task as soon as deps allow."
+          "null and the assignee will pick up the task as soon as deps allow.",
       ),
-    due_at: z
-      .string()
-      .optional()
-      .describe("ISO 8601 soft deadline."),
+    due_at: z.string().optional().describe("ISO 8601 soft deadline."),
     session: z
       .string()
       .optional()
       .describe(
-        "Where the work lives. `\"current\"` (only valid self-assigned), `\"fresh\"`, " +
-          "or a session uuid. Omit for smart default: current for self-assign, fresh otherwise."
+        'Where the work lives. `"current"` (only valid self-assigned), `"fresh"`, ' +
+          "or a session uuid. Omit for smart default: current for self-assign, fresh otherwise.",
       ),
     recurrence: RecurrenceParamsSchema.optional().describe(
-      "Schedule the task to fire repeatedly. Marking it done schedules the next fire; cancel to stop."
+      "Schedule the task to fire repeatedly. Marking it done schedules the next fire; cancel to stop.",
     ),
     team: z
       .string()
@@ -274,7 +266,7 @@ registry.register({
       .describe(
         "Team tag (team id) when the work belongs to a team's charter. " +
           "With an explicit `assignee` it's organizational only; without " +
-          "one, the task routes to the team's manager."
+          "one, the task routes to the team's manager.",
       ),
   }),
   emoji: "🆕",
@@ -301,7 +293,8 @@ registry.register({
     if (!agentId) {
       return JSON.stringify({
         ok: false,
-        error: "task_create requires an active agent context (only agents create tasks).",
+        error:
+          "task_create requires an active agent context (only agents create tasks).",
       });
     }
 
@@ -347,6 +340,7 @@ registry.register({
         title: a.title,
         assignee: a.assignee,
         created_by: agentId,
+        created_in_session_id: callerSession,
         body: a.body,
         parent_id: parentId,
         depends_on: dependsOn,
@@ -359,7 +353,7 @@ registry.register({
       const warnings: string[] = [];
       if (task.status === "blocked") {
         warnings.push(
-          "Task created in `blocked` status because depends_on are not yet done."
+          "Task created in `blocked` status because depends_on are not yet done.",
         );
       }
       return JSON.stringify({
@@ -385,7 +379,7 @@ registry.register({
 
 const TASK_UPDATE_DESCRIPTION =
   "Patch a task. Common uses:\n" +
-  "- Mark progress: `status: \"in_progress\"`, `\"done\"`, `\"canceled\"`.\n" +
+  '- Mark progress: `status: "in_progress"`, `"done"`, `"canceled"`.\n' +
   "- Append notes to body — pass the FULL replacement body (not a diff). Prefer " +
   "  `task_comment` for discussion / mid-flight notes — body is the spec, " +
   "  comments are the conversation.\n" +
@@ -397,16 +391,16 @@ const TASK_UPDATE_DESCRIPTION =
   "  re-evaluate later (e.g., world-state isn't ready). Don't set start_at as " +
   "  part of normal handoff.\n\n" +
   "For ordinary progress, blockers, errors, corrections, or partial updates, " +
-  "call `task_comment` with `id`, `body`, and `mode: \"comment\"` (or omit " +
+  'call `task_comment` with `id`, `body`, and `mode: "comment"` (or omit ' +
   "`mode`; comment is the default).\n\n" +
-  "BEFORE marking `done`: leave a `task_comment(id, body, mode: \"result\")` with " +
+  'BEFORE marking `done`: leave a `task_comment(id, body, mode: "result")` with ' +
   "the single canonical final answer. The next agent that depends on this task reads it from " +
   "there. (Soft warning if you skip this — some tasks legitimately have no " +
   "textual result, just an artifact in the world.)\n\n" +
   "When you mark a non-recurring task `done`, dependents auto-flip from blocked to open. " +
   "When you mark a RECURRING task `done`, the task self-resets to `open` with the next " +
   "fire time — the returned status will be `open` (not `done`) and `runs` will increment. " +
-  "Use `status: \"canceled\"` to stop a recurrence permanently.";
+  'Use `status: "canceled"` to stop a recurrence permanently.';
 
 registry.register({
   name: "task_update",
@@ -420,7 +414,9 @@ registry.register({
     assignee: z
       .string()
       .optional()
-      .describe("New assignee. Clears session_id unless you also pass session_id."),
+      .describe(
+        "New assignee. Clears session_id unless you also pass session_id.",
+      ),
     session_id: z
       .string()
       .nullable()
@@ -504,7 +500,7 @@ registry.register({
             ? { team: a.team }
             : {}),
         },
-        { actor: agentId }
+        { actor: agentId },
       );
       const out: Record<string, unknown> = {
         ok: true,
@@ -513,7 +509,7 @@ registry.register({
       if (warnMissingResult) {
         out.warning =
           "Marked done without a result comment. If this task produced output, " +
-          "leave a `task_comment(id, body, mode: \"result\")` so the assigner " +
+          'leave a `task_comment(id, body, mode: "result")` so the assigner ' +
           "and dependents can find the answer. Some tasks have no textual " +
           "result (the artifact is in the world); in that case ignore this warning.";
       }
@@ -537,10 +533,10 @@ registry.register({
 const TASK_COMMENT_DESCRIPTION =
   "Leave a comment on a task. This single tool has two modes:\n" +
   "1. Ordinary comments — progress, checkpoints, blockers, errors, corrections, " +
-  "and partial updates. For these, set `mode: \"comment\"` or omit `mode`; " +
+  'and partial updates. For these, set `mode: "comment"` or omit `mode`; ' +
   "comment is the default.\n" +
   "2. Result comments — the assignee's single canonical final answer for the " +
-  "task. For this, include `mode: \"result\"` immediately before marking the " +
+  'task. For this, include `mode: "result"` immediately before marking the ' +
   "task done.\n\n" +
   "The body of the task is the SPEC (one voice); comments are the conversation " +
   "(multi-voice, append-only). Only the assignee can leave a `result` comment.\n\n" +
@@ -560,7 +556,7 @@ registry.register({
       .default("comment")
       .describe(
         '"comment" is for progress, checkpoints, blockers, errors, corrections, and partial updates. ' +
-          '"result" is only for the assignee\'s final answer at task completion.'
+          '"result" is only for the assignee\'s final answer at task completion.',
       ),
   }),
   emoji: "💬",
@@ -590,11 +586,7 @@ registry.register({
 
     // Belt-and-braces with the Zod schema — blocks any path that bypasses
     // validation from forging system-authored comments.
-    if (
-      a.mode !== undefined &&
-      a.mode !== "comment" &&
-      a.mode !== "result"
-    ) {
+    if (a.mode !== undefined && a.mode !== "comment" && a.mode !== "result") {
       return JSON.stringify({
         ok: false,
         error: `Invalid comment mode ${JSON.stringify(a.mode)}: only "comment" or "result" is allowed.`,
@@ -617,8 +609,7 @@ registry.register({
     if (kind === "result" && task.assignee !== agentId) {
       return JSON.stringify({
         ok: false,
-        error:
-          `Only the assignee (${task.assignee}) can leave a result comment on this task.`,
+        error: `Only the assignee (${task.assignee}) can leave a result comment on this task.`,
       });
     }
 
@@ -654,9 +645,9 @@ registry.register({
 
 const TASK_COMMENTS_DESCRIPTION =
   "Read the discussion thread on a task. Returns comments oldest-first. " +
-  "Use `kinds: [\"result\"]` to fetch only the canonical answer when you " +
+  'Use `kinds: ["result"]` to fetch only the canonical answer when you ' +
   "depend on this task and want the assignee's final output. " +
-  "Use `kinds: [\"system\"]` to see scheduler annotations (timeout / error " +
+  'Use `kinds: ["system"]` to see scheduler annotations (timeout / error ' +
   "parks, watchdog notes) — useful when a task got stuck and you're checking " +
   "what happened. Use `sinceTs` to read only what's new since you last looked.";
 
@@ -683,7 +674,7 @@ registry.register({
       .array(z.string())
       .optional()
       .describe(
-        "Filter by kind. Common: [\"result\"] for just the canonical answer."
+        'Filter by kind. Common: ["result"] for just the canonical answer.',
       ),
   }),
   emoji: "📜",

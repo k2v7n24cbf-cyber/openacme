@@ -34,6 +34,7 @@ export interface Task {
   assignee: string;
   session_id: string | null;
   created_by: string;
+  created_in_session_id: string | null;
   parent_id: string | null;
   depends_on: string[];
   start_at: string | null;
@@ -48,6 +49,8 @@ export interface Task {
   body?: string;
   /** Populated by GET /api/tasks (list); absent on GET /api/tasks/:id. */
   comment_count?: number;
+  /** Populated by GET /api/tasks (list): latest update/comment/event unix seconds. */
+  last_activity_at?: number;
 }
 
 export const STATUS_ORDER: TaskStatus[] = [
@@ -164,7 +167,7 @@ export function formatRelativeFromIso(iso: string): string {
 // Otherwise no chroma — distant dates stay mono. Caller passes the
 // result as a className on the meta span; `undefined` keeps inherit.
 export function dueUrgencyClass(
-  iso: string | null | undefined
+  iso: string | null | undefined,
 ): string | undefined {
   if (!iso) return undefined;
   const ms = new Date(iso).getTime();

@@ -37,7 +37,7 @@ export function TaskListRow({
         "group relative flex cursor-pointer flex-col items-start gap-1 border-b border-paper-rule/40 px-4 py-3 text-left transition-colors last:border-b-0",
         isActive
           ? "bg-paper-sunk text-ink"
-          : "text-ink-soft hover:bg-paper-sunk hover:text-ink"
+          : "text-ink-soft hover:bg-paper-sunk hover:text-ink",
       )}
     >
       <ActiveMarker active={isActive} />
@@ -50,7 +50,7 @@ export function TaskListRow({
         </span>
       </div>
       {/* Same glanceable meta set as board cards — who, urgency,
-          why-not-running. The rest lives in the detail pane. */}
+          declared gates. The rest lives in the detail pane. */}
       <div className="flex w-full flex-wrap gap-x-3 font-mono text-[11px] tabular-nums text-ink-faint">
         <span>#{task.id}</span>
         <AgentRef id={task.assignee} />
@@ -68,7 +68,7 @@ export function TaskListRow({
             starts {formatRelativeFromIso(task.start_at)}
           </span>
         )}
-        {task.status === "blocked" && task.depends_on.length > 0 && (
+        {task.depends_on.length > 0 && (
           <span>
             {task.depends_on.length} dep
             {task.depends_on.length === 1 ? "" : "s"}

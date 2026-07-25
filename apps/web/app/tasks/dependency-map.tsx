@@ -70,6 +70,9 @@ const SOURCE_TO_LANE_GAP_X = 104;
 const LANE_BAND_PAD_X = 22;
 const LANE_BAND_PAD_Y = 16;
 const TIMELINE_OFFSET_X = 168;
+const COMPACT_INDEPENDENT_LANE_THRESHOLD = 5;
+const COMPACT_INDEPENDENT_LANE_MAX_COLS = 4;
+const COMPACT_INDEPENDENT_COLUMN_W = NODE_W + TIMELINE_OFFSET_X + 44;
 const MANUAL_OFFSET_STORAGE_PREFIX = "openacme.tasks.dependencyMap.offsets.v1:";
 const OFFSET_EPSILON = 1;
 const TASK_HOVER_DETAIL_DELAY_MS = 1000;
@@ -130,7 +133,15 @@ type ManualLayoutOffsets = Record<string, Record<string, LayoutOffset>>;
 
 type TaskUsageState =
   | { status: "loading" }
-  | { status: "ready"; totalTokens: number; events: number }
+  | {
+      status: "ready";
+      inputTokens: number;
+      outputTokens: number;
+      cachedInputTokens: number;
+      cacheWriteTokens: number;
+      totalTokens: number;
+      events: number;
+    }
   | { status: "error" };
 
 interface ExecutionLaneLayout {
@@ -145,6 +156,11 @@ interface TimelineScale {
   mode: "actual" | "created";
   min: number;
   max: number;
+}
+
+interface SessionLane {
+  rootId: string;
+  nodeIds: string[];
 }
 
 interface TaskDependencyMapContextValue {
@@ -325,7 +341,6 @@ function TaskHoverDetails({
         : { value: "No start event", detail: null };
   const duration = durationDetail(startedAtMs, task);
   const comments = commentDetail(task.comment_count);
-  const usageDetail = taskUsageDetail(usage, usageAvailable);
   return (
     <div
       role="tooltip"
@@ -377,11 +392,10 @@ function TaskHoverDetails({
           detail={comments}
           className="col-span-2"
         />
-        <TaskDetailMetric
-          label="Tokens"
-          detail={usageDetail}
+        <TaskUsageBreakdown
+          usage={usage}
+          usageAvailable={usageAvailable}
           className="col-span-2"
-          emphasize
         />
       </div>
       <div className="mt-2 flex min-w-0 items-center gap-2 border-t border-paper-rule pt-2">
@@ -408,6 +422,114 @@ function TaskHoverDetails({
           />
           Go to
         </Button>
+      </div>
+    </div>
+  );
+}
+
+function TaskUsageBreakdown({
+  usage,
+  usageAvailable,
+  className,
+}: {
+  usage: TaskUsageState | undefined;
+  usageAvailable: boolean;
+  className?: string;
+}) {
+  if (!usageAvailable) {
+    return (
+      <TaskDetailMetric
+        label="Tokens"
+        detail={{ value: "Unavailable", detail: null }}
+        className={className}
+      />
+    );
+  }
+  if (!usage || usage.status === "loading") {
+    return (
+      <TaskDetailMetric
+        label="Tokens"
+        detail={{ value: "Reading", detail: null }}
+        className={className}
+      />
+    );
+  }
+  if (usage.status === "error") {
+    return (
+      <TaskDetailMetric
+        label="Tokens"
+        detail={{ value: "Unavailable", detail: null }}
+        className={className}
+      />
+    );
+  }
+
+  const cached = usage.cachedInputTokens;
+  const cacheWrite = usage.cacheWriteTokens;
+  const fresh = Math.max(0, usage.totalTokens - cached);
+  const calls = usage.events === 1 ? "1 call" : `${usage.events} calls`;
+
+  return (
+    <div
+      className={cn(
+        "min-w-0 border border-paper-rule bg-paper-sunk px-2 py-1.5",
+        className,
+      )}
+    >
+      <div className="font-mono text-[9px] uppercase tracking-[0.08em] text-ink-faint">
+        Tokens
+      </div>
+      <div className="mt-0.5 grid grid-cols-3 gap-x-2 gap-y-1 font-mono tabular-nums">
+        <TokenBreakdownCell
+          label="Total"
+          value={usage.totalTokens}
+          emphasize
+          title={`${formatTokens(usage.inputTokens)} input + ${formatTokens(
+            usage.outputTokens,
+          )} output`}
+        />
+        <TokenBreakdownCell
+          label="Fresh"
+          value={fresh}
+          title="Total minus cache-read tokens"
+        />
+        <TokenBreakdownCell
+          label="Cached"
+          value={cached}
+          title="Cache-read input tokens"
+        />
+      </div>
+      <div className="mt-1 truncate font-mono text-[10px] tabular-nums text-ink-faint">
+        {calls}
+        {cacheWrite > 0 && ` · ${formatTokens(cacheWrite)} cache write`}
+      </div>
+    </div>
+  );
+}
+
+function TokenBreakdownCell({
+  label,
+  value,
+  title,
+  emphasize = false,
+}: {
+  label: string;
+  value: number;
+  title: string;
+  emphasize?: boolean;
+}) {
+  return (
+    <div className="min-w-0" title={title}>
+      <div
+        className={cn(
+          "truncate text-[12px] text-ink",
+          emphasize && "text-signal-blue",
+        )}
+      >
+        {formatTokens(value)}
+      </div>
+      <div className="truncate text-[9px] uppercase tracking-[0.08em] text-ink-faint">
+        {label}
       </div>
     </div>
   );
@@ -488,21 +610,6 @@ function formatUnixMs(ms: number): string {
   }
 }
 
-function taskUsageDetail(
-  usage: TaskUsageState | undefined,
-  usageAvailable: boolean,
-): { value: string; detail: string | null } {
-  if (!usageAvailable) return { value: "Unavailable", detail: null };
-  if (!usage || usage.status === "loading") {
-    return { value: "Reading", detail: null };
-  }
-  if (usage.status === "error") return { value: "Unavailable", detail: null };
-  return {
-    value: formatTokens(usage.totalTokens),
-    detail: usage.events === 1 ? "1 call" : `${usage.events} calls`,
-  };
-}
-
 function durationDetail(
   startedAtMs: number | null,
   task: Task,
@@ -565,7 +672,8 @@ function FlowHeaderNode({ data }: NodeProps & { data: FlowHeaderNodeData }) {
 function SourceSessionNode({
   data,
 }: NodeProps & { data: SourceSessionNodeData }) {
-  const title = data.title?.trim() || `Session ${shortSessionId(data.sessionId)}`;
+  const title =
+    data.title?.trim() || `Session ${shortSessionId(data.sessionId)}`;
   const agentLabel = data.agentName || data.agentId || "Unknown agent";
   return (
     <div
@@ -911,6 +1019,10 @@ function TaskDependencyMapInner({
             const next = new Map(current);
             next.set(taskId, {
               status: "ready",
+              inputTokens: json.totals.inputTokens,
+              outputTokens: json.totals.outputTokens,
+              cachedInputTokens: json.totals.cachedInputTokens,
+              cacheWriteTokens: json.totals.cacheWriteTokens,
               totalTokens: json.totals.totalTokens,
               events: json.totals.events,
             });
@@ -1333,7 +1445,7 @@ function layoutSessionGroup(
     (id) => !outcomeIdSet.has(id),
   );
 
-  const lanes: Array<{ rootId: string; nodeIds: string[] }> = [];
+  const lanes: SessionLane[] = [];
   const assigned = new Set<string>(outcomeIds);
   for (const rootId of roots) {
     const nodeIds = collectLaneNodes(
@@ -1354,18 +1466,39 @@ function layoutSessionGroup(
     assigned.add(id);
   }
 
-  const laneCount = Math.max(lanes.length, 1);
   const firstTaskX = NODE_W + SOURCE_TO_LANE_GAP_X;
   const columnW = NODE_W + LANE_GAP_X;
-  const maxLaneDepth = Math.max(1, ...lanes.map((lane) => lane.nodeIds.length));
-  const outcomeX = firstTaskX + maxLaneDepth * columnW;
-  const sourceY = ((laneCount - 1) * LANE_PITCH_Y) / 2;
+  const compactIndependentLanes = lanes.filter((lane) =>
+    sessionLaneIsIndependent(lane, outgoing, incomingCount),
+  );
+  const shouldCompactIndependent =
+    compactIndependentLanes.length >= COMPACT_INDEPENDENT_LANE_THRESHOLD;
+  const compactLaneIds = new Set(
+    shouldCompactIndependent
+      ? compactIndependentLanes.map((lane) => lane.rootId)
+      : [],
+  );
+  const linearLanes = lanes.filter((lane) => !compactLaneIds.has(lane.rootId));
+  const compactCols = shouldCompactIndependent
+    ? Math.min(
+        COMPACT_INDEPENDENT_LANE_MAX_COLS,
+        Math.max(1, Math.ceil(Math.sqrt(compactIndependentLanes.length))),
+      )
+    : 1;
+  const compactRows = shouldCompactIndependent
+    ? Math.ceil(compactIndependentLanes.length / compactCols)
+    : 0;
+  const maxLaneDepth = Math.max(
+    1,
+    ...linearLanes.map((lane) => lane.nodeIds.length),
+  );
+  let outcomeX = firstTaskX + maxLaneDepth * columnW;
   const timelineByDepth = new Map<number, TimelineScale | null>();
   for (let depth = 0; depth < maxLaneDepth; depth += 1) {
     timelineByDepth.set(
       depth,
       timelineScale(
-        lanes
+        linearLanes
           .map((lane) => lane.nodeIds[depth])
           .filter((id): id is string => !!id),
         nodeById,
@@ -1374,42 +1507,75 @@ function layoutSessionGroup(
     );
   }
   const outcomeTimeline = timelineScale(outcomeIds, nodeById, taskStartTimes);
-  const out = new Map<string, { x: number; y: number }>([
-    [sourceId, { x: 0, y: sourceY }],
-  ]);
+  const compactTimeline = shouldCompactIndependent
+    ? timelineScale(
+        compactIndependentLanes.map((lane) => lane.rootId),
+        nodeById,
+        taskStartTimes,
+      )
+    : null;
+  const out = new Map<string, { x: number; y: number }>();
   const laneLayouts: ExecutionLaneLayout[] = [];
   const bandX = firstTaskX - LANE_BAND_PAD_X;
-  const bandWidth =
-    (outcomeIds.length > 0
-      ? outcomeX + NODE_W
-      : firstTaskX + (maxLaneDepth - 1) * columnW + NODE_W) -
-    bandX +
-    LANE_BAND_PAD_X;
 
-  lanes.forEach((lane, laneIndex) => {
-    const laneY = laneIndex * LANE_PITCH_Y;
+  let nextLaneY = 0;
+  let maxX = firstTaskX + (maxLaneDepth - 1) * columnW + NODE_W;
+  for (const lane of linearLanes) {
+    const laneY = nextLaneY;
+    nextLaneY += LANE_PITCH_Y;
     laneLayouts.push({
       id: lane.rootId,
       x: bandX,
       y: laneY - LANE_BAND_PAD_Y,
-      width: bandWidth,
+      width: NODE_W,
       height: NODE_H + LANE_BAND_PAD_Y * 2,
     });
     lane.nodeIds.forEach((id, depth) => {
+      const x =
+        firstTaskX +
+        depth * columnW +
+        timelineOffsetX(
+          id,
+          nodeById,
+          taskStartTimes,
+          timelineByDepth.get(depth) ?? null,
+        );
       out.set(id, {
-        x:
-          firstTaskX +
-          depth * columnW +
-          timelineOffsetX(
-            id,
-            nodeById,
-            taskStartTimes,
-            timelineByDepth.get(depth) ?? null,
-          ),
+        x,
         y: laneY,
       });
+      maxX = Math.max(maxX, x + NODE_W);
     });
-  });
+  }
+
+  if (shouldCompactIndependent) {
+    if (linearLanes.length > 0) nextLaneY += Math.round(LANE_PITCH_Y / 2);
+    const compactStartY = nextLaneY;
+    compactIndependentLanes.forEach((lane, index) => {
+      const id = lane.rootId;
+      const col = index % compactCols;
+      const row = Math.floor(index / compactCols);
+      const x =
+        firstTaskX +
+        col * COMPACT_INDEPENDENT_COLUMN_W +
+        timelineOffsetX(id, nodeById, taskStartTimes, compactTimeline);
+      out.set(id, {
+        x,
+        y: compactStartY + row * LANE_PITCH_Y,
+      });
+      maxX = Math.max(maxX, x + NODE_W);
+    });
+  }
+
+  if (outcomeIds.length > 0) {
+    outcomeX = Math.max(outcomeX, maxX + LANE_GAP_X);
+  }
+  const sourceY = verticalCenter(out);
+  out.set(sourceId, { x: 0, y: sourceY });
+  maxX = Math.max(maxX, outcomeIds.length > 0 ? outcomeX + NODE_W : maxX);
+
+  const bandWidth = maxX - bandX + LANE_BAND_PAD_X;
+  for (const lane of laneLayouts) lane.width = bandWidth;
 
   const outcomeBaseY = sourceY - ((outcomeIds.length - 1) * LANE_PITCH_Y) / 2;
   outcomeIds.forEach((id, index) => {
@@ -1448,6 +1614,31 @@ function collectLaneNodes(
   }
 
   return lane;
+}
+
+function sessionLaneIsIndependent(
+  lane: SessionLane,
+  outgoing: Map<string, string[]>,
+  incomingCount: Map<string, number>,
+): boolean {
+  if (lane.nodeIds.length !== 1) return false;
+  const id = lane.nodeIds[0]!;
+  return (
+    (incomingCount.get(id) ?? 0) === 0 && (outgoing.get(id)?.length ?? 0) === 0
+  );
+}
+
+function verticalCenter(
+  positions: Map<string, { x: number; y: number }>,
+): number {
+  if (positions.size === 0) return 0;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  for (const position of positions.values()) {
+    minY = Math.min(minY, position.y);
+    maxY = Math.max(maxY, position.y + NODE_H);
+  }
+  return Math.round((minY + maxY - NODE_H) / 2);
 }
 
 function layoutStandaloneGroup(group: TaskDependencyFlow): GroupLayout {

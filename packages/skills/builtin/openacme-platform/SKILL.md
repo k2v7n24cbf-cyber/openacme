@@ -52,6 +52,58 @@ mailbox credentials and is off-limits alongside the other secrets.
 their provider credentials, tell them to check `<dataDir>/.env` or
 `<dataDir>/auth.json` themselves — don't open the file.
 
+## Standard logs and telemetry
+
+Use local platform surfaces first, then route to the configured OpenTelemetry
+backend. Do not assume Langfuse is active.
+
+Standard local logs:
+
+- Daemon log: `<dataDir>/openacme.log`
+- Terminal chat UI log: `<dataDir>/openacme-tui.log`
+- CLI tail command: `openacme logs -f`
+- Override sink: `OPENACME_LOG_FILE=/path/to/file`
+
+The app logger writes structured JSON-line pino logs locally and can emit OTel
+logs when an OTel logs endpoint is configured. Treat logs as operational
+diagnostics: process startup, config load, dispatcher warnings, provider
+upstream errors, MCP connection failures, and unexpected exceptions. Logs are
+not the source of truth for per-turn token accounting.
+
+Telemetry types:
+
+- **Logs**: structured runtime diagnostics.
+- **Traces/spans**: OpenTelemetry execution graph for turns, provider
+  requests, tools, helpers, and correlation IDs.
+- **Usage ledger**: `usage_events` rows in `state.db`; source of truth for
+  token/cost accounting and provider/model/auth facts.
+- **Session timeline**: `session_timeline_events` plus
+  `GET /api/sessions/:id/timeline`; ordered lifecycle index for a session.
+- **Local AI forensics**:
+  `<dataDir>/ai-forensics/YYYY-MM-DD/<forensicRunId>/`; sensitive local
+  evidence archive for hashes, byte counts, lifecycle JSONL, and optional raw
+  capture.
+- **Tool outcome telemetry**: tool spans, `tool.start`, `tool.finish`, and
+  timeline rows that separate execution failures from logical result failures.
+
+OpenTelemetry backend routing:
+
+1. Inspect config/env, not assumptions. The runtime resolves
+   `OPENACME_OBSERVABILITY` to `off`, `logfire`, `langfuse`, or `otlp`.
+   Legacy `OPENACME_TELEMETRY=true` maps to Logfire.
+2. If backend is `off`, use local logs, `usage_events`, session timeline, and
+   local forensics.
+3. If backend is `otlp`, use `OPENACME_OTLP_TRACES_ENDPOINT`, optional
+   `OPENACME_OTLP_LOGS_ENDPOINT`, and `OPENACME_OTLP_HEADERS`.
+4. If backend is `logfire`, use the configured Logfire endpoints and token.
+5. If backend is `langfuse`, do not assume a fixed Langfuse version, UI shape,
+   API path, or skill name. Discover the configured base URL and installed
+   local skills/docs first, then use only version-compatible Langfuse
+   instructions.
+
+Never send raw prompts, provider bodies, tool outputs, secrets, OAuth tokens,
+cookies, API keys, or absolute local filesystem paths to any telemetry backend.
+
 ## AGENT.md format
 
 Each agent is a folder under `<dataDir>/agents/<id>/`. The id is the
@@ -68,8 +120,20 @@ model:
   provider: anthropic
   model: claude-sonnet-4-20250514
   auth: oauth
-tools: [shell, read_file, write_file, edit, apply_patch, list_files,
-        search_files, web_search, web_extract, execute_code, process]
+tools:
+  [
+    shell,
+    read_file,
+    write_file,
+    edit,
+    apply_patch,
+    list_files,
+    search_files,
+    web_search,
+    web_extract,
+    execute_code,
+    process,
+  ]
 mcpServers: {}
 mcpDisabled: []
 skills: []
@@ -129,6 +193,7 @@ files in the same dir (examples, templates) are surfaced as
 ```
 
 **Authoring a good skill:**
+
 - Description is the trigger — be specific about WHEN the skill applies.
 - Body should be reference content, not a step-by-step script. The
   agent reads it and decides how to apply it.
@@ -203,6 +268,7 @@ marked `done`; use `canceled` to stop a recurrence permanently.
 **At most one `in_progress` per session.** The platform enforces this.
 
 **Comments vs body vs events:**
+
 - **Body** is the spec — one voice, owned by the assigner / assignee.
 - **Comments** (`task_comment` / `task_comments`) are the discussion
   thread — multi-voice, append-only. Kind `result` is the assignee's
@@ -257,7 +323,7 @@ and edit teams by writing TEAM.md.
 
 Email is **per-agent and opt-in** — each agent that gets a mailbox has
 its own address, credentials, and isolation. The email tools resolve
-the *current* agent's mailbox; there is no "which mailbox" argument, so
+the _current_ agent's mailbox; there is no "which mailbox" argument, so
 one agent literally cannot touch another's. Backends: generic
 IMAP/SMTP, Gmail API, Microsoft Graph (Gmail/Microsoft use a
 bring-your-own OAuth app set in Settings → Email).
@@ -330,7 +396,7 @@ When the user asks how something works:
 
 There's a public docs site at **https://openacme.org/docs** with
 walkthroughs and screenshots. This skill is your fast reference for
-*doing* things; the docs are the deep-dive you point the user to when
+_doing_ things; the docs are the deep-dive you point the user to when
 they want to read more or set up something step-by-step. Useful pages:
 
 - `/docs/quickstart` — install + first run
@@ -363,6 +429,6 @@ never invent a filename; a wrong URL renders as a broken image:
 
 Use this when a screenshot genuinely helps the user find something in
 the UI (e.g. "the Email panel is here") — not on every reply. Two
-caveats: you can't *see* these images (you're citing a known URL, not
+caveats: you can't _see_ these images (you're citing a known URL, not
 viewing it), and they only render in the **web** chat — the terminal
 chat shows alt text only, so always keep the alt text descriptive.

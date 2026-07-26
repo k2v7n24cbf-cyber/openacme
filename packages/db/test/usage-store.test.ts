@@ -53,6 +53,11 @@ describe("UsageStore — record + totals", () => {
         reasoningTokens: 50,
         steps: 3,
         durationMs: 1234,
+        traceId: "trace-1",
+        spanId: "span-1",
+        forensicRunId: "run-1",
+        forensicPath: "/tmp/openacme/ai-forensics/2026-07-25/run-1",
+        providerRequestCount: 2,
       })
     );
     expect(row.id).toBeTruthy();
@@ -63,6 +68,11 @@ describe("UsageStore — record + totals", () => {
     expect(row.costSource).toBe("estimated");
     expect(row.steps).toBe(3);
     expect(row.durationMs).toBe(1234);
+    expect(row.traceId).toBe("trace-1");
+    expect(row.spanId).toBe("span-1");
+    expect(row.forensicRunId).toBe("run-1");
+    expect(row.forensicPath).toBe("/tmp/openacme/ai-forensics/2026-07-25/run-1");
+    expect(row.providerRequestCount).toBe(2);
   });
 
   it("survives session deletion (no FK cascade)", () => {
@@ -168,6 +178,26 @@ describe("UsageStore — pagination + budget feeds", () => {
     const p3 = store.listEvents({}, { limit: 2, before: p2.nextCursor! });
     expect(p3.events.map((e) => e.id)).toEqual(["e0"]);
     expect(p3.nextCursor).toBeNull();
+  });
+
+  it("listEvents includes nullable forensic correlation fields", () => {
+    store.record(
+      ev({
+        id: "correlated",
+        traceId: "trace-list",
+        forensicRunId: "run-list",
+        forensicPath: "/tmp/forensics/run-list",
+        providerRequestCount: 4,
+      })
+    );
+
+    const event = store.listEvents({}, { limit: 1 }).events[0]!;
+    expect(event.id).toBe("correlated");
+    expect(event.traceId).toBe("trace-list");
+    expect(event.spanId).toBeNull();
+    expect(event.forensicRunId).toBe("run-list");
+    expect(event.forensicPath).toBe("/tmp/forensics/run-list");
+    expect(event.providerRequestCount).toBe(4);
   });
 
   it("dailyCostByAgent groups per UTC day per agent", () => {

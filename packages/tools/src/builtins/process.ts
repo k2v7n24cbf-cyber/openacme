@@ -9,6 +9,7 @@ import {
 } from "../session-context.js";
 import { buildToolHomeEnv } from "../tool-env.js";
 import { resolveShellForSpawn } from "../internal/shell-executable.js";
+import { classifyProcessToolResult } from "../outcome.js";
 
 /**
  * Background process management. One tool with an action enum, mirroring
@@ -387,6 +388,7 @@ registry.register({
   emoji: "⚙️",
   parallelSafe: false,
   maxResultSizeChars: MAX_AGGREGATE_CHARS + 1000,
+  classifyResult: classifyProcessToolResult,
 
   handler: async (args) => {
     const a = args as {

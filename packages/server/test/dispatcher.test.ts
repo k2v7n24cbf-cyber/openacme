@@ -9,6 +9,7 @@ import {
   createSessionStore,
   createInboxStore,
 } from "@openacme/db";
+import type { SessionTimelineEventInput } from "@openacme/db";
 import { TaskStore } from "@openacme/tasks";
 import { AutonomousTurnTimeout } from "@openacme/agent-core";
 import { Dispatcher } from "../src/dispatcher.js";
@@ -89,7 +90,10 @@ afterEach(() => {
 
 function makeDispatcher(
   manager: AgentManager,
-  opts: { now?: () => Date } = {}
+  opts: {
+    now?: () => Date;
+    onTimelineEvent?: (event: SessionTimelineEventInput) => void;
+  } = {}
 ): Dispatcher {
   dispatcher = new Dispatcher({
     taskStore,
@@ -153,6 +157,43 @@ describe("Dispatcher spawn rule", () => {
     await d.drain(5_000);
 
     expect(calls).toEqual([{ agentId: "a1", sessionId: session.id }]);
+  });
+
+  it("emits dispatcher and autonomous lifecycle timeline events for a successful wake", async () => {
+    const timelineEvents: SessionTimelineEventInput[] = [];
+    const { manager, calls } = fakeManager(["a1"]);
+    const { session, task } = await makeBoundTask("a1");
+
+    const d = makeDispatcher(manager, {
+      onTimelineEvent: (event) => timelineEvents.push(event),
+    });
+    await d.start();
+    await d.drain(5_000);
+
+    expect(calls).toEqual([{ agentId: "a1", sessionId: session.id }]);
+    expect(timelineEvents.map((event) => event.eventType)).toEqual([
+      "session.dispatcher.wake.started",
+      "session.autonomous.started",
+      "session.autonomous.finished",
+      "session.dispatcher.wake.finished",
+    ]);
+    expect(timelineEvents[0]).toMatchObject({
+      sessionId: session.id,
+      agentId: "a1",
+      taskId: task.id,
+      source: "dispatcher",
+      status: "running",
+      payload: {
+        reason: "task_open_ready",
+      },
+    });
+    expect(timelineEvents[2]).toMatchObject({
+      sessionId: session.id,
+      agentId: "a1",
+      taskId: task.id,
+      source: "dispatcher",
+      status: "ok",
+    });
   });
 
   it("does not pre-mark a task in_progress before the agent claims it", async () => {
@@ -317,6 +358,39 @@ describe("Dispatcher spawn rule", () => {
     expect(calls).toEqual([{ agentId: "a1", sessionId: session.id }]);
   });
 
+  it("emits a coalesced defer skipped timeline event when defer suppresses ready work", async () => {
+    const timelineEvents: SessionTimelineEventInput[] = [];
+    const { manager, calls } = fakeManager(["a1"]);
+    const { session, task } = await makeBoundTask("a1");
+    const deferUntil = Math.floor(Date.now() / 1000) + 3600;
+    sessionStore.setDeferUntil(session.id, deferUntil);
+
+    const d = makeDispatcher(manager, {
+      onTimelineEvent: (event) => timelineEvents.push(event),
+    });
+    await d.start();
+    await d.drain(5_000);
+    await tick(d);
+
+    expect(calls).toEqual([]);
+    const deferEvents = timelineEvents.filter(
+      (event) => event.eventType === "session.dispatcher.defer.skipped"
+    );
+    expect(deferEvents).toEqual([
+      expect.objectContaining({
+        sessionId: session.id,
+        agentId: "a1",
+        taskId: task.id,
+        source: "dispatcher",
+        status: "skipped",
+        payload: expect.objectContaining({
+          reason: "task_open_ready",
+          deferUntilMs: deferUntil * 1000,
+        }),
+      }),
+    ]);
+  });
+
   it("skips interactive-busy sessions and picks them up on clear", async () => {
     const { manager, calls } = fakeManager(["a1"]);
     const { session } = await makeBoundTask("a1");
@@ -372,6 +446,42 @@ describe("Dispatcher spawn rule", () => {
     expect(calls).toHaveLength(1);
     expect([a.session.id, b.session.id]).toContain(calls[0]?.sessionId);
     expect(d.runningSessionIds()).toEqual([calls[0]!.sessionId]);
+    await releaseTurn(gate, calls[0]!.sessionId);
+    await d.drain(5_000);
+  });
+
+  it("emits capacity queued timeline events when ready work waits for an agent slot", async () => {
+    const timelineEvents: SessionTimelineEventInput[] = [];
+    const gate = deferredTurns();
+    const { manager, calls } = fakeManager(
+      [{ id: "a1", maxConcurrentSessions: 1 }],
+      gate.turn
+    );
+    const a = await makeBoundTask("a1");
+    const b = await makeBoundTask("a1");
+
+    const d = makeDispatcher(manager, {
+      onTimelineEvent: (event) => timelineEvents.push(event),
+    });
+    await d.start();
+
+    expect(calls).toHaveLength(1);
+    const queued = timelineEvents.find(
+      (event) => event.eventType === "session.dispatcher.capacity_queued"
+    );
+    expect(queued).toMatchObject({
+      agentId: "a1",
+      source: "dispatcher",
+      status: "queued",
+      payload: {
+        reason: "task_open_ready",
+        limit: 1,
+        activeCount: 1,
+      },
+    });
+    expect([a.session.id, b.session.id]).toContain(queued?.sessionId);
+    expect(queued?.sessionId).not.toBe(calls[0]!.sessionId);
+
     await releaseTurn(gate, calls[0]!.sessionId);
     await d.drain(5_000);
   });
@@ -927,6 +1037,47 @@ describe("Dispatcher failure handling", () => {
     // Park backoff is 5 minutes.
     expect(retryAt).toBeGreaterThan(Date.now() + 4 * 60_000);
     expect(retryAt).toBeLessThan(Date.now() + 6 * 60_000);
+  });
+
+  it("emits autonomous and wake failure timeline events when a turn errors", async () => {
+    const timelineEvents: SessionTimelineEventInput[] = [];
+    const { manager, calls } = fakeManager(["a1"], async () => {
+      throw new Error("boom");
+    });
+    const { session, task } = await makeBoundTask("a1", {
+      status: "in_progress",
+    });
+
+    const d = makeDispatcher(manager, {
+      onTimelineEvent: (event) => timelineEvents.push(event),
+    });
+    await d.start();
+    await d.drain(5_000);
+
+    expect(calls).toEqual([{ agentId: "a1", sessionId: session.id }]);
+    expect(timelineEvents.map((event) => event.eventType)).toEqual([
+      "session.dispatcher.wake.started",
+      "session.autonomous.started",
+      "session.autonomous.failed",
+      "session.dispatcher.wake.failed",
+    ]);
+    expect(timelineEvents[2]).toMatchObject({
+      sessionId: session.id,
+      agentId: "a1",
+      taskId: task.id,
+      source: "dispatcher",
+      status: "error",
+      payload: {
+        error: "boom",
+      },
+    });
+    expect(timelineEvents[3]).toMatchObject({
+      sessionId: session.id,
+      agentId: "a1",
+      taskId: task.id,
+      source: "dispatcher",
+      status: "error",
+    });
   });
 
   it("parks timeout failures with a timeout-specific scheduler comment", async () => {

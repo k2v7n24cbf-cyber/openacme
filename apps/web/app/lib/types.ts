@@ -270,6 +270,11 @@ export interface UsageEventRow {
   costSource: "estimated" | "provider_reported" | "subscription" | "free";
   steps: number | null;
   durationMs: number | null;
+  traceId: string | null;
+  spanId: string | null;
+  forensicRunId: string | null;
+  forensicPath: string | null;
+  providerRequestCount: number | null;
 }
 
 export interface UsageTotals {

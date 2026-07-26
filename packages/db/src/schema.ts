@@ -273,12 +273,55 @@ export const usageEvents = sqliteTable(
     costSource: text("cost_source", { enum: USAGE_COST_SOURCES }).notNull(),
     steps: integer("steps"),
     durationMs: integer("duration_ms"),
+    traceId: text("trace_id"),
+    spanId: text("span_id"),
+    forensicRunId: text("forensic_run_id"),
+    forensicPath: text("forensic_path"),
+    providerRequestCount: integer("provider_request_count"),
   },
   (t) => [
     index("idx_usage_created").on(t.createdAt),
     index("idx_usage_agent_created").on(t.agentId, t.createdAt),
     index("idx_usage_session").on(t.sessionId),
     index("idx_usage_task").on(t.taskId),
+    index("idx_usage_trace").on(t.traceId),
+    index("idx_usage_forensic_run").on(t.forensicRunId),
+  ]
+);
+
+/**
+ * Session-scoped forensic timeline. This is a semantic, queryable index over
+ * important lifecycle boundaries; local raw prompt/provider/tool evidence
+ * remains in the AI forensic archive and Langfuse keeps the trace UI.
+ *
+ * `created_at_ms` is millisecond precision because multiple AI/tool lifecycle
+ * boundaries regularly occur inside the same SQLite epoch second. List queries
+ * use `(created_at_ms ASC, rowid ASC)` for stable timeline order.
+ */
+export const sessionTimelineEvents = sqliteTable(
+  "session_timeline_events",
+  {
+    id: text("id").primaryKey(),
+    createdAtMs: integer("created_at_ms").notNull(),
+    sessionId: text("session_id").notNull(),
+    agentId: text("agent_id"),
+    messageId: text("message_id"),
+    taskId: text("task_id"),
+    eventType: text("event_type").notNull(),
+    source: text("source").notNull(),
+    status: text("status"),
+    traceId: text("trace_id"),
+    spanId: text("span_id"),
+    forensicRunId: text("forensic_run_id"),
+    usageEventId: text("usage_event_id"),
+    durationMs: integer("duration_ms"),
+    payload: text("payload"),
+  },
+  (t) => [
+    index("idx_session_timeline_session").on(t.sessionId, t.createdAtMs),
+    index("idx_session_timeline_trace").on(t.traceId),
+    index("idx_session_timeline_forensic_run").on(t.forensicRunId),
+    index("idx_session_timeline_usage").on(t.usageEventId),
   ]
 );
 
@@ -360,6 +403,8 @@ export type PushSubscriptionRow = typeof pushSubscriptions.$inferSelect;
 export type NewPushSubscriptionRow = typeof pushSubscriptions.$inferInsert;
 export type UsageEventRow = typeof usageEvents.$inferSelect;
 export type NewUsageEventRow = typeof usageEvents.$inferInsert;
+export type SessionTimelineEventRow = typeof sessionTimelineEvents.$inferSelect;
+export type NewSessionTimelineEventRow = typeof sessionTimelineEvents.$inferInsert;
 export type MemberRow = typeof members.$inferSelect;
 export type NewMemberRow = typeof members.$inferInsert;
 export type AuthSessionRow = typeof authSessions.$inferSelect;

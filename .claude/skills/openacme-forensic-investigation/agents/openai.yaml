@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenAcme Forensic Investigation"
+  short_description: "Investigate OpenAcme AI traces and evidence"
+  default_prompt: "Use $openacme-forensic-investigation to investigate an OpenAcme AI token, trace, or session anomaly."

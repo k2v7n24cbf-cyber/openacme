@@ -10,6 +10,7 @@ import {
   joinBom,
   type Hunk,
 } from "../patch/parser.js";
+import { classifyFilesystemToolResult } from "../outcome.js";
 
 interface StagedChange {
   type: "add" | "update" | "delete" | "move";
@@ -153,6 +154,7 @@ registry.register({
   }),
   emoji: "🩹",
   parallelSafe: false,
+  classifyResult: classifyFilesystemToolResult,
   handler: async (args) => {
     const { patchText, cwd } = args as { patchText: string; cwd?: string };
     const baseCwd = getCurrentWorkspaceDir() ?? process.cwd();

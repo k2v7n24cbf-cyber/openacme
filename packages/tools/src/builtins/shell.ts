@@ -9,6 +9,7 @@ import {
 import { getShellSession } from "../internal/shell-session.js";
 import { buildToolHomeEnv } from "../tool-env.js";
 import { resolveShellForExec } from "../internal/shell-executable.js";
+import { classifyShellToolResult } from "../outcome.js";
 
 const DESTRUCTIVE_PATTERNS = /(?:^|\s|&&|\|\||;|`)(?:rm\s|rmdir\s|cp\s|mv\s|sed\s+-i|truncate\s|dd\s|shred\s|git\s+(?:reset|clean|checkout)\s)/;
 
@@ -38,6 +39,7 @@ registry.register({
   emoji: "🖥️",
   parallelSafe: false,
   maxResultSizeChars: 50_000,
+  classifyResult: classifyShellToolResult,
 
   handler: async (args) => {
     const { command, timeout } = args as { command: string; timeout: number };

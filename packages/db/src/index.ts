@@ -55,6 +55,16 @@ export {
   type AgentHourCell,
 } from "./stores/usage-store.js";
 export {
+  createSessionTimelineStore,
+  type SessionTimelineStore,
+  type SessionTimelineEventInput,
+  type SessionTimelineEvent,
+  type SessionTimelineFilter,
+  type SessionTimelineCursor,
+  type SessionTimelinePage,
+  type SessionTimelineSource,
+} from "./stores/session-timeline-store.js";
+export {
   USAGE_KINDS,
   USAGE_AUTH_MODES,
   USAGE_COST_SOURCES,
@@ -77,6 +87,7 @@ export {
   agentInbox,
   pushSubscriptions,
   usageEvents,
+  sessionTimelineEvents,
   members,
   authSessions,
   enrollTokens,
@@ -89,4 +100,6 @@ export {
   type NewTaskEventRow,
   type NewAgentInboxRow,
   type NewPushSubscriptionRow,
+  type SessionTimelineEventRow,
+  type NewSessionTimelineEventRow,
 } from "./schema.js";

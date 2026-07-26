@@ -30,6 +30,11 @@ export interface UsageEventInput {
   costSource: UsageCostSource;
   steps?: number | null;
   durationMs?: number | null;
+  traceId?: string | null;
+  spanId?: string | null;
+  forensicRunId?: string | null;
+  forensicPath?: string | null;
+  providerRequestCount?: number | null;
   id?: string;
   /** Epoch-seconds override, tests only. */
   createdAt?: number;
@@ -40,6 +45,7 @@ export interface UsageFilter {
   from?: number;
   to?: number;
   agentId?: string;
+  sessionId?: string;
   model?: string;
   kind?: UsageKind;
   taskId?: string;
@@ -120,6 +126,10 @@ function buildWhere(filter: UsageFilter): {
     conds.push("agent_id = @agentId");
     params.agentId = filter.agentId;
   }
+  if (filter.sessionId) {
+    conds.push("session_id = @sessionId");
+    params.sessionId = filter.sessionId;
+  }
   if (filter.model) {
     conds.push("model = @model");
     params.model = filter.model;
@@ -184,6 +194,11 @@ export function createUsageStore(db: WasmDatabase) {
           costSource: input.costSource,
           steps: input.steps ?? null,
           durationMs: input.durationMs ?? null,
+          traceId: input.traceId ?? null,
+          spanId: input.spanId ?? null,
+          forensicRunId: input.forensicRunId ?? null,
+          forensicPath: input.forensicPath ?? null,
+          providerRequestCount: input.providerRequestCount ?? null,
         })
         .returning()
         .get();
@@ -484,6 +499,11 @@ interface UsageEventRawRow {
   cost_source: string;
   steps: number | null;
   duration_ms: number | null;
+  trace_id: string | null;
+  span_id: string | null;
+  forensic_run_id: string | null;
+  forensic_path: string | null;
+  provider_request_count: number | null;
 }
 
 function toEventRow(r: UsageEventRawRow): UsageEventRow {
@@ -509,6 +529,11 @@ function toEventRow(r: UsageEventRawRow): UsageEventRow {
     costSource: r.cost_source as UsageEventRow["costSource"],
     steps: r.steps,
     durationMs: r.duration_ms,
+    traceId: r.trace_id,
+    spanId: r.span_id,
+    forensicRunId: r.forensic_run_id,
+    forensicPath: r.forensic_path,
+    providerRequestCount: r.provider_request_count,
   };
 }
 

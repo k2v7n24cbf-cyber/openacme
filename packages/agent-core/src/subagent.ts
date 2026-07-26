@@ -21,14 +21,32 @@ import {
 } from "ai";
 import { randomUUID } from "node:crypto";
 import { z, type ZodTypeAny } from "zod";
-import { resolveSubagentModel } from "@openacme/llm-provider";
+import {
+  enterAIForensicContext,
+  getAIForensicContext,
+  getAIForensicProviderRequestCount,
+  resolveSubagentModel,
+  withOpenAcmeSpan,
+} from "@openacme/llm-provider";
 import type { UsageKind } from "@openacme/db";
 import type { Agent } from "./agent.js";
 import { extractErrorText } from "./error-classifier.js";
+import {
+  buildAiForensicContext,
+  buildAiTelemetrySettings,
+} from "./telemetry.js";
 import type { TokenUsage } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_FORKED_STEP_CAP = 10;
+const TIMELINE_ERROR_MAX_CHARS = 4096;
+
+function truncateTimelineError(value: string | undefined): string | null {
+  if (!value) return null;
+  return value.length > TIMELINE_ERROR_MAX_CHARS
+    ? value.slice(0, TIMELINE_ERROR_MAX_CHARS)
+    : value;
+}
 
 export type SubagentStatus =
   | "completed"
@@ -124,9 +142,9 @@ export async function runSubagent<S extends ZodTypeAny>(
 
   try {
     if (args.mode === "forked") {
-      return await runForked(args, combined, timeoutCtrl.signal);
+      return await runForked(args, combined, timeoutCtrl.signal, timeoutMs);
     }
-    return await runStructured(args, combined, timeoutCtrl.signal);
+    return await runStructured(args, combined, timeoutCtrl.signal, timeoutMs);
   } finally {
     clearTimeout(timer);
   }
@@ -135,8 +153,35 @@ export async function runSubagent<S extends ZodTypeAny>(
 async function runForked(
   args: ForkedSubagentArgs,
   combined: AbortSignal,
-  timeoutSignal: AbortSignal
+  timeoutSignal: AbortSignal,
+  timeoutMs: number
 ): Promise<ForkedSubagentResult> {
+  const startedAt = Date.now();
+  const report = (
+    eventType: string,
+    status: string,
+    payload: Record<string, unknown>,
+    durationMs?: number
+  ) => {
+    args.parent.reportTimelineEvent({
+      sessionId: args.parentSessionId,
+      agentId: args.parent.config.id,
+      eventType,
+      source: "agent",
+      status,
+      ...(durationMs !== undefined ? { durationMs } : {}),
+      payload,
+    });
+  };
+  report("session.subagent.started", "running", {
+    mode: "forked",
+    usageKind: args.usageKind ?? null,
+    telemetryFunctionId: args.telemetryFunctionId ?? null,
+    timeoutMs,
+    contextMessageCount: args.contextMessages?.length ?? 0,
+    toolFilterCount: args.toolFilter?.size ?? null,
+  });
+
   const seedMsg: UIMessage = {
     id: `fork_${randomUUID()}`,
     role: "user",
@@ -169,9 +214,21 @@ async function runForked(
     }
 
     if (combined.aborted) {
+      const status = timeoutSignal.aborted ? "timeout" : "aborted";
+      report(
+        "session.subagent.failed",
+        status,
+        {
+          mode: "forked",
+          usageKind: args.usageKind ?? null,
+          subagentStatus: status,
+          totalTokens: usage?.totalTokens,
+        },
+        Date.now() - startedAt
+      );
       return {
         mode: "forked",
-        status: timeoutSignal.aborted ? "timeout" : "aborted",
+        status,
         message: assembled,
       };
     }
@@ -186,6 +243,20 @@ async function runForked(
     } catch {
       // usage is optional; downstream loggers tolerate undefined.
     }
+    report(
+      "session.subagent.finished",
+      "ok",
+      {
+        mode: "forked",
+        usageKind: args.usageKind ?? null,
+        telemetryFunctionId: args.telemetryFunctionId ?? null,
+        subagentStatus: "completed",
+        totalTokens: usage?.totalTokens,
+        inputTokens: usage?.inputTokens,
+        outputTokens: usage?.outputTokens,
+      },
+      Date.now() - startedAt
+    );
     return {
       mode: "forked",
       status: "completed",
@@ -194,12 +265,34 @@ async function runForked(
     };
   } catch (e) {
     if (combined.aborted) {
+      const status = timeoutSignal.aborted ? "timeout" : "aborted";
+      report(
+        "session.subagent.failed",
+        status,
+        {
+          mode: "forked",
+          usageKind: args.usageKind ?? null,
+          subagentStatus: status,
+        },
+        Date.now() - startedAt
+      );
       return {
         mode: "forked",
-        status: timeoutSignal.aborted ? "timeout" : "aborted",
+        status,
         message: assembled,
       };
     }
+    report(
+      "session.subagent.failed",
+      "error",
+      {
+        mode: "forked",
+        usageKind: args.usageKind ?? null,
+        subagentStatus: "failed",
+        error: truncateTimelineError(extractErrorText(e)),
+      },
+      Date.now() - startedAt
+    );
     return {
       mode: "forked",
       status: "failed",
@@ -229,56 +322,133 @@ function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
 async function runStructured<S extends ZodTypeAny>(
   args: StructuredSubagentArgs<S>,
   combined: AbortSignal,
-  timeoutSignal: AbortSignal
+  timeoutSignal: AbortSignal,
+  timeoutMs: number
 ): Promise<StructuredSubagentResult<z.infer<S>>> {
   const startedAt = Date.now();
+  let provider: string | undefined;
+  let model: string | undefined;
+  let forensicRunId: string | undefined;
+  const report = (
+    eventType: string,
+    status: string,
+    payload: Record<string, unknown>,
+    durationMs?: number,
+    ids: { traceId?: string; spanId?: string } = {}
+  ) => {
+    if (!args.usage?.sessionId) return;
+    args.parent.reportTimelineEvent({
+      sessionId: args.usage.sessionId,
+      agentId: args.parent.config.id,
+      taskId: args.usage.taskId ?? null,
+      eventType,
+      source: "agent",
+      status,
+      traceId: ids.traceId ?? null,
+      spanId: ids.spanId ?? null,
+      forensicRunId: forensicRunId ?? null,
+      ...(durationMs !== undefined ? { durationMs } : {}),
+      payload,
+    });
+  };
   try {
     const subagentModel = resolveSubagentModel(args.parent.config.model);
+    provider = subagentModel.provider;
+    model = subagentModel.model;
+    const parentForensicRunId = getAIForensicContext()?.forensicRunId;
+    const telemetry = buildAiTelemetrySettings({
+      functionId: `${args.parent.config.id}:subagent.structured`,
+      agentId: args.parent.config.id,
+      sessionId: args.usage?.sessionId,
+      taskId: args.usage?.taskId,
+      kind: args.usage?.kind,
+      model: subagentModel,
+    });
+    forensicRunId = telemetry.forensicRunId;
+    report("session.subagent.started", "running", {
+      mode: "structured",
+      usageKind: args.usage?.kind ?? null,
+      timeoutMs,
+      maxOutputTokens: args.maxOutputTokens ?? null,
+      provider,
+      model,
+    });
     let object: z.infer<S>;
     let usage: LanguageModelUsage | undefined;
+    let traceId: string | undefined;
+    let spanId: string | undefined;
 
-    if (usesStreamingStructuredOutput(subagentModel)) {
-      const result = streamObject({
-        model: args.parent.resolveModel(subagentModel),
-        system: args.system,
-        schema: args.schema,
-        messages: [{ role: "user", content: args.user }],
-        maxOutputTokens: args.maxOutputTokens,
-        abortSignal: combined,
-        experimental_telemetry: {
-          isEnabled: true,
-          functionId: `${args.parent.config.id}:subagent.structured`,
+    const forensicContext = buildAiForensicContext({
+      forensicRunId: telemetry.forensicRunId,
+      parentForensicRunId,
+      agentId: args.parent.config.id,
+      sessionId: args.usage?.sessionId,
+      taskId: args.usage?.taskId,
+      kind: args.usage?.kind,
+      model: subagentModel,
+    });
+    const helper = await enterAIForensicContext(forensicContext, () =>
+      withOpenAcmeSpan(
+        "openacme.ai.helper",
+        {
+          "openacme.span.type": "ai_helper",
+          "openacme.ai.function_id": telemetry.settings.functionId,
+          "openacme.forensic.run_id": telemetry.forensicRunId,
+          "openacme.forensic.parent_run_id": parentForensicRunId,
+          "openacme.agent.id": args.parent.config.id,
+          "openacme.session.id": args.usage?.sessionId,
+          "openacme.task.id": args.usage?.taskId,
+          "openacme.usage.kind": args.usage?.kind,
+          "openacme.provider": subagentModel.provider,
+          "openacme.model": subagentModel.model,
         },
-      });
-      const streamFinished = drainStream(result.fullStream);
-      try {
-        object = (await result.object) as z.infer<S>;
-      } finally {
-        await streamFinished.catch(() => {
-          // The object promise carries the meaningful failure for callers.
-        });
-      }
-      try {
-        usage = await result.usage;
-      } catch {
-        // Structured result is authoritative; usage is best-effort metadata.
-      }
-    } else {
-      const result = await generateObject({
-        model: args.parent.resolveModel(subagentModel),
-        system: args.system,
-        schema: args.schema,
-        messages: [{ role: "user", content: args.user }],
-        maxOutputTokens: args.maxOutputTokens,
-        abortSignal: combined,
-        experimental_telemetry: {
-          isEnabled: true,
-          functionId: `${args.parent.config.id}:subagent.structured`,
-        },
-      });
-      object = result.object as z.infer<S>;
-      usage = result.usage;
-    }
+        async (span) => {
+          let object: z.infer<S>;
+          let usage: LanguageModelUsage | undefined;
+          if (usesStreamingStructuredOutput(subagentModel)) {
+            const result = streamObject({
+              model: args.parent.resolveModel(subagentModel),
+              system: args.system,
+              schema: args.schema,
+              messages: [{ role: "user", content: args.user }],
+              maxOutputTokens: args.maxOutputTokens,
+              abortSignal: combined,
+              experimental_telemetry: telemetry.settings,
+            });
+            const streamFinished = drainStream(result.fullStream);
+            try {
+              object = (await result.object) as z.infer<S>;
+            } finally {
+              await streamFinished.catch(() => {
+                // The object promise carries the meaningful failure for callers.
+              });
+            }
+            try {
+              usage = await result.usage;
+            } catch {
+              // Structured result is authoritative; usage is best-effort metadata.
+            }
+          } else {
+            const result = await generateObject({
+              model: args.parent.resolveModel(subagentModel),
+              system: args.system,
+              schema: args.schema,
+              messages: [{ role: "user", content: args.user }],
+              maxOutputTokens: args.maxOutputTokens,
+              abortSignal: combined,
+              experimental_telemetry: telemetry.settings,
+            });
+            object = result.object as z.infer<S>;
+            usage = result.usage;
+          }
+          return { object, usage, traceId: span.traceId, spanId: span.spanId };
+        }
+      )
+    );
+    object = helper.object;
+    usage = helper.usage;
+    traceId = helper.traceId;
+    spanId = helper.spanId;
 
     if (args.usage && usage) {
       args.parent.reportUsage({
@@ -297,8 +467,30 @@ async function runStructured<S extends ZodTypeAny>(
         },
         steps: 1,
         durationMs: Date.now() - startedAt,
+        traceId,
+        spanId,
+        forensicRunId: telemetry.forensicRunId,
+        providerRequestCount: getAIForensicProviderRequestCount(
+          telemetry.forensicRunId
+        ),
       });
     }
+    report(
+      "session.subagent.finished",
+      "ok",
+      {
+        mode: "structured",
+        usageKind: args.usage?.kind ?? null,
+        subagentStatus: "completed",
+        provider,
+        model,
+        totalTokens: usage?.totalTokens,
+        inputTokens: usage?.inputTokens,
+        outputTokens: usage?.outputTokens,
+      },
+      Date.now() - startedAt,
+      { traceId, spanId }
+    );
     return {
       mode: "structured",
       status: "completed",
@@ -313,12 +505,38 @@ async function runStructured<S extends ZodTypeAny>(
     };
   } catch (e) {
     if (combined.aborted) {
+      const status = timeoutSignal.aborted ? "timeout" : "aborted";
+      report(
+        "session.subagent.failed",
+        status,
+        {
+          mode: "structured",
+          usageKind: args.usage?.kind ?? null,
+          subagentStatus: status,
+          provider,
+          model,
+        },
+        Date.now() - startedAt
+      );
       return {
         mode: "structured",
-        status: timeoutSignal.aborted ? "timeout" : "aborted",
+        status,
         object: null,
       };
     }
+    report(
+      "session.subagent.failed",
+      "error",
+      {
+        mode: "structured",
+        usageKind: args.usage?.kind ?? null,
+        subagentStatus: "failed",
+        provider,
+        model,
+        error: truncateTimelineError(extractErrorText(e)),
+      },
+      Date.now() - startedAt
+    );
     return {
       mode: "structured",
       status: "failed",

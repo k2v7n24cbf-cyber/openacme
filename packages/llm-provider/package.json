@@ -39,6 +39,7 @@
     "@openacme/config": "workspace:*",
     "@openacme/auth": "workspace:*",
     "ai": "^6.0.177",
+    "@opentelemetry/api": "^1.9.0",
     "@ai-sdk/provider": "^3.0.10",
     "@ai-sdk/openai": "^3.0.63",
     "@ai-sdk/anthropic": "^3.0.76",

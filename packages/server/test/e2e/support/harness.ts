@@ -4,7 +4,7 @@
  * wired to the fake OpenAI-compatible LLM through the stock `custom` provider.
  * No tokens, no network, no production mock code.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { serve, type ServerType } from "@hono/node-server";
@@ -44,34 +44,51 @@ export async function startE2EServer(
      *  existing suites are unchanged. Pass false to test the gate from a
      *  clean, member-less install. */
     seedMember?: boolean;
-  } = {}
+    /** Use a caller-provided data dir instead of a throwaway tmpdir. */
+    dataDir?: string;
+    /** Remove the data dir on close. Default true for tmpdirs, false for caller dirs. */
+    cleanupDataDir?: boolean;
+  } = {},
 ): Promise<E2EServer> {
-  const dataDir = mkdtempSync(path.join(tmpdir(), "openacme-e2e-"));
+  const dataDir =
+    opts.dataDir ?? mkdtempSync(path.join(tmpdir(), "openacme-e2e-"));
+  const cleanupDataDir = opts.cleanupDataDir ?? !opts.dataDir;
+  if (opts.dataDir) mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   process.env["OPENACME_DATA_DIR"] = dataDir;
   // Model config is irrelevant to the turn — `resolveModel` overrides it with
   // the stub. A dead loopback `custom` baseUrl keeps any background path
   // (title/extractor) from reaching a real provider.
   const config = ConfigSchema.parse({
     dataDir,
-    model: { provider: "custom", model: "stub-1", baseUrl: "http://127.0.0.1:9/v1", apiKey: "stub" },
+    model: {
+      provider: "custom",
+      model: "stub-1",
+      baseUrl: "http://127.0.0.1:9/v1",
+      apiKey: "stub",
+    },
     server: {
       host: opts.serverHost ?? "127.0.0.1",
       ...(opts.requireAuth ? { requireAuth: true } : {}),
     },
   });
-  const { app, manager, close: closeApp } = await createApp(config, {
+  const {
+    app,
+    manager,
+    close: closeApp,
+  } = await createApp(config, {
     resolveModel: () => createStubModel(),
     tickIntervalMs: opts.tickMs,
   });
 
-  const { server, port } = await new Promise<{ server: ServerType; port: number }>(
-    (resolve) => {
-      const s = serve(
-        { fetch: app.fetch, port: 0, hostname: "127.0.0.1" },
-        (info) => resolve({ server: s, port: info.port })
-      );
-    }
-  );
+  const { server, port } = await new Promise<{
+    server: ServerType;
+    port: number;
+  }>((resolve) => {
+    const s = serve(
+      { fetch: app.fetch, port: 0, hostname: "127.0.0.1" },
+      (info) => resolve({ server: s, port: info.port }),
+    );
+  });
 
   if (opts.seedMember === false) {
     e2eAuthToken = "";
@@ -98,7 +115,7 @@ export async function startE2EServer(
       await new Promise((r) => setTimeout(r, 150));
       await new Promise<void>((r) => server.close(() => r()));
       await closeApp();
-      rmSync(dataDir, { recursive: true, force: true });
+      if (cleanupDataDir) rmSync(dataDir, { recursive: true, force: true });
     },
   };
 }
@@ -111,7 +128,10 @@ export interface SSEEvent {
 /** Minimal SSE reader over fetch (Node 20 has no global EventSource). */
 export interface SSEHandle {
   events: SSEEvent[];
-  waitFor: (pred: (e: SSEEvent) => boolean, timeoutMs?: number) => Promise<SSEEvent>;
+  waitFor: (
+    pred: (e: SSEEvent) => boolean,
+    timeoutMs?: number,
+  ) => Promise<SSEEvent>;
   close: () => void;
 }
 
@@ -128,7 +148,10 @@ export async function openSSE(url: string): Promise<SSEHandle> {
   if (!res.body) throw new Error(`SSE ${url} returned no body (${res.status})`);
 
   const events: SSEEvent[] = [];
-  const waiters: Array<{ pred: (e: SSEEvent) => boolean; resolve: (e: SSEEvent) => void }> = [];
+  const waiters: Array<{
+    pred: (e: SSEEvent) => boolean;
+    resolve: (e: SSEEvent) => void;
+  }> = [];
 
   const push = (ev: SSEEvent) => {
     events.push(ev);
@@ -198,7 +221,7 @@ export async function openSSE(url: string): Promise<SSEHandle> {
         if (existing) return resolve(existing);
         const timer = setTimeout(
           () => reject(new Error(`SSE waitFor timed out after ${timeoutMs}ms`)),
-          timeoutMs
+          timeoutMs,
         );
         waiters.push({
           pred,

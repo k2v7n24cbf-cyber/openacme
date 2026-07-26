@@ -24,6 +24,7 @@ import {
   injectUsageAccounting,
 } from "./openrouter-cache.js";
 import { anthropicCacheMiddleware } from "./anthropic-cache.js";
+import { forensicFetch } from "./forensics-fetch.js";
 
 const log = createLogger("llm-provider");
 const MAX_OAUTH_ERROR_BODY_CHARS = 4_000;
@@ -369,10 +370,19 @@ const providerFactories: Record<
           log.debug({ provider: "openai", url, body: rewritten?.body }, "outbound request");
 
           const send = async (force: boolean) =>
-            fetch(url as string | URL, {
-              ...rewritten,
-              headers: await buildHeaders(force),
-            });
+            forensicFetch(
+              url as string | URL,
+              {
+                ...rewritten,
+                headers: await buildHeaders(force),
+              },
+              {
+                provider: "openai",
+                model: config.model,
+                authMode: "oauth",
+                preTransformBody: init?.body,
+              }
+            );
 
           let res = await send(false);
           if (res.status === 401) {
@@ -404,6 +414,12 @@ const providerFactories: Record<
       apiKey: config.apiKey ?? process.env["OPENAI_API_KEY"],
       baseURL: config.baseUrl,
       headers: config.headers,
+      fetch: async (url, init) =>
+        forensicFetch(url as string | URL, init, {
+          provider: "openai",
+          model: config.model,
+          authMode: "api_key",
+        }),
     });
     return provider(config.model);
   },
@@ -505,10 +521,19 @@ const providerFactories: Record<
         log.debug({ provider: "anthropic", url, body: rewritten?.body }, "outbound request");
 
         const send = async (force: boolean) =>
-          fetch(url as string | URL, {
-            ...rewritten,
-            headers: await buildHeaders(force),
-          });
+          forensicFetch(
+            url as string | URL,
+            {
+              ...rewritten,
+              headers: await buildHeaders(force),
+            },
+            {
+              provider: "anthropic",
+              model: config.model,
+              authMode: oauthNow ? "oauth" : "api_key",
+              preTransformBody: init?.body,
+            }
+          );
 
         let res = await send(false);
         // 401 on an OAuth call usually means the token was revoked
@@ -591,6 +616,12 @@ const providerFactories: Record<
       apiKey: config.apiKey ?? process.env["GOOGLE_GENERATIVE_AI_API_KEY"],
       baseURL: config.baseUrl,
       headers: config.headers,
+      fetch: async (url, init) =>
+        forensicFetch(url as string | URL, init, {
+          provider: "google",
+          model: config.model,
+          authMode: "api_key",
+        }),
     });
     return provider(config.model);
   },
@@ -622,7 +653,12 @@ const providerFactories: Record<
           init && newBody !== init.body
             ? { ...init, body: newBody as RequestInit["body"] }
             : init;
-        return fetch(url as string | URL, rewritten);
+        return forensicFetch(url as string | URL, rewritten, {
+          provider: "openrouter",
+          model: config.model,
+          authMode: "api_key",
+          preTransformBody: init?.body,
+        });
       },
     });
     return provider(config.model);
@@ -633,6 +669,12 @@ const providerFactories: Record<
       name: "ollama",
       baseURL: config.baseUrl ?? "http://localhost:11434/v1",
       headers: config.headers,
+      fetch: async (url, init) =>
+        forensicFetch(url as string | URL, init, {
+          provider: "ollama",
+          model: config.model,
+          authMode: "local",
+        }),
     });
     return provider(config.model);
   },
@@ -646,6 +688,12 @@ const providerFactories: Record<
       apiKey: config.apiKey,
       baseURL: config.baseUrl,
       headers: config.headers,
+      fetch: async (url, init) =>
+        forensicFetch(url as string | URL, init, {
+          provider: "custom",
+          model: config.model,
+          authMode: "api_key",
+        }),
     });
     return provider(config.model);
   },

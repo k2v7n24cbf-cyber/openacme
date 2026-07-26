@@ -1,14 +1,273 @@
 import { z } from "zod";
 import { createLogger } from "@openacme/config/logger";
-import type { ToolEntry, ToolDefinition, ToolInfo } from "./types.js";
+import type {
+  ToolEntry,
+  ToolDefinition,
+  ToolInfo,
+  ToolExecutionStatus,
+  ToolResultClassification,
+} from "./types.js";
 import { SYSTEM_TOOLS } from "./system.js";
-import { maybeSpill } from "./spill.js";
+import { maybeSpillWithMetadata, type SpillOutcome } from "./spill.js";
 import { toolCallContext } from "./session-context.js";
 import { getToolHostDispatcher } from "./tool-host-binding.js";
+import { classifyToolResult } from "./outcome.js";
+import {
+  getToolForensicLocatorAttributes,
+  rawRecordPath,
+  recordToolForensicEvent,
+  safeForensicSegment,
+  sha256ForensicText,
+  stringifyForensics,
+  toolForensicLocatorPayload,
+  type ToolForensicsSpan,
+  withToolForensicSpan,
+  writeToolForensicRawFile,
+} from "./forensics.js";
 
 const log = createLogger("tools.registry");
 
 const SYSTEM_TOOL_SET = new Set<string>(SYSTEM_TOOLS);
+
+function runtimeLabel(entry: ToolEntry): "daemon" | "worker" {
+  return entry.runtime ?? "daemon";
+}
+
+function toolForensicDir(entry: ToolEntry, toolCallId?: string): string {
+  return `tool-calls/${safeForensicSegment(toolCallId ?? `unknown-${entry.name}`)}`;
+}
+
+function byteLength(value: string): number {
+  return Buffer.byteLength(value, "utf-8");
+}
+
+function exceptionClassification(error: unknown): ToolResultClassification {
+  return {
+    resultStatus: "failure",
+    resultClassifier: "exception",
+    failureKind: "handler_exception",
+    failureMessage: error instanceof Error ? error.message : String(error),
+    parsedJson: false,
+  };
+}
+
+function classificationPayload(
+  executionStatus: ToolExecutionStatus,
+  classification: ToolResultClassification
+): Record<string, unknown> {
+  return {
+    executionStatus,
+    resultStatus: classification.resultStatus,
+    resultClassifier: classification.resultClassifier,
+    failureKind: classification.failureKind,
+    failureMessage: classification.failureMessage,
+    exitCode: classification.exitCode,
+    processStatus: classification.processStatus,
+    successFlag: classification.successFlag,
+    okFlag: classification.okFlag,
+    parsedJson: classification.parsedJson,
+    outcomeAttributes: classification.outcomeAttributes,
+  };
+}
+
+function classificationSpanAttributes(
+  executionStatus: ToolExecutionStatus,
+  classification: ToolResultClassification
+): Record<string, unknown> {
+  const attrs: Record<string, unknown> = {
+    "openacme.tool.execution_status": executionStatus,
+    "openacme.tool.result_status": classification.resultStatus,
+    "openacme.tool.result_classifier": classification.resultClassifier,
+    "openacme.tool.failure_kind": classification.failureKind,
+    "openacme.tool.failure_message": classification.failureMessage,
+    "openacme.tool.exit_code": classification.exitCode,
+    "openacme.tool.process_status": classification.processStatus,
+    "openacme.tool.success_flag": classification.successFlag,
+    "openacme.tool.ok_flag": classification.okFlag,
+    "openacme.tool.parsed_json": classification.parsedJson,
+  };
+  for (const [key, value] of Object.entries(
+    classification.outcomeAttributes ?? {}
+  )) {
+    attrs[`openacme.tool.outcome.${key}`] = value;
+  }
+  return attrs;
+}
+
+function applyClassificationToSpan(
+  span: ToolForensicsSpan | undefined,
+  executionStatus: ToolExecutionStatus,
+  classification: ToolResultClassification
+): void {
+  span?.setAttributes?.(
+    classificationSpanAttributes(executionStatus, classification)
+  );
+  if (classification.resultStatus === "failure") {
+    span?.addEvent?.("openacme.tool.logical_failure", {
+      "openacme.tool.failure_kind": classification.failureKind,
+      "openacme.tool.failure_message": classification.failureMessage,
+    });
+    span?.setStatusError?.(
+      new Error(
+        classification.failureMessage ??
+          classification.failureKind ??
+          "tool result failure"
+      )
+    );
+    return;
+  }
+  span?.setStatusOk?.();
+}
+
+function recordToolStart(
+  entry: ToolEntry,
+  args: Record<string, unknown>,
+  toolCallId?: string,
+  span?: ToolForensicsSpan
+): void {
+  const dir = toolForensicDir(entry, toolCallId);
+  const locator = getToolLocator("tool.start", toolCallId, dir);
+  const argsJson = stringifyForensics(args);
+  const raw = writeToolForensicRawFile(`${dir}/args.json`, argsJson);
+  recordToolForensicEvent("tool.start", {
+    toolName: entry.name,
+    toolset: entry.toolset,
+    toolCallId,
+    runtime: runtimeLabel(entry),
+    traceId: span?.traceId,
+    spanId: span?.spanId,
+    argsBytes: byteLength(argsJson),
+    argsSha256: sha256ForensicText(argsJson),
+    rawArgsFile: rawRecordPath(raw),
+    ...toolForensicLocatorPayload(locator),
+  });
+}
+
+function recordToolFinish(args: {
+  entry: ToolEntry;
+  toolArgs: Record<string, unknown>;
+  toolCallId?: string;
+  startedAt: number;
+  workerDispatched: boolean;
+  preSpillResult?: string;
+  output: string;
+  spill?: SpillOutcome;
+  span?: ToolForensicsSpan;
+}): void {
+  const dir = toolForensicDir(args.entry, args.toolCallId);
+  const locator = getToolLocator("tool.finish", args.toolCallId, dir);
+  const preRaw =
+    args.preSpillResult === undefined
+      ? null
+      : writeToolForensicRawFile(
+          `${dir}/result.pre-spill.txt`,
+          args.preSpillResult
+        );
+  const postRaw = writeToolForensicRawFile(
+    `${dir}/result.post-spill.txt`,
+    args.output
+  );
+  const classification = classifyToolResult(
+    args.entry,
+    args.toolArgs,
+    args.preSpillResult ?? args.output
+  );
+  recordToolForensicEvent("tool.finish", {
+    toolName: args.entry.name,
+    toolset: args.entry.toolset,
+    toolCallId: args.toolCallId,
+    runtime: runtimeLabel(args.entry),
+    traceId: args.span?.traceId,
+    spanId: args.span?.spanId,
+    workerDispatched: args.workerDispatched,
+    durationMs: Date.now() - args.startedAt,
+    spilled: args.spill?.spilled ?? false,
+    spillPath: args.spill?.spillPath,
+    resultPreSpillBytes:
+      args.preSpillResult === undefined
+        ? undefined
+        : byteLength(args.preSpillResult),
+    resultPreSpillSha256:
+      args.preSpillResult === undefined
+        ? undefined
+        : sha256ForensicText(args.preSpillResult),
+    resultPostSpillBytes: byteLength(args.output),
+    resultPostSpillSha256: sha256ForensicText(args.output),
+    rawPreSpillFile: rawRecordPath(preRaw),
+    rawPostSpillFile: rawRecordPath(postRaw),
+    ...classificationPayload("ok", classification),
+    ...toolForensicLocatorPayload(locator),
+  });
+  args.span?.setAttributes?.({
+    "openacme.tool.result_pre_spill_bytes":
+      args.preSpillResult === undefined
+        ? undefined
+        : byteLength(args.preSpillResult),
+    "openacme.tool.result_post_spill_bytes": byteLength(args.output),
+    "openacme.tool.spilled": args.spill?.spilled ?? false,
+    "openacme.tool.spill_path": args.spill?.spillPath,
+    "openacme.tool.worker_dispatched": args.workerDispatched,
+  });
+  applyClassificationToSpan(args.span, "ok", classification);
+}
+
+function recordToolError(args: {
+  entry: ToolEntry;
+  toolCallId?: string;
+  startedAt: number;
+  error: unknown;
+  span?: ToolForensicsSpan;
+}): void {
+  const classification = exceptionClassification(args.error);
+  recordToolForensicEvent("tool.error", {
+    toolName: args.entry.name,
+    toolset: args.entry.toolset,
+    toolCallId: args.toolCallId,
+    runtime: runtimeLabel(args.entry),
+    traceId: args.span?.traceId,
+    spanId: args.span?.spanId,
+    durationMs: Date.now() - args.startedAt,
+    errorName:
+      args.error instanceof Error ? args.error.name : typeof args.error,
+    errorMessage:
+      args.error instanceof Error ? args.error.message : String(args.error),
+    ...classificationPayload("error", classification),
+  });
+  args.span?.setAttributes?.(
+    classificationSpanAttributes("error", classification)
+  );
+  args.span?.recordException?.(args.error);
+  args.span?.setStatusError?.(args.error);
+}
+
+function toolSpanAttributes(
+  entry: ToolEntry,
+  toolCallId?: string
+): Record<string, unknown> {
+  const dir = toolForensicDir(entry, toolCallId);
+  return {
+    "openacme.span.type": "tool_execute",
+    "openacme.tool.name": entry.name,
+    "openacme.toolset": entry.toolset,
+    "openacme.tool.call_id": toolCallId,
+    "openacme.tool.runtime": runtimeLabel(entry),
+    ...getToolLocator("tool.execute", toolCallId, dir),
+  };
+}
+
+function getToolLocator(
+  eventType: string,
+  toolCallId: string | undefined,
+  relativeEvidenceDir: string
+): Record<string, unknown> {
+  const store = toolCallContext.getStore();
+  return getToolForensicLocatorAttributes({
+    eventType,
+    toolCallId,
+    sessionId: store?.sessionId,
+    relativeEvidenceDir,
+  });
+}
 
 /**
  * Singleton tool registry — mirrors Hermes tools/registry.py ToolRegistry.
@@ -144,28 +403,63 @@ export class ToolRegistry {
           // (read_file image/PDF, browser_take_screenshot) can namespace
           // their tool-files-dir copies without changing tool signatures.
           const store = toolCallContext.getStore();
+          const previousToolCallId = store?.toolCallId;
           if (store && opts.toolCallId) {
             store.toolCallId = opts.toolCallId;
           }
-          try {
-            // Worker-runtime tools route to the per-agent sandboxed tool
-            // host when one is bound. The worker re-enters the context,
-            // runs the same handler module, and applies spill — so no
-            // daemon-side maybeSpill here (the spill dir is only writable
-            // by the worker). Unbound (tests, scripts) → local fallback.
-            if (entry.runtime === "worker" && store) {
-              const dispatcher = getToolHostDispatcher();
-              if (dispatcher) {
-                return await dispatcher.dispatch(entry.name, args, {
-                  ...store,
+          const toolCallId = opts.toolCallId ?? store?.toolCallId;
+          const startedAt = Date.now();
+          return withToolForensicSpan(
+            "openacme.tool.execute",
+            toolSpanAttributes(entry, toolCallId),
+            async (span) => {
+              recordToolStart(entry, args, toolCallId, span);
+              try {
+                // Worker-runtime tools route to the per-agent sandboxed tool
+                // host when one is bound. The worker re-enters the context,
+                // runs the same handler module, and applies spill — so no
+                // daemon-side maybeSpill here (the spill dir is only writable
+                // by the worker). Unbound (tests, scripts) → local fallback.
+                if (entry.runtime === "worker" && store) {
+                  const dispatcher = getToolHostDispatcher();
+                  if (dispatcher) {
+                    const output = await dispatcher.dispatch(entry.name, args, {
+                      ...store,
+                    });
+                    recordToolFinish({
+                      entry,
+                      toolArgs: args,
+                      toolCallId,
+                      startedAt,
+                      workerDispatched: true,
+                      output,
+                      span,
+                    });
+                    return output;
+                  }
+                }
+                const result = await entry.handler(args);
+                const spill = await maybeSpillWithMetadata(result, entry);
+                recordToolFinish({
+                  entry,
+                  toolArgs: args,
+                  toolCallId,
+                  startedAt,
+                  workerDispatched: false,
+                  preSpillResult: result,
+                  output: spill.output,
+                  spill,
+                  span,
                 });
+                return spill.output;
+              } catch (error) {
+                recordToolError({ entry, toolCallId, startedAt, error, span });
+                throw error;
+              } finally {
+                if (store) store.toolCallId = previousToolCallId;
               }
             }
-            const result = await entry.handler(args);
-            return maybeSpill(result, entry);
-          } finally {
-            if (store) store.toolCallId = undefined;
-          }
+          );
         },
       };
       if (entry.toModelOutput) {
@@ -199,16 +493,49 @@ export class ToolRegistry {
           .join("; ")}`,
       });
     }
-    try {
-      const result = await entry.handler(
-        parsed.data as Record<string, unknown>
-      );
-      return await maybeSpill(result, entry);
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : String(error);
-      return JSON.stringify({ error: `Tool execution failed: ${message}` });
-    }
+    const toolCallId = toolCallContext.getStore()?.toolCallId;
+    const startedAt = Date.now();
+    return withToolForensicSpan(
+      "openacme.tool.execute",
+      toolSpanAttributes(entry, toolCallId),
+      async (span) => {
+        try {
+          recordToolStart(
+            entry,
+            parsed.data as Record<string, unknown>,
+            toolCallId,
+            span
+          );
+          const result = await entry.handler(
+            parsed.data as Record<string, unknown>
+          );
+          const spill = await maybeSpillWithMetadata(result, entry);
+          recordToolFinish({
+            entry,
+            toolArgs: parsed.data as Record<string, unknown>,
+            toolCallId,
+            startedAt,
+            workerDispatched: false,
+            preSpillResult: result,
+            output: spill.output,
+            spill,
+            span,
+          });
+          return spill.output;
+        } catch (error) {
+          recordToolError({
+            entry,
+            toolCallId,
+            startedAt,
+            error,
+            span,
+          });
+          const message =
+            error instanceof Error ? error.message : String(error);
+          return JSON.stringify({ error: `Tool execution failed: ${message}` });
+        }
+      }
+    );
   }
 
   /**

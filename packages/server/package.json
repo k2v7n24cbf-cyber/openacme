@@ -37,6 +37,7 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "test:e2e:langfuse": "vitest run --config vitest.langfuse-e2e.config.ts",
     "prepack": "rm -rf web && cp -r ../../apps/web/out web"
   },
   "dependencies": {

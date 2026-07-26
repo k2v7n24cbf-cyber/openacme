@@ -1,5 +1,6 @@
 import * as p from "@clack/prompts";
 import { loadConfig } from "@openacme/config";
+import { initializeOpenAcmeTelemetry } from "@openacme/config/telemetry-bootstrap";
 import { AgentManager } from "@openacme/server";
 import { sanitizeStoredHistory, type UIMessage } from "@openacme/agent-core";
 import { dbMessagesToTuiMessages } from "../tui/restore.js";
@@ -21,6 +22,7 @@ export async function chatCommand(opts: {
   dataDir?: string;
 }): Promise<void> {
   const config = loadConfig(opts.dataDir);
+  initializeOpenAcmeTelemetry();
   // In interactive TUI mode, Ink owns the terminal — pino's default stderr
   // sink would corrupt the rendered UI. Route logs to a side file in the
   // data dir before any agent code runs (the logger reads this env on

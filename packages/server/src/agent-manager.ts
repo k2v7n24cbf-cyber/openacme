@@ -35,6 +35,7 @@ import {
   createInboxStore,
   createPushStore,
   createUsageStore,
+  createSessionTimelineStore,
   createAuthStore,
   type AuthStore,
   type SessionStore,
@@ -44,6 +45,8 @@ import {
   type InboxStore,
   type PushStore,
   type UsageStore,
+  type SessionTimelineStore,
+  type SessionTimelineEventInput,
   type UsageCostSource,
 } from "@openacme/db";
 import { createPushDispatcher, type PushDispatcher } from "./push.js";
@@ -171,6 +174,7 @@ export class AgentManager {
   readonly inboxStore: InboxStore;
   readonly pushStore: PushStore;
   readonly usageStore: UsageStore;
+  readonly sessionTimelineStore: SessionTimelineStore;
   readonly authStore: AuthStore;
   readonly pushDispatcher: PushDispatcher;
   readonly vapid: VapidKeys;
@@ -247,6 +251,7 @@ export class AgentManager {
     this.inboxStore = createInboxStore(this.db);
     this.pushStore = createPushStore(this.db);
     this.usageStore = createUsageStore(this.db);
+    this.sessionTimelineStore = createSessionTimelineStore(this.db);
     this.authStore = createAuthStore(this.db);
 
     // VAPID keys persist under `<dataDir>/push-vapid.json`, generated on
@@ -349,6 +354,7 @@ export class AgentManager {
       inboxStore: this.inboxStore,
       agentManager: this,
       broadcaster: this.broadcaster,
+      onTimelineEvent: (event) => this.recordSessionTimeline(event),
       tickIntervalMs: opts?.tickIntervalMs,
     });
     // Event fan-out has two branches now:
@@ -2098,6 +2104,7 @@ export class AgentManager {
       inboxStore: this.inboxStore,
       broadcaster: this.broadcaster,
       onUsage: (report) => this.recordUsage(report),
+      onTimelineEvent: (event) => this.recordSessionTimeline(event),
       resolveModel: this.modelResolver,
     });
   }
@@ -2157,6 +2164,42 @@ export class AgentManager {
         costSource,
         steps: report.steps ?? null,
         durationMs: report.durationMs ?? null,
+        traceId: report.traceId ?? null,
+        spanId: report.spanId ?? null,
+        forensicRunId: report.forensicRunId ?? null,
+        forensicPath: report.forensicPath ?? null,
+        providerRequestCount: report.providerRequestCount ?? null,
+      });
+      this.recordSessionTimeline({
+        sessionId: report.sessionId,
+        agentId: report.agentId,
+        messageId: report.messageId ?? null,
+        taskId: report.taskId ?? null,
+        eventType: "session.usage.finalized",
+        source: "usage",
+        status: "ok",
+        traceId: report.traceId ?? null,
+        spanId: report.spanId ?? null,
+        forensicRunId: report.forensicRunId ?? null,
+        usageEventId: row.id,
+        durationMs: report.durationMs ?? null,
+        payload: {
+          kind: report.kind,
+          provider: row.provider,
+          model: row.model,
+          authMode: row.authMode,
+          inputTokens: row.inputTokens,
+          outputTokens: row.outputTokens,
+          cachedInputTokens: row.cachedInputTokens,
+          cacheWriteTokens: row.cacheWriteTokens,
+          reasoningTokens: row.reasoningTokens,
+          totalTokens: row.totalTokens,
+          steps: row.steps,
+          providerRequestCount: row.providerRequestCount,
+          costSource: row.costSource,
+          costUsd: row.costUsd,
+          costUsdEquivalent: row.costUsdEquivalent,
+        },
       });
       this.broadcaster.broadcast(report.sessionId, {
         kind: "usage_event",
@@ -2174,6 +2217,19 @@ export class AgentManager {
     } catch (e) {
       if (this.closing && isClosedDatabaseError(e)) return;
       log.warn({ err: e, agentId: report.agentId }, "usage record failed");
+    }
+  }
+
+  recordSessionTimeline(input: SessionTimelineEventInput): void {
+    if (this.closing) return;
+    try {
+      this.sessionTimelineStore.record(input);
+    } catch (e) {
+      if (this.closing && isClosedDatabaseError(e)) return;
+      log.warn(
+        { err: e, sessionId: input.sessionId, eventType: input.eventType },
+        "session timeline record failed"
+      );
     }
   }
 

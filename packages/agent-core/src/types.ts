@@ -37,6 +37,11 @@ export interface UsageReport {
   providerCostUsd?: number;
   steps?: number;
   durationMs?: number;
+  traceId?: string;
+  spanId?: string;
+  forensicRunId?: string;
+  forensicPath?: string;
+  providerRequestCount?: number;
 }
 
 /**

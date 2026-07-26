@@ -8,22 +8,68 @@ import {
   createSessionStore,
   createMessageStore,
   createInboxStore,
+  type SessionTimelineEventInput,
 } from "@openacme/db";
 import { MemoryStore } from "@openacme/memory";
 import { TaskStore } from "@openacme/tasks";
 import type { ToolRegistry } from "@openacme/tools";
 import type { UIMessage } from "ai";
 import { Agent } from "../src/agent.js";
-import type { AgentConfig } from "../src/types.js";
+import type { AgentConfig, UsageReport } from "../src/types.js";
 
 // `streamText` and `generateText` from `ai` are mocked. The agent's
 // `runStream` returns whatever `streamText` returns; for our tests that's
 // a stub object with a `usage` Promise — we don't drive the fullStream
 // loop here, that's the host's job.
-const { streamTextMock, generateTextMock, getModelMock } = vi.hoisted(() => ({
+const {
+  streamTextMock,
+  generateTextMock,
+  getModelMock,
+  enterAIForensicContextMock,
+  spanRecords,
+  recorderEvents,
+  rawWrites,
+  createForensicRecorderMock,
+} = vi.hoisted(() => ({
   streamTextMock: vi.fn(),
   generateTextMock: vi.fn(),
   getModelMock: vi.fn(() => ({})),
+  enterAIForensicContextMock: vi.fn((_ctx: unknown, fn: () => unknown) => fn()),
+  spanRecords: [] as Array<{ name: string; attrs: Record<string, unknown> }>,
+  recorderEvents: [] as Array<{
+    runId: string | undefined;
+    type: string;
+    data: Record<string, unknown> | undefined;
+  }>,
+  rawWrites: [] as Array<{
+    runId: string | undefined;
+    relativePath: string;
+    byteLength: number;
+  }>,
+  createForensicRecorderMock: vi.fn(
+    (opts?: { context?: { forensicRunId?: string } }) => {
+      const runId = opts?.context?.forensicRunId;
+      return {
+        enabled: true,
+        forensicRunId: runId,
+        runDir: runId ? `/tmp/openacme-forensics/${runId}` : undefined,
+        recordEvent: vi.fn((type: string, data?: Record<string, unknown>) => {
+          recorderEvents.push({ runId, type, data });
+        }),
+        writeRawFile: vi.fn((relativePath: string, data: string | Buffer) => {
+          const byteLength = Buffer.isBuffer(data)
+            ? data.byteLength
+            : Buffer.byteLength(data, "utf-8");
+          rawWrites.push({ runId, relativePath, byteLength });
+          return {
+            relativePath,
+            byteLength,
+            sha256: `sha256-${relativePath}`,
+          };
+        }),
+      };
+    }
+  ),
 }));
 
 vi.mock("ai", async () => {
@@ -44,6 +90,94 @@ vi.mock("@openacme/llm-provider", () => ({
   // Default: no tool-result media support. Tests don't exercise this
   // path; the injector handles delivery via synthetic user messages.
   supportsToolResultMedia: () => false,
+  getActiveTraceContext: () => null,
+  getAIForensicContext: () => undefined,
+  getAIForensicProviderRequestCount: () => 1,
+  buildForensicEventSelector: (
+    eventType: string,
+    fields: Record<string, string | number | undefined | null> = {}
+  ) =>
+    [
+      `type=${eventType}`,
+      ...Object.entries(fields)
+        .filter(([, value]) => value !== undefined && value !== null)
+        .map(([key, value]) => `${key}=${value}`),
+    ].join(" "),
+  buildForensicLocatorAttributes: (args: {
+    forensicRunId?: string;
+    sessionId?: string;
+    eventType: string;
+    selector?: string | number;
+    eventSelector?: string;
+    relativeEvidenceDir?: string;
+  }) => {
+    if (!args.forensicRunId) return {};
+    const selector =
+      args.selector === undefined ? "" : `:${String(args.selector)}`;
+    const out: Record<string, string> = {
+      "openacme.forensic.lookup": "usage_events.forensic_run_id",
+      "openacme.forensic.evidence_ref":
+        `openacme://forensics/${args.forensicRunId}#${args.eventType}${selector}`,
+    };
+    if (args.eventSelector) {
+      out["openacme.forensic.event_selector"] = args.eventSelector;
+    }
+    if (args.relativeEvidenceDir) {
+      out["openacme.forensic.relative_evidence_dir"] =
+        args.relativeEvidenceDir;
+    }
+    if (args.sessionId) {
+      out["openacme.session.timeline_locator"] =
+        `/api/sessions/${args.sessionId}/timeline?includeForensics=1&forensicRunId=${args.forensicRunId}`;
+    }
+    return out;
+  },
+  buildForensicLocatorPayload: (args: {
+    forensicRunId?: string;
+    sessionId?: string;
+    eventType: string;
+    selector?: string | number;
+    eventSelector?: string;
+    relativeEvidenceDir?: string;
+  }) => {
+    if (!args.forensicRunId) return {};
+    const selector =
+      args.selector === undefined ? "" : `:${String(args.selector)}`;
+    return {
+      evidenceRef:
+        `openacme://forensics/${args.forensicRunId}#${args.eventType}${selector}`,
+      ...(args.eventSelector ? { eventSelector: args.eventSelector } : {}),
+      ...(args.relativeEvidenceDir
+        ? { relativeEvidenceDir: args.relativeEvidenceDir }
+        : {}),
+      ...(args.sessionId
+        ? {
+            timelineLocator:
+              `/api/sessions/${args.sessionId}/timeline?includeForensics=1&forensicRunId=${args.forensicRunId}`,
+          }
+        : {}),
+    };
+  },
+  setAIForensicContext: vi.fn(),
+  enterAIForensicContext: enterAIForensicContextMock,
+  createForensicRecorder: createForensicRecorderMock,
+  withOpenAcmeSpan: (
+    name: string,
+    attrs: Record<string, unknown>,
+    fn: (span: unknown) => unknown
+  ) => {
+    spanRecords.push({ name, attrs });
+    return fn({ traceId: "trace-helper", spanId: `span-helper-${spanRecords.length}` });
+  },
+  startOpenAcmeSpan: () => ({
+    setAttributes: vi.fn(),
+    addEvent: vi.fn(),
+    recordException: vi.fn(),
+    setStatusOk: vi.fn(),
+    setStatusError: vi.fn(),
+    end: vi.fn(),
+    run: (fn: () => unknown) => fn(),
+  }),
 }));
 
 function freshDb() {
@@ -64,6 +198,8 @@ function makeAgent(opts: {
   protectFirstN?: number;
   tailTokenBudget?: number;
   attachmentsRoot?: string;
+  onUsage?: (report: UsageReport) => void;
+  onTimelineEvent?: (event: SessionTimelineEventInput) => void;
 }): Agent {
   const sessionStore = createSessionStore(opts.db);
   const messageStore = createMessageStore(opts.db);
@@ -93,6 +229,8 @@ function makeAgent(opts: {
     memoryStore: new MemoryStore(path.join(tmpRoot, "agents")),
     taskStore: new TaskStore(path.join(tmpRoot, "tasks")),
     inboxStore: createInboxStore(opts.db),
+    onUsage: opts.onUsage,
+    onTimelineEvent: opts.onTimelineEvent,
   });
 }
 
@@ -117,6 +255,11 @@ describe("Agent — compress() over UIMessage[]", () => {
     streamTextMock.mockReset();
     generateTextMock.mockReset();
     getModelMock.mockReset();
+    enterAIForensicContextMock.mockClear();
+    createForensicRecorderMock.mockClear();
+    spanRecords.length = 0;
+    recorderEvents.length = 0;
+    rawWrites.length = 0;
     getModelMock.mockReturnValue({});
     generateTextMock.mockResolvedValue({ text: "## Active Task\nNone." });
   });
@@ -182,6 +325,30 @@ describe("Agent — compress() over UIMessage[]", () => {
     expect(activeIds.has(parent.id)).toBe(true);
     expect(activeIds.has(archivedId)).toBe(false);
 
+    const helperTelemetries = generateTextMock.mock.calls.map(
+      (call) => call[0]!.experimental_telemetry
+    );
+    const memoryFlushTelemetry = helperTelemetries.find(
+      (telemetry) => telemetry.functionId === "a1:memory-flush"
+    );
+    const summarizerTelemetry = helperTelemetries.find(
+      (telemetry) => telemetry.functionId === "compression-summarizer"
+    );
+    expect(memoryFlushTelemetry).toBeDefined();
+    expect(summarizerTelemetry).toBeDefined();
+    for (const telemetry of [memoryFlushTelemetry!, summarizerTelemetry!]) {
+      expect(enterAIForensicContextMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          forensicRunId: telemetry.metadata.forensicRunId,
+          sessionId: parent.id,
+          kind: "extractor",
+          provider: "openai",
+          model: "gpt-test",
+        }),
+        expect.any(Function)
+      );
+    }
+
     // Compressed history is now under the ORIGINAL id; the archived row
     // holds the original messages.
     const postHistory = messages.getHistory(parent.id);
@@ -195,6 +362,163 @@ describe("Agent — compress() over UIMessage[]", () => {
 
     const archivedHistory = messages.getHistory(archivedId);
     expect(archivedHistory.length).toBe(seed.length);
+  });
+
+  it("emits forensic-grade compression timeline, helper locators, and usage paths", async () => {
+    generateTextMock.mockResolvedValue({
+      text: "## Active Task\nNone.",
+      usage: {
+        inputTokens: 30,
+        outputTokens: 6,
+        totalTokens: 36,
+        inputTokenDetails: { cacheReadTokens: 2, cacheWriteTokens: 1 },
+        outputTokenDetails: { reasoningTokens: 3 },
+      },
+      totalUsage: {
+        inputTokens: 40,
+        outputTokens: 8,
+        totalTokens: 48,
+        inputTokenDetails: { cacheReadTokens: 4, cacheWriteTokens: 2 },
+        outputTokenDetails: { reasoningTokens: 5 },
+      },
+      steps: [{ usage: {} }],
+    });
+
+    const db = freshDb();
+    const sessions = createSessionStore(db);
+    const messages = createMessageStore(db);
+    const parent = sessions.create("a1", { id: "forensic-compress" });
+    const seed: UIMessage[] = [];
+    for (let i = 0; i < 6; i++) {
+      seed.push(userUI(`u${i}`));
+      seed.push(assistantUI(`a${i}`.repeat(40)));
+    }
+    messages.appendMany(
+      parent.id,
+      seed.map((m) => ({
+        id: m.id,
+        role: m.role as "user" | "assistant",
+        parts: m.parts,
+      }))
+    );
+
+    const usageReports: UsageReport[] = [];
+    const timelineEvents: SessionTimelineEventInput[] = [];
+    const agent = makeAgent({
+      db,
+      thresholdTokens: 1000,
+      protectFirstN: 1,
+      tailTokenBudget: 100,
+      onUsage: (report) => usageReports.push(report),
+      onTimelineEvent: (event) => timelineEvents.push(event),
+    });
+
+    await agent.compress(parent.id, "proactive");
+
+    const timelineTypes = timelineEvents.map((event) => event.eventType);
+    expect(timelineTypes).toEqual(
+      expect.arrayContaining([
+        "session.compression.started",
+        "session.compression.memory_flush.started",
+        "session.compression.memory_flush.finished",
+        "session.compression.summarizer.started",
+        "session.compression.summarizer.finished",
+        "session.compression.finished",
+      ])
+    );
+    expect(timelineTypes).not.toContain("session.compression.failed");
+    expect(
+      timelineEvents.every((event) => event.sessionId === parent.id)
+    ).toBe(true);
+
+    const extractorUsage = usageReports.find(
+      (report) => report.kind === "extractor"
+    );
+    const summarizerUsage = usageReports.find(
+      (report) => report.kind === "summarizer"
+    );
+    expect(extractorUsage).toMatchObject({
+      forensicPath: expect.stringMatching(/^\/tmp\/openacme-forensics\//),
+      traceId: "trace-helper",
+      providerRequestCount: 1,
+    });
+    expect(summarizerUsage).toMatchObject({
+      forensicPath: expect.stringMatching(/^\/tmp\/openacme-forensics\//),
+      traceId: "trace-helper",
+      providerRequestCount: 1,
+    });
+
+    const memoryFlushSpan = spanRecords.find(
+      (record) =>
+        record.name === "openacme.ai.helper" &&
+        record.attrs["openacme.ai.function_id"] === "a1:memory-flush"
+    );
+    const summarizerSpan = spanRecords.find(
+      (record) =>
+        record.name === "openacme.ai.helper" &&
+        record.attrs["openacme.ai.function_id"] ===
+          "compression-summarizer"
+    );
+    for (const record of [memoryFlushSpan, summarizerSpan]) {
+      expect(record?.attrs).toMatchObject({
+        "openacme.forensic.lookup": "usage_events.forensic_run_id",
+        "openacme.forensic.evidence_ref": expect.stringContaining(
+          "openacme://forensics/"
+        ),
+        "openacme.session.timeline_locator": expect.stringContaining(
+          `/api/sessions/${parent.id}/timeline?includeForensics=1&forensicRunId=`
+        ),
+      });
+      expect(
+        Object.keys(record?.attrs ?? {}).filter((key) =>
+          key.startsWith("langfuse.")
+        )
+      ).toEqual([]);
+    }
+
+    expect(recorderEvents.map((event) => event.type)).toEqual(
+      expect.arrayContaining([
+        "compression.memory_flush.start",
+        "compression.memory_flush.finish",
+        "compression.summarizer.start",
+        "compression.summarizer.finish",
+      ])
+    );
+    expect(rawWrites.map((write) => write.relativePath)).toEqual(
+      expect.arrayContaining([
+        "compression/memory-flush/model-input.system.txt",
+        "compression/memory-flush/model-input.messages.json",
+        "compression/summarizer/prompt.txt",
+      ])
+    );
+  });
+
+  it("emits a compression no-op timeline event for histories that cannot be compacted", async () => {
+    const db = freshDb();
+    const sessions = createSessionStore(db);
+    sessions.create("a1", { id: "noop-session" });
+    const timelineEvents: SessionTimelineEventInput[] = [];
+    const agent = makeAgent({
+      db,
+      thresholdTokens: 1000,
+      protectFirstN: 1,
+      tailTokenBudget: 100,
+      onTimelineEvent: (event) => timelineEvents.push(event),
+    });
+
+    await agent.compress("noop-session", "proactive");
+
+    expect(timelineEvents.map((event) => event.eventType)).toEqual(
+      expect.arrayContaining([
+        "session.compression.started",
+        "session.compression.noop",
+      ])
+    );
+    expect(
+      timelineEvents.find(
+        (event) => event.eventType === "session.compression.noop"
+      )?.payload
+    ).toMatchObject({ noOpReason: "too_short" });
   });
 
   it("extends the chain on repeated compression", async () => {

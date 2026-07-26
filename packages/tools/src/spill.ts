@@ -17,6 +17,12 @@ export const PREVIEW_CHARS = 2_000;
  *  cleanup can scope precisely to a session. */
 export const TOOL_CALLS_DIR = "tool-calls";
 
+export interface SpillOutcome {
+  output: string;
+  spilled: boolean;
+  spillPath?: string;
+}
+
 /** Resolve `<agentDir>/sessions/<sessionId>/tool-calls` for the active tool
  *  call. `workspaceDir` is `<agentDir>/workspace`, so the agent dir is its
  *  parent. Returns null if no workspace context (test/script paths). */
@@ -41,12 +47,19 @@ export async function maybeSpill(
   result: string,
   entry: ToolEntry
 ): Promise<string> {
-  if (entry.binaryResult) return result;
+  return (await maybeSpillWithMetadata(result, entry)).output;
+}
+
+export async function maybeSpillWithMetadata(
+  result: string,
+  entry: ToolEntry
+): Promise<SpillOutcome> {
+  if (entry.binaryResult) return { output: result, spilled: false };
   const threshold = entry.maxResultSizeChars ?? DEFAULT_SPILL_THRESHOLD;
-  if (result.length <= threshold) return result;
+  if (result.length <= threshold) return { output: result, spilled: false };
 
   const dir = resolveToolCallsDir();
-  if (!dir) return result; // no spill destination — pass through
+  if (!dir) return { output: result, spilled: false }; // no spill destination — pass through
 
   const filename = spillFilename(entry.name);
   const absPath = path.join(dir, filename);
@@ -59,16 +72,19 @@ export async function maybeSpill(
       { err, tool: entry.name, dir },
       "spill write failed — returning result verbatim"
     );
-    return result;
+    return { output: result, spilled: false };
   }
 
   const preview = result.slice(0, PREVIEW_CHARS);
   const sizeLabel = humanBytes(result.length);
-  return (
-    preview +
-    `\n\n[overflow: ${sizeLabel} total — full result at ${absPath}. ` +
-    `Use read_file, search_files, or shell grep/head/tail on that absolute path to navigate.]`
-  );
+  return {
+    output:
+      preview +
+      `\n\n[overflow: ${sizeLabel} total — full result at ${absPath}. ` +
+      `Use read_file, search_files, or shell grep/head/tail on that absolute path to navigate.]`,
+    spilled: true,
+    spillPath: absPath,
+  };
 }
 
 function spillFilename(toolName: string): string {

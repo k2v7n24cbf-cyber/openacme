@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { registry } from "../registry.js";
 import { lock } from "../internal/lock.js";
 import { getCurrentWorkspaceDir } from "../session-context.js";
+import { classifyFilesystemToolResult } from "../outcome.js";
 
 type Replacer = (content: string, find: string) => Generator<string, void, unknown>;
 
@@ -190,6 +191,7 @@ registry.register({
   }),
   emoji: "✏️",
   parallelSafe: false,
+  classifyResult: classifyFilesystemToolResult,
   handler: async (args) => {
     const { path: filePath, oldString, newString, replaceAll } = args as {
       path: string;

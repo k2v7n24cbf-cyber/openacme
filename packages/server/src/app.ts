@@ -40,6 +40,7 @@ import { registerStreamRoutes } from "./routes/streams.js";
 import { registerHomeRoutes } from "./routes/home.js";
 import { registerPushRoutes } from "./routes/push.js";
 import { registerUsageRoutes } from "./routes/usage.js";
+import { registerSessionTimelineRoutes } from "./routes/session-timeline.js";
 import { SkillHub, HubError } from "@openacme/skills";
 import {
   AgentDefinitionSchema,
@@ -392,6 +393,8 @@ export async function createApp(
     return c.json(messages);
   });
 
+  registerSessionTimelineRoutes(app, manager);
+
   app.get("/api/sessions/:id", (c) => {
     // Session metadata (title, agent id, timestamps). Used by the chat
     // header to render the session title instead of just the id slug.
@@ -585,6 +588,23 @@ export async function createApp(
     }
 
     const lastUser = committed[committed.length - 1];
+    const recordUserMessageReceived = (queuedReason?: "agent_capacity") => {
+      if (!lastUser || lastUser.role !== "user") return;
+      manager.recordSessionTimeline({
+        sessionId: effectiveSessionId,
+        agentId,
+        messageId: lastUser.id,
+        eventType: "session.user_message.received",
+        source: "server",
+        status: queuedReason ? "queued" : "accepted",
+        payload: {
+          partCount: Array.isArray(lastUser.parts) ? lastUser.parts.length : 0,
+          queued: Boolean(queuedReason),
+          queuedReason,
+          attachmentKinds,
+        },
+      });
+    };
     // Union of interactive (`activeTurns`) AND autonomous (dispatcher)
     // turns. Without the dispatcher check, a POST landing during an
     // autonomous turn falls through to the standard path and spawns a
@@ -615,6 +635,7 @@ export async function createApp(
         );
         return c.json({ error: "queue_failed" }, 500);
       }
+      recordUserMessageReceived(queuedReason);
       // Broadcast so other tabs viewing this session render the queue
       // chip too. The originating tab already added optimistically;
       // its receive-side dedup by id keeps the round-trip a no-op.
@@ -680,6 +701,7 @@ export async function createApp(
             },
           ],
         });
+        recordUserMessageReceived();
       } catch (e) {
         log.warn({ err: e }, "user message pre-persist skipped");
       }

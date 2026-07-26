@@ -9,6 +9,39 @@ export interface ToolSchema {
   parameters: z.ZodType;
 }
 
+export type ToolExecutionStatus = "ok" | "error";
+export type ToolResultStatus =
+  | "success"
+  | "failure"
+  | "partial"
+  | "running"
+  | "unknown";
+export type ToolOutcomeAttributeValue = string | number | boolean;
+
+export interface ToolResultClassifierContext {
+  toolName: string;
+  toolset: string;
+  args: Record<string, unknown>;
+  output: string;
+}
+
+export interface ToolResultClassification {
+  resultStatus: ToolResultStatus;
+  resultClassifier: string;
+  failureKind?: string;
+  failureMessage?: string;
+  exitCode?: number;
+  processStatus?: string;
+  successFlag?: boolean;
+  okFlag?: boolean;
+  parsedJson?: boolean;
+  outcomeAttributes?: Record<string, ToolOutcomeAttributeValue>;
+}
+
+export type ToolResultClassifier = (
+  context: ToolResultClassifierContext
+) => ToolResultClassification;
+
 /**
  * A registered tool entry — mirrors Hermes tools/registry.py ToolEntry.
  */
@@ -23,6 +56,10 @@ export interface ToolEntry {
   parameters: z.ZodType;
   /** Handler function — takes parsed args, returns result string */
   handler: (args: Record<string, unknown>) => Promise<string>;
+  /** Optional domain-specific classifier for observability-only tool
+   *  outcomes. The registry invokes this after the handler returns; it must
+   *  not mutate output or drive application behavior. */
+  classifyResult?: ToolResultClassifier;
   /** Optional: check if tool is available (e.g. Docker installed) */
   checkFn?: () => boolean;
   /** Emoji for display */

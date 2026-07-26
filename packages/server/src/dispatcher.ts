@@ -29,7 +29,11 @@
 
 import type { TaskStore, Task } from "@openacme/tasks";
 import { AutonomousTurnTimeout, extractErrorText } from "@openacme/agent-core";
-import type { SessionStore, InboxStore } from "@openacme/db";
+import type {
+  SessionStore,
+  InboxStore,
+  SessionTimelineEventInput,
+} from "@openacme/db";
 import { createLogger } from "@openacme/config/logger";
 import type { AgentManager } from "./agent-manager.js";
 import type { SessionBroadcaster } from "./broadcaster.js";
@@ -40,7 +44,33 @@ const log = createLogger("server.dispatcher");
 const DEFAULT_TICK_MS = 60_000;
 /** Park-on-failure backoff. Same value the old TaskScheduler used. */
 const PARK_BACKOFF_MS = 5 * 60_000;
+const TIMELINE_ERROR_MAX_CHARS = 4096;
 type ParallelSchedulingPolicy = "lane_first" | "chain_first";
+type DispatcherSpawnReason =
+  | "inbox"
+  | "task_in_progress"
+  | "task_open_ready"
+  | "task_blocked_revisit";
+
+interface SpawnDecision {
+  reason: DispatcherSpawnReason;
+  taskId: string | null;
+  hasInbox: boolean;
+}
+
+interface DispatcherRunResult {
+  status: "ok" | "error" | "timeout" | "skipped";
+  taskId: string | null;
+  error?: string;
+  reason?: string;
+}
+
+function truncateTimelineError(value: string | undefined): string | null {
+  if (!value) return null;
+  return value.length > TIMELINE_ERROR_MAX_CHARS
+    ? value.slice(0, TIMELINE_ERROR_MAX_CHARS)
+    : value;
+}
 
 export interface DispatcherOptions {
   taskStore: TaskStore;
@@ -48,6 +78,7 @@ export interface DispatcherOptions {
   inboxStore: InboxStore;
   agentManager: AgentManager;
   broadcaster?: SessionBroadcaster;
+  onTimelineEvent?: (event: SessionTimelineEventInput) => void;
   /** Override the wall clock — test seam. */
   now?: () => Date;
   /** Override the tick interval. Production is `DEFAULT_TICK_MS`. */
@@ -60,6 +91,9 @@ export class Dispatcher {
   private readonly inboxStore: InboxStore;
   private readonly agentManager: AgentManager;
   private readonly broadcaster: SessionBroadcaster | null;
+  private readonly onTimelineEvent:
+    | ((event: SessionTimelineEventInput) => void)
+    | null;
   private readonly now: () => Date;
   private readonly tickIntervalMs: number;
 
@@ -95,6 +129,8 @@ export class Dispatcher {
    *  prefer sessions that have not yet had a turn in this daemon run. */
   private runSequence = 0;
   private lastRunSequenceBySession = new Map<string, number>();
+  private deferSkipKeysBySession = new Map<string, string>();
+  private capacityQueuedKeysBySession = new Map<string, string>();
 
   constructor(opts: DispatcherOptions) {
     this.taskStore = opts.taskStore;
@@ -102,6 +138,7 @@ export class Dispatcher {
     this.inboxStore = opts.inboxStore;
     this.agentManager = opts.agentManager;
     this.broadcaster = opts.broadcaster ?? null;
+    this.onTimelineEvent = opts.onTimelineEvent ?? null;
     this.now = opts.now ?? (() => new Date());
     this.tickIntervalMs = opts.tickIntervalMs ?? DEFAULT_TICK_MS;
   }
@@ -220,6 +257,76 @@ export class Dispatcher {
     );
   }
 
+  private recordTimeline(input: SessionTimelineEventInput): void {
+    if (!this.onTimelineEvent) return;
+    try {
+      this.onTimelineEvent(input);
+    } catch (e) {
+      log.warn(
+        { err: e, sessionId: input.sessionId, eventType: input.eventType },
+        "dispatcher timeline event failed"
+      );
+    }
+  }
+
+  private recordDeferSkipped(
+    agentId: string,
+    sessionId: string,
+    decision: SpawnDecision,
+    facts: { deferUntilMs: number }
+  ): void {
+    const key = [
+      facts.deferUntilMs,
+      decision.reason,
+      decision.taskId ?? "",
+    ].join(":");
+    if (this.deferSkipKeysBySession.get(sessionId) === key) return;
+    this.deferSkipKeysBySession.set(sessionId, key);
+    this.recordTimeline({
+      sessionId,
+      agentId,
+      taskId: decision.taskId,
+      eventType: "session.dispatcher.defer.skipped",
+      source: "dispatcher",
+      status: "skipped",
+      payload: {
+        reason: decision.reason,
+        hasInbox: decision.hasInbox,
+        deferUntilMs: facts.deferUntilMs,
+      },
+    });
+  }
+
+  private recordCapacityQueued(
+    agentId: string,
+    sessionId: string,
+    decision: SpawnDecision,
+    facts: { limit: number; activeCount: number }
+  ): void {
+    const key = [
+      facts.limit,
+      facts.activeCount,
+      decision.reason,
+      decision.taskId ?? "",
+    ].join(":");
+    if (this.capacityQueuedKeysBySession.get(sessionId) === key) return;
+    this.capacityQueuedKeysBySession.set(sessionId, key);
+    this.recordTimeline({
+      sessionId,
+      agentId,
+      taskId: decision.taskId,
+      eventType: "session.dispatcher.capacity_queued",
+      source: "dispatcher",
+      status: "queued",
+      payload: {
+        reason: decision.reason,
+        hasInbox: decision.hasInbox,
+        limit: facts.limit,
+        activeCount: facts.activeCount,
+      },
+    });
+  }
+
   // ── Internals ─────────────────────────────────────────────────────
 
   private async tickSafe(): Promise<void> {
@@ -336,20 +443,37 @@ export class Dispatcher {
           session.deferUntil * 1000 > nowMs &&
           !hasInbox
         ) {
+          const deferredDecision = this.spawnDecision(
+            session.id,
+            nowMs,
+            false
+          );
+          if (deferredDecision) {
+            this.recordDeferSkipped(agentId, session.id, deferredDecision, {
+              deferUntilMs: session.deferUntil * 1000,
+            });
+          }
           continue;
         }
 
-        if (this.shouldSpawn(session.id, nowMs, hasInbox)) {
+        const decision = this.spawnDecision(session.id, nowMs, hasInbox);
+        if (decision) {
           if (available <= 0) {
             if (limit > 1 || hasInbox) {
               this.kickAfterRunAgents.add(agentId);
             }
+            this.recordCapacityQueued(agentId, session.id, decision, {
+              limit,
+              activeCount: this.activeSessionIdsForAgent(agentId).size,
+            });
             break;
           }
-          if (this.enqueueTurn(agentId, session.id)) {
+          if (this.enqueueTurn(agentId, session.id, decision)) {
             available--;
             if (pending.hasAgentWide) agentWideAssigned = true;
           }
+        } else {
+          this.deferSkipKeysBySession.delete(session.id);
         }
       }
     }
@@ -434,7 +558,7 @@ export class Dispatcher {
   }
 
   /**
-   * Spawn rule. Returns true if the dispatcher should run a turn for
+   * Spawn rule. Returns the reason the dispatcher should run a turn for
    * this (agent, session) right now.
    *
    * Triggers:
@@ -450,15 +574,21 @@ export class Dispatcher {
    * the agent claims a task by setting in_progress + session_id, so
    * unbound tasks aren't a dispatcher concern.
    */
-  private shouldSpawn(
+  private spawnDecision(
     sessionId: string,
     nowMs: number,
     hasInbox: boolean
-  ): boolean {
-    if (hasInbox) return true;
+  ): SpawnDecision | null {
+    if (hasInbox) {
+      return {
+        reason: "inbox",
+        taskId: this.timelineTaskForSession(sessionId, nowMs)?.id ?? null,
+        hasInbox,
+      };
+    }
     const tasks = this.taskStore.list({ session_id: sessionId });
-    let hasReady = false;
-    let hasBlocked = false;
+    let readyTask: Task | null = null;
+    let blockedTask: Task | null = null;
     for (const t of tasks) {
       if (t.status === "in_progress") {
         // Recurring task that fired recently: respect its interval as a
@@ -481,19 +611,53 @@ export class Dispatcher {
             continue;
           }
         }
-        return true;
+        return { reason: "task_in_progress", taskId: t.id, hasInbox };
       }
-      if (t.status === "open" && isStartReady(t.start_at, nowMs) && this.depsSatisfied(t)) {
-        hasReady = true;
+      if (
+        t.status === "open" &&
+        isStartReady(t.start_at, nowMs) &&
+        this.depsSatisfied(t)
+      ) {
+        readyTask ??= t;
       } else if (t.status === "blocked") {
-        hasBlocked = true;
+        blockedTask ??= t;
       }
     }
     // Returning true on "only blocked tasks" means the dispatcher
     // periodically nudges the agent to revisit. The agent can call
     // `defer_session(duration)` to suppress this if it doesn't want
     // to be checked back so often.
-    return hasReady || hasBlocked;
+    if (readyTask) {
+      return {
+        reason: "task_open_ready",
+        taskId: readyTask.id,
+        hasInbox,
+      };
+    }
+    if (blockedTask) {
+      return {
+        reason: "task_blocked_revisit",
+        taskId: blockedTask.id,
+        hasInbox,
+      };
+    }
+    return null;
+  }
+
+  private timelineTaskForSession(sessionId: string, nowMs: number): Task | null {
+    const tasks = this.taskStore.list({ session_id: sessionId });
+    return (
+      tasks.find((t) => t.status === "in_progress") ??
+      tasks.find(
+        (t) =>
+          t.status === "open" &&
+          isStartReady(t.start_at, nowMs) &&
+          this.depsSatisfied(t)
+      ) ??
+      tasks.find((t) => t.status === "blocked") ??
+      tasks[0] ??
+      null
+    );
   }
 
   private depsSatisfied(t: Task): boolean {
@@ -513,13 +677,17 @@ export class Dispatcher {
    * a while, then the first real signal (inbox row, post-interactive
    * tick) would legitimately wake the agent AND wipe defer; from that
    * point on every periodic 60s tick would re-spawn because nothing
-   * suppressed it (any in-progress task triggers `shouldSpawn`). With
+   * suppressed it (any in-progress task triggers the spawn rule). With
    * defer sticky, the same first signal still wakes the agent, but
    * defer stays in place and holds against subsequent pure-tick wakes
    * for the rest of the window. Only an explicit `defer_session` call
    * (or natural expiry) changes it.
    */
-  private enqueueTurn(agentId: string, sessionId: string): boolean {
+  private enqueueTurn(
+    agentId: string,
+    sessionId: string,
+    decision: SpawnDecision
+  ): boolean {
     if (this.runningSessions.has(sessionId)) return false;
     if (this.interactiveBusy.has(sessionId)) return false;
     if (!this.agentExists(agentId)) {
@@ -534,6 +702,7 @@ export class Dispatcher {
     }
 
     this.runningSessions.add(sessionId);
+    this.capacityQueuedKeysBySession.delete(sessionId);
     this.lastRunSequenceBySession.set(sessionId, ++this.runSequence);
     let active = this.activeByAgent.get(agentId);
     if (!active) {
@@ -548,49 +717,143 @@ export class Dispatcher {
       });
     }
 
-    const promise = this.runTurn(agentId, sessionId).finally(() => {
-      this.activeTurns.delete(sessionId);
-      this.runningSessions.delete(sessionId);
-      const activeForAgent = this.activeByAgent.get(agentId);
-      activeForAgent?.delete(sessionId);
-      if (activeForAgent?.size === 0) this.activeByAgent.delete(agentId);
-      if (this.broadcaster) {
-        this.broadcaster.broadcast(sessionId, {
-          kind: "session_state",
-          state: "idle",
-        });
-      }
-      if (this.kickAfterRunAgents.delete(agentId)) {
-        this.tickSafe().catch((e) =>
-          log.warn(
-            { err: e, sessionId },
-            "post-run dispatcher kick threw"
-          )
-        );
-      }
+    const wakeStartedAt = Date.now();
+    this.recordTimeline({
+      sessionId,
+      agentId,
+      taskId: decision.taskId,
+      eventType: "session.dispatcher.wake.started",
+      source: "dispatcher",
+      status: "running",
+      payload: {
+        reason: decision.reason,
+        hasInbox: decision.hasInbox,
+      },
     });
+
+    const promise = this.runTurn(agentId, sessionId, decision)
+      .then((result) => {
+        const ok = result.status === "ok";
+        this.recordTimeline({
+          sessionId,
+          agentId,
+          taskId: result.taskId ?? decision.taskId,
+          eventType: ok
+            ? "session.dispatcher.wake.finished"
+            : "session.dispatcher.wake.failed",
+          source: "dispatcher",
+          status:
+            result.status === "ok"
+              ? "ok"
+              : result.status === "timeout"
+                ? "timeout"
+                : "error",
+          durationMs: Date.now() - wakeStartedAt,
+          payload: {
+            reason: decision.reason,
+            resultStatus: result.status,
+            error: truncateTimelineError(result.error),
+          },
+        });
+      })
+      .finally(() => {
+        this.activeTurns.delete(sessionId);
+        this.runningSessions.delete(sessionId);
+        const activeForAgent = this.activeByAgent.get(agentId);
+        activeForAgent?.delete(sessionId);
+        if (activeForAgent?.size === 0) this.activeByAgent.delete(agentId);
+        if (this.broadcaster) {
+          this.broadcaster.broadcast(sessionId, {
+            kind: "session_state",
+            state: "idle",
+          });
+        }
+        if (this.kickAfterRunAgents.delete(agentId)) {
+          this.tickSafe().catch((e) =>
+            log.warn(
+              { err: e, sessionId },
+              "post-run dispatcher kick threw"
+            )
+          );
+        }
+      });
     this.activeTurns.set(sessionId, promise);
     return true;
   }
 
   private async runTurn(
     agentId: string,
-    sessionId: string
-  ): Promise<void> {
-    if (!this.running) return;
+    sessionId: string,
+    decision: SpawnDecision
+  ): Promise<DispatcherRunResult> {
+    if (!this.running) {
+      return {
+        status: "skipped",
+        taskId: decision.taskId,
+        reason: "dispatcher_stopped",
+      };
+    }
     let agent;
     try {
       agent = this.agentManager.getAgent(agentId);
     } catch (e) {
+      const message = extractErrorText(e);
       log.warn(
         { agentId, sessionId, err: e },
         "agent not available for session"
       );
-      return;
+      this.recordTimeline({
+        sessionId,
+        agentId,
+        taskId: decision.taskId,
+        eventType: "session.autonomous.failed",
+        source: "dispatcher",
+        status: "error",
+        payload: {
+          reason: decision.reason,
+          phase: "agent_lookup",
+          error: truncateTimelineError(message),
+        },
+      });
+      return {
+        status: "error",
+        taskId: decision.taskId,
+        error: message,
+      };
     }
+
+    const startedAt = Date.now();
+    const taskId =
+      this.timelineTaskForSession(sessionId, this.now().getTime())?.id ??
+      decision.taskId;
+    this.recordTimeline({
+      sessionId,
+      agentId,
+      taskId,
+      eventType: "session.autonomous.started",
+      source: "dispatcher",
+      status: "running",
+      payload: {
+        reason: decision.reason,
+        hasInbox: decision.hasInbox,
+      },
+    });
 
     try {
       await agent.runAutonomous({ sessionId });
+      this.recordTimeline({
+        sessionId,
+        agentId,
+        taskId,
+        eventType: "session.autonomous.finished",
+        source: "dispatcher",
+        status: "ok",
+        durationMs: Date.now() - startedAt,
+        payload: {
+          reason: decision.reason,
+        },
+      });
+      return { status: "ok", taskId };
     } catch (e) {
       const message = extractErrorText(e);
       const isTimeout = e instanceof AutonomousTurnTimeout;
@@ -603,6 +866,24 @@ export class Dispatcher {
           ? `turn timed out at ${this.now().toISOString()}`
           : `turn errored at ${this.now().toISOString()}: ${message}`,
       });
+      this.recordTimeline({
+        sessionId,
+        agentId,
+        taskId,
+        eventType: "session.autonomous.failed",
+        source: "dispatcher",
+        status: isTimeout ? "timeout" : "error",
+        durationMs: Date.now() - startedAt,
+        payload: {
+          reason: decision.reason,
+          error: truncateTimelineError(message),
+        },
+      });
+      return {
+        status: isTimeout ? "timeout" : "error",
+        taskId,
+        error: message,
+      };
     }
   }
 

@@ -40,6 +40,39 @@ vi.mock("@openacme/llm-provider", () => ({
   resolveSubagentModel: (m: unknown) => m,
   getEffectiveContextWindow: getEffectiveContextWindowMock,
   supportsToolResultMedia: () => false,
+  getActiveTraceContext: () => null,
+  getAIForensicContext: () => undefined,
+  getAIForensicProviderRequestCount: () => 1,
+  buildForensicEventSelector: (
+    eventType: string,
+    fields: Record<string, string | number | undefined | null> = {}
+  ) =>
+    [
+      `type=${eventType}`,
+      ...Object.entries(fields)
+        .filter(([, value]) => value !== undefined && value !== null)
+        .map(([key, value]) => `${key}=${value}`),
+    ].join(" "),
+  buildForensicLocatorAttributes: () => ({}),
+  buildForensicLocatorPayload: () => ({}),
+  setAIForensicContext: vi.fn(),
+  enterAIForensicContext: (_ctx: unknown, fn: () => unknown) => fn(),
+  createForensicRecorder: () => ({
+    enabled: false,
+    recordEvent: vi.fn(),
+    writeRawFile: vi.fn(),
+  }),
+  withOpenAcmeSpan: (_name: string, _attrs: unknown, fn: (span: unknown) => unknown) =>
+    fn({ traceId: "trace-helper", spanId: "span-helper" }),
+  startOpenAcmeSpan: () => ({
+    setAttributes: vi.fn(),
+    addEvent: vi.fn(),
+    recordException: vi.fn(),
+    setStatusOk: vi.fn(),
+    setStatusError: vi.fn(),
+    end: vi.fn(),
+    run: (fn: () => unknown) => fn(),
+  }),
 }));
 
 function freshDb() {

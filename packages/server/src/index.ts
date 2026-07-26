@@ -1,4 +1,4 @@
-import "@openacme/config/telemetry-bootstrap";
+import { initializeOpenAcmeTelemetry } from "@openacme/config/telemetry-bootstrap";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,6 +33,7 @@ function readPlatformVersion(): string {
  */
 export async function startServer(dataDirOverride?: string) {
   const config = loadConfig(dataDirOverride);
+  initializeOpenAcmeTelemetry();
   // Make the resolved data dir discoverable by the LLM provider's OAuth path
   // without invasive signature changes.
   if (!process.env["OPENACME_DATA_DIR"]) {

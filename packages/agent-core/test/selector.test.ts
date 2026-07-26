@@ -9,6 +9,7 @@ import {
   createMessageStore,
   createInboxStore,
 } from "@openacme/db";
+import type { SessionTimelineEventInput } from "@openacme/db";
 import { MemoryStore } from "@openacme/memory";
 import { TaskStore } from "@openacme/tasks";
 import type { ToolRegistry } from "@openacme/tools";
@@ -28,6 +29,28 @@ vi.mock("@openacme/llm-provider", () => ({
   getModel: getModelMock,
   resolveSubagentModel: (m: unknown) => m,
   supportsToolResultMedia: () => false,
+  getActiveTraceContext: () => null,
+  getAIForensicContext: () => undefined,
+  getAIForensicProviderRequestCount: () => 1,
+  buildForensicLocatorAttributes: () => ({}),
+  setAIForensicContext: vi.fn(),
+  enterAIForensicContext: (_ctx: unknown, fn: () => unknown) => fn(),
+  createForensicRecorder: () => ({
+    enabled: false,
+    recordEvent: vi.fn(),
+    writeRawFile: vi.fn(),
+  }),
+  withOpenAcmeSpan: (_name: string, _attrs: unknown, fn: (span: unknown) => unknown) =>
+    fn({ traceId: "trace-helper", spanId: "span-helper" }),
+  startOpenAcmeSpan: () => ({
+    setAttributes: vi.fn(),
+    addEvent: vi.fn(),
+    recordException: vi.fn(),
+    setStatusOk: vi.fn(),
+    setStatusError: vi.fn(),
+    end: vi.fn(),
+    run: (fn: () => unknown) => fn(),
+  }),
 }));
 
 const stubToolRegistry = {
@@ -42,7 +65,7 @@ function freshDb() {
   return db;
 }
 
-function makeAgent(): Agent {
+function makeAgent(timelineEvents?: SessionTimelineEventInput[]): Agent {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openacme-sel-agent-"));
   const db = freshDb();
   const sessionStore = createSessionStore(db);
@@ -68,6 +91,9 @@ function makeAgent(): Agent {
     memoryStore: new MemoryStore(path.join(tmpRoot, "agents")),
     taskStore: new TaskStore(path.join(tmpRoot, "tasks")),
     inboxStore: createInboxStore(db),
+    onTimelineEvent: timelineEvents
+      ? (event) => timelineEvents.push(event)
+      : undefined,
   });
 }
 
@@ -184,6 +210,89 @@ describe("findRelevantMemories", () => {
     expect(out.length).toBe(1);
     expect(out[0]!.path).toBe(a);
     expect(typeof out[0]!.mtimeMs).toBe("number");
+  });
+
+  it("emits memory selection timeline events around selector model calls", async () => {
+    const timelineEvents: SessionTimelineEventInput[] = [];
+    agent = makeAgent(timelineEvents);
+    write(dir, "a.md", entry("a hook"));
+    write(dir, "b.md", entry("b hook"));
+    getModelMock.mockReturnValue(modelReturning(["a.md"]));
+
+    const out = await findRelevantMemories({
+      parent: agent,
+      sessionId: "s-selector",
+      triggerText: "trigger",
+      memoryDir: dir,
+      recentTools: ["shell"],
+    });
+
+    expect(out.map((m) => path.basename(m.path))).toEqual(["a.md"]);
+    const selectionEvents = timelineEvents.filter((event) =>
+      event.eventType.startsWith("session.memory.selection.")
+    );
+    expect(selectionEvents.map((event) => event.eventType)).toEqual([
+      "session.memory.selection.started",
+      "session.memory.selection.finished",
+    ]);
+    expect(selectionEvents[0]).toMatchObject({
+      sessionId: "s-selector",
+      agentId: "a1",
+      source: "agent",
+      status: "running",
+      payload: {
+        recentToolCount: 1,
+      },
+    });
+    expect(selectionEvents[1]).toMatchObject({
+      sessionId: "s-selector",
+      agentId: "a1",
+      source: "agent",
+      status: "ok",
+      payload: {
+        candidateCount: 2,
+        selectedNameCount: 1,
+        selectedCount: 1,
+      },
+    });
+  });
+
+  it("emits memory selection failed timeline events when the selector model errors", async () => {
+    const timelineEvents: SessionTimelineEventInput[] = [];
+    agent = makeAgent(timelineEvents);
+    write(dir, "x.md", entry("hook"));
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => {
+        throw new Error("selector model down");
+      },
+    });
+    getModelMock.mockReturnValue(model);
+
+    const out = await findRelevantMemories({
+      parent: agent,
+      sessionId: "s-selector-fail",
+      triggerText: "trigger",
+      memoryDir: dir,
+    });
+
+    expect(out).toEqual([]);
+    const selectionEvents = timelineEvents.filter((event) =>
+      event.eventType.startsWith("session.memory.selection.")
+    );
+    expect(selectionEvents.map((event) => event.eventType)).toEqual([
+      "session.memory.selection.started",
+      "session.memory.selection.failed",
+    ]);
+    expect(selectionEvents[1]).toMatchObject({
+      sessionId: "s-selector-fail",
+      agentId: "a1",
+      source: "agent",
+      status: "error",
+      payload: {
+        selectorStatus: "failed",
+        error: "selector model down",
+      },
+    });
   });
 
   it("drops invalid filenames from the model selection", async () => {

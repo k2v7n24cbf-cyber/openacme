@@ -9,6 +9,7 @@ import {
   supportsCurrentToolResultMedia,
 } from "../session-context.js";
 import { resolveToolCallsDir } from "../spill.js";
+import { classifyFilesystemToolResult } from "../outcome.js";
 
 /**
  * File tools — read, write, list, search files.
@@ -209,6 +210,7 @@ registry.register({
   emoji: "📄",
   parallelSafe: true,
   toModelOutput: buildMediaToolModelOutput,
+  classifyResult: classifyFilesystemToolResult,
   handler: async (args) => {
     const { path: filePath, maxLines } = args as {
       path: string;
@@ -299,6 +301,7 @@ registry.register({
   }),
   emoji: "✍️",
   parallelSafe: false,
+  classifyResult: classifyFilesystemToolResult,
   handler: async (args) => {
     const { path: filePath, content } = args as {
       path: string;
@@ -345,6 +348,7 @@ registry.register({
   }),
   emoji: "📁",
   parallelSafe: true,
+  classifyResult: classifyFilesystemToolResult,
   handler: async (args) => {
     const {
       path: dirPath,
@@ -430,6 +434,7 @@ registry.register({
   }),
   emoji: "🔍",
   parallelSafe: true,
+  classifyResult: classifyFilesystemToolResult,
   handler: async (args) => {
     const { pattern, path: searchPath, fileGlob, maxResults } = args as {
       pattern: string;

@@ -9,6 +9,7 @@ import {
   createMessageStore,
   createInboxStore,
 } from "@openacme/db";
+import type { SessionTimelineEventInput } from "@openacme/db";
 import { MemoryStore } from "@openacme/memory";
 import { TaskStore } from "@openacme/tasks";
 import type { ToolRegistry } from "@openacme/tools";
@@ -29,7 +30,9 @@ function freshDb() {
   return db;
 }
 
-function makeAgent(): {
+function makeAgent(opts: {
+  timelineEvents?: SessionTimelineEventInput[];
+} = {}): {
   agent: Agent;
   broadcasts: Array<{
     sessionId: string;
@@ -71,6 +74,9 @@ function makeAgent(): {
     taskStore: new TaskStore(path.join(tmpRoot, "tasks")),
     inboxStore: createInboxStore(db),
     broadcaster,
+    onTimelineEvent: opts.timelineEvents
+      ? (event) => opts.timelineEvents!.push(event)
+      : undefined,
   });
   return { agent, broadcasts };
 }
@@ -116,6 +122,73 @@ describe("Agent.fireTitle", () => {
         event: { kind: "session_title", title: "OAuth refresh bug" },
       },
     ]);
+  });
+
+  it("emits title timeline events for generated titles", async () => {
+    const timelineEvents: SessionTimelineEventInput[] = [];
+    const { agent } = makeAgent({ timelineEvents });
+    agent.sessionStore.create(agent.config.id, { id: "s-title" });
+    vi.spyOn(titleModule, "runTitle").mockResolvedValue("OAuth refresh bug");
+
+    await fireAndSettle(agent, {
+      sessionId: "s-title",
+      sessionMessages: [
+        user("u1", "Why does OAuth refresh fail?"),
+        asst("a1", "The refresh token is stale."),
+      ],
+    });
+
+    expect(timelineEvents.map((event) => event.eventType)).toEqual([
+      "session.title.started",
+      "session.title.finished",
+    ]);
+    expect(timelineEvents[0]).toMatchObject({
+      sessionId: "s-title",
+      agentId: "a1",
+      source: "agent",
+      status: "running",
+    });
+    expect(timelineEvents[1]).toMatchObject({
+      sessionId: "s-title",
+      agentId: "a1",
+      source: "agent",
+      status: "ok",
+      payload: {
+        method: "generated",
+        titleLength: "OAuth refresh bug".length,
+      },
+    });
+  });
+
+  it("emits failed plus fallback title timeline events when generation throws", async () => {
+    const timelineEvents: SessionTimelineEventInput[] = [];
+    const { agent } = makeAgent({ timelineEvents });
+    agent.sessionStore.create(agent.config.id, { id: "s-fallback" });
+    vi.spyOn(titleModule, "runTitle").mockRejectedValue(
+      new Error("title model down")
+    );
+
+    await fireAndSettle(agent, {
+      sessionId: "s-fallback",
+      sessionMessages: [
+        user("u1", "Summarize the build failure."),
+        asst("a1", "The build failed because title generation threw."),
+      ],
+    });
+
+    expect(timelineEvents.map((event) => event.eventType)).toEqual([
+      "session.title.started",
+      "session.title.failed",
+      "session.title.finished",
+    ]);
+    expect(timelineEvents[1]).toMatchObject({
+      status: "error",
+      payload: { error: "title model down" },
+    });
+    expect(timelineEvents[2]).toMatchObject({
+      status: "fallback",
+      payload: { method: "fallback" },
+    });
   });
 
   it("broadcasts the fallback title when generation returns empty", async () => {

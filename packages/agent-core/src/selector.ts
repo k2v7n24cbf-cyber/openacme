@@ -13,6 +13,7 @@ import {
   type MemoryHeader,
 } from "@openacme/memory";
 import type { Agent } from "./agent.js";
+import { extractErrorText } from "./error-classifier.js";
 import { runSubagent } from "./subagent.js";
 
 const log = createLogger("agent-core.selector");
@@ -25,6 +26,14 @@ export interface RelevantMemory {
 const MAX_SELECTED = 5;
 const SELECTOR_TIMEOUT_MS = 30_000;
 const SELECTOR_MAX_OUTPUT_TOKENS = 256;
+const TIMELINE_ERROR_MAX_CHARS = 4096;
+
+function truncateTimelineError(value: string | undefined): string | null {
+  if (!value) return null;
+  return value.length > TIMELINE_ERROR_MAX_CHARS
+    ? value.slice(0, TIMELINE_ERROR_MAX_CHARS)
+    : value;
+}
 
 // Verbatim from Claude Code; trained-on wording.
 const SELECT_MEMORIES_SYSTEM_PROMPT = `You are selecting memories that will be useful to the assistant as it processes a query. You will be given the query and a list of available memory files with their filenames and descriptions.
@@ -41,8 +50,8 @@ const SelectionSchema = z.object({
 
 export interface FindRelevantMemoriesArgs {
   parent: Agent;
-  /** Session the recall is for — usage-ledger attribution. */
-  sessionId: string;
+  /** Session the recall is for — usage-ledger attribution when present. */
+  sessionId?: string;
   /** Work-item description; trigger source is opaque. */
   triggerText: string;
   memoryDir: string;
@@ -56,26 +65,107 @@ export interface FindRelevantMemoriesArgs {
 export async function findRelevantMemories(
   args: FindRelevantMemoriesArgs
 ): Promise<RelevantMemory[]> {
-  const surfaced = args.alreadySurfaced ?? new Set<string>();
-  const all = await scanMemoryFiles(args.memoryDir, args.signal);
-  const candidates = all.filter((m) => !surfaced.has(m.filePath));
-  if (candidates.length === 0) return [];
+  const startedAt = Date.now();
+  const report = (
+    eventType: string,
+    status: string,
+    payload: Record<string, unknown>,
+    durationMs?: number
+  ) => {
+    if (!args.sessionId) return;
+    args.parent.reportTimelineEvent({
+      sessionId: args.sessionId,
+      agentId: args.parent.config.id,
+      eventType,
+      source: "agent",
+      status,
+      ...(durationMs !== undefined ? { durationMs } : {}),
+      payload,
+    });
+  };
 
-  const selectedNames = await selectFilenames(candidates, args);
+  const surfaced = args.alreadySurfaced ?? new Set<string>();
+  report("session.memory.selection.started", "running", {
+    recentToolCount: args.recentTools?.length ?? 0,
+    alreadySurfacedCount: surfaced.size,
+    triggerTextChars: args.triggerText.length,
+  });
+
+  let all: MemoryHeader[];
+  try {
+    all = await scanMemoryFiles(args.memoryDir, args.signal);
+  } catch (e) {
+    report(
+      "session.memory.selection.failed",
+      "error",
+      {
+        phase: "scan",
+        error: truncateTimelineError(extractErrorText(e)),
+      },
+      Date.now() - startedAt
+    );
+    throw e;
+  }
+
+  const candidates = all.filter((m) => !surfaced.has(m.filePath));
+  if (candidates.length === 0) {
+    report(
+      "session.memory.selection.skipped",
+      "skipped",
+      {
+        reason: "no_candidates",
+        memoryFileCount: all.length,
+        alreadySurfacedCount: surfaced.size,
+      },
+      Date.now() - startedAt
+    );
+    return [];
+  }
+
+  const selection = await selectFilenames(candidates, args);
+  if (selection.status !== "completed") {
+    report(
+      "session.memory.selection.failed",
+      selection.status === "timeout" || selection.status === "aborted"
+        ? selection.status
+        : "error",
+      {
+        selectorStatus: selection.status,
+        candidateCount: candidates.length,
+        error: truncateTimelineError(selection.error),
+      },
+      Date.now() - startedAt
+    );
+    return [];
+  }
   const byName = new Map(candidates.map((m) => [m.filename, m]));
   const out: RelevantMemory[] = [];
-  for (const name of selectedNames) {
+  for (const name of selection.names) {
     const hit = byName.get(name);
     if (hit) out.push({ path: hit.filePath, mtimeMs: hit.mtimeMs });
     if (out.length >= MAX_SELECTED) break;
   }
+  report(
+    "session.memory.selection.finished",
+    "ok",
+    {
+      candidateCount: candidates.length,
+      selectedNameCount: selection.names.length,
+      selectedCount: out.length,
+    },
+    Date.now() - startedAt
+  );
   return out;
 }
+
+type FilenameSelection =
+  | { status: "completed"; names: string[] }
+  | { status: "failed" | "timeout" | "aborted"; names: []; error?: string };
 
 async function selectFilenames(
   candidates: MemoryHeader[],
   args: FindRelevantMemoriesArgs
-): Promise<string[]> {
+): Promise<FilenameSelection> {
   const validNames = new Set(candidates.map((m) => m.filename));
   const manifest = formatMemoryManifest(candidates);
   const toolsSection =
@@ -93,7 +183,9 @@ async function selectFilenames(
     maxOutputTokens: SELECTOR_MAX_OUTPUT_TOKENS,
     timeoutMs: SELECTOR_TIMEOUT_MS,
     abortSignal: args.signal,
-    usage: { kind: "selector", sessionId: args.sessionId },
+    ...(args.sessionId
+      ? { usage: { kind: "selector" as const, sessionId: args.sessionId } }
+      : {}),
   });
 
   if (result.status !== "completed" || !result.object) {
@@ -103,7 +195,14 @@ async function selectFilenames(
         "memory.selector failed"
       );
     }
-    return [];
+    return {
+      status: result.status,
+      names: [],
+      error: result.error,
+    };
   }
-  return result.object.selected_memories.filter((n) => validNames.has(n));
+  return {
+    status: "completed",
+    names: result.object.selected_memories.filter((n) => validNames.has(n)),
+  };
 }

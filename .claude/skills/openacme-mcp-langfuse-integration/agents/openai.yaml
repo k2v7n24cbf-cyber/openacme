@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenAcme MCP Langfuse Integration"
+  short_description: "Build MCP tools with OpenAcme observability contracts"
+  default_prompt: "Use $openacme-mcp-langfuse-integration to design, implement, or review an OpenAcme MCP tool with Langfuse and local forensic observability."

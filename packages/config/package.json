@@ -63,6 +63,7 @@
     "@opentelemetry/exporter-logs-otlp-http": "^0.57.0",
     "@opentelemetry/auto-instrumentations-node": "^0.55.0",
     "@opentelemetry/resources": "^1.30.0",
+    "@opentelemetry/sdk-trace-base": "^1.30.0",
     "@opentelemetry/semantic-conventions": "^1.30.0"
   },
   "devDependencies": {

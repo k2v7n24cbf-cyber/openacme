@@ -9,6 +9,7 @@ import {
   createMessageStore,
   createInboxStore,
 } from "@openacme/db";
+import type { SessionTimelineEventInput } from "@openacme/db";
 import { MemoryStore } from "@openacme/memory";
 import { TaskStore } from "@openacme/tasks";
 import type { ToolRegistry } from "@openacme/tools";
@@ -29,7 +30,10 @@ function freshDb() {
   return db;
 }
 
-function makeAgent(configOverrides: Partial<AgentConfig> = {}): Agent {
+function makeAgent(
+  configOverrides: Partial<AgentConfig> = {},
+  timelineEvents?: SessionTimelineEventInput[]
+): Agent {
   const tmpRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "openacme-fire-extractor-")
   );
@@ -58,6 +62,9 @@ function makeAgent(configOverrides: Partial<AgentConfig> = {}): Agent {
     memoryStore: new MemoryStore(path.join(tmpRoot, "agents")),
     taskStore: new TaskStore(path.join(tmpRoot, "tasks")),
     inboxStore: createInboxStore(db),
+    onTimelineEvent: timelineEvents
+      ? (event) => timelineEvents.push(event)
+      : undefined,
   });
 }
 
@@ -107,6 +114,97 @@ describe("Agent.fireExtractor", () => {
     expect(call.sessionId).toBe("s1");
     expect(call.sessionMessages).toBe(messages);
     expect(call.newMessageCount).toBe(2); // first run, no cursor → all
+  });
+
+  it("emits memory extraction started and finished timeline events", async () => {
+    const timelineEvents: SessionTimelineEventInput[] = [];
+    const agent = makeAgent({}, timelineEvents);
+    vi.spyOn(extractorModule, "runExtractor").mockResolvedValue({
+      status: "completed",
+    });
+
+    await fireAndSettle(agent, {
+      sessionId: "s-extract",
+      sessionMessages: [user("u1", "hi"), asst("a1", "ok")],
+    });
+
+    expect(timelineEvents.map((event) => event.eventType)).toEqual([
+      "session.memory.extraction.started",
+      "session.memory.extraction.finished",
+    ]);
+    expect(timelineEvents[0]).toMatchObject({
+      sessionId: "s-extract",
+      agentId: "a1",
+      source: "agent",
+      status: "running",
+      payload: {
+        newMessageCount: 2,
+      },
+    });
+    expect(timelineEvents[1]).toMatchObject({
+      sessionId: "s-extract",
+      agentId: "a1",
+      source: "agent",
+      status: "ok",
+      payload: {
+        extractorStatus: "completed",
+      },
+    });
+  });
+
+  it("emits memory extraction failed timeline events without advancing the cursor", async () => {
+    const timelineEvents: SessionTimelineEventInput[] = [];
+    const agent = makeAgent({}, timelineEvents);
+    vi.spyOn(extractorModule, "runExtractor").mockResolvedValue({
+      status: "failed",
+      error: "extractor model down",
+    });
+
+    await fireAndSettle(agent, {
+      sessionId: "s-extract-fail",
+      sessionMessages: [user("u1", "hi"), asst("a1", "ok")],
+    });
+
+    expect(timelineEvents.map((event) => event.eventType)).toEqual([
+      "session.memory.extraction.started",
+      "session.memory.extraction.failed",
+    ]);
+    expect(timelineEvents[1]).toMatchObject({
+      sessionId: "s-extract-fail",
+      agentId: "a1",
+      source: "agent",
+      status: "error",
+      payload: {
+        extractorStatus: "failed",
+        error: "extractor model down",
+      },
+    });
+  });
+
+  it("emits memory extraction skipped when extraction is disabled", async () => {
+    const timelineEvents: SessionTimelineEventInput[] = [];
+    const agent = makeAgent(
+      { memoryExtractionEnabled: false },
+      timelineEvents
+    );
+    const spy = vi.spyOn(extractorModule, "runExtractor");
+
+    await fireAndSettle(agent, {
+      sessionId: "s-extract-disabled",
+      sessionMessages: [user("u1", "hi"), asst("a1", "ok")],
+    });
+
+    expect(spy).not.toHaveBeenCalled();
+    expect(timelineEvents).toEqual([
+      expect.objectContaining({
+        sessionId: "s-extract-disabled",
+        agentId: "a1",
+        eventType: "session.memory.extraction.skipped",
+        source: "agent",
+        status: "skipped",
+        payload: { reason: "disabled" },
+      }),
+    ]);
   });
 
   it("does not invoke the extractor when memory extraction is disabled", async () => {

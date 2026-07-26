@@ -1,5 +1,15 @@
 export { ToolRegistry, registry } from "./registry.js";
-export type { ToolEntry, ToolSchema, ToolDefinition, ToolInfo } from "./types.js";
+export type {
+  ToolEntry,
+  ToolSchema,
+  ToolDefinition,
+  ToolInfo,
+  ToolExecutionStatus,
+  ToolResultStatus,
+  ToolResultClassification,
+  ToolResultClassifier,
+  ToolResultClassifierContext,
+} from "./types.js";
 export {
   bindSessionSearch,
   type SessionSearchBindings,
@@ -69,6 +79,13 @@ export {
   getToolHostDispatcher,
   type ToolHostDispatcher,
 } from "./tool-host-binding.js";
+export {
+  bindToolForensics,
+  type ToolForensicsBinding,
+  type ToolForensicsSink,
+  type ToolForensicsSpan,
+  withToolForensicSpan,
+} from "./forensics.js";
 export { SYSTEM_TOOLS, type SystemTool } from "./system.js";
 export {
   sweepOverflow,

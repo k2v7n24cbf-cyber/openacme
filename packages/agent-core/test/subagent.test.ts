@@ -10,6 +10,7 @@ import {
   createMessageStore,
   createInboxStore,
 } from "@openacme/db";
+import type { SessionTimelineEventInput } from "@openacme/db";
 import { MemoryStore } from "@openacme/memory";
 import { TaskStore } from "@openacme/tasks";
 import type { ToolRegistry } from "@openacme/tools";
@@ -20,13 +21,36 @@ import { runSubagent } from "../src/subagent.js";
 
 // Mock @openacme/llm-provider so structured-mode tests can route the
 // generateObject call through a controlled MockLanguageModelV3.
-const { getModelMock } = vi.hoisted(() => ({
+const { getModelMock, enterAIForensicContextMock } = vi.hoisted(() => ({
   getModelMock: vi.fn<(cfg: unknown) => unknown>(() => ({})),
+  enterAIForensicContextMock: vi.fn((_ctx: unknown, fn: () => unknown) => fn()),
 }));
 vi.mock("@openacme/llm-provider", () => ({
   getModel: getModelMock,
   resolveSubagentModel: (m: unknown) => m,
   supportsToolResultMedia: () => false,
+  getActiveTraceContext: () => null,
+  getAIForensicContext: () => undefined,
+  getAIForensicProviderRequestCount: () => 1,
+  buildForensicLocatorAttributes: () => ({}),
+  setAIForensicContext: vi.fn(),
+  enterAIForensicContext: enterAIForensicContextMock,
+  createForensicRecorder: () => ({
+    enabled: false,
+    recordEvent: vi.fn(),
+    writeRawFile: vi.fn(),
+  }),
+  withOpenAcmeSpan: (_name: string, _attrs: unknown, fn: (span: unknown) => unknown) =>
+    fn({ traceId: "trace-helper", spanId: "span-helper" }),
+  startOpenAcmeSpan: () => ({
+    setAttributes: vi.fn(),
+    addEvent: vi.fn(),
+    recordException: vi.fn(),
+    setStatusOk: vi.fn(),
+    setStatusError: vi.fn(),
+    end: vi.fn(),
+    run: (fn: () => unknown) => fn(),
+  }),
 }));
 
 const stubToolRegistry = {
@@ -41,7 +65,10 @@ function freshDb() {
   return db;
 }
 
-function makeAgent(model?: Partial<AgentConfig["model"]>): Agent {
+function makeAgent(
+  model?: Partial<AgentConfig["model"]>,
+  timelineEvents?: SessionTimelineEventInput[]
+): Agent {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openacme-subagent-"));
   const db = freshDb();
   const sessionStore = createSessionStore(db);
@@ -68,6 +95,9 @@ function makeAgent(model?: Partial<AgentConfig["model"]>): Agent {
     memoryStore: new MemoryStore(path.join(tmpRoot, "agents")),
     taskStore: new TaskStore(path.join(tmpRoot, "tasks")),
     inboxStore: createInboxStore(db),
+    onTimelineEvent: timelineEvents
+      ? (event) => timelineEvents.push(event)
+      : undefined,
   });
 }
 
@@ -115,6 +145,61 @@ describe("runSubagent (forked mode)", () => {
     expect(firstPart.text).toBe("extract anything important");
     expect(out.mode).toBe("forked");
     expect(out.status).toBe("completed");
+  });
+
+  it("emits generic subagent timeline events for forked helpers", async () => {
+    const timelineEvents: SessionTimelineEventInput[] = [];
+    const agent = makeAgent(undefined, timelineEvents);
+    agent.sessionStore.create(agent.config.id, { id: "sess-fork-timeline" });
+    vi.spyOn(agent, "runStream").mockResolvedValue({
+      toUIMessageStream: () =>
+        new ReadableStream({
+          start(c) {
+            c.close();
+          },
+        }),
+      usage: Promise.resolve({
+        inputTokens: 1,
+        outputTokens: 2,
+        totalTokens: 3,
+      }),
+    } as unknown as Awaited<ReturnType<Agent["runStream"]>>);
+
+    await runSubagent({
+      mode: "forked",
+      parent: agent,
+      parentSessionId: "sess-fork-timeline",
+      initialMessage: "extract anything important",
+      usageKind: "extractor",
+      telemetryFunctionId: "a1:subagent.forked.extractor",
+    });
+
+    expect(timelineEvents.map((event) => event.eventType)).toEqual([
+      "session.subagent.started",
+      "session.subagent.finished",
+    ]);
+    expect(timelineEvents[0]).toMatchObject({
+      sessionId: "sess-fork-timeline",
+      agentId: "a1",
+      source: "agent",
+      status: "running",
+      payload: {
+        mode: "forked",
+        usageKind: "extractor",
+        telemetryFunctionId: "a1:subagent.forked.extractor",
+      },
+    });
+    expect(timelineEvents[1]).toMatchObject({
+      sessionId: "sess-fork-timeline",
+      agentId: "a1",
+      source: "agent",
+      status: "ok",
+      payload: {
+        mode: "forked",
+        subagentStatus: "completed",
+        totalTokens: 3,
+      },
+    });
   });
 
   it("returns status=failed when runStream throws", async () => {
@@ -302,7 +387,19 @@ function modelReturning(obj: unknown): MockLanguageModelV3 {
     doGenerate: async () => ({
       content: [{ type: "text", text: JSON.stringify(obj) }],
       finishReason: "stop",
-      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      usage: {
+        inputTokens: {
+          total: 1,
+          noCache: 1,
+          cacheRead: undefined,
+          cacheWrite: undefined,
+        },
+        outputTokens: {
+          total: 1,
+          text: 1,
+          reasoning: undefined,
+        },
+      },
       warnings: [],
     }),
   });
@@ -325,7 +422,19 @@ function streamingModelReturning(obj: unknown): MockLanguageModelV3 {
             {
               type: "finish",
               finishReason: "stop",
-              usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+              usage: {
+                inputTokens: {
+                  total: 1,
+                  noCache: 1,
+                  cacheRead: undefined,
+                  cacheWrite: undefined,
+                },
+                outputTokens: {
+                  total: 1,
+                  text: 1,
+                  reasoning: undefined,
+                },
+              },
             },
           ],
         }),
@@ -338,6 +447,7 @@ describe("runSubagent (structured mode)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     getModelMock.mockReset();
+    enterAIForensicContextMock.mockClear();
   });
 
   it("returns the parsed object on success", async () => {
@@ -357,6 +467,49 @@ describe("runSubagent (structured mode)", () => {
     }
   });
 
+  it("emits generic subagent timeline events for structured helpers with usage attribution", async () => {
+    const timelineEvents: SessionTimelineEventInput[] = [];
+    const agent = makeAgent(undefined, timelineEvents);
+    getModelMock.mockReturnValue(modelReturning({ selected: ["a"] }));
+
+    await runSubagent({
+      mode: "structured",
+      parent: agent,
+      system: "system",
+      user: "user",
+      schema: PickSchema,
+      usage: { kind: "selector", sessionId: "sess-structured-timeline" },
+    });
+
+    expect(timelineEvents.map((event) => event.eventType)).toEqual([
+      "session.subagent.started",
+      "session.subagent.finished",
+    ]);
+    expect(timelineEvents[0]).toMatchObject({
+      sessionId: "sess-structured-timeline",
+      agentId: "a1",
+      source: "agent",
+      status: "running",
+      payload: {
+        mode: "structured",
+        usageKind: "selector",
+      },
+    });
+    expect(timelineEvents[1]).toMatchObject({
+      sessionId: "sess-structured-timeline",
+      agentId: "a1",
+      source: "agent",
+      status: "ok",
+      traceId: "trace-helper",
+      spanId: "span-helper",
+      payload: {
+        mode: "structured",
+        subagentStatus: "completed",
+        totalTokens: 2,
+      },
+    });
+  });
+
   it("streams structured output for OpenAI OAuth", async () => {
     const agent = makeAgent({ auth: "oauth" });
     const model = streamingModelReturning({ selected: ["oauth"] });
@@ -374,6 +527,16 @@ describe("runSubagent (structured mode)", () => {
     if (out.mode === "structured") {
       expect(out.object).toEqual({ selected: ["oauth"] });
     }
+    expect(enterAIForensicContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        forensicRunId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        agentId: "a1",
+        provider: "openai",
+        model: "test",
+        authMode: "oauth",
+      }),
+      expect.any(Function)
+    );
     expect(model.doStreamCalls.length).toBe(1);
     expect(model.doGenerateCalls.length).toBe(0);
   });

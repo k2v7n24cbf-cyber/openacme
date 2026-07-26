@@ -1,9 +1,23 @@
 import { generateText, type UIMessage, type UIMessagePart } from "ai";
 import { createHash, randomUUID } from "node:crypto";
-import { getModel } from "@openacme/llm-provider";
+import {
+  buildForensicEventSelector,
+  buildForensicLocatorAttributes,
+  buildForensicLocatorPayload,
+  createForensicRecorder,
+  enterAIForensicContext,
+  getAIForensicContext,
+  getAIForensicProviderRequestCount,
+  getModel,
+  withOpenAcmeSpan,
+} from "@openacme/llm-provider";
 import type { ModelConfig } from "@openacme/config";
 import { extractErrorText } from "./error-classifier.js";
 import type { CompressionConfig } from "./types.js";
+import {
+  buildAiForensicContext,
+  buildAiTelemetrySettings,
+} from "./telemetry.js";
 
 /**
  * Internal "step view" of a UIMessage. Each user UIMessage flattens to
@@ -994,6 +1008,60 @@ function errorMessage(e: unknown): string {
   return extractErrorText(e);
 }
 
+function sha256Text(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function safeForensicWrite(fn: () => void): void {
+  try {
+    fn();
+  } catch {
+    // Forensic recording is best-effort and must never alter compression.
+  }
+}
+
+export type CompressionNoOpReason =
+  | "too_short"
+  | "raw_boundary_empty"
+  | "pruned_boundary_empty"
+  | "proactive_summarizer_failed";
+
+export interface CompressionTimelineEvent {
+  eventType: string;
+  status?: string;
+  traceId?: string;
+  spanId?: string;
+  forensicRunId?: string;
+  durationMs?: number;
+  payload?: Record<string, unknown>;
+}
+
+function reportCompressionTimeline(
+  opts: { onTimelineEvent?: (event: CompressionTimelineEvent) => void },
+  event: CompressionTimelineEvent
+): void {
+  try {
+    opts.onTimelineEvent?.(event);
+  } catch {
+    // Timeline recording is non-blocking observability.
+  }
+}
+
+function noOpResult(
+  noOpReason: CompressionNoOpReason,
+  diagnostics: CompressResult["diagnostics"] = {}
+): CompressResult {
+  return {
+    childMessages: [],
+    summary: null,
+    savingsRatio: 0,
+    usedFallback: false,
+    noOp: true,
+    noOpReason,
+    diagnostics,
+  };
+}
+
 export interface CompressOpts {
   /** The session whose history we're summarizing. */
   parentSessionId: string;
@@ -1020,7 +1088,14 @@ export interface CompressOpts {
       reasoningTokens?: number;
     };
     durationMs: number;
+    forensicRunId?: string;
+    traceId?: string;
+    spanId?: string;
+    forensicPath?: string;
+    providerRequestCount?: number;
   }) => void;
+  /** Session-timeline sink for compression helper lifecycle events. */
+  onTimelineEvent?: (event: CompressionTimelineEvent) => void;
 }
 
 export interface CompressResult {
@@ -1040,6 +1115,8 @@ export interface CompressResult {
   usedFallback: boolean;
   /** True when no compression was performed (history too short, etc.). */
   noOp: boolean;
+  /** Diagnostic no-op reason, for timeline and forensic investigation. */
+  noOpReason?: CompressionNoOpReason;
   /** Diagnostic hooks for surfacing aux-model misconfig to the user. */
   diagnostics: {
     auxFailureModel?: string;
@@ -1140,14 +1217,7 @@ export class Compressor {
 
     const minForCompress = config.protectFirstN + 3 + 1;
     if (parentSteps.length <= minForCompress) {
-      return {
-        childMessages: [],
-        summary: null,
-        savingsRatio: 0,
-        usedFallback: false,
-        noOp: true,
-        diagnostics: {},
-      };
+      return noOpResult("too_short");
     }
 
     // Phase 0: Quick boundary probe on raw messages. If the user-anchor
@@ -1164,14 +1234,7 @@ export class Compressor {
         tailTokenBudget,
       });
       if (rawHeadEnd >= rawCut) {
-        return {
-          childMessages: [],
-          summary: null,
-          savingsRatio: 0,
-          usedFallback: false,
-          noOp: true,
-          diagnostics: {},
-        };
+        return noOpResult("raw_boundary_empty");
       }
     }
 
@@ -1190,14 +1253,7 @@ export class Compressor {
     const headEnd = alignBoundaryForward(working, config.protectFirstN);
     const cutEnd = findTailCutByTokens(working, { headEnd, tailTokenBudget });
     if (headEnd >= cutEnd) {
-      return {
-        childMessages: [],
-        summary: null,
-        savingsRatio: 0,
-        usedFallback: false,
-        noOp: true,
-        diagnostics: {},
-      };
+      return noOpResult("pruned_boundary_empty");
     }
 
     const summarizable = working.slice(headEnd, cutEnd);
@@ -1230,6 +1286,7 @@ export class Compressor {
       primaryModel: summarizerModel,
       fallbackModel: mainModel,
       onUsage: opts.onUsage,
+      onTimelineEvent: opts.onTimelineEvent,
     });
 
     // Phase 4: Build child message list.
@@ -1264,14 +1321,10 @@ export class Compressor {
     } else {
       // Proactive failure — give up this pass; cooldown prevents thrash.
       // Caller treats noOp:true as "stay on parent".
-      return {
-        childMessages: [],
-        summary: null,
-        savingsRatio: 0,
-        usedFallback: false,
-        noOp: true,
-        diagnostics: this.getDiagnostics(parentSessionId),
-      };
+      return noOpResult(
+        "proactive_summarizer_failed",
+        this.getDiagnostics(parentSessionId)
+      );
     }
 
     let combined: Step[] = [...head, summaryStep, ...tail];
@@ -1308,6 +1361,7 @@ export class Compressor {
     primaryModel: ModelConfig;
     fallbackModel: ModelConfig;
     onUsage?: CompressOpts["onUsage"];
+    onTimelineEvent?: CompressOpts["onTimelineEvent"];
   }): Promise<
     | { kind: "ok"; summary: string; usedFallback: boolean }
     | { kind: "err"; error: string }
@@ -1331,34 +1385,225 @@ export class Compressor {
 
     const tryGen = async (m: ModelConfig): Promise<string> => {
       const startedAt = Date.now();
-      const res = await generateText({
-        model: getModel(m),
-        prompt,
-        maxOutputTokens: Math.floor(opts.summaryBudget * 1.3),
-        experimental_telemetry: {
-          isEnabled: true,
-          functionId: "compression-summarizer",
-          metadata: { model: modelLabel(m) },
-        },
+      const parentForensicRunId = getAIForensicContext()?.forensicRunId;
+      const telemetry = buildAiTelemetrySettings({
+        functionId: "compression-summarizer",
+        sessionId: opts.sessionId,
+        kind: "extractor",
+        model: m,
+        metadata: { summaryBudget: opts.summaryBudget },
       });
-      try {
-        if (res.usage) {
-          opts.onUsage?.({
-            model: m,
-            tokens: {
-              inputTokens: res.usage.inputTokens,
-              outputTokens: res.usage.outputTokens,
-              totalTokens: res.usage.totalTokens,
-              cachedInputTokens: res.usage.inputTokenDetails?.cacheReadTokens,
-              cacheWriteTokens: res.usage.inputTokenDetails?.cacheWriteTokens,
-              reasoningTokens: res.usage.outputTokenDetails?.reasoningTokens,
-            },
-            durationMs: Date.now() - startedAt,
-          });
-        }
-      } catch {
-        // Ledger reporting must never fail a summarization attempt.
-      }
+      const forensicContext = buildAiForensicContext({
+        forensicRunId: telemetry.forensicRunId,
+        parentForensicRunId,
+        sessionId: opts.sessionId,
+        kind: "extractor",
+        model: m,
+      });
+      const recorder = createForensicRecorder({ context: forensicContext });
+      const eventSelector = buildForensicEventSelector(
+        "compression.summarizer.start"
+      );
+      const locatorArgs = {
+        forensicRunId: telemetry.forensicRunId,
+        sessionId: opts.sessionId,
+        eventType: "compression.summarizer",
+        eventSelector,
+        relativeEvidenceDir: "compression/summarizer",
+      };
+      const locatorAttributes = buildForensicLocatorAttributes(locatorArgs);
+      const locatorPayload = buildForensicLocatorPayload(locatorArgs);
+      const promptBytes = Buffer.byteLength(prompt, "utf-8");
+      const promptSha256 = sha256Text(prompt);
+      const res = await enterAIForensicContext(forensicContext, () =>
+        withOpenAcmeSpan(
+          "openacme.ai.helper",
+          {
+            "openacme.span.type": "ai_helper",
+            "openacme.ai.function_id": telemetry.settings.functionId,
+            "openacme.forensic.run_id": telemetry.forensicRunId,
+            "openacme.forensic.parent_run_id": parentForensicRunId,
+            "openacme.session.id": opts.sessionId,
+            "openacme.usage.kind": "extractor",
+            "openacme.provider": m.provider,
+            "openacme.model": m.model,
+            ...locatorAttributes,
+          },
+          async (span) => {
+            safeForensicWrite(() => {
+              recorder.writeRawFile("compression/summarizer/prompt.txt", prompt);
+              recorder.writeRawFile(
+                "compression/summarizer/input.json",
+                JSON.stringify(
+                  {
+                    summaryBudget: opts.summaryBudget,
+                    previousSummaryBytes: opts.previousSummary
+                      ? Buffer.byteLength(opts.previousSummary, "utf-8")
+                      : 0,
+                    previousSummarySha256: opts.previousSummary
+                      ? sha256Text(opts.previousSummary)
+                      : undefined,
+                    turnCount: opts.turns.length,
+                    promptBytes,
+                    promptSha256,
+                  },
+                  null,
+                  2
+                )
+              );
+              recorder.recordEvent("compression.summarizer.start", {
+                provider: m.provider,
+                model: m.model,
+                summaryBudget: opts.summaryBudget,
+                turnCount: opts.turns.length,
+                promptBytes,
+                promptSha256,
+                traceId: span.traceId,
+                spanId: span.spanId,
+                ...locatorPayload,
+              });
+            });
+            reportCompressionTimeline(opts, {
+              eventType: "session.compression.summarizer.started",
+              status: "running",
+              traceId: span.traceId,
+              spanId: span.spanId,
+              forensicRunId: telemetry.forensicRunId,
+              payload: {
+                provider: m.provider,
+                model: m.model,
+                summaryBudget: opts.summaryBudget,
+                turnCount: opts.turns.length,
+                promptBytes,
+                promptSha256,
+                ...locatorPayload,
+              },
+            });
+            let res;
+            try {
+              res = await generateText({
+                model: getModel(m),
+                prompt,
+                maxOutputTokens: Math.floor(opts.summaryBudget * 1.3),
+                experimental_telemetry: telemetry.settings,
+              });
+            } catch (err) {
+              const durationMs = Date.now() - startedAt;
+              const error = errorMessage(err);
+              safeForensicWrite(() => {
+                recorder.recordEvent("compression.summarizer.error", {
+                  provider: m.provider,
+                  model: m.model,
+                  durationMs,
+                  error,
+                  traceId: span.traceId,
+                  spanId: span.spanId,
+                  ...locatorPayload,
+                });
+              });
+              reportCompressionTimeline(opts, {
+                eventType: "session.compression.summarizer.failed",
+                status: "error",
+                traceId: span.traceId,
+                spanId: span.spanId,
+                forensicRunId: telemetry.forensicRunId,
+                durationMs,
+                payload: {
+                  provider: m.provider,
+                  model: m.model,
+                  error,
+                  ...locatorPayload,
+                },
+              });
+              throw err;
+            }
+            const durationMs = Date.now() - startedAt;
+            const outputBytes = Buffer.byteLength(res.text ?? "", "utf-8");
+            const outputSha256 = sha256Text(res.text ?? "");
+            const providerRequestCount = getAIForensicProviderRequestCount(
+              telemetry.forensicRunId
+            );
+            safeForensicWrite(() => {
+              recorder.writeRawFile(
+                "compression/summarizer/output.txt",
+                res.text ?? ""
+              );
+              recorder.recordEvent("compression.summarizer.finish", {
+                provider: m.provider,
+                model: m.model,
+                inputTokens: res.usage?.inputTokens,
+                outputTokens: res.usage?.outputTokens,
+                totalTokens: res.usage?.totalTokens,
+                cachedInputTokens:
+                  res.usage?.inputTokenDetails?.cacheReadTokens,
+                cacheWriteTokens:
+                  res.usage?.inputTokenDetails?.cacheWriteTokens,
+                reasoningTokens:
+                  res.usage?.outputTokenDetails?.reasoningTokens,
+                outputBytes,
+                outputSha256,
+                durationMs,
+                providerRequestCount,
+                traceId: span.traceId,
+                spanId: span.spanId,
+                ...locatorPayload,
+              });
+            });
+            reportCompressionTimeline(opts, {
+              eventType: "session.compression.summarizer.finished",
+              status: "ok",
+              traceId: span.traceId,
+              spanId: span.spanId,
+              forensicRunId: telemetry.forensicRunId,
+              durationMs,
+              payload: {
+                provider: m.provider,
+                model: m.model,
+                inputTokens: res.usage?.inputTokens,
+                outputTokens: res.usage?.outputTokens,
+                totalTokens: res.usage?.totalTokens,
+                cachedInputTokens:
+                  res.usage?.inputTokenDetails?.cacheReadTokens,
+                cacheWriteTokens:
+                  res.usage?.inputTokenDetails?.cacheWriteTokens,
+                reasoningTokens:
+                  res.usage?.outputTokenDetails?.reasoningTokens,
+                outputBytes,
+                outputSha256,
+                providerRequestCount,
+                ...locatorPayload,
+              },
+            });
+            try {
+              if (res.usage) {
+                opts.onUsage?.({
+                  model: m,
+                  tokens: {
+                    inputTokens: res.usage.inputTokens,
+                    outputTokens: res.usage.outputTokens,
+                    totalTokens: res.usage.totalTokens,
+                    cachedInputTokens:
+                      res.usage.inputTokenDetails?.cacheReadTokens,
+                    cacheWriteTokens:
+                      res.usage.inputTokenDetails?.cacheWriteTokens,
+                    reasoningTokens:
+                      res.usage.outputTokenDetails?.reasoningTokens,
+                  },
+                  durationMs,
+                  forensicRunId: telemetry.forensicRunId,
+                  traceId: span.traceId,
+                  spanId: span.spanId,
+                  forensicPath: recorder.runDir,
+                  providerRequestCount,
+                });
+              }
+            } catch {
+              // Ledger reporting must never fail a summarization attempt.
+            }
+            return res;
+          }
+        )
+      );
       return res.text.trim();
     };
 

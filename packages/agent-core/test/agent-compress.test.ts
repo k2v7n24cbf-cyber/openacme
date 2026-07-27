@@ -192,6 +192,7 @@ function makeAgent(opts: {
   protectFirstN?: number;
   tailTokenBudget?: number;
   attachmentsRoot?: string;
+  auth?: "api_key" | "oauth";
   onUsage?: (report: UsageReport) => void;
   onTimelineEvent?: (event: SessionTimelineEventInput) => void;
 }): Agent {
@@ -204,7 +205,7 @@ function makeAgent(opts: {
       provider: "openai",
       model: "gpt-test",
       apiKey: "x",
-      auth: "api_key",
+      auth: opts.auth ?? "api_key",
     },
     persona: "test",
     tools: [],
@@ -368,6 +369,63 @@ describe("Agent — compress() over UIMessage[]", () => {
 
     const archivedHistory = messages.getHistory(archivedId);
     expect(archivedHistory.length).toBe(seed.length);
+  });
+
+  it("uses streaming summarization for OpenAI OAuth compression", async () => {
+    const db = freshDb();
+    const sessions = createSessionStore(db);
+    const messages = createMessageStore(db);
+    const parent = sessions.create("a1", { id: "p-oauth" });
+
+    const seed: UIMessage[] = [];
+    for (let i = 0; i < 6; i++) {
+      seed.push(userUI(`u${i}`));
+      seed.push(assistantUI(`a${i}`.repeat(40)));
+    }
+    messages.appendMany(
+      parent.id,
+      seed.map((m) => ({
+        id: m.id,
+        role: m.role as "user" | "assistant",
+        parts: m.parts,
+      })),
+    );
+
+    generateTextMock.mockRejectedValue(new Error("non-stream rejected"));
+    streamTextMock.mockReturnValue({
+      textStream: (async function* () {
+        yield "## Active Task\n";
+        yield "None.";
+      })(),
+      totalUsage: Promise.resolve({}),
+    });
+
+    const agent = makeAgent({
+      db,
+      thresholdTokens: 1000,
+      protectFirstN: 1,
+      tailTokenBudget: 100,
+      auth: "oauth",
+    });
+    await agent.compress(parent.id, "proactive");
+
+    expect(streamTextMock).toHaveBeenCalled();
+    expect(
+      generateTextMock.mock.calls.some(
+        ([arg]) =>
+          arg?.experimental_telemetry?.functionId === "compression-summarizer",
+      ),
+    ).toBe(false);
+    const postHistory = messages.getHistory(parent.id);
+    const summaryRow = postHistory.find((m) => {
+      if (m.role !== "user") return false;
+      const first = m.parts[0] as { type?: string; text?: string };
+      return (
+        first.type === "text" &&
+        (first.text ?? "").includes("[CONTEXT COMPACTION")
+      );
+    });
+    expect(summaryRow).toBeDefined();
   });
 
   it("emits forensic-grade compression timeline, helper locators, and usage paths", async () => {

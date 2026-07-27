@@ -1,4 +1,10 @@
-import { generateText, type UIMessage, type UIMessagePart } from "ai";
+import {
+  generateText,
+  streamText,
+  type LanguageModelUsage,
+  type UIMessage,
+  type UIMessagePart,
+} from "ai";
 import { createHash, randomUUID } from "node:crypto";
 import { getModel } from "@openacme/llm-provider";
 import type { ModelConfig } from "@openacme/config";
@@ -1004,6 +1010,10 @@ function errorMessage(e: unknown): string {
   return extractErrorText(e);
 }
 
+function requiresStreamingGenerate(m: ModelConfig): boolean {
+  return m.provider === "openai" && m.auth === "oauth";
+}
+
 function sha256Text(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -1435,14 +1445,35 @@ export class Compressor {
             ...observation.locatorPayload,
           },
         });
-        let res;
+        let res: { text: string; usage?: LanguageModelUsage };
         try {
-          res = await generateText({
-            model: getModel(m),
-            prompt,
-            maxOutputTokens: Math.floor(opts.summaryBudget * 1.3),
-            experimental_telemetry: observation.telemetry.settings,
-          });
+          if (requiresStreamingGenerate(m)) {
+            const stream = streamText({
+              model: getModel(m),
+              prompt,
+              maxOutputTokens: Math.floor(opts.summaryBudget * 1.3),
+              experimental_telemetry: observation.telemetry.settings,
+            });
+            let text = "";
+            for await (const delta of stream.textStream) {
+              text += delta;
+            }
+            let usage: LanguageModelUsage | undefined;
+            try {
+              usage = await stream.totalUsage;
+            } catch {
+              // Usage metadata is useful but not required for compression.
+            }
+            res = { text, usage };
+          } else {
+            const generated = await generateText({
+              model: getModel(m),
+              prompt,
+              maxOutputTokens: Math.floor(opts.summaryBudget * 1.3),
+              experimental_telemetry: observation.telemetry.settings,
+            });
+            res = { text: generated.text, usage: generated.usage };
+          }
         } catch (err) {
           const durationMs = Date.now() - startedAt;
           const error = errorMessage(err);

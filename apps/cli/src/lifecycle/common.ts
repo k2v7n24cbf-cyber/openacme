@@ -101,6 +101,39 @@ export interface RunResult {
   stderr: string;
 }
 
+const SERVICE_ENV_PASSTHROUGH_KEYS = [
+  "OPENACME_TELEMETRY",
+  "OPENACME_DEBUG",
+  "OPENACME_LOG_FILE",
+  "OPENACME_OBSERVABILITY",
+  "OPENACME_TELEMETRY_SERVICE_NAME",
+  "OPENACME_AI_FORENSICS",
+  "OPENACME_AI_FORENSICS_CAPTURE_RAW",
+  "OPENACME_AI_FORENSICS_DIR",
+  "OPENACME_AI_FORENSICS_RETENTION_DAYS",
+  "OPENACME_AI_FORENSICS_MAX_RUN_BYTES",
+  "LANGFUSE_BASE_URL",
+  "LANGFUSE_PUBLIC_KEY",
+  "OPENACME_OTLP_TRACES_ENDPOINT",
+  "OPENACME_OTLP_LOGS_ENDPOINT",
+] as const;
+
+/**
+ * Environment persisted into service managers. Keep this list to non-secret
+ * toggles and endpoints; credentials belong in the process environment or
+ * data-dir .env, not world-readable launchd/systemd unit files.
+ */
+export function serviceEnvironmentPassthrough(
+  env: Record<string, string | undefined> = process.env
+): Array<[string, string]> {
+  return SERVICE_ENV_PASSTHROUGH_KEYS.flatMap((key) => {
+    const value = env[key];
+    return typeof value === "string" && value.length > 0
+      ? [[key, value] as [string, string]]
+      : [];
+  });
+}
+
 /**
  * Spawn a command and capture stdout/stderr. Resolves with the result —
  * caller decides whether non-zero is an error. We resolve (instead of reject)

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { runCmd } from "./common.js";
+import { runCmd, serviceEnvironmentPassthrough } from "./common.js";
 import type { InstallOpts, PlatformLifecycle, ServiceStatus } from "./types.js";
 
 const LABEL = "com.openacme";
@@ -54,18 +54,7 @@ function escapeXml(s: string): string {
 }
 
 function renderPlist(opts: InstallOpts, wrapper: string): string {
-  // Optional env vars: forward through when set on the caller's environment
-  // so the daemon picks them up on next launchd boot. Telemetry is the
-  // current opt-in; add more here if other dev/diag flags need to survive
-  // a `pnpm agent restart`. Without this passthrough, a manual plist edit
-  // would be overwritten on every restart.
-  const passthrough: Array<[string, string | undefined]> = [
-    ["OPENACME_TELEMETRY", process.env["OPENACME_TELEMETRY"]],
-    ["OPENACME_DEBUG", process.env["OPENACME_DEBUG"]],
-    ["OPENACME_LOG_FILE", process.env["OPENACME_LOG_FILE"]],
-  ];
-  const extraEnv = passthrough
-    .filter(([, v]) => typeof v === "string" && v.length > 0)
+  const extraEnv = serviceEnvironmentPassthrough()
     .map(([k, v]) => `    <key>${k}</key><string>${escapeXml(v!)}</string>`)
     .join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>

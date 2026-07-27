@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { runCmd } from "./common.js";
+import { runCmd, serviceEnvironmentPassthrough } from "./common.js";
 import { NoSystemdError, type InstallOpts, type PlatformLifecycle, type ServiceStatus } from "./types.js";
 
 const UNIT_NAME = "openacme.service";
@@ -19,6 +19,9 @@ function renderUnit(opts: InstallOpts): string {
   // paths containing spaces work correctly. Environment and file directives
   // are not tokenized, so bare paths are fine there.
   const q = (s: string) => `"${s.replaceAll('"', '\\"')}"`;
+  const passthrough = serviceEnvironmentPassthrough()
+    .map(([key, value]) => `Environment=${q(`${key}=${value}`)}`)
+    .join("\n");
   return `[Unit]
 Description=OpenAcme agent daemon
 After=network.target
@@ -26,8 +29,8 @@ After=network.target
 [Service]
 Type=simple
 ExecStart=${q(opts.nodePath)} ${q(opts.binPath)} __serve
-Environment=OPENACME_DATA_DIR=${opts.dataDir}
-WorkingDirectory=${opts.dataDir}
+Environment=${q(`OPENACME_DATA_DIR=${opts.dataDir}`)}
+${passthrough ? `${passthrough}\n` : ""}WorkingDirectory=${opts.dataDir}
 StandardOutput=append:${opts.logPath}
 StandardError=append:${opts.logPath}
 Restart=on-failure

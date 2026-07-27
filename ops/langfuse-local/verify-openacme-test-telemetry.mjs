@@ -154,19 +154,21 @@ async function runPrompt({ agent, prompt, langfuse, startedAt }) {
     failures.push("forensic missing tool.finish evidenceRef");
   }
 
-  const observations = await pollLangfuseObservations(langfuse, {
+  const langfuseVisibility = await pollLangfuseVisibility(langfuse, {
     traceId: usage.traceId,
     sessionId,
+    forensicRunId: usage.forensicRunId,
     fromStartTime: turnStartedAt,
   });
+  const observations = langfuseVisibility.observations;
   const observationNames = uniqueSorted(
     observations.map((obs) => typeof obs.name === "string" ? obs.name : undefined).filter(Boolean)
   );
   const observationTypes = uniqueSorted(
     observations.map((obs) => typeof obs.type === "string" ? obs.type : undefined).filter(Boolean)
   );
-  if (!observationNames.includes("openacme.agent.turn")) {
-    failures.push("Langfuse missing openacme.agent.turn");
+  if (!langfuseVisibility.agentTurnVisible) {
+    failures.push("Langfuse missing agent turn trace metadata/observation");
   }
   if (prompt.expectTool && !observationNames.includes("openacme.tool.execute")) {
     failures.push("Langfuse missing openacme.tool.execute");
@@ -250,6 +252,10 @@ async function runPrompt({ agent, prompt, langfuse, startedAt }) {
       runCaptureRaw: forensic.runCaptureRaw,
     },
     langfuse: {
+      traceName: langfuseVisibility.trace?.name ?? null,
+      traceSessionId: langfuseVisibility.trace?.sessionId ?? null,
+      traceMetadataKeys: Object.keys(langfuseVisibility.trace?.metadata ?? {}).sort(),
+      agentTurnVisible: langfuseVisibility.agentTurnVisible,
       observationCount: observations.length,
       observationNames,
       observationTypes,
@@ -310,15 +316,29 @@ function readForensicSummary(forensicPath) {
   };
 }
 
-async function pollLangfuseObservations(langfuse, query) {
+async function pollLangfuseVisibility(langfuse, query) {
   const deadline = Date.now() + LANGFUSE_TIMEOUT_MS;
-  let last = [];
+  let lastObservations = [];
+  let lastTrace = null;
   let lastError;
   while (Date.now() <= deadline) {
     try {
-      last = await fetchLangfuseObservations(langfuse, query);
-      const names = new Set(last.map((obs) => obs.name).filter(Boolean));
-      if (names.has("openacme.agent.turn")) return last;
+      lastObservations = await fetchLangfuseObservations(langfuse, query);
+      lastTrace = query.traceId
+        ? await fetchLangfuseTrace(langfuse, query.traceId)
+        : null;
+      const agentTurnVisible = hasAgentTurnVisibility(
+        lastTrace,
+        lastObservations,
+        query.forensicRunId,
+      );
+      if (agentTurnVisible) {
+        return {
+          observations: lastObservations,
+          trace: lastTrace,
+          agentTurnVisible,
+        };
+      }
       lastError = undefined;
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
@@ -328,7 +348,10 @@ async function pollLangfuseObservations(langfuse, query) {
   throw new VerifyError("Timed out waiting for Langfuse observations", {
     traceId: query.traceId,
     sessionId: query.sessionId,
-    lastNames: uniqueSorted(last.map((obs) => obs.name).filter(Boolean)),
+    forensicRunId: query.forensicRunId,
+    lastTraceName: lastTrace?.name,
+    lastTraceMetadataKeys: Object.keys(lastTrace?.metadata ?? {}).sort(),
+    lastNames: uniqueSorted(lastObservations.map((obs) => obs.name).filter(Boolean)),
     lastError,
   });
 }
@@ -395,6 +418,26 @@ async function requestLangfuseObservations(langfuse, publicPath, query, includeF
   if (Array.isArray(parsed?.data)) return parsed.data.filter((item) => item && typeof item === "object");
   if (Array.isArray(parsed?.observations)) return parsed.observations.filter((item) => item && typeof item === "object");
   return [];
+}
+
+async function fetchLangfuseTrace(langfuse, traceId) {
+  const res = await fetch(langfusePublicUrl(langfuse.baseUrl, `/traces/${traceId}`), {
+    headers: {
+      accept: "application/json",
+      authorization: `Basic ${Buffer.from(`${langfuse.publicKey}:${langfuse.secretKey}`).toString("base64")}`,
+    },
+    signal: AbortSignal.timeout(15_000),
+  });
+  const body = await res.text();
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    throw new VerifyError("Langfuse trace request failed", {
+      status: res.status,
+      body: truncate(body, 800),
+    });
+  }
+  const parsed = parseJsonSafe(body);
+  return parsed && typeof parsed === "object" ? parsed : null;
 }
 
 async function openSSE(pathname) {
@@ -634,6 +677,30 @@ function observationHasEvidenceLocator(obs, forensicRunId) {
     text.includes("openacme.forensic.evidence_ref") ||
     text.includes("evidence_ref") ||
     (forensicRunId && text.includes(`openacme://forensics/${forensicRunId}`))
+  );
+}
+
+function hasAgentTurnVisibility(trace, observations, forensicRunId) {
+  if (trace?.name === "openacme.agent.turn") return true;
+  if (metadataMatchesAgentTurn(trace?.metadata, forensicRunId)) return true;
+  return observations.some((obs) => {
+    if (obs?.name === "openacme.agent.turn") return true;
+    return metadataMatchesAgentTurn(obs?.metadata, forensicRunId);
+  });
+}
+
+function metadataMatchesAgentTurn(metadata, forensicRunId) {
+  if (!metadata || typeof metadata !== "object") return false;
+  const text = JSON.stringify(metadata);
+  if (metadata.span_type === "agent_turn") return true;
+  if (text.includes("openacme.span.type") && text.includes("agent_turn")) {
+    return true;
+  }
+  if (!forensicRunId) return false;
+  return (
+    metadata.forensic_run_id === forensicRunId ||
+    metadata.forensicRunId === forensicRunId ||
+    text.includes(`openacme://forensics/${forensicRunId}#agent.run`)
   );
 }
 

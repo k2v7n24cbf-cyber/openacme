@@ -24,7 +24,7 @@ import {
   injectUsageAccounting,
 } from "./openrouter-cache.js";
 import { anthropicCacheMiddleware } from "./anthropic-cache.js";
-import { forensicFetch } from "./forensics-fetch.js";
+import { observeProviderRequest } from "./provider-observation.js";
 
 const log = createLogger("llm-provider");
 const MAX_OAUTH_ERROR_BODY_CHARS = 4_000;
@@ -369,20 +369,23 @@ const providerFactories: Record<
             : init;
           log.debug({ provider: "openai", url, body: rewritten?.body }, "outbound request");
 
-          const send = async (force: boolean) =>
-            forensicFetch(
+          const send = async (force: boolean) => {
+            const nextInit = {
+              ...rewritten,
+              headers: await buildHeaders(force),
+            };
+            return observeProviderRequest(
               url as string | URL,
-              {
-                ...rewritten,
-                headers: await buildHeaders(force),
-              },
+              nextInit,
               {
                 provider: "openai",
                 model: config.model,
                 authMode: "oauth",
                 preTransformBody: init?.body,
-              }
+              },
+              () => fetch(url as string | URL, nextInit)
             );
+          };
 
           let res = await send(false);
           if (res.status === 401) {
@@ -415,11 +418,16 @@ const providerFactories: Record<
       baseURL: config.baseUrl,
       headers: config.headers,
       fetch: async (url, init) =>
-        forensicFetch(url as string | URL, init, {
-          provider: "openai",
-          model: config.model,
-          authMode: "api_key",
-        }),
+        observeProviderRequest(
+          url as string | URL,
+          init,
+          {
+            provider: "openai",
+            model: config.model,
+            authMode: "api_key",
+          },
+          () => fetch(url as string | URL, init)
+        ),
     });
     return provider(config.model);
   },
@@ -520,20 +528,23 @@ const providerFactories: Record<
           : init;
         log.debug({ provider: "anthropic", url, body: rewritten?.body }, "outbound request");
 
-        const send = async (force: boolean) =>
-          forensicFetch(
+        const send = async (force: boolean) => {
+          const nextInit = {
+            ...rewritten,
+            headers: await buildHeaders(force),
+          };
+          return observeProviderRequest(
             url as string | URL,
-            {
-              ...rewritten,
-              headers: await buildHeaders(force),
-            },
+            nextInit,
             {
               provider: "anthropic",
               model: config.model,
               authMode: oauthNow ? "oauth" : "api_key",
               preTransformBody: init?.body,
-            }
+            },
+            () => fetch(url as string | URL, nextInit)
           );
+        };
 
         let res = await send(false);
         // 401 on an OAuth call usually means the token was revoked
@@ -617,11 +628,16 @@ const providerFactories: Record<
       baseURL: config.baseUrl,
       headers: config.headers,
       fetch: async (url, init) =>
-        forensicFetch(url as string | URL, init, {
-          provider: "google",
-          model: config.model,
-          authMode: "api_key",
-        }),
+        observeProviderRequest(
+          url as string | URL,
+          init,
+          {
+            provider: "google",
+            model: config.model,
+            authMode: "api_key",
+          },
+          () => fetch(url as string | URL, init)
+        ),
     });
     return provider(config.model);
   },
@@ -653,12 +669,17 @@ const providerFactories: Record<
           init && newBody !== init.body
             ? { ...init, body: newBody as RequestInit["body"] }
             : init;
-        return forensicFetch(url as string | URL, rewritten, {
-          provider: "openrouter",
-          model: config.model,
-          authMode: "api_key",
-          preTransformBody: init?.body,
-        });
+        return observeProviderRequest(
+          url as string | URL,
+          rewritten,
+          {
+            provider: "openrouter",
+            model: config.model,
+            authMode: "api_key",
+            preTransformBody: init?.body,
+          },
+          () => fetch(url as string | URL, rewritten)
+        );
       },
     });
     return provider(config.model);
@@ -670,11 +691,16 @@ const providerFactories: Record<
       baseURL: config.baseUrl ?? "http://localhost:11434/v1",
       headers: config.headers,
       fetch: async (url, init) =>
-        forensicFetch(url as string | URL, init, {
-          provider: "ollama",
-          model: config.model,
-          authMode: "local",
-        }),
+        observeProviderRequest(
+          url as string | URL,
+          init,
+          {
+            provider: "ollama",
+            model: config.model,
+            authMode: "local",
+          },
+          () => fetch(url as string | URL, init)
+        ),
     });
     return provider(config.model);
   },
@@ -689,11 +715,16 @@ const providerFactories: Record<
       baseURL: config.baseUrl,
       headers: config.headers,
       fetch: async (url, init) =>
-        forensicFetch(url as string | URL, init, {
-          provider: "custom",
-          model: config.model,
-          authMode: "api_key",
-        }),
+        observeProviderRequest(
+          url as string | URL,
+          init,
+          {
+            provider: "custom",
+            model: config.model,
+            authMode: "api_key",
+          },
+          () => fetch(url as string | URL, init)
+        ),
     });
     return provider(config.model);
   },

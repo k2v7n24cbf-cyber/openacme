@@ -6,20 +6,19 @@ export interface ForensicEvidenceRefArgs {
   selector?: string | number | null;
 }
 
-export interface SessionTimelineLocatorArgs {
+interface ForensicCorrelationArgs {
   sessionId?: string | null;
   forensicRunId?: string | null;
 }
 
 export interface ForensicLocatorArgs
-  extends ForensicEvidenceRefArgs,
-    SessionTimelineLocatorArgs {
+  extends ForensicEvidenceRefArgs, ForensicCorrelationArgs {
   eventSelector?: string | null;
   relativeEvidenceDir?: string | null;
 }
 
 export function buildForensicEvidenceRef(
-  args: ForensicEvidenceRefArgs
+  args: ForensicEvidenceRefArgs,
 ): string | undefined {
   const forensicRunId = clean(args.forensicRunId);
   const eventType = clean(args.eventType);
@@ -27,7 +26,7 @@ export function buildForensicEvidenceRef(
   const selector = clean(
     args.selector === undefined || args.selector === null
       ? undefined
-      : String(args.selector)
+      : String(args.selector),
   );
   const fragment = selector
     ? `${encodeURIComponent(eventType)}:${encodeURIComponent(selector)}`
@@ -35,20 +34,9 @@ export function buildForensicEvidenceRef(
   return `openacme://forensics/${encodeURIComponent(forensicRunId)}#${fragment}`;
 }
 
-export function buildSessionTimelineLocator(
-  args: SessionTimelineLocatorArgs
-): string | undefined {
-  const sessionId = clean(args.sessionId);
-  if (!sessionId) return undefined;
-  const params = new URLSearchParams({ includeForensics: "1" });
-  const forensicRunId = clean(args.forensicRunId);
-  if (forensicRunId) params.set("forensicRunId", forensicRunId);
-  return `/api/sessions/${encodeURIComponent(sessionId)}/timeline?${params.toString()}`;
-}
-
 export function buildForensicEventSelector(
   eventType: string,
-  fields: Record<string, string | number | undefined | null> = {}
+  fields: Record<string, string | number | undefined | null> = {},
 ): string {
   const parts = [`type=${eventType}`];
   for (const [key, value] of Object.entries(fields)) {
@@ -61,7 +49,7 @@ export function buildForensicEventSelector(
 }
 
 export function buildForensicLocatorAttributes(
-  args: ForensicLocatorArgs
+  args: ForensicLocatorArgs,
 ): Record<string, string> {
   const evidenceRef = buildForensicEvidenceRef(args);
   if (!evidenceRef) return {};
@@ -72,20 +60,16 @@ export function buildForensicLocatorAttributes(
   const eventSelector = clean(args.eventSelector);
   if (eventSelector) out["openacme.forensic.event_selector"] = eventSelector;
   const relativeEvidenceDir = sanitizeRelativeEvidenceDir(
-    args.relativeEvidenceDir
+    args.relativeEvidenceDir,
   );
   if (relativeEvidenceDir) {
     out["openacme.forensic.relative_evidence_dir"] = relativeEvidenceDir;
-  }
-  const timelineLocator = buildSessionTimelineLocator(args);
-  if (timelineLocator) {
-    out["openacme.session.timeline_locator"] = timelineLocator;
   }
   return out;
 }
 
 export function buildForensicLocatorPayload(
-  args: ForensicLocatorArgs
+  args: ForensicLocatorArgs,
 ): Record<string, string> {
   const attrs = buildForensicLocatorAttributes(args);
   const out: Record<string, string> = {};
@@ -95,9 +79,8 @@ export function buildForensicLocatorPayload(
     attrs,
     out,
     "openacme.forensic.relative_evidence_dir",
-    "relativeEvidenceDir"
+    "relativeEvidenceDir",
   );
-  copy(attrs, out, "openacme.session.timeline_locator", "timelineLocator");
   return out;
 }
 
@@ -105,7 +88,7 @@ function copy(
   source: Record<string, string>,
   target: Record<string, string>,
   sourceKey: string,
-  targetKey: string
+  targetKey: string,
 ): void {
   const value = source[sourceKey];
   if (value) target[targetKey] = value;
@@ -118,7 +101,7 @@ function clean(value: string | null | undefined): string | undefined {
 }
 
 function sanitizeRelativeEvidenceDir(
-  value: string | null | undefined
+  value: string | null | undefined,
 ): string | undefined {
   const cleaned = clean(value);
   if (!cleaned) return undefined;

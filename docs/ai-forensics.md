@@ -5,7 +5,7 @@ for investigations where an operator or agent needs to answer:
 
 - Which session, task, and message produced this token spike?
 - What exact model input was assembled for the turn?
-- What provider HTTP payloads were sent and received?
+- Which provider request/response happened, with status and request id?
 - Which tool output inflated the next model request?
 - Which `usage_events` row links to the trace and local evidence?
 
@@ -16,8 +16,8 @@ OpenAcme now records AI interactions in three linked layers:
 1. `usage_events`: aggregate accounting in SQLite. This is the first place to
    query for abnormal token or cost rows.
 2. Langfuse through OpenTelemetry: shared trace UI for humans and agents.
-3. Local AI forensic archive: local proof files for model inputs, provider
-   payloads, tool arguments, tool outputs, hashes, sizes, errors, and timings.
+3. Local AI forensic archive: local proof files for model inputs, helper
+   prompts, tool arguments, tool outputs, hashes, sizes, errors, and timings.
 4. `session_timeline_events` plus `GET /api/sessions/:id/timeline`: a
    session-scoped semantic timeline that links user-message receipt, turn
    lifecycle events, usage finalization, Langfuse correlation ids, and local
@@ -57,11 +57,18 @@ Useful overrides:
 OPENACME_AI_FORENSICS_DIR="$HOME/.openacme-test/ai-forensics"
 OPENACME_AI_FORENSICS_RETENTION_DAYS=30
 OPENACME_AI_FORENSICS_MAX_RUN_BYTES=0
+OPENACME_AI_FORENSICS_MAX_RAW_FILE_BYTES=1048576
+OPENACME_AI_FORENSICS_QUEUE_MAX_JOBS=10000
+OPENACME_AI_FORENSICS_QUEUE_MAX_RAW_BYTES=16777216
 ```
 
 `OPENACME_AI_FORENSICS_MAX_RUN_BYTES=0` means no per-run raw-file cap. Any
 positive value is a soft cap: raw files beyond the cap are skipped and an event
 is recorded, but the model call continues.
+
+`OPENACME_AI_FORENSICS_MAX_RAW_FILE_BYTES` is the hard per-file cap before a
+raw file is copied into the archive queue. Archive queue overflow drops evidence
+jobs instead of delaying model, tool, or HTTP execution.
 
 ## Enable Langfuse
 
@@ -93,8 +100,8 @@ OPENACME_AI_TELEMETRY_RECORD_INPUTS=1
 OPENACME_AI_TELEMETRY_RECORD_OUTPUTS=1
 ```
 
-Use these only during an investigation. Local raw forensics can already contain
-prompts, tool output, customer data, internal files, and model responses.
+Use these only during an investigation. Local raw forensics can contain prompts,
+tool output, customer data, internal files, and helper outputs.
 
 ## What Gets Recorded
 
@@ -106,9 +113,6 @@ events.jsonl
 agent/model-input.system.txt
 agent/model-input.messages.json
 agent/model-input.tools.json
-provider-requests/<ordinal>-<provider>-<model>/request.pre-transform.body
-provider-requests/<ordinal>-<provider>-<model>/request.post-transform.body
-provider-requests/<ordinal>-<provider>-<model>/response.body
 tool-calls/<toolCallId>/args.json
 tool-calls/<toolCallId>/result.pre-spill.txt
 tool-calls/<toolCallId>/result.post-spill.txt
@@ -121,8 +125,11 @@ compression/summarizer/output.txt
 ```
 
 Raw files are present only when `OPENACME_AI_FORENSICS_CAPTURE_RAW=1`.
-`events.jsonl` always records hashes, byte counts, redacted headers, status,
-duration, errors, and correlation fields where available.
+Provider wire request and response bodies are intentionally not written as raw
+files. Provider events record provider/model/auth, request ordinal, redacted
+headers, body presence/kind, response status, provider request id, trace/span
+ids, and evidence locators. Raw-file events record hashes and byte counts for
+the local evidence files that are still captured.
 
 History compression creates separate helper forensic runs:
 

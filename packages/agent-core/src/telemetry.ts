@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { TelemetrySettings } from "ai";
 import type { ModelConfig } from "@openacme/config";
 import type { UsageKind } from "@openacme/db";
-import type { AIForensicContext } from "@openacme/llm-provider";
+import type { AiObservationContext } from "@openacme/llm-provider";
 
 type Env = Record<string, string | undefined>;
 type MetadataValue = string | number | boolean;
@@ -24,7 +24,7 @@ export interface AiTelemetryArgs {
   metadata?: Record<string, MetadataValue | undefined>;
 }
 
-export interface AiForensicContextArgs {
+export interface AiObservationContextArgs {
   forensicRunId: string;
   parentForensicRunId?: string;
   agentId?: string;
@@ -87,9 +87,9 @@ export function buildAiTelemetrySettings(
   };
 }
 
-export function buildAiForensicContext(
-  args: AiForensicContextArgs
-): AIForensicContext {
+export function buildAiObservationContext(
+  args: AiObservationContextArgs
+): AiObservationContext {
   return {
     forensicRunId: args.forensicRunId,
     parentForensicRunId: args.parentForensicRunId,

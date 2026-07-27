@@ -13,19 +13,12 @@ import * as path from "node:path";
 import {
   getModel,
   getEffectiveContextWindow,
-  getAIForensicProviderRequestCount,
   resolveSubagentModel,
   supportsToolResultMedia,
-  createForensicRecorder,
-  enterAIForensicContext,
-  getActiveTraceContext,
-  getAIForensicContext,
-  setAIForensicContext,
+  createEvidenceRecorder,
+  getAiObservationContext,
   startOpenAcmeSpan,
-  withOpenAcmeSpan,
-  buildForensicEventSelector,
-  buildForensicLocatorAttributes,
-  buildForensicLocatorPayload,
+  buildEvidenceLocatorAttributes,
 } from "@openacme/llm-provider";
 import { createLogger } from "@openacme/config/logger";
 
@@ -34,7 +27,7 @@ import { createLogger } from "@openacme/config/logger";
  *  so e2e can supply a stub without going through a real provider. */
 export type ModelResolver = typeof getModel;
 import {
-  bindToolForensics,
+  bindToolObservation,
   toolCallContext,
   type ToolRegistry,
 } from "@openacme/tools";
@@ -59,62 +52,55 @@ import { Compressor, resolveThreshold } from "./compression.js";
 import { findRelevantMemories, type RelevantMemory } from "./selector.js";
 import { collectSurfacedMemories } from "./surfaced.js";
 import { runExtractor } from "./extractor.js";
-import {
-  runTitle,
-  extractTitleInputs,
-  sliceFallbackTitle,
-} from "./title.js";
+import { runTitle, extractTitleInputs, sliceFallbackTitle } from "./title.js";
 import {
   uiToModelMessages,
   sanitizeStoredHistory,
   ensureStepBoundaries,
   finalizeOrphanToolParts,
 } from "./messages.js";
-import {
-  extractErrorText,
-  extractStatusCode,
-} from "./error-classifier.js";
+import { extractErrorText, extractStatusCode } from "./error-classifier.js";
 import type {
   AgentConfig,
   MessageMetadata,
   TokenUsage,
   UsageReport,
 } from "./types.js";
-import {
-  buildAiForensicContext,
-  buildAiTelemetrySettings,
-} from "./telemetry.js";
+import { createAgentRunObservation } from "./agent-observation.js";
+import { createAiHelperObservation } from "./helper-observation.js";
 
 const log = createLogger("agent-core.agent");
 
-bindToolForensics({
-  getSink: () => createForensicRecorder(),
-  locatorAttributes: (args) => {
-    const forensicContext = getAIForensicContext();
-    return buildForensicLocatorAttributes({
-      forensicRunId: forensicContext?.forensicRunId,
-      sessionId: args.sessionId ?? forensicContext?.sessionId,
-      eventType: args.eventType,
-      selector: args.toolCallId,
-      eventSelector: args.toolCallId
-        ? `type=${args.eventType} toolCallId=${args.toolCallId}`
-        : `type=${args.eventType}`,
-      relativeEvidenceDir: args.relativeEvidenceDir,
-    });
-  },
-  withSpan: async (name, attributes, fn) => {
-    const span = startOpenAcmeSpan(name, attributes);
-    try {
-      return await span.run(() => fn(span));
-    } catch (err) {
-      span.recordException(err);
-      span.setStatusError(err);
-      throw err;
-    } finally {
-      span.end();
-    }
-  },
-});
+function bindAgentToolObservation(): void {
+  bindToolObservation({
+    getSink: () => createEvidenceRecorder(),
+    locatorAttributes: (args) => {
+      const observationContext = getAiObservationContext();
+      return buildEvidenceLocatorAttributes({
+        forensicRunId: observationContext?.forensicRunId,
+        sessionId: args.sessionId ?? observationContext?.sessionId,
+        eventType: args.eventType,
+        selector: args.toolCallId,
+        eventSelector: args.toolCallId
+          ? `type=${args.eventType} toolCallId=${args.toolCallId}`
+          : `type=${args.eventType}`,
+        relativeEvidenceDir: args.relativeEvidenceDir,
+      });
+    },
+    withSpan: async (name, attributes, fn) => {
+      const span = startOpenAcmeSpan(name, attributes);
+      try {
+        return await span.run(() => fn(span));
+      } catch (err) {
+        span.recordException(err);
+        span.setStatusError(err);
+        throw err;
+      } finally {
+        span.end();
+      }
+    },
+  });
+}
 
 const DEFAULT_AUTONOMOUS_TIMEOUT_MS = 5 * 60 * 1000;
 const UPSTREAM_ERROR_MAX_CHARS = 4096;
@@ -143,70 +129,52 @@ function timelineErrorText(err: unknown): string {
   return truncateTimelineText(extractErrorText(err)) ?? "unknown";
 }
 
-/**
- * Sum per-step provider-reported cost (OpenRouter usage accounting puts
- * `cost` in each step's raw usage). Undefined when no step reports one —
- * the recorder then falls back to registry-estimated pricing.
- */
-function sumProviderReportedCost(
-  steps: ReadonlyArray<{ usage: { raw?: unknown } }>
-): number | undefined {
-  let sum = 0;
-  let found = false;
-  for (const step of steps) {
-    const raw = step.usage.raw as { cost?: unknown } | undefined;
-    if (raw && typeof raw.cost === "number" && Number.isFinite(raw.cost)) {
-      sum += raw.cost;
-      found = true;
-    }
-  }
-  return found ? sum : undefined;
-}
-
 function sha256Text(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function safeForensicWrite(fn: () => void): void {
-  try {
-    fn();
-  } catch {
-    // Local forensic recording is best-effort telemetry.
+function stringifyJsonForEvidence(
+  value: unknown,
+  maxBytes: number,
+): string | null {
+  if (maxBytes > 0 && estimateJsonBytes(value, maxBytes) > maxBytes) {
+    return null;
   }
+  const json = JSON.stringify(value);
+  if (maxBytes > 0 && Buffer.byteLength(json, "utf-8") > maxBytes) {
+    return null;
+  }
+  return json;
 }
 
-function agentTurnSpanAttributes(args: {
-  functionId?: string;
-  forensicRunId: string;
-  agentId: string;
-  sessionId: string;
-  taskId?: string;
-  messageId?: string;
-  kind: UsageKind;
-  provider?: string;
-  model?: string;
-  authMode: string;
-}): Record<string, unknown> {
-  const locatorAttributes = buildForensicLocatorAttributes({
-    forensicRunId: args.forensicRunId,
-    sessionId: args.sessionId,
-    eventType: "agent.run",
-    eventSelector: "type=agent.run.start",
-  });
-  return {
-    "openacme.span.type": "agent_turn",
-    "openacme.ai.function_id": args.functionId,
-    "openacme.forensic.run_id": args.forensicRunId,
-    "openacme.agent.id": args.agentId,
-    "openacme.session.id": args.sessionId,
-    "openacme.task.id": args.taskId,
-    "openacme.message.id": args.messageId,
-    "openacme.usage.kind": args.kind,
-    "openacme.provider": args.provider,
-    "openacme.model": args.model,
-    "openacme.auth_mode": args.authMode,
-    ...locatorAttributes,
-  };
+function estimateJsonBytes(
+  value: unknown,
+  limit: number,
+  seen = new WeakSet<object>(),
+): number {
+  const visit = (child: unknown): number =>
+    estimateJsonBytes(child, limit, seen);
+  if (value === null || value === undefined) return 4;
+  if (typeof value === "string") return Buffer.byteLength(value, "utf-8") + 2;
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value).length;
+  }
+  if (typeof value !== "object") return 2;
+  if (seen.has(value)) return limit + 1;
+  seen.add(value);
+  let total = 2;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      total += visit(item) + 1;
+      if (total > limit) return total;
+    }
+    return total;
+  }
+  for (const [key, child] of Object.entries(value)) {
+    total += Buffer.byteLength(key, "utf-8") + 3 + visit(child) + 1;
+    if (total > limit) return total;
+  }
+  return total;
 }
 
 // Recall budgets (ports of Claude Code RELEVANT_MEMORIES_CONFIG +
@@ -217,10 +185,7 @@ const MAX_SESSION_RECALL_BYTES = 60 * 1024;
 const MAX_MEMORY_BYTES = 4096;
 const MAX_MEMORY_LINES = 200;
 
-function truncateForSurfacing(
-  body: string,
-  logicalPath: string
-): string {
+function truncateForSurfacing(body: string, logicalPath: string): string {
   const lines = body.split("\n");
   const lineTruncated = lines.length > MAX_MEMORY_LINES;
   let head = lineTruncated ? lines.slice(0, MAX_MEMORY_LINES).join("\n") : body;
@@ -247,7 +212,7 @@ function truncateForSurfacing(
 // disabling extraction.
 function countMessagesAfter(
   messages: readonly UIMessage[],
-  sinceUuid: string | undefined
+  sinceUuid: string | undefined,
 ): number {
   if (!sinceUuid) return messages.length;
   let found = false;
@@ -360,7 +325,7 @@ function buildWakeText(inboxText: string | null, now: Date): string {
  *  (the redditor's 1112-row case). Inbox-signal wakes ignore this check
  *  and always fire so new events are surfaced. */
 function lastIsUnansweredAutonomousWake(
-  history: readonly UIMessage[]
+  history: readonly UIMessage[],
 ): boolean {
   if (history.length === 0) return false;
   const m = history[history.length - 1]!;
@@ -399,7 +364,7 @@ export interface AutonomousBroadcaster {
             metadata?: unknown;
           }>;
         }
-      | { kind: "session_title"; title: string }
+      | { kind: "session_title"; title: string },
   ): void;
 }
 
@@ -460,14 +425,15 @@ export class Agent {
        *  token counts; the recorder computes cost + persists. Must never
        *  throw into the turn — calls are wrapped. */
       onUsage?: (report: UsageReport) => void;
-      /** Session forensic timeline sink. Fired for semantic lifecycle
+      /** Session timeline sink. Fired for semantic lifecycle
        *  boundaries; recorder failures must never affect the turn. */
       onTimelineEvent?: (event: SessionTimelineEventInput) => void;
       /** Override the model-resolution factory. Defaults to the real
        *  `getModel`; supplied by tests/e2e to inject a stub model. */
       resolveModel?: ModelResolver;
-    }
+    },
   ) {
+    bindAgentToolObservation();
     this.config = config;
     this.sessionStore = deps.sessionStore;
     this.messageStore = deps.messageStore;
@@ -503,7 +469,7 @@ export class Agent {
     } catch (e) {
       log.warn(
         { err: e, agentId: this.config.id, eventType: event.eventType },
-        "timeline event report failed"
+        "timeline event report failed",
       );
     }
   }
@@ -523,7 +489,7 @@ export class Agent {
     } catch (e) {
       log.warn(
         { err: e, sessionId, agentId: this.config.id },
-        "runAutonomous: failed to surface upstream error"
+        "runAutonomous: failed to surface upstream error",
       );
     }
   }
@@ -560,9 +526,7 @@ export class Agent {
     const effectiveToolNames = opts.toolFilter
       ? this.config.tools.filter((t) => opts.toolFilter!.has(t))
       : this.config.tools;
-    const tools = this.toolRegistry.getVercelTools(
-      new Set(effectiveToolNames)
-    );
+    const tools = this.toolRegistry.getVercelTools(new Set(effectiveToolNames));
 
     // ALS: tool handlers read sessionId/agentId/workspaceDir without arg-threading.
     toolCallContext.enterWith({
@@ -584,132 +548,23 @@ export class Agent {
 
     const usageModel = opts.modelOverride ?? this.config.model;
     const usageKind = opts.usage?.kind ?? "interactive";
-    const telemetry = buildAiTelemetrySettings({
+    const observation = createAgentRunObservation({
+      agentId: this.config.id,
+      sessionId: opts.sessionId,
+      taskId: opts.usage?.taskId,
+      messageId: opts.usage?.messageId,
+      usageKind,
+      usageModel,
       functionId: opts.telemetryFunctionId ?? this.config.id,
-      agentId: this.config.id,
-      sessionId: opts.sessionId,
-      taskId: opts.usage?.taskId,
-      messageId: opts.usage?.messageId,
-      kind: usageKind,
-      model: usageModel,
+      maxOutputTokens: this.config.maxOutputTokens,
+      system,
+      messages,
+      tools,
+      reportTimelineEvent: (event) => this.reportTimelineEvent(event),
+      reportUsage: (report) => this.reportUsage(report),
     });
-    const forensicContext = {
-      forensicRunId: telemetry.forensicRunId,
-      agentId: this.config.id,
-      sessionId: opts.sessionId,
-      taskId: opts.usage?.taskId,
-      messageId: opts.usage?.messageId,
-      kind: usageKind,
-      provider: usageModel.provider,
-      model: usageModel.model,
-      authMode:
-        usageModel.provider === "ollama" ? "local" : usageModel.auth ?? "api_key",
-    };
-    const turnSpan = startOpenAcmeSpan(
-      "openacme.agent.turn",
-      agentTurnSpanAttributes({
-        functionId: telemetry.settings.functionId,
-        forensicRunId: telemetry.forensicRunId,
-        agentId: this.config.id,
-        sessionId: opts.sessionId,
-        taskId: opts.usage?.taskId,
-        messageId: opts.usage?.messageId,
-        kind: usageKind,
-        provider: usageModel.provider,
-        model: usageModel.model,
-        authMode: forensicContext.authMode,
-      })
-    );
 
-    return turnSpan.run(() => {
-      setAIForensicContext(forensicContext);
-      const forensicRecorder = createForensicRecorder({
-        context: forensicContext,
-      });
-      const messagesJson = JSON.stringify(messages, null, 2);
-      const toolsJson = JSON.stringify(Object.keys(tools).sort(), null, 2);
-      const startedAt = Date.now();
-      let sawStreamError = false;
-      let closeTimer: ReturnType<typeof setTimeout> | null = null;
-      const closeSpan = () => {
-        if (closeTimer) {
-          clearTimeout(closeTimer);
-          closeTimer = null;
-        }
-        turnSpan.end();
-      };
-      const scheduleErrorClose = () => {
-        if (closeTimer) return;
-        closeTimer = setTimeout(closeSpan, 5_000);
-        const maybeUnref = closeTimer as ReturnType<typeof setTimeout> & {
-          unref?: () => void;
-        };
-        maybeUnref.unref?.();
-      };
-
-      forensicRecorder.recordEvent("agent.run.start", {
-        functionId: telemetry.settings.functionId,
-        maxOutputTokens: this.config.maxOutputTokens,
-        toolCount: Object.keys(tools).length,
-        traceId: turnSpan.traceId,
-        spanId: turnSpan.spanId,
-      });
-      this.reportTimelineEvent({
-        sessionId: opts.sessionId,
-        agentId: this.config.id,
-        taskId: opts.usage?.taskId ?? null,
-        messageId: opts.usage?.messageId ?? null,
-        eventType: "session.turn.started",
-        source: "agent",
-        status: "running",
-        traceId: turnSpan.traceId,
-        spanId: turnSpan.spanId,
-        forensicRunId: telemetry.forensicRunId,
-        payload: {
-          functionId: telemetry.settings.functionId,
-          kind: usageKind,
-          provider: usageModel.provider,
-          model: usageModel.model,
-          authMode: forensicContext.authMode,
-          maxOutputTokens: this.config.maxOutputTokens,
-          toolCount: Object.keys(tools).length,
-        },
-      });
-      forensicRecorder.writeRawFile("agent/model-input.system.txt", system);
-      forensicRecorder.writeRawFile(
-        "agent/model-input.messages.json",
-        messagesJson
-      );
-      forensicRecorder.writeRawFile("agent/model-input.tools.json", toolsJson);
-      forensicRecorder.recordEvent("agent.model_input.snapshot", {
-        systemBytes: Buffer.byteLength(system, "utf-8"),
-        systemSha256: sha256Text(system),
-        messagesBytes: Buffer.byteLength(messagesJson, "utf-8"),
-        messagesSha256: sha256Text(messagesJson),
-        toolsBytes: Buffer.byteLength(toolsJson, "utf-8"),
-        toolsSha256: sha256Text(toolsJson),
-      });
-      this.reportTimelineEvent({
-        sessionId: opts.sessionId,
-        agentId: this.config.id,
-        taskId: opts.usage?.taskId ?? null,
-        messageId: opts.usage?.messageId ?? null,
-        eventType: "session.prompt.snapshot.created",
-        source: "agent",
-        status: "ok",
-        traceId: turnSpan.traceId,
-        spanId: turnSpan.spanId,
-        forensicRunId: telemetry.forensicRunId,
-        payload: {
-          systemBytes: Buffer.byteLength(system, "utf-8"),
-          systemSha256: sha256Text(system),
-          messagesBytes: Buffer.byteLength(messagesJson, "utf-8"),
-          messagesSha256: sha256Text(messagesJson),
-          toolsBytes: Buffer.byteLength(toolsJson, "utf-8"),
-          toolsSha256: sha256Text(toolsJson),
-        },
-      });
-
+    return observation.run(() => {
       try {
         return streamText({
           model: this.resolveModel(usageModel),
@@ -724,164 +579,16 @@ export class Agent {
             // The ledger uses totalUsage (all steps), not the final-step
             // `result.usage` — multi-step turns would under-count. Aborted
             // turns never reach onFinish: no row (accepted v1 loss).
-            const u = event.totalUsage;
-            if (!u) {
-              if (!sawStreamError) turnSpan.setStatusOk();
-              closeSpan();
-              return;
-            }
-            const durationMs = Date.now() - startedAt;
-            forensicRecorder.recordEvent("agent.run.finish", {
-              inputTokens: u.inputTokens,
-              outputTokens: u.outputTokens,
-              totalTokens: u.totalTokens,
-              cachedInputTokens: u.inputTokenDetails?.cacheReadTokens,
-              cacheWriteTokens: u.inputTokenDetails?.cacheWriteTokens,
-              reasoningTokens: u.outputTokenDetails?.reasoningTokens,
-              steps: event.steps?.length,
-              durationMs,
-              traceId: turnSpan.traceId,
-              spanId: turnSpan.spanId,
-            });
-            turnSpan.setAttributes({
-              "openacme.duration_ms": durationMs,
-              "openacme.usage.input_tokens": u.inputTokens,
-              "openacme.usage.output_tokens": u.outputTokens,
-              "openacme.usage.total_tokens": u.totalTokens,
-              "openacme.usage.cached_input_tokens":
-                u.inputTokenDetails?.cacheReadTokens,
-              "openacme.usage.cache_write_tokens":
-                u.inputTokenDetails?.cacheWriteTokens,
-              "openacme.usage.reasoning_tokens":
-                u.outputTokenDetails?.reasoningTokens,
-              "openacme.ai.steps": event.steps?.length,
-            });
-            turnSpan.addEvent("openacme.agent.finish", {
-              "openacme.duration_ms": durationMs,
-              "openacme.usage.total_tokens": u.totalTokens,
-            });
-            if (!sawStreamError) turnSpan.setStatusOk();
-            const activeTrace = getActiveTraceContext();
-            const providerRequestCount =
-              getAIForensicProviderRequestCount(telemetry.forensicRunId);
-            this.reportTimelineEvent({
-              sessionId: opts.sessionId,
-              agentId: this.config.id,
-              taskId: opts.usage?.taskId ?? null,
-              messageId: opts.usage?.messageId ?? null,
-              eventType: "session.turn.finished",
-              source: "agent",
-              status: "ok",
-              traceId: turnSpan.traceId ?? activeTrace?.traceId,
-              spanId: turnSpan.spanId ?? activeTrace?.spanId,
-              forensicRunId: telemetry.forensicRunId,
-              durationMs,
-              payload: {
-                kind: usageKind,
-                inputTokens: u.inputTokens,
-                outputTokens: u.outputTokens,
-                totalTokens: u.totalTokens,
-                cachedInputTokens: u.inputTokenDetails?.cacheReadTokens,
-                cacheWriteTokens: u.inputTokenDetails?.cacheWriteTokens,
-                reasoningTokens: u.outputTokenDetails?.reasoningTokens,
-                steps: event.steps?.length,
-                providerRequestCount,
-              },
-            });
-            this.reportUsage({
-              agentId: this.config.id,
-              sessionId: opts.sessionId,
-              kind: usageKind,
-              model: usageModel,
-              taskId: opts.usage?.taskId,
-              messageId: opts.usage?.messageId,
-              tokens: {
-                inputTokens: u.inputTokens,
-                outputTokens: u.outputTokens,
-                totalTokens: u.totalTokens,
-                cachedInputTokens: u.inputTokenDetails?.cacheReadTokens,
-                cacheWriteTokens: u.inputTokenDetails?.cacheWriteTokens,
-                reasoningTokens: u.outputTokenDetails?.reasoningTokens,
-              },
-              providerCostUsd: sumProviderReportedCost(event.steps ?? []),
-              steps: event.steps?.length,
-              durationMs,
-              traceId: turnSpan.traceId ?? activeTrace?.traceId,
-              spanId: turnSpan.spanId ?? activeTrace?.spanId,
-              forensicRunId: telemetry.forensicRunId,
-              forensicPath: forensicRecorder.runDir,
-              providerRequestCount,
-            });
-            closeSpan();
+            observation.finish(event);
           },
           onError: (event) => {
-            sawStreamError = true;
-            const errorText =
-              event instanceof Error
-                ? event.message
-                : typeof event === "string"
-                  ? event
-                  : extractErrorText(event);
-            forensicRecorder.recordEvent("agent.run.error", {
-              error: errorText,
-              traceId: turnSpan.traceId,
-              spanId: turnSpan.spanId,
-            });
-            turnSpan.recordException(event);
-            turnSpan.setStatusError(event);
-            turnSpan.addEvent("openacme.agent.error", {
-              "openacme.error.message": errorText,
-            });
-            this.reportTimelineEvent({
-              sessionId: opts.sessionId,
-              agentId: this.config.id,
-              taskId: opts.usage?.taskId ?? null,
-              messageId: opts.usage?.messageId ?? null,
-              eventType: "session.turn.failed",
-              source: "agent",
-              status: "error",
-              traceId: turnSpan.traceId,
-              spanId: turnSpan.spanId,
-              forensicRunId: telemetry.forensicRunId,
-              durationMs: Date.now() - startedAt,
-              payload: {
-                kind: usageKind,
-                error: errorText,
-              },
-            });
-            scheduleErrorClose();
+            observation.streamError(event);
             opts.onError?.(event);
           },
-          experimental_telemetry: telemetry.settings,
+          experimental_telemetry: observation.telemetry.settings,
         });
       } catch (err) {
-        const errorText =
-          err instanceof Error ? err.message : extractErrorText(err);
-        forensicRecorder.recordEvent("agent.run.error", {
-          error: errorText,
-          traceId: turnSpan.traceId,
-          spanId: turnSpan.spanId,
-        });
-        turnSpan.recordException(err);
-        turnSpan.setStatusError(err);
-        this.reportTimelineEvent({
-          sessionId: opts.sessionId,
-          agentId: this.config.id,
-          taskId: opts.usage?.taskId ?? null,
-          messageId: opts.usage?.messageId ?? null,
-          eventType: "session.turn.failed",
-          source: "agent",
-          status: "error",
-          traceId: turnSpan.traceId,
-          spanId: turnSpan.spanId,
-          forensicRunId: telemetry.forensicRunId,
-          durationMs: Date.now() - startedAt,
-          payload: {
-            kind: usageKind,
-            error: errorText,
-          },
-        });
-        closeSpan();
+        observation.syncError(err);
         throw err;
       }
     });
@@ -905,7 +612,7 @@ export class Agent {
     // in its tick; could vanish before we run).
     if (!this.sessionStore.get(opts.sessionId)) {
       throw new Error(
-        `Session ${opts.sessionId} no longer exists; aborting autonomous turn`
+        `Session ${opts.sessionId} no longer exists; aborting autonomous turn`,
       );
     }
 
@@ -944,7 +651,7 @@ export class Agent {
     } catch (e) {
       log.warn(
         { err: e, agentId: this.config.id, sessionId: opts.sessionId },
-        "inboxStore.claimForSession failed; turn will run without inbox content"
+        "inboxStore.claimForSession failed; turn will run without inbox content",
       );
     }
 
@@ -952,8 +659,7 @@ export class Agent {
     // rows here. Rows for other sessions were never claimed and remain in
     // the inbox for their own turns.
     const queuedUserMessagesForThisSession = pendingInbox.filter(
-      (i) =>
-        i.kind === "user_message" && i.relatedSession === opts.sessionId
+      (i) => i.kind === "user_message" && i.relatedSession === opts.sessionId,
     );
     const drainedUserMessage = queuedUserMessagesForThisSession.length > 0;
 
@@ -963,14 +669,22 @@ export class Agent {
     // will respond to these messages. Reuse the original message id
     // from the payload so the UI's optimistic upsert collapses.
     for (const row of queuedUserMessagesForThisSession) {
-      const payload = row.payload as
-        | { id?: string; role?: string; parts?: unknown[] }
-        | null;
-      if (!payload || payload.role !== "user" || !Array.isArray(payload.parts)) {
+      const payload = row.payload as {
+        id?: string;
+        role?: string;
+        parts?: unknown[];
+      } | null;
+      if (
+        !payload ||
+        payload.role !== "user" ||
+        !Array.isArray(payload.parts)
+      ) {
         continue;
       }
       const msgId =
-        typeof payload.id === "string" && payload.id ? payload.id : randomUUID();
+        typeof payload.id === "string" && payload.id
+          ? payload.id
+          : randomUUID();
       try {
         this.messageStore.append(opts.sessionId, {
           id: msgId,
@@ -984,14 +698,14 @@ export class Agent {
       } catch (e) {
         log.warn(
           { err: e, msgId, sessionId: opts.sessionId },
-          "failed to persist queued user message; row will not be re-rendered"
+          "failed to persist queued user message; row will not be re-rendered",
         );
       }
     }
 
     const inboxText = renderInboxItems(pendingInbox);
     let baseHistory = sanitizeStoredHistory(
-      this.messageStore.getHistory(opts.sessionId)
+      this.messageStore.getHistory(opts.sessionId),
     ) as unknown as UIMessage[];
 
     // Preflight compression: compact the session in place before the
@@ -1009,12 +723,12 @@ export class Agent {
       // Re-read history if compaction wrote new messages under the
       // same id. Cheaper than diffing — message-row counts are small.
       baseHistory = sanitizeStoredHistory(
-        this.messageStore.getHistory(sessionId)
+        this.messageStore.getHistory(sessionId),
       ) as unknown as UIMessage[];
     } catch (e) {
       log.warn(
         { err: e, sessionId },
-        "preflight compression failed; continuing on uncompacted session"
+        "preflight compression failed; continuing on uncompacted session",
       );
     }
 
@@ -1080,7 +794,7 @@ export class Agent {
     if (retryingExistingWake) {
       log.info(
         { sessionId, agentId: this.config.id },
-        "autonomous wake: previous wake unanswered; retrying on existing history without new row"
+        "autonomous wake: previous wake unanswered; retrying on existing history without new row",
       );
     }
 
@@ -1111,7 +825,10 @@ export class Agent {
           ],
         });
       } catch (e) {
-        log.warn({ err: e }, "runAutonomous: failed to pre-persist auto user message");
+        log.warn(
+          { err: e },
+          "runAutonomous: failed to pre-persist auto user message",
+        );
       }
     }
 
@@ -1149,7 +866,7 @@ export class Agent {
     // persisted to the chat row.
     const recallPart = this.buildRelevantMemoryPart(
       recall.entries,
-      recall.modelContent
+      recall.modelContent,
     );
     if (recallPart) {
       const target =
@@ -1180,7 +897,7 @@ export class Agent {
     const turnInboxStore = this.inboxStore;
     const turnSessionId = sessionId;
     const prepareStep: Parameters<typeof streamText>[0]["prepareStep"] = (
-      stepOpts
+      stepOpts,
     ) => {
       if (stepOpts.stepNumber === 0) return undefined;
       if (injectionCount >= MAX_INJECTIONS) return undefined;
@@ -1210,7 +927,7 @@ export class Agent {
       } catch (e) {
         log.warn(
           { err: e, sessionId: turnSessionId },
-          `Mid-turn inbox drain failed for ${turnSessionId}`
+          `Mid-turn inbox drain failed for ${turnSessionId}`,
         );
         return undefined;
       }
@@ -1289,6 +1006,11 @@ export class Agent {
                 log.warn({ err: e }, "runAutonomous broadcaster part failed");
               }
             }
+          } catch (e) {
+            log.warn(
+              { err: e, sessionId: sid },
+              "runAutonomous broadcaster stream failed",
+            );
           } finally {
             reader.releaseLock();
           }
@@ -1330,7 +1052,7 @@ export class Agent {
             } catch (e) {
               log.warn(
                 { err: e, sessionId: sid },
-                "runAutonomous snapshot broadcast failed"
+                "runAutonomous snapshot broadcast failed",
               );
             }
           }
@@ -1374,7 +1096,7 @@ export class Agent {
 
     if (timedOut) {
       throw new AutonomousTurnTimeout(
-        `Autonomous turn timed out after ${timeoutMs}ms in session ${sessionId}`
+        `Autonomous turn timed out after ${timeoutMs}ms in session ${sessionId}`,
       );
     }
     if (!assistantMessage) {
@@ -1382,11 +1104,11 @@ export class Agent {
         sessionId,
         capturedError ??
           new Error(
-            `Autonomous turn in session ${sessionId} produced no assistant message`
-          )
+            `Autonomous turn in session ${sessionId} produced no assistant message`,
+          ),
       );
       throw new Error(
-        `Autonomous turn in session ${sessionId} produced no assistant message`
+        `Autonomous turn in session ${sessionId} produced no assistant message`,
       );
     }
 
@@ -1400,7 +1122,7 @@ export class Agent {
       : (assistantMessage.parts as UIMessage["parts"]);
     if (assistantParts.length > 0) {
       const sanitized = ensureStepBoundaries(
-        finalizeOrphanToolParts(assistantParts)
+        finalizeOrphanToolParts(assistantParts),
       );
       const assistantId = assistantMessage.id ?? randomUUID();
       this.messageStore.append(sessionId, {
@@ -1434,7 +1156,7 @@ export class Agent {
 
     if (capturedError) {
       throw new Error(
-        extractErrorText(capturedError) || "Autonomous upstream provider error"
+        extractErrorText(capturedError) || "Autonomous upstream provider error",
       );
     }
 
@@ -1468,14 +1190,14 @@ export class Agent {
    */
   async compress(
     parentSessionId: string,
-    reason: "proactive" | "payload_too_large" | "context_overflow"
+    reason: "proactive" | "payload_too_large" | "context_overflow",
   ): Promise<string> {
     const parent = this.sessionStore.get(parentSessionId);
     if (!parent) return parentSessionId;
     if (!this.config.compression) return parentSessionId;
 
     const parentMessages = sanitizeStoredHistory(
-      this.messageStore.getHistory(parentSessionId)
+      this.messageStore.getHistory(parentSessionId),
     ) as unknown as UIMessage[];
     const compressionStartedAt = Date.now();
 
@@ -1578,7 +1300,7 @@ export class Agent {
     } catch (e) {
       log.error(
         { err: e, sessionId: parentSessionId },
-        "rename-swap failed; session unchanged"
+        "rename-swap failed; session unchanged",
       );
       this.reportTimelineEvent({
         sessionId: parentSessionId,
@@ -1609,7 +1331,7 @@ export class Agent {
         id: randomUUID(),
         role: m.role as "user" | "assistant",
         parts: ensureStepBoundaries(
-          finalizeOrphanToolParts(m.parts as UIMessage["parts"])
+          finalizeOrphanToolParts(m.parts as UIMessage["parts"]),
         ) as unknown[],
         metadata: m.metadata,
       }));
@@ -1617,7 +1339,7 @@ export class Agent {
     } catch (e) {
       log.error(
         { err: e, sessionId: parentSessionId },
-        `Failed to persist compressed messages for ${parentSessionId}`
+        `Failed to persist compressed messages for ${parentSessionId}`,
       );
       this.reportTimelineEvent({
         sessionId: parentSessionId,
@@ -1638,7 +1360,7 @@ export class Agent {
     this.compressor.recordResult(
       parentSessionId,
       result.savingsRatio,
-      result.summary
+      result.summary,
     );
     this.cachedSystemPrompts.delete(parentSessionId);
     this.reportTimelineEvent({
@@ -1682,7 +1404,7 @@ export class Agent {
    */
   async preflightCompress(
     sessionId: string,
-    history: UIMessage[]
+    history: UIMessage[],
   ): Promise<string> {
     if (!this.config.compression) return sessionId;
     // The registry-resolved contextWindow (e.g. 1M for opus-4-7) is
@@ -1696,7 +1418,7 @@ export class Agent {
     const effectiveWindow = getEffectiveContextWindow(this.config.model);
     const threshold = resolveThreshold(
       this.config.compression,
-      effectiveWindow
+      effectiveWindow,
     );
     if (threshold === null) return sessionId;
 
@@ -1714,14 +1436,14 @@ export class Agent {
           effectiveWindow,
           pass,
         },
-        "preflight compression: tokens >= threshold, compacting"
+        "preflight compression: tokens >= threshold, compacting",
       );
       const beforeLen = currentHistory.length;
       await this.compress(sessionId, "proactive");
       // Rename-swap keeps the same id; re-read history under the same
       // id to see post-compaction state.
       currentHistory = sanitizeStoredHistory(
-        this.messageStore.getHistory(sessionId)
+        this.messageStore.getHistory(sessionId),
       ) as unknown as UIMessage[];
       // If the message-count drop is negligible (<5%) the algorithm
       // can't compact further — stop instead of spinning.
@@ -1741,7 +1463,7 @@ export class Agent {
    */
   private estimateRequestTokens(
     sessionId: string,
-    history: UIMessage[]
+    history: UIMessage[],
   ): number {
     const IMAGE_TOKEN_COST = 1500;
     const system = this.getSystemPrompt(sessionId);
@@ -1781,7 +1503,7 @@ export class Agent {
    */
   private async flushMemoryBeforeCompression(
     sessionId: string,
-    history: UIMessage[]
+    history: UIMessage[],
   ): Promise<void> {
     const flushStarted = Date.now();
     let failureReported = false;
@@ -1800,7 +1522,7 @@ export class Agent {
         if (estimated > Math.floor(effective * 0.75)) {
           log.info(
             { sessionId, estimated, effective },
-            "skipping memory flush: history too large for the model's effective context"
+            "skipping memory flush: history too large for the model's effective context",
           );
           this.reportTimelineEvent({
             sessionId,
@@ -1843,180 +1565,148 @@ export class Agent {
         },
       ];
       const flushModel = resolveSubagentModel(this.config.model);
-      const parentForensicRunId = getAIForensicContext()?.forensicRunId;
-      const telemetry = buildAiTelemetrySettings({
+      const observation = createAiHelperObservation({
         functionId: `${this.config.id}:memory-flush`,
         agentId: this.config.id,
         sessionId,
         kind: "extractor",
         model: flushModel,
+        profile: "compression.memory_flush",
       });
-      const forensicContext = buildAiForensicContext({
-        forensicRunId: telemetry.forensicRunId,
-        parentForensicRunId,
-        agentId: this.config.id,
-        sessionId,
-        kind: "extractor",
-        model: flushModel,
-      });
-      const recorder = createForensicRecorder({ context: forensicContext });
-      const eventSelector = buildForensicEventSelector(
-        "compression.memory_flush.start"
-      );
-      const locatorArgs = {
-        forensicRunId: telemetry.forensicRunId,
-        sessionId,
-        eventType: "compression.memory_flush",
-        eventSelector,
-        relativeEvidenceDir: "compression/memory-flush",
-      };
-      const locatorAttributes = buildForensicLocatorAttributes(locatorArgs);
-      const locatorPayload = buildForensicLocatorPayload(locatorArgs);
       const systemBytes = Buffer.byteLength(system, "utf-8");
       const systemSha256 = sha256Text(system);
-      const messagesJson = JSON.stringify(flushMessages);
-      const messagesBytes = Buffer.byteLength(messagesJson, "utf-8");
-      const messagesSha256 = sha256Text(messagesJson);
       const toolCount = Object.keys(tools).length;
-      const helper = await enterAIForensicContext(forensicContext, () =>
-        withOpenAcmeSpan(
-          "openacme.ai.helper",
-          {
-            "openacme.span.type": "ai_helper",
-            "openacme.ai.function_id": telemetry.settings.functionId,
-            "openacme.forensic.run_id": telemetry.forensicRunId,
-            "openacme.forensic.parent_run_id": parentForensicRunId,
-            "openacme.agent.id": this.config.id,
-            "openacme.session.id": sessionId,
-            "openacme.usage.kind": "extractor",
-            "openacme.provider": flushModel.provider,
-            "openacme.model": flushModel.model,
-            ...locatorAttributes,
-          },
-          async (span) => {
-            safeForensicWrite(() => {
-              recorder.writeRawFile(
-                "compression/memory-flush/model-input.system.txt",
-                system
-              );
-              recorder.writeRawFile(
-                "compression/memory-flush/model-input.messages.json",
-                messagesJson
-              );
-              recorder.recordEvent("compression.memory_flush.start", {
-                agentId: this.config.id,
-                provider: flushModel.provider,
-                model: flushModel.model,
-                toolCount,
-                historyMessageCount: history.length,
-                systemBytes,
-                systemSha256,
-                messagesBytes,
-                messagesSha256,
-                traceId: span.traceId,
-                spanId: span.spanId,
-                ...locatorPayload,
-              });
-            });
-            this.reportTimelineEvent({
-              sessionId,
-              agentId: this.config.id,
-              eventType: "session.compression.memory_flush.started",
-              source: "agent",
-              status: "running",
-              traceId: span.traceId,
-              spanId: span.spanId,
-              forensicRunId: telemetry.forensicRunId,
-              payload: {
-                provider: flushModel.provider,
-                model: flushModel.model,
-                toolCount,
-                historyMessageCount: history.length,
-                systemBytes,
-                systemSha256,
-                messagesBytes,
-                messagesSha256,
-                ...locatorPayload,
-              },
-            });
-            try {
-              return {
-                result: await generateText({
-                  model: getModel(flushModel),
-                  system,
-                  messages: flushMessages,
-                  tools: tools as Parameters<typeof generateText>[0]["tools"],
-                  stopWhen: stepCountIs(this.config.maxSteps),
-                  experimental_telemetry: telemetry.settings,
-                }),
-                traceId: span.traceId,
-                spanId: span.spanId,
-              };
-            } catch (err) {
-              const durationMs = Date.now() - flushStarted;
-              const error = extractErrorText(err);
-              safeForensicWrite(() => {
-                recorder.recordEvent("compression.memory_flush.error", {
-                  agentId: this.config.id,
-                  provider: flushModel.provider,
-                  model: flushModel.model,
-                  durationMs,
-                  error,
-                  traceId: span.traceId,
-                  spanId: span.spanId,
-                  ...locatorPayload,
-                });
-              });
-              this.reportTimelineEvent({
-                sessionId,
-                agentId: this.config.id,
-                eventType: "session.compression.memory_flush.failed",
-                source: "agent",
-                status: "error",
-                traceId: span.traceId,
-                spanId: span.spanId,
-                forensicRunId: telemetry.forensicRunId,
-                durationMs,
-                payload: {
-                  provider: flushModel.provider,
-                  model: flushModel.model,
-                  error,
-                  ...locatorPayload,
-                },
-              });
-              failureReported = true;
-              throw err;
-            }
-          }
-        )
-      );
-      const flushRes = helper.result;
-      const durationMs = Date.now() - flushStarted;
-      const fu = flushRes.totalUsage;
-      safeForensicWrite(() => {
-        recorder.writeRawFile(
-          "compression/memory-flush/output.txt",
-          flushRes.text ?? ""
+      const helper = await observation.run(async (span) => {
+        const messagesJson = observation.captureRaw
+          ? stringifyJsonForEvidence(flushMessages, observation.maxRawFileBytes)
+          : null;
+        const messagesBytes =
+          messagesJson === null
+            ? undefined
+            : Buffer.byteLength(messagesJson, "utf-8");
+        const messagesSha256 =
+          messagesJson === null ? undefined : sha256Text(messagesJson);
+        observation.writeEvidenceFile(
+          "compression.memory_flush.system",
+          system,
         );
-        recorder.recordEvent("compression.memory_flush.finish", {
+        if (messagesJson !== null) {
+          observation.writeEvidenceFile(
+            "compression.memory_flush.messages",
+            messagesJson,
+          );
+        } else if (observation.captureRaw) {
+          observation.recordEvent("compression.memory_flush.snapshot.skipped", {
+            reason: "max_raw_file_bytes",
+            maxRawFileBytes: observation.maxRawFileBytes,
+          });
+        }
+        observation.recordEvent("compression.memory_flush.start", {
           agentId: this.config.id,
           provider: flushModel.provider,
           model: flushModel.model,
-          inputTokens: fu?.inputTokens,
-          outputTokens: fu?.outputTokens,
-          totalTokens: fu?.totalTokens,
-          cachedInputTokens: fu?.inputTokenDetails?.cacheReadTokens,
-          cacheWriteTokens: fu?.inputTokenDetails?.cacheWriteTokens,
-          reasoningTokens: fu?.outputTokenDetails?.reasoningTokens,
-          steps: flushRes.steps?.length,
-          durationMs,
-          providerRequestCount: getAIForensicProviderRequestCount(
-            telemetry.forensicRunId
-          ),
-          traceId: helper.traceId,
-          spanId: helper.spanId,
-          ...locatorPayload,
+          toolCount,
+          historyMessageCount: history.length,
+          systemBytes,
+          systemSha256,
+          messagesBytes,
+          messagesSha256,
+          traceId: span.traceId,
+          spanId: span.spanId,
+          ...observation.locatorPayload,
         });
+        this.reportTimelineEvent({
+          sessionId,
+          agentId: this.config.id,
+          eventType: "session.compression.memory_flush.started",
+          source: "agent",
+          status: "running",
+          traceId: span.traceId,
+          spanId: span.spanId,
+          forensicRunId: observation.forensicRunId,
+          payload: {
+            provider: flushModel.provider,
+            model: flushModel.model,
+            toolCount,
+            historyMessageCount: history.length,
+            systemBytes,
+            systemSha256,
+            messagesBytes,
+            messagesSha256,
+            ...observation.locatorPayload,
+          },
+        });
+        try {
+          return {
+            result: await generateText({
+              model: getModel(flushModel),
+              system,
+              messages: flushMessages,
+              tools: tools as Parameters<typeof generateText>[0]["tools"],
+              stopWhen: stepCountIs(this.config.maxSteps),
+              experimental_telemetry: observation.telemetry.settings,
+            }),
+            traceId: span.traceId,
+            spanId: span.spanId,
+          };
+        } catch (err) {
+          const durationMs = Date.now() - flushStarted;
+          const error = extractErrorText(err);
+          observation.recordEvent("compression.memory_flush.error", {
+            agentId: this.config.id,
+            provider: flushModel.provider,
+            model: flushModel.model,
+            durationMs,
+            error,
+            traceId: span.traceId,
+            spanId: span.spanId,
+            ...observation.locatorPayload,
+          });
+          this.reportTimelineEvent({
+            sessionId,
+            agentId: this.config.id,
+            eventType: "session.compression.memory_flush.failed",
+            source: "agent",
+            status: "error",
+            traceId: span.traceId,
+            spanId: span.spanId,
+            forensicRunId: observation.forensicRunId,
+            durationMs,
+            payload: {
+              provider: flushModel.provider,
+              model: flushModel.model,
+              error,
+              ...observation.locatorPayload,
+            },
+          });
+          failureReported = true;
+          throw err;
+        }
+      });
+      const flushRes = helper.result;
+      const durationMs = Date.now() - flushStarted;
+      const fu = flushRes.totalUsage;
+      const providerRequestCount = observation.providerRequestCount();
+      observation.writeEvidenceFile(
+        "compression.memory_flush.output",
+        flushRes.text ?? "",
+      );
+      observation.recordEvent("compression.memory_flush.finish", {
+        agentId: this.config.id,
+        provider: flushModel.provider,
+        model: flushModel.model,
+        inputTokens: fu?.inputTokens,
+        outputTokens: fu?.outputTokens,
+        totalTokens: fu?.totalTokens,
+        cachedInputTokens: fu?.inputTokenDetails?.cacheReadTokens,
+        cacheWriteTokens: fu?.inputTokenDetails?.cacheWriteTokens,
+        reasoningTokens: fu?.outputTokenDetails?.reasoningTokens,
+        steps: flushRes.steps?.length,
+        durationMs,
+        providerRequestCount,
+        traceId: helper.traceId,
+        spanId: helper.spanId,
+        ...observation.locatorPayload,
       });
       this.reportTimelineEvent({
         sessionId,
@@ -2026,7 +1716,7 @@ export class Agent {
         status: "ok",
         traceId: helper.traceId,
         spanId: helper.spanId,
-        forensicRunId: telemetry.forensicRunId,
+        forensicRunId: observation.forensicRunId,
         durationMs,
         payload: {
           provider: flushModel.provider,
@@ -2038,10 +1728,8 @@ export class Agent {
           cacheWriteTokens: fu?.inputTokenDetails?.cacheWriteTokens,
           reasoningTokens: fu?.outputTokenDetails?.reasoningTokens,
           steps: flushRes.steps?.length,
-          providerRequestCount: getAIForensicProviderRequestCount(
-            telemetry.forensicRunId
-          ),
-          ...locatorPayload,
+          providerRequestCount,
+          ...observation.locatorPayload,
         },
       });
       // Same ledger kind as the post-turn extractor: both are
@@ -2064,18 +1752,16 @@ export class Agent {
           durationMs: Date.now() - flushStarted,
           traceId: helper.traceId,
           spanId: helper.spanId,
-          forensicRunId: telemetry.forensicRunId,
-          forensicPath: recorder.runDir,
-          providerRequestCount: getAIForensicProviderRequestCount(
-            telemetry.forensicRunId
-          ),
+          forensicRunId: observation.forensicRunId,
+          forensicPath: observation.evidenceRunDir,
+          providerRequestCount,
         });
       }
     } catch (e) {
       // Body kept verbatim — referenced in CLAUDE.md / agent-core rules.
       log.warn(
         { err: e, sessionId },
-        `Pre-compaction memory flush failed for ${sessionId}`
+        `Pre-compaction memory flush failed for ${sessionId}`,
       );
       if (!failureReported) {
         this.reportTimelineEvent({
@@ -2110,7 +1796,7 @@ export class Agent {
     if (missingTools.length > 0) {
       log.warn(
         { agentId: this.config.id, missingTools },
-        "agent has missing tool references"
+        "agent has missing tool references",
       );
     }
 
@@ -2122,12 +1808,12 @@ export class Agent {
     try {
       memorySnapshot = this.memoryStore.readIndex(
         this.config.id,
-        DEFAULT_MEMORY_CHAR_LIMIT
+        DEFAULT_MEMORY_CHAR_LIMIT,
       );
     } catch (e) {
       log.warn(
         { err: e, agentId: this.config.id },
-        "failed to read memory index"
+        "failed to read memory index",
       );
     }
 
@@ -2136,13 +1822,13 @@ export class Agent {
       const rendered = this.taskStore.renderForPrompt(
         this.config.id,
         sessionId,
-        (sid: string) => this.sessionStore.get(sid) !== null
+        (sid: string) => this.sessionStore.get(sid) !== null,
       );
       if (rendered) tasksContext = rendered;
     } catch (e) {
       log.warn(
         { err: e, agentId: this.config.id },
-        "failed to render tasks for prompt"
+        "failed to render tasks for prompt",
       );
     }
 
@@ -2239,7 +1925,10 @@ export class Agent {
         signal: opts.signal,
       });
     } catch (e) {
-      log.warn({ err: e, agentId: this.config.id }, "memory.recall selector failed");
+      log.warn(
+        { err: e, agentId: this.config.id },
+        "memory.recall selector failed",
+      );
       return { entries: [], modelContent: null };
     }
 
@@ -2247,7 +1936,8 @@ export class Agent {
       return { entries: [], modelContent: null };
     }
 
-    const entries: Array<{ path: string; mtimeMs: number; content: string }> = [];
+    const entries: Array<{ path: string; mtimeMs: number; content: string }> =
+      [];
     for (const r of selected) {
       try {
         const body = fs.readFileSync(r.path, "utf-8");
@@ -2280,7 +1970,7 @@ export class Agent {
   /** Builds the `data-relevant-memory` part for the user UIMessage. */
   buildRelevantMemoryPart(
     entries: Array<{ path: string; mtimeMs: number; content: string }>,
-    modelContent: string | null
+    modelContent: string | null,
   ): {
     type: "data-relevant-memory";
     id: string;
@@ -2380,8 +2070,12 @@ export class Agent {
         }
         if (res.status === "failed") {
           log.warn(
-            { agentId: this.config.id, sessionId: opts.sessionId, error: res.error ?? "unknown" },
-            "memory.extractor failed"
+            {
+              agentId: this.config.id,
+              sessionId: opts.sessionId,
+              error: res.error ?? "unknown",
+            },
+            "memory.extractor failed",
           );
         }
         if (
@@ -2428,7 +2122,7 @@ export class Agent {
       .catch((e) => {
         log.warn(
           { err: e, agentId: this.config.id, sessionId: opts.sessionId },
-          "memory.extractor threw"
+          "memory.extractor threw",
         );
         this.reportTimelineEvent({
           sessionId: opts.sessionId,
@@ -2465,7 +2159,9 @@ export class Agent {
     const session = this.sessionStore.get(opts.sessionId);
     if (!session || session.title) return;
 
-    const { userText, assistantText } = extractTitleInputs(opts.sessionMessages);
+    const { userText, assistantText } = extractTitleInputs(
+      opts.sessionMessages,
+    );
     if (!userText && !assistantText) return;
 
     const writeFallback = () => {
@@ -2488,7 +2184,7 @@ export class Agent {
       } catch (e) {
         log.warn(
           { err: e, agentId: this.config.id, sessionId: opts.sessionId },
-          "title fallback write failed"
+          "title fallback write failed",
         );
         this.reportTimelineEvent({
           sessionId: opts.sessionId,
@@ -2547,7 +2243,7 @@ export class Agent {
       .catch((e) => {
         log.warn(
           { err: e, agentId: this.config.id, sessionId: opts.sessionId },
-          "title generation threw"
+          "title generation threw",
         );
         this.reportTimelineEvent({
           sessionId: opts.sessionId,

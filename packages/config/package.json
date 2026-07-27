@@ -33,6 +33,11 @@
       "types": "./dist/logger.d.ts",
       "import": "./dist/logger.js",
       "default": "./dist/logger.js"
+    },
+    "./process-exception-guard": {
+      "types": "./dist/process-exception-guard.d.ts",
+      "import": "./dist/process-exception-guard.js",
+      "default": "./dist/process-exception-guard.js"
     }
   },
   "files": [

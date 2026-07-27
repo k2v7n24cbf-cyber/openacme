@@ -1,10 +1,12 @@
 #!/usr/bin/env node
-import "@openacme/config/telemetry-bootstrap";
+import { shutdownOpenAcmeTelemetry } from "@openacme/config/telemetry-bootstrap";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { resolveDataDir } from "@openacme/config";
+import { registerOpenAcmeProcessExceptionGuard } from "@openacme/config/process-exception-guard";
+import { flushEvidenceWriters } from "@openacme/llm-provider";
 import { setupCommand } from "./commands/setup.js";
 import { startCommand } from "./commands/start.js";
 import { stopCommand } from "./commands/stop.js";
@@ -58,6 +60,27 @@ import {
 import { tasksRepairSourceSessionsCommand } from "./commands/tasks.js";
 import { updateCommand } from "./commands/update.js";
 import { showBanner } from "./tui/banner.js";
+
+const OBSERVATION_SHUTDOWN_TIMEOUT_MS = 2_000;
+
+registerOpenAcmeProcessExceptionGuard({
+  scope: "cli.process",
+  shutdownTelemetry: shutdownObservationSinksWithTimeout,
+});
+
+async function shutdownObservationSinksWithTimeout(): Promise<void> {
+  await Promise.race([
+    shutdownObservationSinks(),
+    new Promise<void>((resolve) =>
+      setTimeout(resolve, OBSERVATION_SHUTDOWN_TIMEOUT_MS),
+    ),
+  ]);
+}
+
+async function shutdownObservationSinks(): Promise<void> {
+  await flushEvidenceWriters();
+  await shutdownOpenAcmeTelemetry();
+}
 
 const pkg = JSON.parse(
   readFileSync(

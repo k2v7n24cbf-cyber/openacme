@@ -16,9 +16,14 @@ import type { UIMessage } from "ai";
 import { Agent } from "../src/agent.js";
 import type { AgentConfig } from "../src/types.js";
 
-const { streamTextMock, getModelMock } = vi.hoisted(() => ({
+const { streamTextMock, getModelMock, createEvidenceRecorderMock } = vi.hoisted(() => ({
   streamTextMock: vi.fn(),
   getModelMock: vi.fn(() => ({})),
+  createEvidenceRecorderMock: vi.fn(() => ({
+    enabled: false,
+    recordEvent: vi.fn(),
+    writeRawFile: vi.fn(),
+  })),
 }));
 
 vi.mock("ai", async () => {
@@ -35,16 +40,12 @@ vi.mock("@openacme/llm-provider", () => ({
   resolveSubagentModel: (m: unknown) => m,
   supportsToolResultMedia: () => false,
   getActiveTraceContext: () => null,
-  getAIForensicContext: () => undefined,
-  getAIForensicProviderRequestCount: () => 1,
-  buildForensicLocatorAttributes: () => ({}),
-  setAIForensicContext: vi.fn(),
-  enterAIForensicContext: (_ctx: unknown, fn: () => unknown) => fn(),
-  createForensicRecorder: () => ({
-    enabled: false,
-    recordEvent: vi.fn(),
-    writeRawFile: vi.fn(),
-  }),
+  getAiObservationContext: () => undefined,
+  getProviderRequestCountForRun: () => 1,
+  buildEvidenceLocatorAttributes: () => ({}),
+  setAiObservationContext: vi.fn(),
+  enterAiObservationContext: (_ctx: unknown, fn: () => unknown) => fn(),
+  createEvidenceRecorder: createEvidenceRecorderMock,
   withOpenAcmeSpan: (_name: string, _attrs: unknown, fn: (span: unknown) => unknown) =>
     fn({ traceId: "trace-helper", spanId: "span-helper" }),
   startOpenAcmeSpan: () => ({
@@ -107,7 +108,13 @@ describe("Agent.runStream telemetry", () => {
   beforeEach(() => {
     streamTextMock.mockReset();
     getModelMock.mockReset();
+    createEvidenceRecorderMock.mockReset();
     getModelMock.mockReturnValue({});
+    createEvidenceRecorderMock.mockReturnValue({
+      enabled: false,
+      recordEvent: vi.fn(),
+      writeRawFile: vi.fn(),
+    });
     process.env["OPENACME_AI_TELEMETRY_RECORD_INPUTS"] = "1";
     delete process.env["OPENACME_AI_TELEMETRY_RECORD_OUTPUTS"];
     streamTextMock.mockReturnValue({ usage: Promise.resolve({}) });
@@ -161,5 +168,34 @@ describe("Agent.runStream telemetry", () => {
     expect(call.experimental_telemetry.metadata.forensicRunId).toMatch(
       /^[0-9a-f-]{36}$/
     );
+  });
+
+  it("keeps streamText behavior when evidence recorder sinks throw", async () => {
+    const agent = makeAgent();
+    const streamResult = { usage: Promise.resolve({}) };
+    streamTextMock.mockReturnValue(streamResult);
+    const history: UIMessage[] = [
+      {
+        id: "user-1",
+        role: "user",
+        parts: [{ type: "text", text: "hello" }],
+      } as UIMessage,
+    ];
+    createEvidenceRecorderMock.mockReturnValue({
+      enabled: true,
+      runDir: "/tmp/openacme-forensics/run-failing-sink",
+      recordEvent: vi.fn(() => {
+        throw new Error("event sink failed");
+      }),
+      writeRawFile: vi.fn(() => {
+        throw new Error("raw sink failed");
+      }),
+    });
+
+    await expect(
+      agent.runStream({ sessionId: "sess-1", history })
+    ).resolves.toBe(streamResult);
+
+    expect(streamTextMock).toHaveBeenCalledTimes(1);
   });
 });

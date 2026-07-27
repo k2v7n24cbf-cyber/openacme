@@ -30,7 +30,7 @@ const FORENSIC_EVENT_TYPES = new Set([
 
 export function registerSessionTimelineRoutes(
   app: Hono,
-  manager: AgentManager
+  manager: AgentManager,
 ): void {
   app.get("/api/sessions/:id/timeline", (c) => {
     const sessionId = c.req.param("id");
@@ -61,7 +61,7 @@ export function registerSessionTimelineRoutes(
     if (includeForensics && (!source || source === "forensic")) {
       const usageRows = manager.usageStore.listEvents(
         { sessionId },
-        { limit: 200 }
+        { limit: 200 },
       ).events;
       events.push(...readForensicTimelineEvents(usageRows, filter));
     }
@@ -76,7 +76,7 @@ export function registerSessionTimelineRoutes(
 
 function readForensicTimelineEvents(
   usageRows: UsageEventRow[],
-  filter: SessionTimelineFilter
+  filter: SessionTimelineFilter,
 ): SessionTimelineEvent[] {
   const out: SessionTimelineEvent[] = [];
   for (const usage of usageRows) {
@@ -108,11 +108,12 @@ interface ForensicRow {
 function forensicRowToTimelineEvent(
   row: ForensicRow,
   usage: UsageEventRow,
-  index: number
+  index: number,
 ): SessionTimelineEvent {
   const context = row.context ?? {};
   const createdAtMs = parseTimestamp(row.timestamp) ?? usage.createdAt * 1000;
   const data = row.data ?? {};
+  const forensicRunId = row.forensicRunId ?? usage.forensicRunId ?? null;
   return {
     id: `forensic:${usage.forensicRunId}:${index}:${row.type}`,
     createdAtMs,
@@ -125,11 +126,43 @@ function forensicRowToTimelineEvent(
     status: inferStatus(row.type, data),
     traceId: row.traceId ?? usage.traceId,
     spanId: row.spanId ?? usage.spanId,
-    forensicRunId: row.forensicRunId ?? usage.forensicRunId,
+    forensicRunId,
     usageEventId: usage.id,
     durationMs: numberValue(data.durationMs),
-    payload: sanitizeForensicPayload(data),
+    payload: withOperatorTimelineLocator(
+      sanitizeForensicPayload(data),
+      usage.sessionId,
+      forensicRunId,
+    ),
   };
+}
+
+function withOperatorTimelineLocator(
+  payload: unknown,
+  sessionId: string,
+  forensicRunId: string | null,
+): unknown {
+  const timelineLocator = buildSessionTimelineLocator({
+    sessionId,
+    forensicRunId,
+  });
+  if (!timelineLocator || !payload || typeof payload !== "object") {
+    return payload;
+  }
+  if (Array.isArray(payload)) return payload;
+  return { ...payload, timelineLocator };
+}
+
+function buildSessionTimelineLocator(args: {
+  sessionId?: string | null;
+  forensicRunId?: string | null;
+}): string | undefined {
+  const sessionId = cleanString(args.sessionId);
+  if (!sessionId) return undefined;
+  const params = new URLSearchParams({ includeForensics: "1" });
+  const forensicRunId = cleanString(args.forensicRunId);
+  if (forensicRunId) params.set("forensicRunId", forensicRunId);
+  return `/api/sessions/${encodeURIComponent(sessionId)}/timeline?${params.toString()}`;
 }
 
 function sanitizeForensicPayload(value: unknown): unknown {
@@ -152,15 +185,12 @@ function sanitizeForensicPayload(value: unknown): unknown {
 
 function matchesFilter(
   event: SessionTimelineEvent,
-  filter: SessionTimelineFilter
+  filter: SessionTimelineFilter,
 ): boolean {
   if (event.sessionId !== filter.sessionId) return false;
   if (filter.source && event.source !== filter.source) return false;
   if (filter.traceId && event.traceId !== filter.traceId) return false;
-  if (
-    filter.forensicRunId &&
-    event.forensicRunId !== filter.forensicRunId
-  ) {
+  if (filter.forensicRunId && event.forensicRunId !== filter.forensicRunId) {
     return false;
   }
   if (filter.usageEventId && event.usageEventId !== filter.usageEventId) {
@@ -171,7 +201,7 @@ function matchesFilter(
 
 function compareTimelineEvents(
   a: SessionTimelineEvent,
-  b: SessionTimelineEvent
+  b: SessionTimelineEvent,
 ): number {
   return a.createdAtMs - b.createdAtMs || a.id.localeCompare(b.id);
 }
@@ -191,7 +221,7 @@ function clampInt(
   value: string | undefined,
   fallback: number,
   min: number,
-  max: number
+  max: number,
 ): number {
   const parsed = Number.parseInt(value ?? "", 10);
   if (!Number.isFinite(parsed)) return fallback;
@@ -233,11 +263,19 @@ function stringValue(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function cleanString(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function inferStatus(type: string, data: Record<string, unknown>): string | null {
+function inferStatus(
+  type: string,
+  data: Record<string, unknown>,
+): string | null {
   if (type === "tool.finish") {
     const resultStatus = stringValue(data.resultStatus);
     if (resultStatus === "success") return "ok";

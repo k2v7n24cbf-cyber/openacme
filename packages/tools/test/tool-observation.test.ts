@@ -2,12 +2,15 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { z } from "zod";
 import { ToolRegistry } from "../src/registry.js";
 import {
-  bindToolForensics,
-  type ToolForensicsSpan,
-  type ToolForensicsSink,
-} from "../src/forensics.js";
+  bindToolObservation,
+  type ToolObservationSpan,
+  type ToolObservationSink,
+} from "../src/observation.js";
 import type { ToolResultClassifier } from "../src/types.js";
-import { toolCallContext, type ToolCallContext } from "../src/session-context.js";
+import {
+  toolCallContext,
+  type ToolCallContext,
+} from "../src/session-context.js";
 import { bindToolHost } from "../src/tool-host-binding.js";
 
 const CTX: ToolCallContext = {
@@ -16,7 +19,7 @@ const CTX: ToolCallContext = {
   workspaceDir: "/tmp/openacme-agent/workspace",
 };
 
-type ForensicEvent = { type: string; data?: Record<string, unknown> };
+type ObservationEvent = { type: string; data?: Record<string, unknown> };
 type RawWrite = { relativePath: string; text: string };
 type SpanRecord = {
   name: string;
@@ -28,14 +31,14 @@ type SpanRecord = {
 };
 type Execute = (
   args: Record<string, unknown>,
-  opts?: { toolCallId?: string }
+  opts?: { toolCallId?: string },
 ) => Promise<string>;
 
-let events: ForensicEvent[];
+let events: ObservationEvent[];
 let rawWrites: RawWrite[];
 let spans: SpanRecord[];
 
-function makeSink(): ToolForensicsSink {
+function makeSink(): ToolObservationSink {
   return {
     recordEvent: vi.fn((type: string, data?: Record<string, unknown>) => {
       events.push({ type, data });
@@ -52,7 +55,7 @@ function makeSink(): ToolForensicsSink {
   };
 }
 
-function makeSpan(record: SpanRecord): ToolForensicsSpan {
+function makeSpan(record: SpanRecord): ToolObservationSpan {
   return {
     traceId: "trace-tool",
     spanId: "span-tool",
@@ -79,13 +82,15 @@ function executeOf(reg: ToolRegistry, name = "echo"): Execute {
   return (tools[name] as { execute: Execute }).execute;
 }
 
-function makeRegistry(opts: {
-  runtime?: "daemon" | "worker";
-  result?: string;
-  throwError?: Error;
-  classifyResult?: ToolResultClassifier;
-  maxResultSizeChars?: number;
-} = {}) {
+function makeRegistry(
+  opts: {
+    runtime?: "daemon" | "worker";
+    result?: string;
+    throwError?: Error;
+    classifyResult?: ToolResultClassifier;
+    maxResultSizeChars?: number;
+  } = {},
+) {
   const reg = new ToolRegistry();
   reg.register({
     name: "echo",
@@ -107,15 +112,13 @@ beforeEach(() => {
   events = [];
   rawWrites = [];
   spans = [];
-  bindToolForensics({
+  bindToolObservation({
     getSink: () => makeSink(),
     locatorAttributes: ({ eventType, toolCallId, relativeEvidenceDir }) => ({
       "openacme.forensic.lookup": "usage_events.forensic_run_id",
       "openacme.forensic.evidence_ref": `openacme://forensics/run-tool#${eventType}:${toolCallId}`,
       "openacme.forensic.event_selector": `type=${eventType} toolCallId=${toolCallId}`,
       "openacme.forensic.relative_evidence_dir": relativeEvidenceDir,
-      "openacme.session.timeline_locator":
-        "/api/sessions/sess-1/timeline?includeForensics=1&forensicRunId=run-tool",
     }),
     withSpan: async (name, attributes, fn) => {
       const record: SpanRecord = {
@@ -133,16 +136,16 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  bindToolForensics(null);
+  bindToolObservation(null);
   bindToolHost(null as never);
 });
 
-describe("tool forensics", () => {
+describe("tool observations", () => {
   it("records tool args and result facts without changing output", async () => {
     const execute = executeOf(makeRegistry());
 
     const output = await toolCallContext.run({ ...CTX }, () =>
-      execute({ msg: "hello" }, { toolCallId: "call-1" })
+      execute({ msg: "hello" }, { toolCallId: "call-1" }),
     );
 
     expect(output).toBe("echo:hello");
@@ -186,8 +189,6 @@ describe("tool forensics", () => {
         "openacme.tool.runtime": "daemon",
         "openacme.forensic.evidence_ref":
           "openacme://forensics/run-tool#tool.execute:call-1",
-        "openacme.session.timeline_locator":
-          "/api/sessions/sess-1/timeline?includeForensics=1&forensicRunId=run-tool",
       },
       status: "ok",
     });
@@ -207,11 +208,11 @@ describe("tool forensics", () => {
   it("records spill facts for large local tool results", async () => {
     const body = "A".repeat(40_000);
     const execute = executeOf(
-      makeRegistry({ result: body, maxResultSizeChars: 100 })
+      makeRegistry({ result: body, maxResultSizeChars: 100 }),
     );
 
     const output = await toolCallContext.run({ ...CTX }, () =>
-      execute({ msg: "large" }, { toolCallId: "call-large" })
+      execute({ msg: "large" }, { toolCallId: "call-large" }),
     );
 
     expect(output).toContain("[overflow:");
@@ -223,8 +224,8 @@ describe("tool forensics", () => {
     expect(String(finish.data?.["spillPath"])).toContain("/tool-calls/");
     expect(
       rawWrites.find((write) =>
-        write.relativePath.endsWith("result.pre-spill.txt")
-      )?.text
+        write.relativePath.endsWith("result.pre-spill.txt"),
+      )?.text,
     ).toBe(body);
   });
 
@@ -235,7 +236,7 @@ describe("tool forensics", () => {
     const execute = executeOf(makeRegistry({ runtime: "worker" }));
 
     const output = await toolCallContext.run({ ...CTX }, () =>
-      execute({ msg: "remote" }, { toolCallId: "call-worker" })
+      execute({ msg: "remote" }, { toolCallId: "call-worker" }),
     );
 
     expect(JSON.parse(output)).toEqual({ viaWorker: true });
@@ -267,11 +268,11 @@ describe("tool forensics", () => {
           exitCode: 7,
           outcomeAttributes: { command_family: "shell" },
         }),
-      })
+      }),
     );
 
     const output = await toolCallContext.run({ ...CTX }, () =>
-      execute({ msg: "bad command" }, { toolCallId: "call-logical-failure" })
+      execute({ msg: "bad command" }, { toolCallId: "call-logical-failure" }),
     );
 
     expect(output).toBe(logicalFailure);
@@ -318,8 +319,8 @@ describe("tool forensics", () => {
 
     await expect(
       toolCallContext.run({ ...CTX }, () =>
-        execute({ msg: "bad" }, { toolCallId: "call-error" })
-      )
+        execute({ msg: "bad" }, { toolCallId: "call-error" }),
+      ),
     ).rejects.toBe(boom);
 
     expect(events.map((event) => event.type)).toEqual([
@@ -340,8 +341,8 @@ describe("tool forensics", () => {
     expect(spans[0]!.status).toBe("error");
   });
 
-  it("does not let forensic sink failures break tool execution", async () => {
-    bindToolForensics({
+  it("does not let observation sink failures break tool execution", async () => {
+    bindToolObservation({
       getSink: () => ({
         recordEvent: () => {
           throw new Error("record failed");
@@ -355,8 +356,8 @@ describe("tool forensics", () => {
 
     await expect(
       toolCallContext.run({ ...CTX }, () =>
-        execute({ msg: "still ok" }, { toolCallId: "call-ok" })
-      )
+        execute({ msg: "still ok" }, { toolCallId: "call-ok" }),
+      ),
     ).resolves.toBe("echo:still ok");
   });
 });

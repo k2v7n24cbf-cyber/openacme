@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
 import { createLogger } from "@openacme/config/logger";
 
-const log = createLogger("tools.forensics");
+const log = createLogger("tools.observation");
 
-export interface ToolForensicsSink {
+export interface ToolObservationSink {
   recordEvent(type: string, data?: Record<string, unknown>): void;
   writeRawFile(relativePath: string, data: string | Buffer): unknown;
 }
 
-export interface ToolForensicsSpan {
+export interface ToolObservationSpan {
   traceId?: string;
   spanId?: string;
   setAttributes?(attributes: Record<string, unknown>): void;
@@ -18,40 +18,40 @@ export interface ToolForensicsSpan {
   setStatusError?(error: unknown): void;
 }
 
-export interface ToolForensicsBinding {
-  getSink(): ToolForensicsSink | null | undefined;
-  locatorAttributes?(args: ToolForensicLocatorArgs): Record<string, unknown>;
+export interface ToolObservationBinding {
+  getSink(): ToolObservationSink | null | undefined;
+  locatorAttributes?(args: ToolObservationLocatorArgs): Record<string, unknown>;
   withSpan?<T>(
     name: string,
     attributes: Record<string, unknown>,
-    fn: (span: ToolForensicsSpan) => Promise<T> | T
+    fn: (span: ToolObservationSpan) => Promise<T> | T
   ): Promise<T> | T;
 }
 
-export interface ToolForensicLocatorArgs {
+export interface ToolObservationLocatorArgs {
   eventType: string;
   toolCallId?: string;
   sessionId?: string;
   relativeEvidenceDir?: string;
 }
 
-let binding: ToolForensicsBinding | null = null;
+let binding: ToolObservationBinding | null = null;
 
-export function bindToolForensics(next: ToolForensicsBinding | null): void {
+export function bindToolObservation(next: ToolObservationBinding | null): void {
   binding = next;
 }
 
-export function withToolForensicSpan<T>(
+export function withToolObservationSpan<T>(
   name: string,
   attributes: Record<string, unknown>,
-  fn: (span: ToolForensicsSpan) => Promise<T> | T
+  fn: (span: ToolObservationSpan) => Promise<T> | T
 ): Promise<T> | T {
   const current = binding;
   if (!current?.withSpan) return fn({});
   return current.withSpan(name, attributes, fn);
 }
 
-export function recordToolForensicEvent(
+export function recordToolObservationEvent(
   type: string,
   data?: Record<string, unknown>
 ): void {
@@ -60,24 +60,27 @@ export function recordToolForensicEvent(
   try {
     sink.recordEvent(type, data);
   } catch (err) {
-    log.warn({ err, type }, "tool forensic event write failed");
+    log.warn({ err, type }, "tool observation event write failed");
   }
 }
 
-export function getToolForensicLocatorAttributes(
-  args: ToolForensicLocatorArgs
+export function getToolObservationLocatorAttributes(
+  args: ToolObservationLocatorArgs
 ): Record<string, unknown> {
   const current = binding;
   if (!current?.locatorAttributes) return {};
   try {
     return current.locatorAttributes(args);
   } catch (err) {
-    log.warn({ err, eventType: args.eventType }, "tool forensic locator failed");
+    log.warn(
+      { err, eventType: args.eventType },
+      "tool observation locator failed"
+    );
     return {};
   }
 }
 
-export function toolForensicLocatorPayload(
+export function toolObservationLocatorPayload(
   attributes: Record<string, unknown>
 ): Record<string, string> {
   const out: Record<string, string> = {};
@@ -108,7 +111,7 @@ export function toolForensicLocatorPayload(
   return out;
 }
 
-export function writeToolForensicRawFile(
+export function writeToolObservationRawFile(
   relativePath: string,
   data: string | Buffer
 ): unknown {
@@ -117,21 +120,21 @@ export function writeToolForensicRawFile(
   try {
     return sink.writeRawFile(relativePath, data);
   } catch (err) {
-    log.warn({ err, relativePath }, "tool forensic raw write failed");
+    log.warn({ err, relativePath }, "tool observation raw write failed");
     return null;
   }
 }
 
-export function sha256ForensicText(value: string): string {
+export function sha256ObservationText(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-export function safeForensicSegment(value: string): string {
+export function safeObservationSegment(value: string): string {
   const safe = value.replace(/[^A-Za-z0-9_.-]/g, "_");
   return safe.length > 0 ? safe.slice(0, 160) : "unknown";
 }
 
-export function stringifyForensics(value: unknown): string {
+export function stringifyObservation(value: unknown): string {
   try {
     return JSON.stringify(value, null, 2) ?? "null";
   } catch (err) {
@@ -149,12 +152,12 @@ export function rawRecordPath(record: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function getSink(): ToolForensicsSink | null {
+function getSink(): ToolObservationSink | null {
   if (!binding) return null;
   try {
     return binding.getSink() ?? null;
   } catch (err) {
-    log.warn({ err }, "tool forensic sink resolution failed");
+    log.warn({ err }, "tool observation sink resolution failed");
     return null;
   }
 }

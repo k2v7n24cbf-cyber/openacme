@@ -41,9 +41,9 @@ vi.mock("@openacme/llm-provider", () => ({
   getEffectiveContextWindow: getEffectiveContextWindowMock,
   supportsToolResultMedia: () => false,
   getActiveTraceContext: () => null,
-  getAIForensicContext: () => undefined,
-  getAIForensicProviderRequestCount: () => 1,
-  buildForensicEventSelector: (
+  getAiObservationContext: () => undefined,
+  getProviderRequestCountForRun: () => 1,
+  buildEvidenceEventSelector: (
     eventType: string,
     fields: Record<string, string | number | undefined | null> = {}
   ) =>
@@ -53,11 +53,11 @@ vi.mock("@openacme/llm-provider", () => ({
         .filter(([, value]) => value !== undefined && value !== null)
         .map(([key, value]) => `${key}=${value}`),
     ].join(" "),
-  buildForensicLocatorAttributes: () => ({}),
-  buildForensicLocatorPayload: () => ({}),
-  setAIForensicContext: vi.fn(),
-  enterAIForensicContext: (_ctx: unknown, fn: () => unknown) => fn(),
-  createForensicRecorder: () => ({
+  buildEvidenceLocatorAttributes: () => ({}),
+  buildEvidenceLocatorPayload: () => ({}),
+  setAiObservationContext: vi.fn(),
+  enterAiObservationContext: (_ctx: unknown, fn: () => unknown) => fn(),
+  createEvidenceRecorder: () => ({
     enabled: false,
     recordEvent: vi.fn(),
     writeRawFile: vi.fn(),

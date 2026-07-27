@@ -21,27 +21,34 @@ import { runSubagent } from "../src/subagent.js";
 
 // Mock @openacme/llm-provider so structured-mode tests can route the
 // generateObject call through a controlled MockLanguageModelV3.
-const { getModelMock, enterAIForensicContextMock } = vi.hoisted(() => ({
+const { getModelMock, enterAiObservationContextMock } = vi.hoisted(() => ({
   getModelMock: vi.fn<(cfg: unknown) => unknown>(() => ({})),
-  enterAIForensicContextMock: vi.fn((_ctx: unknown, fn: () => unknown) => fn()),
+  enterAiObservationContextMock: vi.fn((_ctx: unknown, fn: () => unknown) =>
+    fn(),
+  ),
 }));
 vi.mock("@openacme/llm-provider", () => ({
   getModel: getModelMock,
   resolveSubagentModel: (m: unknown) => m,
   supportsToolResultMedia: () => false,
   getActiveTraceContext: () => null,
-  getAIForensicContext: () => undefined,
-  getAIForensicProviderRequestCount: () => 1,
-  buildForensicLocatorAttributes: () => ({}),
-  setAIForensicContext: vi.fn(),
-  enterAIForensicContext: enterAIForensicContextMock,
-  createForensicRecorder: () => ({
+  getAiObservationContext: () => undefined,
+  getProviderRequestCountForRun: () => 1,
+  buildEvidenceEventSelector: (eventType: string) => `type=${eventType}`,
+  buildEvidenceLocatorAttributes: () => ({}),
+  buildEvidenceLocatorPayload: () => ({}),
+  setAiObservationContext: vi.fn(),
+  enterAiObservationContext: enterAiObservationContextMock,
+  createEvidenceRecorder: () => ({
     enabled: false,
     recordEvent: vi.fn(),
     writeRawFile: vi.fn(),
   }),
-  withOpenAcmeSpan: (_name: string, _attrs: unknown, fn: (span: unknown) => unknown) =>
-    fn({ traceId: "trace-helper", spanId: "span-helper" }),
+  withOpenAcmeSpan: (
+    _name: string,
+    _attrs: unknown,
+    fn: (span: unknown) => unknown,
+  ) => fn({ traceId: "trace-helper", spanId: "span-helper" }),
   startOpenAcmeSpan: () => ({
     setAttributes: vi.fn(),
     addEvent: vi.fn(),
@@ -67,7 +74,7 @@ function freshDb() {
 
 function makeAgent(
   model?: Partial<AgentConfig["model"]>,
-  timelineEvents?: SessionTimelineEventInput[]
+  timelineEvents?: SessionTimelineEventInput[],
 ): Agent {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openacme-subagent-"));
   const db = freshDb();
@@ -246,15 +253,18 @@ describe("runSubagent (forked mode)", () => {
     const agent = makeAgent();
     agent.sessionStore.create(agent.config.id, { id: "sess-4" });
     const ac = new AbortController();
-    vi.spyOn(agent, "runStream").mockImplementation(async (opts) => ({
-      toUIMessageStream: () =>
-        new ReadableStream({
-          start(c) {
-            opts.signal?.addEventListener("abort", () => c.close());
-          },
-        }),
-      usage: new Promise(() => {}),
-    } as unknown as Awaited<ReturnType<Agent["runStream"]>>));
+    vi.spyOn(agent, "runStream").mockImplementation(
+      async (opts) =>
+        ({
+          toUIMessageStream: () =>
+            new ReadableStream({
+              start(c) {
+                opts.signal?.addEventListener("abort", () => c.close());
+              },
+            }),
+          usage: new Promise(() => {}),
+        }) as unknown as Awaited<ReturnType<Agent["runStream"]>>,
+    );
     setTimeout(() => ac.abort(), 30);
     const out = await runSubagent({
       mode: "forked",
@@ -281,8 +291,16 @@ describe("runSubagent (forked mode)", () => {
     } as unknown as Awaited<ReturnType<Agent["runStream"]>>);
 
     const ctx = [
-      { id: "u1", role: "user" as const, parts: [{ type: "text" as const, text: "hi" }] },
-      { id: "a1", role: "assistant" as const, parts: [{ type: "text" as const, text: "hello" }] },
+      {
+        id: "u1",
+        role: "user" as const,
+        parts: [{ type: "text" as const, text: "hi" }],
+      },
+      {
+        id: "a1",
+        role: "assistant" as const,
+        parts: [{ type: "text" as const, text: "hello" }],
+      },
     ];
 
     await runSubagent({
@@ -447,7 +465,7 @@ describe("runSubagent (structured mode)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     getModelMock.mockReset();
-    enterAIForensicContextMock.mockClear();
+    enterAiObservationContextMock.mockClear();
   });
 
   it("returns the parsed object on success", async () => {
@@ -527,7 +545,7 @@ describe("runSubagent (structured mode)", () => {
     if (out.mode === "structured") {
       expect(out.object).toEqual({ selected: ["oauth"] });
     }
-    expect(enterAIForensicContextMock).toHaveBeenCalledWith(
+    expect(enterAiObservationContextMock).toHaveBeenCalledWith(
       expect.objectContaining({
         forensicRunId: expect.stringMatching(/^[0-9a-f-]{36}$/),
         agentId: "a1",
@@ -535,7 +553,7 @@ describe("runSubagent (structured mode)", () => {
         model: "test",
         authMode: "oauth",
       }),
-      expect.any(Function)
+      expect.any(Function),
     );
     expect(model.doStreamCalls.length).toBe(1);
     expect(model.doGenerateCalls.length).toBe(0);
@@ -543,9 +561,7 @@ describe("runSubagent (structured mode)", () => {
 
   it("returns null + failed on schema mismatch", async () => {
     const agent = makeAgent();
-    getModelMock.mockReturnValue(
-      modelReturning({ wrong_field: "oops" })
-    );
+    getModelMock.mockReturnValue(modelReturning({ wrong_field: "oops" }));
     const out = await runSubagent({
       mode: "structured",
       parent: agent,
@@ -566,7 +582,7 @@ describe("runSubagent (structured mode)", () => {
         doGenerate: async () => {
           throw new Error("provider down");
         },
-      })
+      }),
     );
     const out = await runSubagent({
       mode: "structured",
@@ -588,11 +604,11 @@ describe("runSubagent (structured mode)", () => {
       new MockLanguageModelV3({
         doGenerate: async (opts) => {
           await new Promise((r) =>
-            opts.abortSignal?.addEventListener("abort", () => r(undefined))
+            opts.abortSignal?.addEventListener("abort", () => r(undefined)),
           );
           throw new Error("aborted");
         },
-      })
+      }),
     );
     setTimeout(() => ac.abort(), 30);
     const out = await runSubagent({
@@ -613,11 +629,11 @@ describe("runSubagent (structured mode)", () => {
       new MockLanguageModelV3({
         doGenerate: async (opts) => {
           await new Promise((r) =>
-            opts.abortSignal?.addEventListener("abort", () => r(undefined))
+            opts.abortSignal?.addEventListener("abort", () => r(undefined)),
           );
           throw new Error("aborted");
         },
-      })
+      }),
     );
     const out = await runSubagent({
       mode: "structured",

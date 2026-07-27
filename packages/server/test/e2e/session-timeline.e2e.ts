@@ -34,53 +34,60 @@ describe("session timeline observability (e2e)", () => {
   it("returns semantic turn events plus structured forensic tool events", async () => {
     const { sessionId } = await c.chat(
       "timeline-agent",
-      'timeline please [[mock:tool:list_files:{"path":"."}]]'
+      'timeline please [[mock:tool:list_files:{"path":"."}]]',
     );
 
     await waitUntil(async () => {
       const assistant = (await c.messages(sessionId)).find(
-        (m) => m.role === "assistant"
+        (m) => m.role === "assistant",
       );
       return !!assistant?.parts.some(
-        (p) => p?.type === "tool-list_files" && p.state === "output-available"
+        (p) => p?.type === "tool-list_files" && p.state === "output-available",
       );
     });
 
-    let timeline: {
-      events: Array<{
-        id: string;
-        sessionId: string;
-        eventType: string;
-        source: string;
-        traceId?: string | null;
-        forensicRunId?: string | null;
-        usageEventId?: string | null;
-        payload?: unknown;
-      }>;
-    } | undefined;
+    let timeline:
+      | {
+          events: Array<{
+            id: string;
+            sessionId: string;
+            eventType: string;
+            source: string;
+            traceId?: string | null;
+            forensicRunId?: string | null;
+            usageEventId?: string | null;
+            payload?: unknown;
+          }>;
+        }
+      | undefined;
 
     try {
-      await waitUntil(async () => {
-        timeline = await c.json(
-          `/api/sessions/${sessionId}/timeline?includeForensics=1&limit=200`
-        );
-        const types = new Set(timeline?.events.map((event) => event.eventType));
-        return (
-          types.has("session.user_message.received") &&
-          types.has("session.turn.started") &&
-          types.has("session.turn.finished") &&
-          types.has("session.usage.finalized") &&
-          types.has("tool.start") &&
-          types.has("tool.finish")
-        );
-      }, { timeoutMs: 10_000 });
+      await waitUntil(
+        async () => {
+          timeline = await c.json(
+            `/api/sessions/${sessionId}/timeline?includeForensics=1&limit=200`,
+          );
+          const types = new Set(
+            timeline?.events.map((event) => event.eventType),
+          );
+          return (
+            types.has("session.user_message.received") &&
+            types.has("session.turn.started") &&
+            types.has("session.turn.finished") &&
+            types.has("session.usage.finalized") &&
+            types.has("tool.start") &&
+            types.has("tool.finish")
+          );
+        },
+        { timeoutMs: 10_000 },
+      );
     } catch (err) {
       const types = [
         ...new Set(timeline?.events.map((event) => event.eventType) ?? []),
       ].sort();
       throw new Error(
         `timeline missing expected event types; saw ${JSON.stringify(types)}`,
-        { cause: err }
+        { cause: err },
       );
     }
 
@@ -89,7 +96,7 @@ describe("session timeline observability (e2e)", () => {
     expect(events.some((event) => event.source === "forensic")).toBe(true);
 
     const finalized = events.find(
-      (event) => event.eventType === "session.usage.finalized"
+      (event) => event.eventType === "session.usage.finalized",
     );
     if (finalized?.traceId != null) {
       expect(typeof finalized.traceId).toBe("string");
@@ -110,7 +117,7 @@ describe("session timeline observability (e2e)", () => {
       srv.dataDir,
       "ai-forensics",
       "2026-07-26",
-      forensicRunId
+      forensicRunId,
     );
     fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
     fs.writeFileSync(
@@ -128,16 +135,13 @@ describe("session timeline observability (e2e)", () => {
           summaryBudget: 2000,
           promptBytes: 1234,
           promptSha256: "abc123",
-          evidenceRef:
-            `openacme://forensics/${forensicRunId}#compression.summarizer`,
-          timelineLocator:
-            `/api/sessions/${sessionId}/timeline?includeForensics=1&forensicRunId=${forensicRunId}`,
+          evidenceRef: `openacme://forensics/${forensicRunId}#compression.summarizer`,
           relativeEvidenceDir: "compression/summarizer",
           rawPromptFile: "compression/summarizer/prompt.txt",
           absolutePath: "/tmp/should-not-leak",
         },
       })}\n`,
-      { encoding: "utf-8", mode: 0o600 }
+      { encoding: "utf-8", mode: 0o600 },
     );
 
     srv.manager.sessionStore.create("timeline-agent", { id: sessionId });
@@ -159,11 +163,11 @@ describe("session timeline observability (e2e)", () => {
     });
 
     const timeline = await c.json(
-      `/api/sessions/${sessionId}/timeline?includeForensics=1&limit=50`
+      `/api/sessions/${sessionId}/timeline?includeForensics=1&limit=50`,
     );
     const event = timeline.events.find(
       (row: { eventType?: string }) =>
-        row.eventType === "compression.summarizer.start"
+        row.eventType === "compression.summarizer.start",
     );
     expect(event).toMatchObject({
       source: "forensic",
@@ -174,8 +178,8 @@ describe("session timeline observability (e2e)", () => {
         provider: "openai",
         model: "gpt-test",
         promptBytes: 1234,
-        evidenceRef:
-          `openacme://forensics/${forensicRunId}#compression.summarizer`,
+        evidenceRef: `openacme://forensics/${forensicRunId}#compression.summarizer`,
+        timelineLocator: `/api/sessions/${sessionId}/timeline?includeForensics=1&forensicRunId=${forensicRunId}`,
         relativeEvidenceDir: "compression/summarizer",
       },
     });
@@ -191,7 +195,7 @@ describe("session timeline observability (e2e)", () => {
       srv.dataDir,
       "ai-forensics",
       "2026-07-26",
-      forensicRunId
+      forensicRunId,
     );
     fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
     fs.writeFileSync(
@@ -214,13 +218,13 @@ describe("session timeline observability (e2e)", () => {
           failureMessage: "Command exited with code 7",
           exitCode: 7,
           outcomeAttributes: { command_family: "shell" },
-          rawPostSpillFile: "tool-calls/call_failed_shell/result.post-spill.txt",
-          evidenceRef:
-            `openacme://forensics/${forensicRunId}#tool.finish:call_failed_shell`,
+          rawPostSpillFile:
+            "tool-calls/call_failed_shell/result.post-spill.txt",
+          evidenceRef: `openacme://forensics/${forensicRunId}#tool.finish:call_failed_shell`,
           relativeEvidenceDir: "tool-calls/call_failed_shell",
         },
       })}\n`,
-      { encoding: "utf-8", mode: 0o600 }
+      { encoding: "utf-8", mode: 0o600 },
     );
 
     srv.manager.sessionStore.create("timeline-agent", { id: sessionId });
@@ -242,10 +246,10 @@ describe("session timeline observability (e2e)", () => {
     });
 
     const timeline = await c.json(
-      `/api/sessions/${sessionId}/timeline?includeForensics=1&limit=50`
+      `/api/sessions/${sessionId}/timeline?includeForensics=1&limit=50`,
     );
     const event = timeline.events.find(
-      (row: { eventType?: string }) => row.eventType === "tool.finish"
+      (row: { eventType?: string }) => row.eventType === "tool.finish",
     );
     expect(event).toMatchObject({
       source: "forensic",
@@ -261,8 +265,7 @@ describe("session timeline observability (e2e)", () => {
         failureMessage: "Command exited with code 7",
         exitCode: 7,
         outcomeAttributes: { command_family: "shell" },
-        evidenceRef:
-          `openacme://forensics/${forensicRunId}#tool.finish:call_failed_shell`,
+        evidenceRef: `openacme://forensics/${forensicRunId}#tool.finish:call_failed_shell`,
         relativeEvidenceDir: "tool-calls/call_failed_shell",
       },
     });
@@ -299,52 +302,60 @@ describe("session timeline autonomous dispatcher events (e2e)", () => {
 
     srv.manager.dispatcher.kick("timeline_autonomous_e2e");
 
-    let timeline: {
-      events: Array<{
-        sessionId: string;
-        agentId?: string | null;
-        taskId?: string | null;
-        eventType: string;
-        source: string;
-        status?: string | null;
-        payload?: unknown;
-      }>;
-    } | undefined;
+    let timeline:
+      | {
+          events: Array<{
+            sessionId: string;
+            agentId?: string | null;
+            taskId?: string | null;
+            eventType: string;
+            source: string;
+            status?: string | null;
+            payload?: unknown;
+          }>;
+        }
+      | undefined;
 
-    await waitUntil(async () => {
-      timeline = await c.json(
-        `/api/sessions/${session.id}/timeline?limit=200`
-      );
-      const types = new Set(timeline.events.map((event) => event.eventType));
-      return (
-        types.has("session.dispatcher.wake.started") &&
-        types.has("session.autonomous.started") &&
-        types.has("session.autonomous.finished") &&
-        types.has("session.dispatcher.wake.finished")
-      );
-    }, { timeoutMs: 12_000 });
+    await waitUntil(
+      async () => {
+        timeline = await c.json(
+          `/api/sessions/${session.id}/timeline?limit=200`,
+        );
+        const types = new Set(timeline.events.map((event) => event.eventType));
+        return (
+          types.has("session.dispatcher.wake.started") &&
+          types.has("session.autonomous.started") &&
+          types.has("session.autonomous.finished") &&
+          types.has("session.dispatcher.wake.finished")
+        );
+      },
+      { timeoutMs: 12_000 },
+    );
 
-    const events = timeline!.events.filter((event) =>
-      event.eventType.startsWith("session.dispatcher.") ||
-      event.eventType.startsWith("session.autonomous.")
+    const events = timeline!.events.filter(
+      (event) =>
+        event.eventType.startsWith("session.dispatcher.") ||
+        event.eventType.startsWith("session.autonomous."),
     );
     expect(events.every((event) => event.sessionId === session.id)).toBe(true);
-    expect(events.every((event) => event.agentId === "timeline-auto-agent")).toBe(true);
+    expect(
+      events.every((event) => event.agentId === "timeline-auto-agent"),
+    ).toBe(true);
     expect(events.every((event) => event.taskId === task.id)).toBe(true);
 
     const wakeStarted = events.find(
-      (event) => event.eventType === "session.dispatcher.wake.started"
+      (event) => event.eventType === "session.dispatcher.wake.started",
     );
     expect(wakeStarted).toMatchObject({
       source: "dispatcher",
       status: "running",
     });
     expect(["inbox", "task_open_ready"]).toContain(
-      (wakeStarted?.payload as { reason?: string } | null)?.reason
+      (wakeStarted?.payload as { reason?: string } | null)?.reason,
     );
 
     const autonomousFinished = events.find(
-      (event) => event.eventType === "session.autonomous.finished"
+      (event) => event.eventType === "session.autonomous.finished",
     );
     expect(autonomousFinished).toMatchObject({
       source: "dispatcher",

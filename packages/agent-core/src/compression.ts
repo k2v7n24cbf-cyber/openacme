@@ -1,23 +1,10 @@
 import { generateText, type UIMessage, type UIMessagePart } from "ai";
 import { createHash, randomUUID } from "node:crypto";
-import {
-  buildForensicEventSelector,
-  buildForensicLocatorAttributes,
-  buildForensicLocatorPayload,
-  createForensicRecorder,
-  enterAIForensicContext,
-  getAIForensicContext,
-  getAIForensicProviderRequestCount,
-  getModel,
-  withOpenAcmeSpan,
-} from "@openacme/llm-provider";
+import { getModel } from "@openacme/llm-provider";
 import type { ModelConfig } from "@openacme/config";
 import { extractErrorText } from "./error-classifier.js";
 import type { CompressionConfig } from "./types.js";
-import {
-  buildAiForensicContext,
-  buildAiTelemetrySettings,
-} from "./telemetry.js";
+import { createAiHelperObservation } from "./helper-observation.js";
 
 /**
  * Internal "step view" of a UIMessage. Each user UIMessage flattens to
@@ -236,7 +223,13 @@ export function contentLengthForBudget(content: unknown): number {
       continue;
     }
     if (!part || typeof part !== "object") continue;
-    const p = part as { type?: string; text?: string; args?: unknown; result?: unknown; textDelta?: string };
+    const p = part as {
+      type?: string;
+      text?: string;
+      args?: unknown;
+      result?: unknown;
+      textDelta?: string;
+    };
     switch (p.type) {
       case "text":
         total += p.text?.length ?? 0;
@@ -341,7 +334,7 @@ function countResults(content: string): number {
 export function summarizeToolResult(
   toolName: string,
   args: unknown,
-  content: string
+  content: string,
 ): string {
   const a = safeArgs(args);
   const len = content.length;
@@ -430,7 +423,7 @@ function shrinkStringLeaves(value: unknown): unknown {
  * args}]`. We do NOT have OpenAI's nested `function.arguments` JSON-in-JSON.
  */
 export function truncateToolCallArgs(
-  toolCallsJson: string | null | undefined
+  toolCallsJson: string | null | undefined,
 ): string | null {
   if (!toolCallsJson) return toolCallsJson ?? null;
   let parsed: unknown;
@@ -502,7 +495,7 @@ export function dedupeToolResults(messages: Step[]): {
  * call's name/args when summarizing a tool result.
  */
 function buildCallIdIndex(
-  messages: Step[]
+  messages: Step[],
 ): Map<string, { toolName: string; args: unknown }> {
   const idx = new Map<string, { toolName: string; args: unknown }>();
   for (const m of messages) {
@@ -533,7 +526,7 @@ function buildCallIdIndex(
  */
 export function pruneOldToolResults(
   messages: Step[],
-  opts: { pruneBoundary: number }
+  opts: { pruneBoundary: number },
 ): { messages: Step[]; pruned: number } {
   if (messages.length === 0 || opts.pruneBoundary <= 0) {
     return { messages, pruned: 0 };
@@ -614,7 +607,7 @@ export function alignBoundaryBackward(messages: Step[], idx: number): number {
 
 export function findLastUserMessageIdx(
   messages: Step[],
-  headEnd: number
+  headEnd: number,
 ): number {
   for (let i = messages.length - 1; i >= headEnd; i--) {
     if (messages[i]!.role === "user") return i;
@@ -634,7 +627,7 @@ export function findLastUserMessageIdx(
 export function ensureLastUserMessageInTail(
   messages: Step[],
   cutIdx: number,
-  headEnd: number
+  headEnd: number,
 ): number {
   const lastUserIdx = findLastUserMessageIdx(messages, headEnd);
   if (lastUserIdx < 0) return cutIdx;
@@ -665,7 +658,7 @@ export function ensureLastUserMessageInTail(
  */
 export function findTailCutByTokens(
   messages: Step[],
-  opts: { headEnd: number; tailTokenBudget: number }
+  opts: { headEnd: number; tailTokenBudget: number },
 ): number {
   const n = messages.length;
   const { headEnd, tailTokenBudget } = opts;
@@ -784,7 +777,8 @@ export function sanitizeToolPairs(messages: Step[]): Step[] {
           content: ORPHAN_TOOL_RESULT_STUB,
           toolCalls: null,
           toolCallId: e.toolCallId,
-          toolName: callIdToToolName.get(e.toolCallId) ?? e.toolName ?? "unknown",
+          toolName:
+            callIdToToolName.get(e.toolCallId) ?? e.toolName ?? "unknown",
         });
         missing.delete(e.toolCallId);
       }
@@ -880,7 +874,7 @@ export function buildSummaryPrompt(opts: {
       "NEW TURNS TO INCORPORATE:",
       rendered,
       "",
-      "Update the summary using this exact structure. PRESERVE all existing information that is still relevant. ADD new completed actions to the numbered list (continue numbering). Move items from \"In Progress\" to \"Completed Actions\" when done. Move answered questions to \"Resolved Questions\". Update \"Active State\" to reflect current state. Remove information only if it is clearly obsolete. CRITICAL: Update \"## Active Task\" to reflect the user's most recent unfulfilled request — this is the most important field for task continuity.",
+      'Update the summary using this exact structure. PRESERVE all existing information that is still relevant. ADD new completed actions to the numbered list (continue numbering). Move items from "In Progress" to "Completed Actions" when done. Move answered questions to "Resolved Questions". Update "Active State" to reflect current state. Remove information only if it is clearly obsolete. CRITICAL: Update "## Active Task" to reflect the user\'s most recent unfulfilled request — this is the most important field for task continuity.',
       "",
       sections,
     ].join("\n");
@@ -927,7 +921,7 @@ export function withSummaryPrefix(summary: string): string {
  */
 export function resolveThreshold(
   c: CompressionConfig,
-  contextWindowOverride?: number | null
+  contextWindowOverride?: number | null,
 ): number | null {
   if (c.thresholdTokens != null) return c.thresholdTokens;
   const window = contextWindowOverride ?? c.contextWindow;
@@ -963,9 +957,11 @@ function trimToCharBudget(messages: Step[], charBudget: number): Step[] {
 function computeSummaryBudget(
   compressedTurns: Step[],
   contextWindow: number | null,
-  ratio: number
+  ratio: number,
 ): number {
-  const contentTokens = Math.floor(totalCharLen(compressedTurns) / CHARS_PER_TOKEN);
+  const contentTokens = Math.floor(
+    totalCharLen(compressedTurns) / CHARS_PER_TOKEN,
+  );
   const target = Math.floor(contentTokens * ratio);
   // If we don't know the model's context window, just clamp to the global
   // ceiling. Prevents accidentally requesting a huge summary on a tiny
@@ -988,7 +984,7 @@ interface SummaryFailureState {
 
 interface CompressorRunState {
   previousSummary?: string;
-  recentSavings: number[];        // last 2 ratios, [0..1]
+  recentSavings: number[]; // last 2 ratios, [0..1]
   failure: SummaryFailureState;
 }
 
@@ -1012,14 +1008,6 @@ function sha256Text(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function safeForensicWrite(fn: () => void): void {
-  try {
-    fn();
-  } catch {
-    // Forensic recording is best-effort and must never alter compression.
-  }
-}
-
 export type CompressionNoOpReason =
   | "too_short"
   | "raw_boundary_empty"
@@ -1038,7 +1026,7 @@ export interface CompressionTimelineEvent {
 
 function reportCompressionTimeline(
   opts: { onTimelineEvent?: (event: CompressionTimelineEvent) => void },
-  event: CompressionTimelineEvent
+  event: CompressionTimelineEvent,
 ): void {
   try {
     opts.onTimelineEvent?.(event);
@@ -1049,7 +1037,7 @@ function reportCompressionTimeline(
 
 function noOpResult(
   noOpReason: CompressionNoOpReason,
-  diagnostics: CompressResult["diagnostics"] = {}
+  diagnostics: CompressResult["diagnostics"] = {},
 ): CompressResult {
   return {
     childMessages: [],
@@ -1137,7 +1125,7 @@ export class Compressor {
   shouldCompress(
     sessionId: string,
     inputTokens: number,
-    threshold: number | null
+    threshold: number | null,
   ): boolean {
     if (threshold === null) return false;
     if (inputTokens < threshold) return false;
@@ -1180,7 +1168,7 @@ export class Compressor {
   recordResult(
     childSessionId: string,
     savingsRatio: number,
-    summary: string | null
+    summary: string | null,
   ): void {
     const s = this.getOrCreate(childSessionId);
     s.recentSavings = [...s.recentSavings, savingsRatio].slice(-2);
@@ -1228,7 +1216,10 @@ export class Compressor {
     // away wastes CPU on every turn that triggers compression.
     const tailTokenBudget = config.tailTokenBudget;
     {
-      const rawHeadEnd = alignBoundaryForward(parentSteps, config.protectFirstN);
+      const rawHeadEnd = alignBoundaryForward(
+        parentSteps,
+        config.protectFirstN,
+      );
       const rawCut = findTailCutByTokens(parentSteps, {
         headEnd: rawHeadEnd,
         tailTokenBudget,
@@ -1264,7 +1255,7 @@ export class Compressor {
     const summaryBudget = computeSummaryBudget(
       summarizable,
       config.contextWindow ?? null,
-      config.summaryTargetRatio ?? SUMMARY_RATIO_DEFAULT
+      config.summaryTargetRatio ?? SUMMARY_RATIO_DEFAULT,
     );
     const summarizerModel = config.summarizerModel ?? mainModel;
 
@@ -1275,7 +1266,7 @@ export class Compressor {
     // loss when the summarizer model has its own context limits.
     const trimmedSummarizable = trimToCharBudget(
       summarizable,
-      config.summarizerInputCharBudget
+      config.summarizerInputCharBudget,
     );
 
     const summaryOutcome = await this.summarizeMessages({
@@ -1312,8 +1303,7 @@ export class Compressor {
       summaryStep = {
         id: `summary-${randomUUID()}`,
         role: "user",
-        content:
-          `${SUMMARY_PREFIX}\n[Earlier conversation summary unavailable: ${summaryOutcome.error}. Continue with caution; refer to recent turns and ask if unsure.]`,
+        content: `${SUMMARY_PREFIX}\n[Earlier conversation summary unavailable: ${summaryOutcome.error}. Continue with caution; refer to recent turns and ask if unsure.]`,
         toolCalls: null,
         toolCallId: null,
         toolName: null,
@@ -1323,7 +1313,7 @@ export class Compressor {
       // Caller treats noOp:true as "stay on parent".
       return noOpResult(
         "proactive_summarizer_failed",
-        this.getDiagnostics(parentSessionId)
+        this.getDiagnostics(parentSessionId),
       );
     }
 
@@ -1334,8 +1324,7 @@ export class Compressor {
 
     const parentTotal = totalCharLen(parentSteps);
     const childTotal = totalCharLen(combined);
-    const savingsRatio =
-      parentTotal === 0 ? 0 : 1 - childTotal / parentTotal;
+    const savingsRatio = parentTotal === 0 ? 0 : 1 - childTotal / parentTotal;
 
     const childMessages = stepsToUIMessages(combined);
 
@@ -1370,7 +1359,10 @@ export class Compressor {
     const now = Date.now();
     if (now < state.failure.cooldownUntil) {
       const remaining = Math.round((state.failure.cooldownUntil - now) / 1000);
-      return { kind: "err", error: `summarizer cooldown ${remaining}s remaining` };
+      return {
+        kind: "err",
+        error: `summarizer cooldown ${remaining}s remaining`,
+      };
     }
 
     const useAux =
@@ -1385,225 +1377,172 @@ export class Compressor {
 
     const tryGen = async (m: ModelConfig): Promise<string> => {
       const startedAt = Date.now();
-      const parentForensicRunId = getAIForensicContext()?.forensicRunId;
-      const telemetry = buildAiTelemetrySettings({
+      const observation = createAiHelperObservation({
         functionId: "compression-summarizer",
         sessionId: opts.sessionId,
         kind: "extractor",
         model: m,
         metadata: { summaryBudget: opts.summaryBudget },
+        profile: "compression.summarizer",
       });
-      const forensicContext = buildAiForensicContext({
-        forensicRunId: telemetry.forensicRunId,
-        parentForensicRunId,
-        sessionId: opts.sessionId,
-        kind: "extractor",
-        model: m,
-      });
-      const recorder = createForensicRecorder({ context: forensicContext });
-      const eventSelector = buildForensicEventSelector(
-        "compression.summarizer.start"
-      );
-      const locatorArgs = {
-        forensicRunId: telemetry.forensicRunId,
-        sessionId: opts.sessionId,
-        eventType: "compression.summarizer",
-        eventSelector,
-        relativeEvidenceDir: "compression/summarizer",
-      };
-      const locatorAttributes = buildForensicLocatorAttributes(locatorArgs);
-      const locatorPayload = buildForensicLocatorPayload(locatorArgs);
       const promptBytes = Buffer.byteLength(prompt, "utf-8");
       const promptSha256 = sha256Text(prompt);
-      const res = await enterAIForensicContext(forensicContext, () =>
-        withOpenAcmeSpan(
-          "openacme.ai.helper",
-          {
-            "openacme.span.type": "ai_helper",
-            "openacme.ai.function_id": telemetry.settings.functionId,
-            "openacme.forensic.run_id": telemetry.forensicRunId,
-            "openacme.forensic.parent_run_id": parentForensicRunId,
-            "openacme.session.id": opts.sessionId,
-            "openacme.usage.kind": "extractor",
-            "openacme.provider": m.provider,
-            "openacme.model": m.model,
-            ...locatorAttributes,
+      const res = await observation.run(async (span) => {
+        observation.writeEvidenceFile("compression.summarizer.prompt", prompt);
+        observation.writeEvidenceFile(
+          "compression.summarizer.input",
+          JSON.stringify(
+            {
+              summaryBudget: opts.summaryBudget,
+              previousSummaryBytes: opts.previousSummary
+                ? Buffer.byteLength(opts.previousSummary, "utf-8")
+                : 0,
+              previousSummarySha256: opts.previousSummary
+                ? sha256Text(opts.previousSummary)
+                : undefined,
+              turnCount: opts.turns.length,
+              promptBytes,
+              promptSha256,
+            },
+            null,
+            2,
+          ),
+        );
+        observation.recordEvent("compression.summarizer.start", {
+          provider: m.provider,
+          model: m.model,
+          summaryBudget: opts.summaryBudget,
+          turnCount: opts.turns.length,
+          promptBytes,
+          promptSha256,
+          traceId: span.traceId,
+          spanId: span.spanId,
+          ...observation.locatorPayload,
+        });
+        reportCompressionTimeline(opts, {
+          eventType: "session.compression.summarizer.started",
+          status: "running",
+          traceId: span.traceId,
+          spanId: span.spanId,
+          forensicRunId: observation.forensicRunId,
+          payload: {
+            provider: m.provider,
+            model: m.model,
+            summaryBudget: opts.summaryBudget,
+            turnCount: opts.turns.length,
+            promptBytes,
+            promptSha256,
+            ...observation.locatorPayload,
           },
-          async (span) => {
-            safeForensicWrite(() => {
-              recorder.writeRawFile("compression/summarizer/prompt.txt", prompt);
-              recorder.writeRawFile(
-                "compression/summarizer/input.json",
-                JSON.stringify(
-                  {
-                    summaryBudget: opts.summaryBudget,
-                    previousSummaryBytes: opts.previousSummary
-                      ? Buffer.byteLength(opts.previousSummary, "utf-8")
-                      : 0,
-                    previousSummarySha256: opts.previousSummary
-                      ? sha256Text(opts.previousSummary)
-                      : undefined,
-                    turnCount: opts.turns.length,
-                    promptBytes,
-                    promptSha256,
-                  },
-                  null,
-                  2
-                )
-              );
-              recorder.recordEvent("compression.summarizer.start", {
-                provider: m.provider,
-                model: m.model,
-                summaryBudget: opts.summaryBudget,
-                turnCount: opts.turns.length,
-                promptBytes,
-                promptSha256,
-                traceId: span.traceId,
-                spanId: span.spanId,
-                ...locatorPayload,
-              });
-            });
-            reportCompressionTimeline(opts, {
-              eventType: "session.compression.summarizer.started",
-              status: "running",
-              traceId: span.traceId,
-              spanId: span.spanId,
-              forensicRunId: telemetry.forensicRunId,
-              payload: {
-                provider: m.provider,
-                model: m.model,
-                summaryBudget: opts.summaryBudget,
-                turnCount: opts.turns.length,
-                promptBytes,
-                promptSha256,
-                ...locatorPayload,
+        });
+        let res;
+        try {
+          res = await generateText({
+            model: getModel(m),
+            prompt,
+            maxOutputTokens: Math.floor(opts.summaryBudget * 1.3),
+            experimental_telemetry: observation.telemetry.settings,
+          });
+        } catch (err) {
+          const durationMs = Date.now() - startedAt;
+          const error = errorMessage(err);
+          observation.recordEvent("compression.summarizer.error", {
+            provider: m.provider,
+            model: m.model,
+            durationMs,
+            error,
+            traceId: span.traceId,
+            spanId: span.spanId,
+            ...observation.locatorPayload,
+          });
+          reportCompressionTimeline(opts, {
+            eventType: "session.compression.summarizer.failed",
+            status: "error",
+            traceId: span.traceId,
+            spanId: span.spanId,
+            forensicRunId: observation.forensicRunId,
+            durationMs,
+            payload: {
+              provider: m.provider,
+              model: m.model,
+              error,
+              ...observation.locatorPayload,
+            },
+          });
+          throw err;
+        }
+        const durationMs = Date.now() - startedAt;
+        const outputBytes = Buffer.byteLength(res.text ?? "", "utf-8");
+        const outputSha256 = sha256Text(res.text ?? "");
+        const providerRequestCount = observation.providerRequestCount();
+        observation.writeEvidenceFile(
+          "compression.summarizer.output",
+          res.text ?? "",
+        );
+        observation.recordEvent("compression.summarizer.finish", {
+          provider: m.provider,
+          model: m.model,
+          inputTokens: res.usage?.inputTokens,
+          outputTokens: res.usage?.outputTokens,
+          totalTokens: res.usage?.totalTokens,
+          cachedInputTokens: res.usage?.inputTokenDetails?.cacheReadTokens,
+          cacheWriteTokens: res.usage?.inputTokenDetails?.cacheWriteTokens,
+          reasoningTokens: res.usage?.outputTokenDetails?.reasoningTokens,
+          outputBytes,
+          outputSha256,
+          durationMs,
+          providerRequestCount,
+          traceId: span.traceId,
+          spanId: span.spanId,
+          ...observation.locatorPayload,
+        });
+        reportCompressionTimeline(opts, {
+          eventType: "session.compression.summarizer.finished",
+          status: "ok",
+          traceId: span.traceId,
+          spanId: span.spanId,
+          forensicRunId: observation.forensicRunId,
+          durationMs,
+          payload: {
+            provider: m.provider,
+            model: m.model,
+            inputTokens: res.usage?.inputTokens,
+            outputTokens: res.usage?.outputTokens,
+            totalTokens: res.usage?.totalTokens,
+            cachedInputTokens: res.usage?.inputTokenDetails?.cacheReadTokens,
+            cacheWriteTokens: res.usage?.inputTokenDetails?.cacheWriteTokens,
+            reasoningTokens: res.usage?.outputTokenDetails?.reasoningTokens,
+            outputBytes,
+            outputSha256,
+            providerRequestCount,
+            ...observation.locatorPayload,
+          },
+        });
+        try {
+          if (res.usage) {
+            opts.onUsage?.({
+              model: m,
+              tokens: {
+                inputTokens: res.usage.inputTokens,
+                outputTokens: res.usage.outputTokens,
+                totalTokens: res.usage.totalTokens,
+                cachedInputTokens: res.usage.inputTokenDetails?.cacheReadTokens,
+                cacheWriteTokens: res.usage.inputTokenDetails?.cacheWriteTokens,
+                reasoningTokens: res.usage.outputTokenDetails?.reasoningTokens,
               },
-            });
-            let res;
-            try {
-              res = await generateText({
-                model: getModel(m),
-                prompt,
-                maxOutputTokens: Math.floor(opts.summaryBudget * 1.3),
-                experimental_telemetry: telemetry.settings,
-              });
-            } catch (err) {
-              const durationMs = Date.now() - startedAt;
-              const error = errorMessage(err);
-              safeForensicWrite(() => {
-                recorder.recordEvent("compression.summarizer.error", {
-                  provider: m.provider,
-                  model: m.model,
-                  durationMs,
-                  error,
-                  traceId: span.traceId,
-                  spanId: span.spanId,
-                  ...locatorPayload,
-                });
-              });
-              reportCompressionTimeline(opts, {
-                eventType: "session.compression.summarizer.failed",
-                status: "error",
-                traceId: span.traceId,
-                spanId: span.spanId,
-                forensicRunId: telemetry.forensicRunId,
-                durationMs,
-                payload: {
-                  provider: m.provider,
-                  model: m.model,
-                  error,
-                  ...locatorPayload,
-                },
-              });
-              throw err;
-            }
-            const durationMs = Date.now() - startedAt;
-            const outputBytes = Buffer.byteLength(res.text ?? "", "utf-8");
-            const outputSha256 = sha256Text(res.text ?? "");
-            const providerRequestCount = getAIForensicProviderRequestCount(
-              telemetry.forensicRunId
-            );
-            safeForensicWrite(() => {
-              recorder.writeRawFile(
-                "compression/summarizer/output.txt",
-                res.text ?? ""
-              );
-              recorder.recordEvent("compression.summarizer.finish", {
-                provider: m.provider,
-                model: m.model,
-                inputTokens: res.usage?.inputTokens,
-                outputTokens: res.usage?.outputTokens,
-                totalTokens: res.usage?.totalTokens,
-                cachedInputTokens:
-                  res.usage?.inputTokenDetails?.cacheReadTokens,
-                cacheWriteTokens:
-                  res.usage?.inputTokenDetails?.cacheWriteTokens,
-                reasoningTokens:
-                  res.usage?.outputTokenDetails?.reasoningTokens,
-                outputBytes,
-                outputSha256,
-                durationMs,
-                providerRequestCount,
-                traceId: span.traceId,
-                spanId: span.spanId,
-                ...locatorPayload,
-              });
-            });
-            reportCompressionTimeline(opts, {
-              eventType: "session.compression.summarizer.finished",
-              status: "ok",
-              traceId: span.traceId,
-              spanId: span.spanId,
-              forensicRunId: telemetry.forensicRunId,
               durationMs,
-              payload: {
-                provider: m.provider,
-                model: m.model,
-                inputTokens: res.usage?.inputTokens,
-                outputTokens: res.usage?.outputTokens,
-                totalTokens: res.usage?.totalTokens,
-                cachedInputTokens:
-                  res.usage?.inputTokenDetails?.cacheReadTokens,
-                cacheWriteTokens:
-                  res.usage?.inputTokenDetails?.cacheWriteTokens,
-                reasoningTokens:
-                  res.usage?.outputTokenDetails?.reasoningTokens,
-                outputBytes,
-                outputSha256,
-                providerRequestCount,
-                ...locatorPayload,
-              },
+              forensicRunId: observation.forensicRunId,
+              traceId: span.traceId,
+              spanId: span.spanId,
+              forensicPath: observation.evidenceRunDir,
+              providerRequestCount,
             });
-            try {
-              if (res.usage) {
-                opts.onUsage?.({
-                  model: m,
-                  tokens: {
-                    inputTokens: res.usage.inputTokens,
-                    outputTokens: res.usage.outputTokens,
-                    totalTokens: res.usage.totalTokens,
-                    cachedInputTokens:
-                      res.usage.inputTokenDetails?.cacheReadTokens,
-                    cacheWriteTokens:
-                      res.usage.inputTokenDetails?.cacheWriteTokens,
-                    reasoningTokens:
-                      res.usage.outputTokenDetails?.reasoningTokens,
-                  },
-                  durationMs,
-                  forensicRunId: telemetry.forensicRunId,
-                  traceId: span.traceId,
-                  spanId: span.spanId,
-                  forensicPath: recorder.runDir,
-                  providerRequestCount,
-                });
-              }
-            } catch {
-              // Ledger reporting must never fail a summarization attempt.
-            }
-            return res;
           }
-        )
-      );
+        } catch {
+          // Ledger reporting must never fail a summarization attempt.
+        }
+        return res;
+      });
       return res.text.trim();
     };
 
@@ -1781,7 +1720,11 @@ export function stepsToUIMessages(steps: Step[]): UIMessage[] {
     }
     if (s.role === "assistant") {
       const parts: UIMessage["parts"] = [];
-      if (s.content) parts.push({ type: "text", text: s.content } as UIMessage["parts"][number]);
+      if (s.content)
+        parts.push({
+          type: "text",
+          text: s.content,
+        } as UIMessage["parts"][number]);
       // Index calls by id so we can pair with the tool steps that follow.
       const calls = parseCalls(s.toolCalls);
       const callsById = new Map<string, ToolCallEntry>();
@@ -1804,7 +1747,11 @@ export function stepsToUIMessages(steps: Step[]): UIMessage[] {
           output,
         } as unknown as UIMessage["parts"][number]);
       }
-      const msg: UIMessage = { id: s.id, role: "assistant", parts } as UIMessage;
+      const msg: UIMessage = {
+        id: s.id,
+        role: "assistant",
+        parts,
+      } as UIMessage;
       if (s.metadata != null) {
         (msg as { metadata?: unknown }).metadata = s.metadata;
       }
@@ -1830,7 +1777,7 @@ function parseCalls(json: string | null): ToolCallEntry[] {
           !!e &&
           typeof e === "object" &&
           typeof (e as { toolCallId?: unknown }).toolCallId === "string" &&
-          typeof (e as { toolName?: unknown }).toolName === "string"
+          typeof (e as { toolName?: unknown }).toolName === "string",
       )
       .map((e) => ({
         toolCallId: e.toolCallId,

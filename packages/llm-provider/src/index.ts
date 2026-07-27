@@ -20,16 +20,29 @@ export {
 } from "./credentials.js";
 export { resolveSubagentModel } from "./subagent-model.js";
 export {
-  createForensicRecorder,
+  EVIDENCE_LOOKUP_KEY,
+  buildEvidenceEventSelector,
+  buildEvidenceLocatorAttributes,
+  buildEvidenceLocatorPayload,
+  buildEvidenceRef,
+  createEvidenceRecorder,
+  enterAiObservationContext,
+  flushEvidenceRecorder,
+  flushEvidenceWriters,
   getActiveTraceContext,
+  getAiObservationContext,
   redactHeaders,
-  resolveForensicsConfig,
+  resolveEvidenceConfig,
+  setAiObservationContext,
   sha256Hex,
-  type ActiveTraceContext,
-  type ForensicRecorder,
-  type ForensicsConfig,
-  type RawFileRecord,
-} from "./forensics-recorder.js";
+  type AiObservationContext,
+  type EvidenceConfig,
+  type EvidenceLocatorArgs,
+  type EvidenceRecorder,
+  type EvidenceRefArgs,
+  type ObservationTraceContext,
+  type RawEvidenceFileRecord,
+} from "./ai-observation.js";
 export {
   sanitizeSpanAttributes,
   startOpenAcmeSpan,
@@ -40,24 +53,7 @@ export {
   type StartOpenAcmeSpanOptions,
 } from "./observability.js";
 export {
-  enterAIForensicContext,
-  getAIForensicContext,
-  setAIForensicContext,
-  type AIForensicContext,
-} from "./forensics-context.js";
-export {
-  forensicFetch,
-  getAIForensicProviderRequestCount,
-  type ForensicFetchOptions,
-} from "./forensics-fetch.js";
-export {
-  FORENSIC_LOOKUP_KEY,
-  buildForensicEventSelector,
-  buildForensicEvidenceRef,
-  buildForensicLocatorAttributes,
-  buildForensicLocatorPayload,
-  buildSessionTimelineLocator,
-  type ForensicEvidenceRefArgs,
-  type ForensicLocatorArgs,
-  type SessionTimelineLocatorArgs,
-} from "./evidence-locator.js";
+  getProviderRequestCountForRun,
+  observeProviderRequest,
+  type ProviderRequestObservationOptions,
+} from "./provider-observation.js";

@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { trace, TraceFlags } from "@opentelemetry/api";
 import {
   createForensicRecorder,
+  flushForensicRecorder,
   redactHeaders,
   resolveForensicsConfig,
   sha256Hex,
@@ -42,7 +43,7 @@ describe("resolveForensicsConfig", () => {
 
   it("derives default dir from dataDir when enabled", () => {
     expect(
-      resolveForensicsConfig({ OPENACME_AI_FORENSICS: "1" }, "/tmp/acme")
+      resolveForensicsConfig({ OPENACME_AI_FORENSICS: "1" }, "/tmp/acme"),
     ).toMatchObject({
       enabled: true,
       captureRaw: false,
@@ -66,7 +67,7 @@ describe("forensic recorder", () => {
     expect(recorder.enabled).toBe(false);
   });
 
-  it("writes run metadata and JSONL events in metadata-only mode", () => {
+  it("writes run metadata and JSONL events in metadata-only mode", async () => {
     const root = tmpRoot();
     const recorder = createForensicRecorder({
       env: {
@@ -83,6 +84,7 @@ describe("forensic recorder", () => {
     });
 
     recorder.recordEvent("provider.request", { ordinal: 1 });
+    await flushForensicRecorder(recorder);
 
     expect(recorder.enabled).toBe(true);
     expect(readJson(path.join(recorder.runDir!, "run.json"))).toMatchObject({
@@ -95,7 +97,9 @@ describe("forensic recorder", () => {
         model: "gpt-5.5",
       },
     });
-    expect(readJsonl(path.join(recorder.runDir!, "events.jsonl"))[0]).toMatchObject({
+    expect(
+      readJsonl(path.join(recorder.runDir!, "events.jsonl"))[0],
+    ).toMatchObject({
       type: "provider.request",
       forensicRunId: "run-1",
       data: { ordinal: 1 },
@@ -103,7 +107,7 @@ describe("forensic recorder", () => {
     expect(recorder.writeRawFile("request.body", "secret prompt")).toBeNull();
   });
 
-  it("writes raw files with hashes and restrictive permissions when raw capture is enabled", () => {
+  it("writes raw files with hashes and restrictive permissions when raw capture is enabled", async () => {
     const root = tmpRoot();
     const recorder = createForensicRecorder({
       env: {
@@ -114,7 +118,11 @@ describe("forensic recorder", () => {
       context: { forensicRunId: "run-raw" },
     });
 
-    const raw = recorder.writeRawFile("provider-requests/1/request.body", "hello");
+    const raw = recorder.writeRawFile(
+      "provider-requests/1/request.body",
+      "hello",
+    );
+    await flushForensicRecorder(recorder);
 
     expect(raw).toMatchObject({
       relativePath: "provider-requests/1/request.body",
@@ -127,6 +135,93 @@ describe("forensic recorder", () => {
     expect(fs.statSync(abs).mode & 0o777).toBe(0o600);
   });
 
+  it("does not use sync fs calls in the main recorder implementation", async () => {
+    const source = fs.readFileSync(
+      path.resolve(import.meta.dirname, "../src/forensics-recorder.ts"),
+      "utf-8",
+    );
+    expect(source).not.toMatch(
+      /\b(?:mkdirSync|chmodSync|writeFileSync|appendFileSync)\b/,
+    );
+
+    const recorder = createForensicRecorder({
+      env: {
+        OPENACME_AI_FORENSICS: "1",
+        OPENACME_AI_FORENSICS_CAPTURE_RAW: "1",
+        OPENACME_AI_FORENSICS_DIR: tmpRoot(),
+      },
+      context: { forensicRunId: "run-async" },
+    });
+    recorder.recordEvent("provider.request", { ordinal: 1 });
+    recorder.writeRawFile("provider-requests/1/request.body", "hello");
+
+    await flushForensicRecorder(recorder);
+    expect(readJsonl(path.join(recorder.runDir!, "events.jsonl"))).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "provider.request" }),
+        expect.objectContaining({ type: "raw_file.written" }),
+      ]),
+    );
+  });
+
+  it("skips oversized raw files instead of copying them into the archive queue", async () => {
+    const root = tmpRoot();
+    const recorder = createForensicRecorder({
+      env: {
+        OPENACME_AI_FORENSICS: "1",
+        OPENACME_AI_FORENSICS_CAPTURE_RAW: "1",
+        OPENACME_AI_FORENSICS_DIR: root,
+        OPENACME_AI_FORENSICS_MAX_RAW_FILE_BYTES: "4",
+      },
+      context: { forensicRunId: "run-raw-cap" },
+    });
+
+    expect(
+      recorder.writeRawFile("provider-requests/1/request.body", "hello"),
+    ).toBeNull();
+    await flushForensicRecorder(recorder);
+
+    const events = readJsonl(path.join(recorder.runDir!, "events.jsonl"));
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "raw_file.skipped",
+          data: expect.objectContaining({
+            relativePath: "provider-requests/1/request.body",
+            byteLength: 5,
+            reason: "max_raw_file_bytes",
+          }),
+        }),
+      ]),
+    );
+    expect(
+      fs.existsSync(
+        path.join(recorder.runDir!, "provider-requests/1/request.body"),
+      ),
+    ).toBe(false);
+  });
+
+  it("drops archive jobs without throwing when the writer queue is full", async () => {
+    const recorder = createForensicRecorder({
+      env: {
+        OPENACME_AI_FORENSICS: "1",
+        OPENACME_AI_FORENSICS_CAPTURE_RAW: "1",
+        OPENACME_AI_FORENSICS_DIR: tmpRoot(),
+        OPENACME_AI_FORENSICS_QUEUE_MAX_JOBS: "0",
+      },
+      context: { forensicRunId: "run-queue-full" },
+    });
+
+    expect(() => recorder.recordEvent("provider.request")).not.toThrow();
+    expect(() =>
+      recorder.writeRawFile("provider-requests/1/request.body", "hello"),
+    ).not.toThrow();
+    expect(
+      recorder.writeRawFile("provider-requests/1/request.body", "hello"),
+    ).toBeNull();
+    await expect(flushForensicRecorder(recorder)).resolves.toBeUndefined();
+  });
+
   it("redacts secret headers with hashed markers", () => {
     expect(
       redactHeaders({
@@ -134,7 +229,7 @@ describe("forensic recorder", () => {
         "x-api-key": "key",
         "chatgpt-account-id": "acct-123",
         "content-type": "application/json",
-      })
+      }),
     ).toEqual({
       authorization: `[redacted:sha256:${sha256Hex("Bearer secret")}]`,
       "x-api-key": `[redacted:sha256:${sha256Hex("key")}]`,
@@ -159,7 +254,7 @@ describe("forensic recorder", () => {
     expect(() => recorder.writeRawFile("x", "y")).not.toThrow();
   });
 
-  it("separates concurrent runs", () => {
+  it("separates concurrent runs", async () => {
     const root = tmpRoot();
     const a = createForensicRecorder({
       env: { OPENACME_AI_FORENSICS: "1", OPENACME_AI_FORENSICS_DIR: root },
@@ -171,11 +266,13 @@ describe("forensic recorder", () => {
     });
 
     expect(a.runDir).not.toBe(b.runDir);
+    await flushForensicRecorder(a);
+    await flushForensicRecorder(b);
     expect(fs.existsSync(path.join(a.runDir!, "run.json"))).toBe(true);
     expect(fs.existsSync(path.join(b.runDir!, "run.json"))).toBe(true);
   });
 
-  it("records active OpenTelemetry trace and span ids", () => {
+  it("records active OpenTelemetry trace and span ids", async () => {
     const root = tmpRoot();
     const span = trace.wrapSpanContext({
       traceId: "1234567890abcdef1234567890abcdef",
@@ -189,7 +286,10 @@ describe("forensic recorder", () => {
       context: { forensicRunId: "run-trace" },
     });
     recorder.recordEvent("with.trace");
-    expect(readJsonl(path.join(recorder.runDir!, "events.jsonl"))[0]).toMatchObject({
+    await flushForensicRecorder(recorder);
+    expect(
+      readJsonl(path.join(recorder.runDir!, "events.jsonl"))[0],
+    ).toMatchObject({
       traceId: "1234567890abcdef1234567890abcdef",
       spanId: "1234567890abcdef",
     });
@@ -198,12 +298,15 @@ describe("forensic recorder", () => {
 
 describe("AI forensic context", () => {
   it("scopes context through AsyncLocalStorage", () => {
-    enterAIForensicContext({ forensicRunId: "run-context", sessionId: "s1" }, () => {
-      expect(getAIForensicContext()).toMatchObject({
-        forensicRunId: "run-context",
-        sessionId: "s1",
-      });
-    });
+    enterAIForensicContext(
+      { forensicRunId: "run-context", sessionId: "s1" },
+      () => {
+        expect(getAIForensicContext()).toMatchObject({
+          forensicRunId: "run-context",
+          sessionId: "s1",
+        });
+      },
+    );
     expect(getAIForensicContext()).toBeUndefined();
   });
 });

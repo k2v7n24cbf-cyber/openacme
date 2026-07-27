@@ -1,7 +1,6 @@
 import {
   createForensicRecorder,
   redactHeaders,
-  sha256Hex,
   type ForensicRecorder,
 } from "./forensics-recorder.js";
 import { getAIForensicContext } from "./forensics-context.js";
@@ -12,30 +11,31 @@ import {
   buildForensicLocatorPayload,
 } from "./evidence-locator.js";
 
-type FetchLike = typeof fetch;
+type FetchInput = Parameters<typeof fetch>[0];
+type FetchInit = Parameters<typeof fetch>[1];
 
-export interface ForensicFetchOptions {
+export interface ProviderRequestObservationOptions {
   provider: string;
   model: string;
   authMode?: string;
   preTransformBody?: unknown;
-  fetch?: FetchLike;
   recorder?: ForensicRecorder;
 }
 
 const providerRequestOrdinals = new Map<string, number>();
 
-export function getAIForensicProviderRequestCount(
-  forensicRunId: string | undefined
+export function getProviderRequestCountForRun(
+  forensicRunId: string | undefined,
 ): number | undefined {
   if (!forensicRunId) return undefined;
   return providerRequestOrdinals.get(forensicRunId);
 }
 
-export async function forensicFetch(
-  input: Parameters<FetchLike>[0],
-  init: Parameters<FetchLike>[1],
-  opts: ForensicFetchOptions
+export async function observeProviderRequest(
+  input: FetchInput,
+  init: FetchInit,
+  opts: ProviderRequestObservationOptions,
+  execute: () => Promise<Response>,
 ): Promise<Response> {
   const recorder = opts.recorder ?? createForensicRecorder();
   const forensicContext = getAIForensicContext();
@@ -65,9 +65,14 @@ export async function forensicFetch(
     relativeEvidenceDir: requestDir,
   };
   const method = init?.method ?? "GET";
-  const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-  const finalBody = await bodyToBuffer(init?.body);
-  const preBody = await bodyToBuffer(opts.preTransformBody);
+  const url =
+    typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+  const requestBody = bodyPresence(init?.body);
+  const preTransformBody = bodyPresence(opts.preTransformBody);
 
   return withOpenAcmeSpan(
     "openacme.provider.request",
@@ -81,34 +86,11 @@ export async function forensicFetch(
       "http.request.method": method,
       "url.full": url,
       ...buildForensicLocatorAttributes(locator),
-      ...(finalBody
-        ? {
-            "openacme.provider.request_body_bytes": finalBody.byteLength,
-            "openacme.provider.request_body_sha256": sha256Hex(finalBody),
-          }
-        : {}),
-      ...(preBody
-        ? {
-            "openacme.provider.pre_transform_body_bytes": preBody.byteLength,
-            "openacme.provider.pre_transform_body_sha256": sha256Hex(preBody),
-          }
-        : {}),
+      "openacme.provider.request_body_present": requestBody.present,
+      "openacme.provider.pre_transform_body_present": preTransformBody.present,
     },
     async (span) => {
-      if (preBody) {
-        recorder.writeRawFile(
-          `${requestDir}/request.pre-transform.body`,
-          preBody
-        );
-      }
-      if (finalBody) {
-        recorder.writeRawFile(
-          `${requestDir}/request.post-transform.body`,
-          finalBody
-        );
-      }
-
-      recorder.recordEvent("provider.request", {
+      safeRecordEvent(recorder, "provider.request", {
         provider: opts.provider,
         model: opts.model,
         authMode: opts.authMode,
@@ -119,25 +101,17 @@ export async function forensicFetch(
         traceId: span.traceId,
         spanId: span.spanId,
         ...buildForensicLocatorPayload(locator),
-        ...(finalBody
-          ? {
-              requestBodyBytes: finalBody.byteLength,
-              requestBodySha256: sha256Hex(finalBody),
-            }
-          : {}),
-        ...(preBody
-          ? {
-              preTransformBodyBytes: preBody.byteLength,
-              preTransformBodySha256: sha256Hex(preBody),
-            }
-          : {}),
+        requestBodyPresent: requestBody.present,
+        requestBodyKind: requestBody.kind,
+        preTransformBodyPresent: preTransformBody.present,
+        preTransformBodyKind: preTransformBody.kind,
       });
 
       let res: Response;
       try {
-        res = await (opts.fetch ?? fetch)(input, init);
+        res = await execute();
       } catch (err) {
-        recorder.recordEvent("provider.error", {
+        safeRecordEvent(recorder, "provider.error", {
           provider: opts.provider,
           model: opts.model,
           ordinal,
@@ -155,13 +129,7 @@ export async function forensicFetch(
         "openacme.provider.response_ok": res.ok,
         "openacme.provider.request_id": requestId,
       });
-      const responseBody = recorder.enabled
-        ? await cloneResponseBody(res)
-        : null;
-      if (responseBody) {
-        recorder.writeRawFile(`${requestDir}/response.body`, responseBody);
-      }
-      recorder.recordEvent("provider.response", {
+      safeRecordEvent(recorder, "provider.response", {
         provider: opts.provider,
         model: opts.model,
         ordinal,
@@ -172,16 +140,10 @@ export async function forensicFetch(
         traceId: span.traceId,
         spanId: span.spanId,
         ...buildForensicLocatorPayload(responseLocator),
-        ...(responseBody
-          ? {
-              responseBodyBytes: responseBody.byteLength,
-              responseBodySha256: sha256Hex(responseBody),
-            }
-          : {}),
       });
       return res;
     },
-    { kind: "client" }
+    { kind: "client" },
   );
 }
 
@@ -191,34 +153,29 @@ function nextOrdinal(key: string): number {
   return next;
 }
 
-function providerRequestDir(ordinal: number, provider: string, model: string): string {
+function providerRequestDir(
+  ordinal: number,
+  provider: string,
+  model: string,
+): string {
   return `provider-requests/${ordinal}-${safeSegment(provider)}-${safeSegment(model)}`;
 }
 
-async function bodyToBuffer(body: unknown): Promise<Buffer | null> {
-  if (body === undefined || body === null) return null;
-  if (typeof body === "string") return Buffer.from(body, "utf-8");
-  if (Buffer.isBuffer(body)) return body;
-  if (body instanceof URLSearchParams) return Buffer.from(body.toString(), "utf-8");
-  if (body instanceof ArrayBuffer) return Buffer.from(body);
-  if (ArrayBuffer.isView(body)) {
-    return Buffer.from(body.buffer, body.byteOffset, body.byteLength);
-  }
-  if (body instanceof Blob) {
-    return Buffer.from(await body.arrayBuffer());
-  }
-  return null;
-}
-
-async function cloneResponseBody(res: Response): Promise<Buffer | null> {
+function safeRecordEvent(
+  recorder: ForensicRecorder,
+  type: string,
+  data: Record<string, unknown>,
+): void {
   try {
-    return Buffer.from(await res.clone().arrayBuffer());
+    recorder.recordEvent(type, data);
   } catch {
-    return null;
+    // Observability sinks must never change provider request behavior.
   }
 }
 
-function headersFromInit(headers: ConstructorParameters<typeof Headers>[0]): Headers {
+function headersFromInit(
+  headers: ConstructorParameters<typeof Headers>[0],
+): Headers {
   try {
     return new Headers(headers);
   } catch {
@@ -237,4 +194,20 @@ function providerRequestId(headers: Headers): string | undefined {
 
 function safeSegment(value: string): string {
   return value.replace(/[^A-Za-z0-9_.-]/g, "_");
+}
+
+function bodyPresence(body: unknown): { present: boolean; kind?: string } {
+  if (body === undefined || body === null) return { present: false };
+  if (typeof body === "string") return { present: true, kind: "string" };
+  if (Buffer.isBuffer(body)) return { present: true, kind: "buffer" };
+  if (body instanceof URLSearchParams) {
+    return { present: true, kind: "url_search_params" };
+  }
+  if (body instanceof ArrayBuffer)
+    return { present: true, kind: "array_buffer" };
+  if (ArrayBuffer.isView(body))
+    return { present: true, kind: "array_buffer_view" };
+  if (body instanceof Blob) return { present: true, kind: "blob" };
+  if (body instanceof ReadableStream) return { present: true, kind: "stream" };
+  return { present: true, kind: typeof body };
 }

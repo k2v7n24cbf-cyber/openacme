@@ -30,18 +30,23 @@ vi.mock("@openacme/llm-provider", () => ({
   resolveSubagentModel: (m: unknown) => m,
   supportsToolResultMedia: () => false,
   getActiveTraceContext: () => null,
-  getAIForensicContext: () => undefined,
-  getAIForensicProviderRequestCount: () => 1,
-  buildForensicLocatorAttributes: () => ({}),
-  setAIForensicContext: vi.fn(),
-  enterAIForensicContext: (_ctx: unknown, fn: () => unknown) => fn(),
-  createForensicRecorder: () => ({
+  getAiObservationContext: () => undefined,
+  getProviderRequestCountForRun: () => 1,
+  buildEvidenceEventSelector: (eventType: string) => `type=${eventType}`,
+  buildEvidenceLocatorAttributes: () => ({}),
+  buildEvidenceLocatorPayload: () => ({}),
+  setAiObservationContext: vi.fn(),
+  enterAiObservationContext: (_ctx: unknown, fn: () => unknown) => fn(),
+  createEvidenceRecorder: () => ({
     enabled: false,
     recordEvent: vi.fn(),
     writeRawFile: vi.fn(),
   }),
-  withOpenAcmeSpan: (_name: string, _attrs: unknown, fn: (span: unknown) => unknown) =>
-    fn({ traceId: "trace-helper", spanId: "span-helper" }),
+  withOpenAcmeSpan: (
+    _name: string,
+    _attrs: unknown,
+    fn: (span: unknown) => unknown,
+  ) => fn({ traceId: "trace-helper", spanId: "span-helper" }),
   startOpenAcmeSpan: () => ({
     setAttributes: vi.fn(),
     addEvent: vi.fn(),
@@ -229,7 +234,7 @@ describe("findRelevantMemories", () => {
 
     expect(out.map((m) => path.basename(m.path))).toEqual(["a.md"]);
     const selectionEvents = timelineEvents.filter((event) =>
-      event.eventType.startsWith("session.memory.selection.")
+      event.eventType.startsWith("session.memory.selection."),
     );
     expect(selectionEvents.map((event) => event.eventType)).toEqual([
       "session.memory.selection.started",
@@ -277,7 +282,7 @@ describe("findRelevantMemories", () => {
 
     expect(out).toEqual([]);
     const selectionEvents = timelineEvents.filter((event) =>
-      event.eventType.startsWith("session.memory.selection.")
+      event.eventType.startsWith("session.memory.selection."),
     );
     expect(selectionEvents.map((event) => event.eventType)).toEqual([
       "session.memory.selection.started",
@@ -297,7 +302,9 @@ describe("findRelevantMemories", () => {
 
   it("drops invalid filenames from the model selection", async () => {
     write(dir, "real.md", entry("hook"));
-    getModelMock.mockReturnValue(modelReturning(["real.md", "hallucinated.md"]));
+    getModelMock.mockReturnValue(
+      modelReturning(["real.md", "hallucinated.md"]),
+    );
     const out = await findRelevantMemories({
       parent: agent,
       triggerText: "trigger",
@@ -356,7 +363,9 @@ describe("findRelevantMemories", () => {
       memoryDir: dir,
     });
     const userText = JSON.stringify(model.doGenerateCalls[0]!.prompt);
-    expect(userText).toContain("from a synthetic peer message at 2026-05-11T00:00");
+    expect(userText).toContain(
+      "from a synthetic peer message at 2026-05-11T00:00",
+    );
   });
 
   it("returns [] when the model errors", async () => {

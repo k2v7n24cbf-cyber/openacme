@@ -80,12 +80,12 @@ export {
   type ToolHostDispatcher,
 } from "./tool-host-binding.js";
 export {
-  bindToolForensics,
-  type ToolForensicsBinding,
-  type ToolForensicsSink,
-  type ToolForensicsSpan,
-  withToolForensicSpan,
-} from "./forensics.js";
+  bindToolObservation,
+  type ToolObservationBinding,
+  type ToolObservationSink,
+  type ToolObservationSpan,
+  withToolObservationSpan,
+} from "./observation.js";
 export { SYSTEM_TOOLS, type SystemTool } from "./system.js";
 export {
   sweepOverflow,

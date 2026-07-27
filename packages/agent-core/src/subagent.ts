@@ -21,20 +21,11 @@ import {
 } from "ai";
 import { randomUUID } from "node:crypto";
 import { z, type ZodTypeAny } from "zod";
-import {
-  enterAIForensicContext,
-  getAIForensicContext,
-  getAIForensicProviderRequestCount,
-  resolveSubagentModel,
-  withOpenAcmeSpan,
-} from "@openacme/llm-provider";
+import { resolveSubagentModel } from "@openacme/llm-provider";
 import type { UsageKind } from "@openacme/db";
 import type { Agent } from "./agent.js";
 import { extractErrorText } from "./error-classifier.js";
-import {
-  buildAiForensicContext,
-  buildAiTelemetrySettings,
-} from "./telemetry.js";
+import { createAiHelperObservation } from "./helper-observation.js";
 import type { TokenUsage } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -48,11 +39,7 @@ function truncateTimelineError(value: string | undefined): string | null {
     : value;
 }
 
-export type SubagentStatus =
-  | "completed"
-  | "timeout"
-  | "aborted"
-  | "failed";
+export type SubagentStatus = "completed" | "timeout" | "aborted" | "failed";
 
 interface CommonArgs {
   parent: Agent;
@@ -81,8 +68,9 @@ export interface ForkedSubagentArgs extends CommonArgs {
   usageKind?: UsageKind;
 }
 
-export interface StructuredSubagentArgs<S extends ZodTypeAny>
-  extends CommonArgs {
+export interface StructuredSubagentArgs<
+  S extends ZodTypeAny,
+> extends CommonArgs {
   mode: "structured";
   /** Side-query system prompt (does NOT see the parent's system). */
   system: string;
@@ -125,12 +113,14 @@ export type SubagentResult<T = unknown> =
   | StructuredSubagentResult<T>;
 
 // Overloads preserve the per-mode return type.
-export function runSubagent(args: ForkedSubagentArgs): Promise<ForkedSubagentResult>;
+export function runSubagent(
+  args: ForkedSubagentArgs,
+): Promise<ForkedSubagentResult>;
 export function runSubagent<S extends ZodTypeAny>(
-  args: StructuredSubagentArgs<S>
+  args: StructuredSubagentArgs<S>,
 ): Promise<StructuredSubagentResult<z.infer<S>>>;
 export async function runSubagent<S extends ZodTypeAny>(
-  args: SubagentArgs<S>
+  args: SubagentArgs<S>,
 ): Promise<SubagentResult<z.infer<S>>> {
   const timeoutMs = args.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const timeoutCtrl = new AbortController();
@@ -154,14 +144,14 @@ async function runForked(
   args: ForkedSubagentArgs,
   combined: AbortSignal,
   timeoutSignal: AbortSignal,
-  timeoutMs: number
+  timeoutMs: number,
 ): Promise<ForkedSubagentResult> {
   const startedAt = Date.now();
   const report = (
     eventType: string,
     status: string,
     payload: Record<string, unknown>,
-    durationMs?: number
+    durationMs?: number,
   ) => {
     args.parent.reportTimelineEvent({
       sessionId: args.parentSessionId,
@@ -224,7 +214,7 @@ async function runForked(
           subagentStatus: status,
           totalTokens: usage?.totalTokens,
         },
-        Date.now() - startedAt
+        Date.now() - startedAt,
       );
       return {
         mode: "forked",
@@ -255,7 +245,7 @@ async function runForked(
         inputTokens: usage?.inputTokens,
         outputTokens: usage?.outputTokens,
       },
-      Date.now() - startedAt
+      Date.now() - startedAt,
     );
     return {
       mode: "forked",
@@ -274,7 +264,7 @@ async function runForked(
           usageKind: args.usageKind ?? null,
           subagentStatus: status,
         },
-        Date.now() - startedAt
+        Date.now() - startedAt,
       );
       return {
         mode: "forked",
@@ -291,7 +281,7 @@ async function runForked(
         subagentStatus: "failed",
         error: truncateTimelineError(extractErrorText(e)),
       },
-      Date.now() - startedAt
+      Date.now() - startedAt,
     );
     return {
       mode: "forked",
@@ -304,9 +294,11 @@ async function runForked(
 
 // Polyfill: `AbortSignal.any` landed in Node 19.13.
 function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
-  const native = (AbortSignal as unknown as {
-    any?: (s: AbortSignal[]) => AbortSignal;
-  }).any;
+  const native = (
+    AbortSignal as unknown as {
+      any?: (s: AbortSignal[]) => AbortSignal;
+    }
+  ).any;
   if (typeof native === "function") return native(signals);
   const ctrl = new AbortController();
   for (const s of signals) {
@@ -323,7 +315,7 @@ async function runStructured<S extends ZodTypeAny>(
   args: StructuredSubagentArgs<S>,
   combined: AbortSignal,
   timeoutSignal: AbortSignal,
-  timeoutMs: number
+  timeoutMs: number,
 ): Promise<StructuredSubagentResult<z.infer<S>>> {
   const startedAt = Date.now();
   let provider: string | undefined;
@@ -334,7 +326,7 @@ async function runStructured<S extends ZodTypeAny>(
     status: string,
     payload: Record<string, unknown>,
     durationMs?: number,
-    ids: { traceId?: string; spanId?: string } = {}
+    ids: { traceId?: string; spanId?: string } = {},
   ) => {
     if (!args.usage?.sessionId) return;
     args.parent.reportTimelineEvent({
@@ -355,16 +347,16 @@ async function runStructured<S extends ZodTypeAny>(
     const subagentModel = resolveSubagentModel(args.parent.config.model);
     provider = subagentModel.provider;
     model = subagentModel.model;
-    const parentForensicRunId = getAIForensicContext()?.forensicRunId;
-    const telemetry = buildAiTelemetrySettings({
+    const observation = createAiHelperObservation({
       functionId: `${args.parent.config.id}:subagent.structured`,
       agentId: args.parent.config.id,
       sessionId: args.usage?.sessionId,
       taskId: args.usage?.taskId,
       kind: args.usage?.kind,
       model: subagentModel,
+      profile: "subagent.structured",
     });
-    forensicRunId = telemetry.forensicRunId;
+    forensicRunId = observation.forensicRunId;
     report("session.subagent.started", "running", {
       mode: "structured",
       usageKind: args.usage?.kind ?? null,
@@ -378,34 +370,10 @@ async function runStructured<S extends ZodTypeAny>(
     let traceId: string | undefined;
     let spanId: string | undefined;
 
-    const forensicContext = buildAiForensicContext({
-      forensicRunId: telemetry.forensicRunId,
-      parentForensicRunId,
-      agentId: args.parent.config.id,
-      sessionId: args.usage?.sessionId,
-      taskId: args.usage?.taskId,
-      kind: args.usage?.kind,
-      model: subagentModel,
-    });
-    const helper = await enterAIForensicContext(forensicContext, () =>
-      withOpenAcmeSpan(
-        "openacme.ai.helper",
-        {
-          "openacme.span.type": "ai_helper",
-          "openacme.ai.function_id": telemetry.settings.functionId,
-          "openacme.forensic.run_id": telemetry.forensicRunId,
-          "openacme.forensic.parent_run_id": parentForensicRunId,
-          "openacme.agent.id": args.parent.config.id,
-          "openacme.session.id": args.usage?.sessionId,
-          "openacme.task.id": args.usage?.taskId,
-          "openacme.usage.kind": args.usage?.kind,
-          "openacme.provider": subagentModel.provider,
-          "openacme.model": subagentModel.model,
-        },
-        async (span) => {
-          let object: z.infer<S>;
-          let usage: LanguageModelUsage | undefined;
-          if (usesStreamingStructuredOutput(subagentModel)) {
+    const helper = await observation.run(async (span) => {
+      let object: z.infer<S>;
+      let usage: LanguageModelUsage | undefined;
+      if (usesStreamingStructuredOutput(subagentModel)) {
             const result = streamObject({
               model: args.parent.resolveModel(subagentModel),
               system: args.system,
@@ -413,7 +381,7 @@ async function runStructured<S extends ZodTypeAny>(
               messages: [{ role: "user", content: args.user }],
               maxOutputTokens: args.maxOutputTokens,
               abortSignal: combined,
-              experimental_telemetry: telemetry.settings,
+              experimental_telemetry: observation.telemetry.settings,
             });
             const streamFinished = drainStream(result.fullStream);
             try {
@@ -436,15 +404,13 @@ async function runStructured<S extends ZodTypeAny>(
               messages: [{ role: "user", content: args.user }],
               maxOutputTokens: args.maxOutputTokens,
               abortSignal: combined,
-              experimental_telemetry: telemetry.settings,
+              experimental_telemetry: observation.telemetry.settings,
             });
             object = result.object as z.infer<S>;
             usage = result.usage;
           }
-          return { object, usage, traceId: span.traceId, spanId: span.spanId };
-        }
-      )
-    );
+      return { object, usage, traceId: span.traceId, spanId: span.spanId };
+    });
     object = helper.object;
     usage = helper.usage;
     traceId = helper.traceId;
@@ -469,10 +435,8 @@ async function runStructured<S extends ZodTypeAny>(
         durationMs: Date.now() - startedAt,
         traceId,
         spanId,
-        forensicRunId: telemetry.forensicRunId,
-        providerRequestCount: getAIForensicProviderRequestCount(
-          telemetry.forensicRunId
-        ),
+        forensicRunId: observation.forensicRunId,
+        providerRequestCount: observation.providerRequestCount(),
       });
     }
     report(
@@ -489,7 +453,7 @@ async function runStructured<S extends ZodTypeAny>(
         outputTokens: usage?.outputTokens,
       },
       Date.now() - startedAt,
-      { traceId, spanId }
+      { traceId, spanId },
     );
     return {
       mode: "structured",
@@ -516,7 +480,7 @@ async function runStructured<S extends ZodTypeAny>(
           provider,
           model,
         },
-        Date.now() - startedAt
+        Date.now() - startedAt,
       );
       return {
         mode: "structured",
@@ -535,7 +499,7 @@ async function runStructured<S extends ZodTypeAny>(
         model,
         error: truncateTimelineError(extractErrorText(e)),
       },
-      Date.now() - startedAt
+      Date.now() - startedAt,
     );
     return {
       mode: "structured",

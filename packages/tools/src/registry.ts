@@ -13,17 +13,17 @@ import { toolCallContext } from "./session-context.js";
 import { getToolHostDispatcher } from "./tool-host-binding.js";
 import { classifyToolResult } from "./outcome.js";
 import {
-  getToolForensicLocatorAttributes,
+  getToolObservationLocatorAttributes,
   rawRecordPath,
-  recordToolForensicEvent,
-  safeForensicSegment,
-  sha256ForensicText,
-  stringifyForensics,
-  toolForensicLocatorPayload,
-  type ToolForensicsSpan,
-  withToolForensicSpan,
-  writeToolForensicRawFile,
-} from "./forensics.js";
+  recordToolObservationEvent,
+  safeObservationSegment,
+  sha256ObservationText,
+  stringifyObservation,
+  toolObservationLocatorPayload,
+  type ToolObservationSpan,
+  withToolObservationSpan,
+  writeToolObservationRawFile,
+} from "./observation.js";
 
 const log = createLogger("tools.registry");
 
@@ -33,8 +33,8 @@ function runtimeLabel(entry: ToolEntry): "daemon" | "worker" {
   return entry.runtime ?? "daemon";
 }
 
-function toolForensicDir(entry: ToolEntry, toolCallId?: string): string {
-  return `tool-calls/${safeForensicSegment(toolCallId ?? `unknown-${entry.name}`)}`;
+function toolObservationDir(entry: ToolEntry, toolCallId?: string): string {
+  return `tool-calls/${safeObservationSegment(toolCallId ?? `unknown-${entry.name}`)}`;
 }
 
 function byteLength(value: string): number {
@@ -95,7 +95,7 @@ function classificationSpanAttributes(
 }
 
 function applyClassificationToSpan(
-  span: ToolForensicsSpan | undefined,
+  span: ToolObservationSpan | undefined,
   executionStatus: ToolExecutionStatus,
   classification: ToolResultClassification
 ): void {
@@ -123,13 +123,13 @@ function recordToolStart(
   entry: ToolEntry,
   args: Record<string, unknown>,
   toolCallId?: string,
-  span?: ToolForensicsSpan
+  span?: ToolObservationSpan
 ): void {
-  const dir = toolForensicDir(entry, toolCallId);
+  const dir = toolObservationDir(entry, toolCallId);
   const locator = getToolLocator("tool.start", toolCallId, dir);
-  const argsJson = stringifyForensics(args);
-  const raw = writeToolForensicRawFile(`${dir}/args.json`, argsJson);
-  recordToolForensicEvent("tool.start", {
+  const argsJson = stringifyObservation(args);
+  const raw = writeToolObservationRawFile(`${dir}/args.json`, argsJson);
+  recordToolObservationEvent("tool.start", {
     toolName: entry.name,
     toolset: entry.toolset,
     toolCallId,
@@ -137,9 +137,9 @@ function recordToolStart(
     traceId: span?.traceId,
     spanId: span?.spanId,
     argsBytes: byteLength(argsJson),
-    argsSha256: sha256ForensicText(argsJson),
+    argsSha256: sha256ObservationText(argsJson),
     rawArgsFile: rawRecordPath(raw),
-    ...toolForensicLocatorPayload(locator),
+    ...toolObservationLocatorPayload(locator),
   });
 }
 
@@ -152,18 +152,18 @@ function recordToolFinish(args: {
   preSpillResult?: string;
   output: string;
   spill?: SpillOutcome;
-  span?: ToolForensicsSpan;
+  span?: ToolObservationSpan;
 }): void {
-  const dir = toolForensicDir(args.entry, args.toolCallId);
+  const dir = toolObservationDir(args.entry, args.toolCallId);
   const locator = getToolLocator("tool.finish", args.toolCallId, dir);
   const preRaw =
     args.preSpillResult === undefined
       ? null
-      : writeToolForensicRawFile(
+      : writeToolObservationRawFile(
           `${dir}/result.pre-spill.txt`,
           args.preSpillResult
         );
-  const postRaw = writeToolForensicRawFile(
+  const postRaw = writeToolObservationRawFile(
     `${dir}/result.post-spill.txt`,
     args.output
   );
@@ -172,7 +172,7 @@ function recordToolFinish(args: {
     args.toolArgs,
     args.preSpillResult ?? args.output
   );
-  recordToolForensicEvent("tool.finish", {
+  recordToolObservationEvent("tool.finish", {
     toolName: args.entry.name,
     toolset: args.entry.toolset,
     toolCallId: args.toolCallId,
@@ -190,13 +190,13 @@ function recordToolFinish(args: {
     resultPreSpillSha256:
       args.preSpillResult === undefined
         ? undefined
-        : sha256ForensicText(args.preSpillResult),
+        : sha256ObservationText(args.preSpillResult),
     resultPostSpillBytes: byteLength(args.output),
-    resultPostSpillSha256: sha256ForensicText(args.output),
+    resultPostSpillSha256: sha256ObservationText(args.output),
     rawPreSpillFile: rawRecordPath(preRaw),
     rawPostSpillFile: rawRecordPath(postRaw),
     ...classificationPayload("ok", classification),
-    ...toolForensicLocatorPayload(locator),
+    ...toolObservationLocatorPayload(locator),
   });
   args.span?.setAttributes?.({
     "openacme.tool.result_pre_spill_bytes":
@@ -216,10 +216,10 @@ function recordToolError(args: {
   toolCallId?: string;
   startedAt: number;
   error: unknown;
-  span?: ToolForensicsSpan;
+  span?: ToolObservationSpan;
 }): void {
   const classification = exceptionClassification(args.error);
-  recordToolForensicEvent("tool.error", {
+  recordToolObservationEvent("tool.error", {
     toolName: args.entry.name,
     toolset: args.entry.toolset,
     toolCallId: args.toolCallId,
@@ -244,7 +244,7 @@ function toolSpanAttributes(
   entry: ToolEntry,
   toolCallId?: string
 ): Record<string, unknown> {
-  const dir = toolForensicDir(entry, toolCallId);
+  const dir = toolObservationDir(entry, toolCallId);
   return {
     "openacme.span.type": "tool_execute",
     "openacme.tool.name": entry.name,
@@ -261,7 +261,7 @@ function getToolLocator(
   relativeEvidenceDir: string
 ): Record<string, unknown> {
   const store = toolCallContext.getStore();
-  return getToolForensicLocatorAttributes({
+  return getToolObservationLocatorAttributes({
     eventType,
     toolCallId,
     sessionId: store?.sessionId,
@@ -409,7 +409,7 @@ export class ToolRegistry {
           }
           const toolCallId = opts.toolCallId ?? store?.toolCallId;
           const startedAt = Date.now();
-          return withToolForensicSpan(
+          return withToolObservationSpan(
             "openacme.tool.execute",
             toolSpanAttributes(entry, toolCallId),
             async (span) => {
@@ -495,7 +495,7 @@ export class ToolRegistry {
     }
     const toolCallId = toolCallContext.getStore()?.toolCallId;
     const startedAt = Date.now();
-    return withToolForensicSpan(
+    return withToolObservationSpan(
       "openacme.tool.execute",
       toolSpanAttributes(entry, toolCallId),
       async (span) => {

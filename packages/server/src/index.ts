@@ -1,4 +1,7 @@
-import { initializeOpenAcmeTelemetry } from "@openacme/config/telemetry-bootstrap";
+import {
+  initializeOpenAcmeTelemetry,
+  shutdownOpenAcmeTelemetry,
+} from "@openacme/config/telemetry-bootstrap";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,9 +12,12 @@ import {
   writeLastVersion,
 } from "@openacme/config";
 import { createLogger } from "@openacme/config/logger";
+import { registerOpenAcmeProcessExceptionGuard } from "@openacme/config/process-exception-guard";
+import { flushEvidenceWriters } from "@openacme/llm-provider";
 import { createApp } from "./app.js";
 
 const log = createLogger("server.index");
+const OBSERVATION_SHUTDOWN_TIMEOUT_MS = 2_000;
 
 /**
  * Resolve the running platform version from `@openacme/server`'s own
@@ -109,10 +115,13 @@ export async function startServer(dataDirOverride?: string) {
   }
 
   // Graceful shutdown
+  let shuttingDown = false;
   const shutdown = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log("\n🛑 Shutting down...");
     manager.close();
-    process.exit(0);
+    void shutdownObservationSinksWithTimeout().finally(() => process.exit(0));
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
@@ -163,5 +172,23 @@ const isDirectRun =
   process.argv[1]?.endsWith("/server/dist/index.js");
 
 if (isDirectRun) {
+  registerOpenAcmeProcessExceptionGuard({
+    scope: "server.process",
+    shutdownTelemetry: shutdownObservationSinksWithTimeout,
+  });
   startServer().catch((err) => log.error({ err }, "server boot failed"));
+}
+
+async function shutdownObservationSinksWithTimeout(): Promise<void> {
+  await Promise.race([
+    shutdownObservationSinks(),
+    new Promise<void>((resolve) =>
+      setTimeout(resolve, OBSERVATION_SHUTDOWN_TIMEOUT_MS),
+    ),
+  ]);
+}
+
+async function shutdownObservationSinks(): Promise<void> {
+  await flushEvidenceWriters();
+  await shutdownOpenAcmeTelemetry();
 }

@@ -25,16 +25,18 @@ const {
   streamTextMock,
   generateTextMock,
   getModelMock,
-  enterAIForensicContextMock,
+  enterAiObservationContextMock,
   spanRecords,
   recorderEvents,
   rawWrites,
-  createForensicRecorderMock,
+  createEvidenceRecorderMock,
 } = vi.hoisted(() => ({
   streamTextMock: vi.fn(),
   generateTextMock: vi.fn(),
   getModelMock: vi.fn(() => ({})),
-  enterAIForensicContextMock: vi.fn((_ctx: unknown, fn: () => unknown) => fn()),
+  enterAiObservationContextMock: vi.fn((_ctx: unknown, fn: () => unknown) =>
+    fn(),
+  ),
   spanRecords: [] as Array<{ name: string; attrs: Record<string, unknown> }>,
   recorderEvents: [] as Array<{
     runId: string | undefined;
@@ -46,11 +48,13 @@ const {
     relativePath: string;
     byteLength: number;
   }>,
-  createForensicRecorderMock: vi.fn(
+  createEvidenceRecorderMock: vi.fn(
     (opts?: { context?: { forensicRunId?: string } }) => {
       const runId = opts?.context?.forensicRunId;
       return {
         enabled: true,
+        captureRaw: true,
+        maxRawFileBytes: 1024 * 1024,
         forensicRunId: runId,
         runDir: runId ? `/tmp/openacme-forensics/${runId}` : undefined,
         recordEvent: vi.fn((type: string, data?: Record<string, unknown>) => {
@@ -68,7 +72,7 @@ const {
           };
         }),
       };
-    }
+    },
   ),
 }));
 
@@ -91,11 +95,11 @@ vi.mock("@openacme/llm-provider", () => ({
   // path; the injector handles delivery via synthetic user messages.
   supportsToolResultMedia: () => false,
   getActiveTraceContext: () => null,
-  getAIForensicContext: () => undefined,
-  getAIForensicProviderRequestCount: () => 1,
-  buildForensicEventSelector: (
+  getAiObservationContext: () => undefined,
+  getProviderRequestCountForRun: () => 1,
+  buildEvidenceEventSelector: (
     eventType: string,
-    fields: Record<string, string | number | undefined | null> = {}
+    fields: Record<string, string | number | undefined | null> = {},
   ) =>
     [
       `type=${eventType}`,
@@ -103,7 +107,7 @@ vi.mock("@openacme/llm-provider", () => ({
         .filter(([, value]) => value !== undefined && value !== null)
         .map(([key, value]) => `${key}=${value}`),
     ].join(" "),
-  buildForensicLocatorAttributes: (args: {
+  buildEvidenceLocatorAttributes: (args: {
     forensicRunId?: string;
     sessionId?: string;
     eventType: string;
@@ -116,23 +120,17 @@ vi.mock("@openacme/llm-provider", () => ({
       args.selector === undefined ? "" : `:${String(args.selector)}`;
     const out: Record<string, string> = {
       "openacme.forensic.lookup": "usage_events.forensic_run_id",
-      "openacme.forensic.evidence_ref":
-        `openacme://forensics/${args.forensicRunId}#${args.eventType}${selector}`,
+      "openacme.forensic.evidence_ref": `openacme://forensics/${args.forensicRunId}#${args.eventType}${selector}`,
     };
     if (args.eventSelector) {
       out["openacme.forensic.event_selector"] = args.eventSelector;
     }
     if (args.relativeEvidenceDir) {
-      out["openacme.forensic.relative_evidence_dir"] =
-        args.relativeEvidenceDir;
-    }
-    if (args.sessionId) {
-      out["openacme.session.timeline_locator"] =
-        `/api/sessions/${args.sessionId}/timeline?includeForensics=1&forensicRunId=${args.forensicRunId}`;
+      out["openacme.forensic.relative_evidence_dir"] = args.relativeEvidenceDir;
     }
     return out;
   },
-  buildForensicLocatorPayload: (args: {
+  buildEvidenceLocatorPayload: (args: {
     forensicRunId?: string;
     sessionId?: string;
     eventType: string;
@@ -144,30 +142,26 @@ vi.mock("@openacme/llm-provider", () => ({
     const selector =
       args.selector === undefined ? "" : `:${String(args.selector)}`;
     return {
-      evidenceRef:
-        `openacme://forensics/${args.forensicRunId}#${args.eventType}${selector}`,
+      evidenceRef: `openacme://forensics/${args.forensicRunId}#${args.eventType}${selector}`,
       ...(args.eventSelector ? { eventSelector: args.eventSelector } : {}),
       ...(args.relativeEvidenceDir
         ? { relativeEvidenceDir: args.relativeEvidenceDir }
         : {}),
-      ...(args.sessionId
-        ? {
-            timelineLocator:
-              `/api/sessions/${args.sessionId}/timeline?includeForensics=1&forensicRunId=${args.forensicRunId}`,
-          }
-        : {}),
     };
   },
-  setAIForensicContext: vi.fn(),
-  enterAIForensicContext: enterAIForensicContextMock,
-  createForensicRecorder: createForensicRecorderMock,
+  setAiObservationContext: vi.fn(),
+  enterAiObservationContext: enterAiObservationContextMock,
+  createEvidenceRecorder: createEvidenceRecorderMock,
   withOpenAcmeSpan: (
     name: string,
     attrs: Record<string, unknown>,
-    fn: (span: unknown) => unknown
+    fn: (span: unknown) => unknown,
   ) => {
     spanRecords.push({ name, attrs });
-    return fn({ traceId: "trace-helper", spanId: `span-helper-${spanRecords.length}` });
+    return fn({
+      traceId: "trace-helper",
+      spanId: `span-helper-${spanRecords.length}`,
+    });
   },
   startOpenAcmeSpan: () => ({
     setAttributes: vi.fn(),
@@ -206,7 +200,12 @@ function makeAgent(opts: {
   const config: AgentConfig = {
     id: "a1",
     name: "Agent A1",
-    model: { provider: "openai", model: "gpt-test", apiKey: "x", auth: "api_key" },
+    model: {
+      provider: "openai",
+      model: "gpt-test",
+      apiKey: "x",
+      auth: "api_key",
+    },
     persona: "test",
     tools: [],
     maxSteps: 1,
@@ -255,8 +254,8 @@ describe("Agent — compress() over UIMessage[]", () => {
     streamTextMock.mockReset();
     generateTextMock.mockReset();
     getModelMock.mockReset();
-    enterAIForensicContextMock.mockClear();
-    createForensicRecorderMock.mockClear();
+    enterAiObservationContextMock.mockClear();
+    createEvidenceRecorderMock.mockClear();
     spanRecords.length = 0;
     recorderEvents.length = 0;
     rawWrites.length = 0;
@@ -295,7 +294,11 @@ describe("Agent — compress() over UIMessage[]", () => {
     }
     messages.appendMany(
       parent.id,
-      seed.map((m) => ({ id: m.id, role: m.role as "user" | "assistant", parts: m.parts }))
+      seed.map((m) => ({
+        id: m.id,
+        role: m.role as "user" | "assistant",
+        parts: m.parts,
+      })),
     );
 
     const agent = makeAgent({
@@ -326,18 +329,18 @@ describe("Agent — compress() over UIMessage[]", () => {
     expect(activeIds.has(archivedId)).toBe(false);
 
     const helperTelemetries = generateTextMock.mock.calls.map(
-      (call) => call[0]!.experimental_telemetry
+      (call) => call[0]!.experimental_telemetry,
     );
     const memoryFlushTelemetry = helperTelemetries.find(
-      (telemetry) => telemetry.functionId === "a1:memory-flush"
+      (telemetry) => telemetry.functionId === "a1:memory-flush",
     );
     const summarizerTelemetry = helperTelemetries.find(
-      (telemetry) => telemetry.functionId === "compression-summarizer"
+      (telemetry) => telemetry.functionId === "compression-summarizer",
     );
     expect(memoryFlushTelemetry).toBeDefined();
     expect(summarizerTelemetry).toBeDefined();
     for (const telemetry of [memoryFlushTelemetry!, summarizerTelemetry!]) {
-      expect(enterAIForensicContextMock).toHaveBeenCalledWith(
+      expect(enterAiObservationContextMock).toHaveBeenCalledWith(
         expect.objectContaining({
           forensicRunId: telemetry.metadata.forensicRunId,
           sessionId: parent.id,
@@ -345,7 +348,7 @@ describe("Agent — compress() over UIMessage[]", () => {
           provider: "openai",
           model: "gpt-test",
         }),
-        expect.any(Function)
+        expect.any(Function),
       );
     }
 
@@ -356,7 +359,10 @@ describe("Agent — compress() over UIMessage[]", () => {
     const summaryRow = postHistory.find((m) => {
       if (m.role !== "user") return false;
       const first = m.parts[0] as { type?: string; text?: string };
-      return first.type === "text" && (first.text ?? "").includes("[CONTEXT COMPACTION");
+      return (
+        first.type === "text" &&
+        (first.text ?? "").includes("[CONTEXT COMPACTION")
+      );
     });
     expect(summaryRow).toBeDefined();
 
@@ -399,7 +405,7 @@ describe("Agent — compress() over UIMessage[]", () => {
         id: m.id,
         role: m.role as "user" | "assistant",
         parts: m.parts,
-      }))
+      })),
     );
 
     const usageReports: UsageReport[] = [];
@@ -424,18 +430,18 @@ describe("Agent — compress() over UIMessage[]", () => {
         "session.compression.summarizer.started",
         "session.compression.summarizer.finished",
         "session.compression.finished",
-      ])
+      ]),
     );
     expect(timelineTypes).not.toContain("session.compression.failed");
-    expect(
-      timelineEvents.every((event) => event.sessionId === parent.id)
-    ).toBe(true);
+    expect(timelineEvents.every((event) => event.sessionId === parent.id)).toBe(
+      true,
+    );
 
     const extractorUsage = usageReports.find(
-      (report) => report.kind === "extractor"
+      (report) => report.kind === "extractor",
     );
     const summarizerUsage = usageReports.find(
-      (report) => report.kind === "summarizer"
+      (report) => report.kind === "summarizer",
     );
     expect(extractorUsage).toMatchObject({
       forensicPath: expect.stringMatching(/^\/tmp\/openacme-forensics\//),
@@ -451,28 +457,24 @@ describe("Agent — compress() over UIMessage[]", () => {
     const memoryFlushSpan = spanRecords.find(
       (record) =>
         record.name === "openacme.ai.helper" &&
-        record.attrs["openacme.ai.function_id"] === "a1:memory-flush"
+        record.attrs["openacme.ai.function_id"] === "a1:memory-flush",
     );
     const summarizerSpan = spanRecords.find(
       (record) =>
         record.name === "openacme.ai.helper" &&
-        record.attrs["openacme.ai.function_id"] ===
-          "compression-summarizer"
+        record.attrs["openacme.ai.function_id"] === "compression-summarizer",
     );
     for (const record of [memoryFlushSpan, summarizerSpan]) {
       expect(record?.attrs).toMatchObject({
         "openacme.forensic.lookup": "usage_events.forensic_run_id",
         "openacme.forensic.evidence_ref": expect.stringContaining(
-          "openacme://forensics/"
-        ),
-        "openacme.session.timeline_locator": expect.stringContaining(
-          `/api/sessions/${parent.id}/timeline?includeForensics=1&forensicRunId=`
+          "openacme://forensics/",
         ),
       });
       expect(
         Object.keys(record?.attrs ?? {}).filter((key) =>
-          key.startsWith("langfuse.")
-        )
+          key.startsWith("langfuse."),
+        ),
       ).toEqual([]);
     }
 
@@ -482,14 +484,14 @@ describe("Agent — compress() over UIMessage[]", () => {
         "compression.memory_flush.finish",
         "compression.summarizer.start",
         "compression.summarizer.finish",
-      ])
+      ]),
     );
     expect(rawWrites.map((write) => write.relativePath)).toEqual(
       expect.arrayContaining([
         "compression/memory-flush/model-input.system.txt",
         "compression/memory-flush/model-input.messages.json",
         "compression/summarizer/prompt.txt",
-      ])
+      ]),
     );
   });
 
@@ -512,12 +514,12 @@ describe("Agent — compress() over UIMessage[]", () => {
       expect.arrayContaining([
         "session.compression.started",
         "session.compression.noop",
-      ])
+      ]),
     );
     expect(
       timelineEvents.find(
-        (event) => event.eventType === "session.compression.noop"
-      )?.payload
+        (event) => event.eventType === "session.compression.noop",
+      )?.payload,
     ).toMatchObject({ noOpReason: "too_short" });
   });
 
@@ -536,7 +538,11 @@ describe("Agent — compress() over UIMessage[]", () => {
       }
       messages.appendMany(
         target,
-        turns.map((m) => ({ id: m.id, role: m.role as "user" | "assistant", parts: m.parts }))
+        turns.map((m) => ({
+          id: m.id,
+          role: m.role as "user" | "assistant",
+          parts: m.parts,
+        })),
       );
     }
     seedTurns(parent.id, 6, "round1-");
@@ -579,7 +585,11 @@ describe("Agent — compress() over UIMessage[]", () => {
     }
     messages.appendMany(
       parent.id,
-      seed.map((m) => ({ id: m.id, role: m.role as "user" | "assistant", parts: m.parts }))
+      seed.map((m) => ({
+        id: m.id,
+        role: m.role as "user" | "assistant",
+        parts: m.parts,
+      })),
     );
 
     const future = Math.floor(Date.now() / 1000) + 3600;
@@ -613,7 +623,7 @@ describe("Agent — compress() over UIMessage[]", () => {
     fs.mkdirSync(path.join(root, `${parent.id}/att-seed`), { recursive: true });
     fs.writeFileSync(
       path.join(root, rel),
-      Buffer.from([0x89, 0x50, 0x4e, 0x47])
+      Buffer.from([0x89, 0x50, 0x4e, 0x47]),
     );
 
     const userWithFile: UIMessage = {
@@ -642,7 +652,7 @@ describe("Agent — compress() over UIMessage[]", () => {
         id: m.id,
         role: m.role as "user" | "assistant",
         parts: m.parts,
-      }))
+      })),
     );
 
     const agent = makeAgent({
@@ -719,7 +729,7 @@ describe("Agent — compress() over UIMessage[]", () => {
         id: m.id,
         role: m.role as "user" | "assistant",
         parts: m.parts,
-      }))
+      })),
     );
 
     const agent = makeAgent({
@@ -749,7 +759,10 @@ describe("Agent — runStream + attachments inlining", () => {
     const root = path.join(tmp, "attachments");
     const rel = `${session.id}/att-1/shot.png`;
     fs.mkdirSync(path.join(root, `${session.id}/att-1`), { recursive: true });
-    fs.writeFileSync(path.join(root, rel), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    fs.writeFileSync(
+      path.join(root, rel),
+      Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+    );
 
     streamTextMock.mockReturnValue({
       fullStream: (async function* () {})(),

@@ -13,28 +13,31 @@ import { MemoryStore } from "@openacme/memory";
 import { TaskStore } from "@openacme/tasks";
 import type { ToolRegistry } from "@openacme/tools";
 import type { UIMessage } from "ai";
-import { createForensicRecorder } from "@openacme/llm-provider";
+import {
+  createEvidenceRecorder,
+  flushEvidenceWriters,
+} from "@openacme/llm-provider";
 import { Agent } from "../src/agent.js";
 import type { AgentConfig, UsageReport } from "../src/types.js";
 
 const { streamTextMock, getModelMock, startOpenAcmeSpanMock, spanEndMock } =
   vi.hoisted(() => ({
-  streamTextMock: vi.fn(),
-  getModelMock: vi.fn(() => ({})),
-  spanEndMock: vi.fn(),
-  startOpenAcmeSpanMock: vi.fn(() => ({
-    traceId: "1234567890abcdef1234567890abcdef",
-    spanId: "1234567890abcdef",
-    sampled: true,
-    setAttributes: vi.fn(),
-    addEvent: vi.fn(),
-    recordException: vi.fn(),
-    setStatusOk: vi.fn(),
-    setStatusError: vi.fn(),
-    end: spanEndMock,
-    run: (fn: () => unknown) => fn(),
-  })),
-}));
+    streamTextMock: vi.fn(),
+    getModelMock: vi.fn(() => ({})),
+    spanEndMock: vi.fn(),
+    startOpenAcmeSpanMock: vi.fn(() => ({
+      traceId: "1234567890abcdef1234567890abcdef",
+      spanId: "1234567890abcdef",
+      sampled: true,
+      setAttributes: vi.fn(),
+      addEvent: vi.fn(),
+      recordException: vi.fn(),
+      setStatusOk: vi.fn(),
+      setStatusError: vi.fn(),
+      end: spanEndMock,
+      run: (fn: () => unknown) => fn(),
+    })),
+  }));
 
 vi.mock("ai", async () => {
   const actual = await vi.importActual<typeof import("ai")>("ai");
@@ -46,11 +49,11 @@ vi.mock("ai", async () => {
 
 vi.mock("@openacme/llm-provider", async () => {
   const actual = await vi.importActual<typeof import("@openacme/llm-provider")>(
-    "@openacme/llm-provider"
+    "@openacme/llm-provider",
   );
   return {
     ...actual,
-    buildForensicLocatorAttributes: (args: {
+    buildEvidenceLocatorAttributes: (args: {
       forensicRunId?: string;
       sessionId?: string;
       eventType: string;
@@ -62,8 +65,7 @@ vi.mock("@openacme/llm-provider", async () => {
       const selector = args.selector ? `:${args.selector}` : "";
       const out: Record<string, string> = {
         "openacme.forensic.lookup": "usage_events.forensic_run_id",
-        "openacme.forensic.evidence_ref":
-          `openacme://forensics/${args.forensicRunId}#${args.eventType}${selector}`,
+        "openacme.forensic.evidence_ref": `openacme://forensics/${args.forensicRunId}#${args.eventType}${selector}`,
       };
       if (args.eventSelector) {
         out["openacme.forensic.event_selector"] = args.eventSelector;
@@ -71,10 +73,6 @@ vi.mock("@openacme/llm-provider", async () => {
       if (args.relativeEvidenceDir) {
         out["openacme.forensic.relative_evidence_dir"] =
           args.relativeEvidenceDir;
-      }
-      if (args.sessionId) {
-        out["openacme.session.timeline_locator"] =
-          `/api/sessions/${args.sessionId}/timeline?includeForensics=1&forensicRunId=${args.forensicRunId}`;
       }
       return out;
     },
@@ -104,7 +102,7 @@ function freshDb() {
 
 function makeAgent(
   tmpRoot: string,
-  onUsage?: (report: UsageReport) => void
+  onUsage?: (report: UsageReport) => void,
 ): Agent {
   const db = freshDb();
   const sessionStore = createSessionStore(db);
@@ -154,23 +152,28 @@ describe("Agent.runStream forensics", () => {
   });
 
   afterEach(() => {
-    if (OLD_FORENSICS === undefined) delete process.env["OPENACME_AI_FORENSICS"];
+    if (OLD_FORENSICS === undefined)
+      delete process.env["OPENACME_AI_FORENSICS"];
     else process.env["OPENACME_AI_FORENSICS"] = OLD_FORENSICS;
-    if (OLD_FORENSICS_DIR === undefined) delete process.env["OPENACME_AI_FORENSICS_DIR"];
+    if (OLD_FORENSICS_DIR === undefined)
+      delete process.env["OPENACME_AI_FORENSICS_DIR"];
     else process.env["OPENACME_AI_FORENSICS_DIR"] = OLD_FORENSICS_DIR;
-    if (OLD_FORENSICS_RAW === undefined) delete process.env["OPENACME_AI_FORENSICS_CAPTURE_RAW"];
+    if (OLD_FORENSICS_RAW === undefined)
+      delete process.env["OPENACME_AI_FORENSICS_CAPTURE_RAW"];
     else process.env["OPENACME_AI_FORENSICS_CAPTURE_RAW"] = OLD_FORENSICS_RAW;
   });
 
   it("creates an agent run archive and propagates forensic context into streamText", async () => {
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openacme-agent-forensics-"));
+    const tmpRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openacme-agent-forensics-"),
+    );
     const forensicsRoot = path.join(tmpRoot, "ai-forensics");
     process.env["OPENACME_AI_FORENSICS"] = "1";
     process.env["OPENACME_AI_FORENSICS_CAPTURE_RAW"] = "1";
     process.env["OPENACME_AI_FORENSICS_DIR"] = forensicsRoot;
 
     streamTextMock.mockImplementation((args) => {
-      const recorder = createForensicRecorder();
+      const recorder = createEvidenceRecorder();
       recorder.recordEvent("inside.streamText");
       args.onFinish?.({
         totalUsage: {
@@ -204,19 +207,20 @@ describe("Agent.runStream forensics", () => {
     const runDir = path.join(
       forensicsRoot,
       new Date().toISOString().slice(0, 10),
-      runId
+      runId,
     );
+    await flushEvidenceWriters();
     const events = readJsonl(path.join(runDir, "events.jsonl"));
     expect(events.map((e) => e.type)).toEqual(
       expect.arrayContaining([
         "agent.run.start",
         "agent.model_input.snapshot",
         "inside.streamText",
-      ])
+      ]),
     );
     expect(events.every((e) => e.forensicRunId === runId)).toBe(true);
     expect(
-      fs.existsSync(path.join(runDir, "agent/model-input.messages.json"))
+      fs.existsSync(path.join(runDir, "agent/model-input.messages.json")),
     ).toBe(true);
     expect(usageReports).toHaveLength(1);
     expect(usageReports[0]).toMatchObject({
@@ -230,21 +234,18 @@ describe("Agent.runStream forensics", () => {
       expect.objectContaining({
         "openacme.forensic.run_id": runId,
         "openacme.forensic.lookup": "usage_events.forensic_run_id",
-        "openacme.forensic.evidence_ref":
-          `openacme://forensics/${runId}#agent.run`,
+        "openacme.forensic.evidence_ref": `openacme://forensics/${runId}#agent.run`,
         "openacme.forensic.event_selector": "type=agent.run.start",
-        "openacme.session.timeline_locator":
-          `/api/sessions/sess-1/timeline?includeForensics=1&forensicRunId=${runId}`,
         "openacme.agent.id": "agent-a",
         "openacme.session.id": "sess-1",
         "openacme.message.id": "msg-1",
-      })
+      }),
     );
     const spanAttrs = startOpenAcmeSpanMock.mock.calls[0]?.[1] as
       | Record<string, unknown>
       | undefined;
     expect(
-      Object.keys(spanAttrs ?? {}).filter((key) => key.startsWith("langfuse."))
+      Object.keys(spanAttrs ?? {}).filter((key) => key.startsWith("langfuse.")),
     ).toEqual([]);
     expect(spanEndMock).toHaveBeenCalledTimes(1);
   });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildAiForensicContext,
+  buildAiObservationContext,
   buildAiTelemetrySettings,
   resolveAiTelemetryCapture,
 } from "../src/telemetry.js";
@@ -26,10 +26,10 @@ describe("resolveAiTelemetryCapture", () => {
   });
 });
 
-describe("buildAiForensicContext", () => {
+describe("buildAiObservationContext", () => {
   it("mirrors telemetry correlation ids and model metadata", () => {
     expect(
-      buildAiForensicContext({
+      buildAiObservationContext({
         forensicRunId: "run-helper",
         parentForensicRunId: "run-parent",
         agentId: "agent-a",

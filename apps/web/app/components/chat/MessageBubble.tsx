@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { formatDistanceToNow } from "date-fns";
 import type { UIMessage } from "ai";
+import { Columns2 } from "lucide-react";
 import {
   highlightSegments,
   type SkillIndexEntry,
@@ -219,6 +220,7 @@ export const MessageBubble = memo(function MessageBubble({
   message,
   agent,
   isStreaming,
+  sessionId,
   pingAnswered = false,
   fileLinks,
   onOpenFile,
@@ -227,6 +229,7 @@ export const MessageBubble = memo(function MessageBubble({
   message: UIMessage;
   agent?: MessageAgent;
   isStreaming: boolean;
+  sessionId?: string;
   /** A user message exists after this one — pings are no longer urgent. */
   pingAnswered?: boolean;
   fileLinks?: Map<string, FileLinkTarget>;
@@ -355,6 +358,10 @@ export const MessageBubble = memo(function MessageBubble({
   // assistant — render parts in order, except ping_user calls which hoist to a
   // callout at the bottom (inline, the ping gets buried under post-ping narration).
   const parts = message.parts;
+  const snapshotId =
+    typeof meta?.contextSnapshotId === "string"
+      ? meta.contextSnapshotId
+      : undefined;
   const pingParts = parts.filter(
     (p) => isToolPart(p) && (p as { type: string }).type === "tool-ping_user"
   );
@@ -376,6 +383,9 @@ export const MessageBubble = memo(function MessageBubble({
         streaming={isStreaming}
         createdAt={(message as { createdAt?: number }).createdAt}
       />
+      {snapshotId && sessionId && (
+        <ModelContextCompare sessionId={sessionId} snapshotId={snapshotId} />
+      )}
       {parts.length === 0 && isStreaming && (
         <div className="flex items-center gap-1.5 text-ink-faint">
           <span className="status-dot bg-current pulse-live" aria-hidden />
@@ -445,3 +455,135 @@ export const MessageBubble = memo(function MessageBubble({
     </section>
   );
 });
+
+type SnapshotResponse = {
+  canonical: { messages: UIMessage[] };
+  modelContext: { messages: UIMessage[] };
+  meta: {
+    canonicalMessageCount: number;
+    reason: string;
+    sourceLastMessageId: string | null;
+  };
+};
+
+function ModelContextCompare({
+  sessionId,
+  snapshotId,
+}: {
+  sessionId: string;
+  snapshotId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [snapshot, setSnapshot] = useState<SnapshotResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || snapshot || error) return;
+    let cancelled = false;
+    void fetch(
+      `${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/context-snapshots/${encodeURIComponent(snapshotId)}`,
+    )
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`Snapshot ${r.status}`);
+        return (await r.json()) as SnapshotResponse;
+      })
+      .then((data) => {
+        if (!cancelled) setSnapshot(data);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, snapshot, error, sessionId, snapshotId]);
+
+  return (
+    <div className="mb-3">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex h-7 items-center gap-1.5 border border-paper-rule bg-paper px-2 font-mono text-[11px] uppercase tracking-[0.08em] text-ink-soft transition-colors hover:border-plot-red hover:text-ink"
+        title="Compare the canonical conversation with the model context sent to the provider"
+      >
+        <Columns2 className="size-3.5" />
+        Model Context
+      </button>
+      {open && (
+        <div className="mt-3 border border-paper-rule bg-paper-sunk">
+          <div className="grid border-b border-paper-rule font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint md:grid-cols-2">
+            <div className="border-b border-paper-rule px-3 py-2 md:border-b-0 md:border-r">
+              Conversation
+            </div>
+            <div className="px-3 py-2">
+              Model Context
+              {snapshot && (
+                <span className="ml-2 normal-case tracking-normal">
+                  {snapshot.modelContext.messages.length} /{" "}
+                  {snapshot.meta.canonicalMessageCount}
+                </span>
+              )}
+            </div>
+          </div>
+          {error ? (
+            <div className="p-3 font-mono text-[12px] text-destructive">
+              {error}
+            </div>
+          ) : !snapshot ? (
+            <div className="p-3 font-mono text-[12px] text-ink-faint">
+              Loading…
+            </div>
+          ) : (
+            <div className="grid max-h-[520px] overflow-hidden md:grid-cols-2">
+              <ContextColumn messages={snapshot.canonical.messages} />
+              <ContextColumn
+                messages={snapshot.modelContext.messages}
+                className="border-t border-paper-rule md:border-l md:border-t-0"
+              />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ContextColumn({
+  messages,
+  className,
+}: {
+  messages: UIMessage[];
+  className?: string;
+}) {
+  return (
+    <div className={cn("max-h-[520px] overflow-y-auto p-3", className)}>
+      <div className="space-y-2">
+        {messages.map((m, i) => (
+          <div key={m.id ?? i} className="border border-paper-rule bg-paper p-2">
+            <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+              {m.role}
+            </div>
+            <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-ink">
+              {renderContextMessage(m)}
+            </pre>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function renderContextMessage(message: UIMessage): string {
+  const chunks = message.parts
+    .map((part) => {
+      if ((part as { type?: unknown }).type === "text") {
+        return (part as { text?: string }).text ?? "";
+      }
+      const type = (part as { type?: unknown }).type;
+      if (typeof type === "string") return `[${type}]`;
+      return "[part]";
+    })
+    .filter(Boolean);
+  const text = chunks.join("\n");
+  return text.length > 4000 ? `${text.slice(0, 4000)}\n[truncated]` : text;
+}

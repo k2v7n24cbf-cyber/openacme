@@ -1122,6 +1122,7 @@ function ChatPage() {
                   key={msg.id}
                   message={msg}
                   agent={activeAgent}
+                  sessionId={activeSessionId}
                   isStreaming={
                     isStreaming &&
                     msg.role === "assistant" &&

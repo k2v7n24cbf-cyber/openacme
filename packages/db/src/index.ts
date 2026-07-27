@@ -65,6 +65,13 @@ export {
   type SessionTimelineSource,
 } from "./stores/session-timeline-store.js";
 export {
+  createContextSnapshotStore,
+  type ContextSnapshotStore,
+  type ContextSnapshot,
+  type ContextSnapshotInput,
+  type ContextSnapshotReason,
+} from "./stores/context-snapshot-store.js";
+export {
   USAGE_KINDS,
   USAGE_AUTH_MODES,
   USAGE_COST_SOURCES,
@@ -81,6 +88,7 @@ export {
 export {
   sessions,
   messages,
+  sessionContextSnapshots,
   userProfiles,
   taskComments,
   taskEvents,
@@ -94,6 +102,8 @@ export {
   type NewSession,
   type MessageRow,
   type NewMessageRow,
+  type SessionContextSnapshotRow,
+  type NewSessionContextSnapshotRow,
   type UserProfile,
   type NewUserProfile,
   type NewTaskCommentRow,

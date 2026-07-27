@@ -505,22 +505,24 @@ export function lookupModelMetadata(model: ModelConfig): ModelMetadata {
 /**
  * Agent behavior configuration.
  *
- * Compression (Hermes-style): when a turn's `usage.inputTokens` crosses
- * the threshold, the agent forks the session synchronously at end-of-turn.
- * The fork:
+ * Compression (Hermes-style): before a provider request, estimate the full
+ * model input. When it crosses the threshold, the agent builds a compacted
+ * model-context projection for that turn. Canonical chat history is not
+ * rewritten; a context snapshot records what the provider saw. The projection:
  *   1. Pre-prunes old tool results (dedup, 1-line summaries, JSON arg trim)
  *   2. Cuts the head/tail boundary by token budget, anchored to the most
  *      recent user message so a tool-call/result pair never splits
  *   3. Summarizes the older portion via auxiliary model (or main model on
  *      aux-model failure), with iterative UPDATE prompts on subsequent
  *      compressions
- *   4. Builds a new child session with [pre-pruned head, summary, pre-pruned tail]
+ *   4. Builds [pre-pruned head, summary, pre-pruned tail] for the provider
  *
  * Trigger: set `compressionThresholdTokens` for an absolute threshold, OR
  * `compressionThresholdPercent` (in which case the resolved context window
  * comes from `modelRegistry[model].contextWindow`). When both are set,
  * the absolute wins. Both null disables proactive compression; reactive
- * compression on provider 413 / context_overflow errors still fires.
+ * compression on provider 413 / context_overflow errors is handled by the
+ * same model-context projection path.
  */
 export const AgentBehaviorSchema = z.object({
   // Per-call output cap. Without this the Anthropic SDK auto-picks the

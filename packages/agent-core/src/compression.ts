@@ -1070,6 +1070,9 @@ export interface CompressOpts {
   /** Main agent model — used for tail/threshold sizing AND as the
    *  fallback summarizer if the configured `summarizerModel` fails. */
   mainModel: ModelConfig;
+  /** Model resolver for helper calls. Defaults to production getModel; e2e
+   *  injects the same stub resolver used by normal agent turns. */
+  resolveModel?: typeof getModel;
   /** Why we're compressing — useful for logging and edge-case handling. */
   reason: "proactive" | "payload_too_large" | "context_overflow";
   /** Usage-ledger sink for the summarizer's generateText call(s). One
@@ -1286,6 +1289,7 @@ export class Compressor {
       summaryBudget,
       primaryModel: summarizerModel,
       fallbackModel: mainModel,
+      resolveModel: opts.resolveModel,
       onUsage: opts.onUsage,
       onTimelineEvent: opts.onTimelineEvent,
     });
@@ -1359,6 +1363,7 @@ export class Compressor {
     summaryBudget: number;
     primaryModel: ModelConfig;
     fallbackModel: ModelConfig;
+    resolveModel?: typeof getModel;
     onUsage?: CompressOpts["onUsage"];
     onTimelineEvent?: CompressOpts["onTimelineEvent"];
   }): Promise<
@@ -1387,6 +1392,7 @@ export class Compressor {
 
     const tryGen = async (m: ModelConfig): Promise<string> => {
       const startedAt = Date.now();
+      const resolveModel = opts.resolveModel ?? getModel;
       const observation = createAiHelperObservation({
         functionId: "compression-summarizer",
         sessionId: opts.sessionId,
@@ -1449,7 +1455,7 @@ export class Compressor {
         try {
           if (requiresStreamingGenerate(m)) {
             const stream = streamText({
-              model: getModel(m),
+              model: resolveModel(m),
               prompt,
               maxOutputTokens: Math.floor(opts.summaryBudget * 1.3),
               experimental_telemetry: observation.telemetry.settings,
@@ -1467,7 +1473,7 @@ export class Compressor {
             res = { text, usage };
           } else {
             const generated = await generateText({
-              model: getModel(m),
+              model: resolveModel(m),
               prompt,
               maxOutputTokens: Math.floor(opts.summaryBudget * 1.3),
               experimental_telemetry: observation.telemetry.settings,

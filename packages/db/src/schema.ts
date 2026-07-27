@@ -89,6 +89,37 @@ export const messages = sqliteTable(
   (t) => [index("idx_messages_session_id").on(t.sessionId)]
 );
 
+/**
+ * Exact per-turn model-context snapshots. The canonical conversation stays in
+ * `messages`; this table records the projected UIMessage list sent to the
+ * provider when runtime compaction changes what the model sees.
+ */
+export const sessionContextSnapshots = sqliteTable(
+  "session_context_snapshots",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    reason: text("reason", {
+      enum: ["proactive", "payload_too_large", "context_overflow"],
+    }).notNull(),
+    compressed: integer("compressed", { mode: "boolean" }).notNull(),
+    modelMessages: text("model_messages").notNull(),
+    canonicalMessageCount: integer("canonical_message_count").notNull(),
+    sourceLastMessageId: text("source_last_message_id"),
+    summaryText: text("summary_text"),
+    summarySha256: text("summary_sha256"),
+    createdAt: integer("created_at")
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (t) => [
+    index("idx_context_snapshots_session").on(t.sessionId, t.createdAt),
+    index("idx_context_snapshots_last_message").on(t.sourceLastMessageId),
+  ]
+);
+
 export const userProfiles = sqliteTable("user_profiles", {
   id: text("id").primaryKey(),
   content: text("content").notNull().default(""),
@@ -391,6 +422,10 @@ export type Session = typeof sessions.$inferSelect;
 export type NewSession = typeof sessions.$inferInsert;
 export type MessageRow = typeof messages.$inferSelect;
 export type NewMessageRow = typeof messages.$inferInsert;
+export type SessionContextSnapshotRow =
+  typeof sessionContextSnapshots.$inferSelect;
+export type NewSessionContextSnapshotRow =
+  typeof sessionContextSnapshots.$inferInsert;
 export type UserProfile = typeof userProfiles.$inferSelect;
 export type NewUserProfile = typeof userProfiles.$inferInsert;
 export type TaskCommentRow = typeof taskComments.$inferSelect;

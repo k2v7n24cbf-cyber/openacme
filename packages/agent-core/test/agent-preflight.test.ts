@@ -8,6 +8,7 @@ import {
   createSessionStore,
   createMessageStore,
   createInboxStore,
+  createContextSnapshotStore,
 } from "@openacme/db";
 import { MemoryStore } from "@openacme/memory";
 import { TaskStore } from "@openacme/tasks";
@@ -98,6 +99,7 @@ function makeAgent(opts: {
 }): Agent {
   const sessionStore = createSessionStore(opts.db);
   const messageStore = createMessageStore(opts.db);
+  const contextSnapshotStore = createContextSnapshotStore(opts.db);
   const config: AgentConfig = {
     id: "a1",
     name: "Agent A1",
@@ -131,6 +133,7 @@ function makeAgent(opts: {
     memoryStore: new MemoryStore(path.join(tmpRoot, "agents")),
     taskStore: new TaskStore(path.join(tmpRoot, "tasks")),
     inboxStore: createInboxStore(opts.db),
+    contextSnapshotStore,
   });
 }
 
@@ -217,10 +220,11 @@ describe("Agent.preflightCompress", () => {
     expect(sessions.findChildOf(parent.id)).toBeNull();
   });
 
-  it("forks when history is over threshold and returns the child id", async () => {
+  it("prepares compressed model context without mutating canonical history", async () => {
     const db = freshDb();
     const sessions = createSessionStore(db);
     const messages = createMessageStore(db);
+    const snapshots = createContextSnapshotStore(db);
     const parent = sessions.create("a1", { id: "big" });
 
     // Seed enough messages to push the estimate over a 1K-token threshold.
@@ -246,25 +250,28 @@ describe("Agent.preflightCompress", () => {
       protectFirstN: 1,
       tailTokenBudget: 200,
     });
-    const newId = await agent.preflightCompress(parent.id, seed);
-    // Rename-swap: id is preserved; the active row at parent.id now
-    // points back at the archived original.
-    expect(newId).toBe(parent.id);
-    const active = sessions.get(parent.id);
-    expect(active?.parentSessionId).toBeTruthy();
-    const archivedId = active!.parentSessionId!;
-    expect(archivedId).not.toBe(parent.id);
+    const prepared = await agent.prepareModelHistory(parent.id, seed, "proactive");
+    expect(prepared.compressed).toBe(true);
+    expect(prepared.snapshotId).toBeTruthy();
+    expect(prepared.modelHistory.length).toBeLessThan(seed.length);
 
-    // Post-compaction history under the original id includes the
-    // summary sentinel.
+    // Canonical history remains under the original session id, unchanged.
+    expect(sessions.get(parent.id)?.parentSessionId).toBeNull();
     const postHistory = messages.getHistory(parent.id);
-    expect(postHistory.length).toBeGreaterThan(0);
-    const hasSummary = postHistory.some((m) => {
+    expect(postHistory.map((m) => m.id)).toEqual(seed.map((m) => m.id));
+
+    // The model-context projection contains the compaction summary.
+    const hasSummary = prepared.modelHistory.some((m) => {
       if (m.role !== "user") return false;
       const first = m.parts[0] as { type?: string; text?: string };
       return first.type === "text" && (first.text ?? "").includes("[CONTEXT COMPACTION");
     });
     expect(hasSummary).toBe(true);
+
+    const snapshot = snapshots.get(prepared.snapshotId!);
+    expect(snapshot?.canonicalMessageCount).toBe(seed.length);
+    expect(snapshot?.sourceLastMessageId).toBe(seed[seed.length - 1]!.id);
+    expect(snapshot?.modelMessages.length).toBe(prepared.modelHistory.length);
   });
 
   it("uses the effective context window override when the 1M-latch is on", async () => {
@@ -303,10 +310,10 @@ describe("Agent.preflightCompress", () => {
       tailTokenBudget: 1_000,
     });
 
-    const newId = await agent.preflightCompress(parent.id, seed);
-    // Compaction fired (the active row now points at the archive).
-    expect(newId).toBe(parent.id);
-    expect(sessions.get(parent.id)?.parentSessionId).toBeTruthy();
+    const prepared = await agent.prepareModelHistory(parent.id, seed, "proactive");
+    expect(prepared.compressed).toBe(true);
+    expect(prepared.modelHistory.length).toBeLessThan(seed.length);
+    expect(sessions.get(parent.id)?.parentSessionId).toBeNull();
     expect(getEffectiveContextWindowMock).toHaveBeenCalled();
   });
 

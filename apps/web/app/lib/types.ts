@@ -65,6 +65,8 @@ export type MessageMetadataKind = "autonomous_event";
 
 export interface MessageMetadata {
   kind?: MessageMetadataKind;
+  contextSnapshotId?: string;
+  contextCompressed?: boolean;
   [key: string]: unknown;
 }
 

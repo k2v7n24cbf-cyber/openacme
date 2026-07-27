@@ -4,6 +4,7 @@ import { applySchema } from "../src/connection.js";
 import { createSessionStore } from "../src/stores/session-store.js";
 import { createMessageStore } from "../src/stores/message-store.js";
 import { createInboxStore } from "../src/stores/inbox-store.js";
+import { createContextSnapshotStore } from "../src/stores/context-snapshot-store.js";
 
 function freshDb() {
   const db = new WasmDatabase(":memory:");
@@ -235,6 +236,65 @@ describe("MessageStore — appendMany and ordering", () => {
     expect(messages.search("result-keyword-abc").length).toBe(0);
     // Text parts still hit.
     expect(messages.search("calling").length).toBeGreaterThan(0);
+  });
+});
+
+describe("ContextSnapshotStore", () => {
+  it("stores exact model context separately from canonical messages", () => {
+    const db = freshDb();
+    const sessions = createSessionStore(db);
+    const messages = createMessageStore(db);
+    const snapshots = createContextSnapshotStore(db);
+    sessions.create("a1", { id: "s-context" });
+    messages.appendMany("s-context", [
+      {
+        id: "u1",
+        role: "user",
+        parts: [{ type: "text", text: "canonical old text" }],
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [{ type: "text", text: "canonical answer" }],
+      },
+    ]);
+
+    const row = snapshots.create({
+      id: "snap-1",
+      sessionId: "s-context",
+      reason: "proactive",
+      compressed: true,
+      canonicalMessageCount: 2,
+      sourceLastMessageId: "a1",
+      summaryText: "## Active Task\nContinue.",
+      summarySha256: "abc123",
+      modelMessages: [
+        {
+          id: "summary-1",
+          role: "user",
+          parts: [{ type: "text", text: "[CONTEXT COMPACTION] summary" }],
+        },
+      ],
+    });
+
+    expect(row.id).toBe("snap-1");
+    expect(row.compressed).toBe(true);
+    expect(row.modelMessages).toEqual([
+      {
+        id: "summary-1",
+        role: "user",
+        parts: [{ type: "text", text: "[CONTEXT COMPACTION] summary" }],
+      },
+    ]);
+    expect(messages.getHistory("s-context").map((m) => m.id)).toEqual([
+      "u1",
+      "a1",
+    ]);
+
+    expect(snapshots.get("snap-1")?.summarySha256).toBe("abc123");
+    expect(snapshots.listForSession("s-context").map((s) => s.id)).toEqual([
+      "snap-1",
+    ]);
   });
 });
 

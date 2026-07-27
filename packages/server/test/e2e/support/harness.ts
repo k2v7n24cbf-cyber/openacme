@@ -48,6 +48,8 @@ export async function startE2EServer(
     dataDir?: string;
     /** Remove the data dir on close. Default true for tmpdirs, false for caller dirs. */
     cleanupDataDir?: boolean;
+    /** Override root behavior config for tests that need low thresholds. */
+    behavior?: Record<string, unknown>;
   } = {},
 ): Promise<E2EServer> {
   const dataDir =
@@ -70,6 +72,7 @@ export async function startE2EServer(
       host: opts.serverHost ?? "127.0.0.1",
       ...(opts.requireAuth ? { requireAuth: true } : {}),
     },
+    ...(opts.behavior ? { behavior: opts.behavior } : {}),
   });
   const {
     app,

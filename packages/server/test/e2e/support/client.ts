@@ -51,7 +51,9 @@ export function makeClient(baseUrl: string, token: string = e2eToken()) {
     return { sessionId, userMessageId };
   }
 
-  async function messages(sessionId: string): Promise<Array<{ role: string; parts: any[] }>> {
+  async function messages(
+    sessionId: string
+  ): Promise<Array<{ id?: string; role: string; parts: any[]; metadata?: unknown }>> {
     return json(`/api/sessions/${sessionId}/messages`);
   }
 

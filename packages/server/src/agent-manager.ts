@@ -36,6 +36,7 @@ import {
   createPushStore,
   createUsageStore,
   createSessionTimelineStore,
+  createContextSnapshotStore,
   createAuthStore,
   type AuthStore,
   type SessionStore,
@@ -46,6 +47,7 @@ import {
   type PushStore,
   type UsageStore,
   type SessionTimelineStore,
+  type ContextSnapshotStore,
   type SessionTimelineEventInput,
   type UsageCostSource,
 } from "@openacme/db";
@@ -175,6 +177,7 @@ export class AgentManager {
   readonly pushStore: PushStore;
   readonly usageStore: UsageStore;
   readonly sessionTimelineStore: SessionTimelineStore;
+  readonly contextSnapshotStore: ContextSnapshotStore;
   readonly authStore: AuthStore;
   readonly pushDispatcher: PushDispatcher;
   readonly vapid: VapidKeys;
@@ -252,6 +255,7 @@ export class AgentManager {
     this.pushStore = createPushStore(this.db);
     this.usageStore = createUsageStore(this.db);
     this.sessionTimelineStore = createSessionTimelineStore(this.db);
+    this.contextSnapshotStore = createContextSnapshotStore(this.db);
     this.authStore = createAuthStore(this.db);
 
     // VAPID keys persist under `<dataDir>/push-vapid.json`, generated on
@@ -2102,6 +2106,7 @@ export class AgentManager {
       memoryStore: this.memoryStore,
       taskStore: this.taskStore,
       inboxStore: this.inboxStore,
+      contextSnapshotStore: this.contextSnapshotStore,
       broadcaster: this.broadcaster,
       onUsage: (report) => this.recordUsage(report),
       onTimelineEvent: (event) => this.recordSessionTimeline(event),

@@ -219,6 +219,7 @@ export function AcmePanel() {
               key={m.id}
               message={m}
               agent={acme ?? undefined}
+              sessionId={sessionId}
               isStreaming={
                 chat.isStreaming &&
                 m.role === "assistant" &&

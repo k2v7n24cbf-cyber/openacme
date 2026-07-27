@@ -393,6 +393,37 @@ export async function createApp(
     return c.json(messages);
   });
 
+  app.get("/api/sessions/:id/context-snapshots/:snapshotId", (c) => {
+    const sessionId = c.req.param("id");
+    const snapshot = manager.contextSnapshotStore.get(
+      c.req.param("snapshotId")
+    );
+    if (!snapshot || snapshot.sessionId !== sessionId) {
+      return c.json({ error: "Context snapshot not found" }, 404);
+    }
+    const canonical = sanitizeStoredHistory(
+      manager.messageStore.getHistory(sessionId)
+    );
+    return c.json({
+      snapshotId: snapshot.id,
+      sessionId,
+      canonical: {
+        messages: canonical,
+      },
+      modelContext: {
+        messages: snapshot.modelMessages,
+      },
+      meta: {
+        compressed: snapshot.compressed,
+        reason: snapshot.reason,
+        canonicalMessageCount: snapshot.canonicalMessageCount,
+        sourceLastMessageId: snapshot.sourceLastMessageId,
+        summarySha256: snapshot.summarySha256,
+        createdAt: snapshot.createdAt,
+      },
+    });
+  });
+
   registerSessionTimelineRoutes(app, manager);
 
   app.get("/api/sessions/:id", (c) => {
@@ -1851,9 +1882,10 @@ async function runChatTurn(args: {
 }): Promise<void> {
   const { manager, agentId, sessionId, responseMessageId, signal } = args;
   // `history` is mutable because preflight compression may compact the
-  // session in place; we re-read from the message store after to pick
-  // up the new [head + summary + tail] shape.
+  // model-context projection before the provider call. Canonical DB
+  // history is not mutated by compaction.
   let history = args.committed;
+  let contextSnapshotId: string | undefined;
 
   manager.dispatcher.markInteractiveBusy(sessionId);
   manager.broadcaster.broadcast(sessionId, {
@@ -1903,10 +1935,13 @@ async function runChatTurn(args: {
         transient: true,
       },
     });
-    await agent.preflightCompress(sessionId, history);
-    history = sanitizeStoredHistory(
-      manager.messageStore.getHistory(sessionId)
-    ) as unknown as UIMessage[];
+    const prepared = await agent.prepareModelHistory(
+      sessionId,
+      history,
+      "proactive"
+    );
+    history = prepared.modelHistory;
+    contextSnapshotId = prepared.snapshotId;
   } catch (e) {
     log.warn(
       { err: e, sessionId },
@@ -2108,10 +2143,20 @@ async function runChatTurn(args: {
           );
           parts = [...baseParts, upstreamErrorPart];
         }
+        const responseMetadata =
+          contextSnapshotId || responseMessage.metadata
+            ? {
+                ...(responseMessage.metadata as Record<string, unknown> | null),
+                ...(contextSnapshotId
+                  ? { contextSnapshotId, contextCompressed: true }
+                  : {}),
+              }
+            : undefined;
         manager.messageStore.append(sessionId, {
           id: responseMessage.id,
           role: responseMessage.role as "user" | "assistant",
           parts: parts as unknown[],
+          metadata: responseMetadata,
         });
         // Final canonical broadcast — chunks already produced the live
         // assembly; this settles late subscribers + applies sanitization
@@ -2123,6 +2168,7 @@ async function runChatTurn(args: {
               id: responseMessage.id,
               role: responseMessage.role as "user" | "assistant",
               parts: parts as unknown[],
+              metadata: responseMetadata,
             },
           ],
         });
@@ -2137,10 +2183,9 @@ async function runChatTurn(args: {
         state: "idle",
       });
 
-      const turnHistory = [
-        ...history,
-        responseMessage as unknown as UIMessage,
-      ];
+      const turnHistory = sanitizeStoredHistory(
+        manager.messageStore.getHistory(sessionId)
+      ) as unknown as UIMessage[];
       try {
         manager.getAgent(agentId).fireExtractor({
           sessionId,

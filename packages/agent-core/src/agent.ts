@@ -46,6 +46,8 @@ import type {
   InboxRow,
   UsageKind,
   SessionTimelineEventInput,
+  ContextSnapshotStore,
+  ContextSnapshotReason,
 } from "@openacme/db";
 import { buildSystemPrompt } from "./prompt.js";
 import { Compressor, resolveThreshold } from "./compression.js";
@@ -377,6 +379,7 @@ export class Agent {
   readonly memoryStore: MemoryStore;
   readonly taskStore: TaskStore;
   readonly inboxStore: InboxStore;
+  readonly contextSnapshotStore: ContextSnapshotStore | null;
   readonly broadcaster: AutonomousBroadcaster | null;
   private readonly onUsage: ((report: UsageReport) => void) | null;
   private readonly onTimelineEvent:
@@ -391,7 +394,7 @@ export class Agent {
   private cachedSystemPrompts = new Map<string, string>();
   // Cursor: id of the last assistant covered by an extractor run.
   private extractionCursor = new Map<string, string>();
-  // Coalesces re-entrant fires (fast successive turns → one fork).
+  // Coalesces re-entrant fires (fast successive turns → one background job).
   private extractionInProgress = new Set<string>();
   // Per-session lock so concurrent onFinish callbacks coalesce into one
   // structured-subagent call. Released in `.finally(...)`.
@@ -415,6 +418,10 @@ export class Agent {
        *  loop reads from here for both initial wake content and
        *  mid-turn signal injection. */
       inboxStore: InboxStore;
+      /** Optional per-turn model-context snapshot store. Canonical chat
+       *  history remains in MessageStore; this records what the provider
+       *  saw when compaction changed the model input. */
+      contextSnapshotStore?: ContextSnapshotStore | null;
       /** Optional UI broadcaster. When present, autonomous turns push
        *  their UIMessage stream chunks here so SSE-subscribed clients
        *  see the run live. Interactive turns don't use this — the
@@ -442,6 +449,7 @@ export class Agent {
     this.memoryStore = deps.memoryStore;
     this.taskStore = deps.taskStore;
     this.inboxStore = deps.inboxStore;
+    this.contextSnapshotStore = deps.contextSnapshotStore ?? null;
     this.broadcaster = deps.broadcaster ?? null;
     this.onUsage = deps.onUsage ?? null;
     this.onTimelineEvent = deps.onTimelineEvent ?? null;
@@ -708,29 +716,7 @@ export class Agent {
       this.messageStore.getHistory(opts.sessionId),
     ) as unknown as UIMessage[];
 
-    // Preflight compression: compact the session in place before the
-    // LLM call if the next request would exceed the configured
-    // threshold. Under rename-swap, the session id is preserved across
-    // compaction — `opts.sessionId` stays valid for all downstream
-    // bookkeeping (task.session_id, inbox.related_session, etc.).
-    //
-    // Skipped on failure — broken compression must not block the turn.
-    // Reactive 413 fallback isn't wired today; a preflight failure
-    // here means the LLM call may 4xx, surfacing back to the user.
     const sessionId = opts.sessionId;
-    try {
-      await this.preflightCompress(sessionId, baseHistory);
-      // Re-read history if compaction wrote new messages under the
-      // same id. Cheaper than diffing — message-row counts are small.
-      baseHistory = sanitizeStoredHistory(
-        this.messageStore.getHistory(sessionId),
-      ) as unknown as UIMessage[];
-    } catch (e) {
-      log.warn(
-        { err: e, sessionId },
-        "preflight compression failed; continuing on uncompacted session",
-      );
-    }
 
     // "Has the agent already responded to every real user message in
     // history?" Walk backwards: if we hit a real (non-autonomous) user
@@ -832,6 +818,23 @@ export class Agent {
       }
     }
 
+    let modelHistory = history;
+    let contextSnapshotId: string | undefined;
+    try {
+      const prepared = await this.prepareModelHistory(
+        sessionId,
+        history,
+        "proactive",
+      );
+      modelHistory = prepared.modelHistory;
+      contextSnapshotId = prepared.snapshotId;
+    } catch (e) {
+      log.warn(
+        { err: e, sessionId },
+        "preflight compression failed; continuing on canonical session",
+      );
+    }
+
     const timeoutMs =
       this.config.autonomousTurnTimeoutMs ?? DEFAULT_AUTONOMOUS_TIMEOUT_MS;
     const timeoutAbort = new AbortController();
@@ -851,7 +854,7 @@ export class Agent {
     const recall = inProgress
       ? await this.applyMemoryRecall({
           sessionId,
-          history,
+          history: modelHistory,
           signal: timeoutAbort.signal,
           triggerText: inProgress.title,
         }).catch(() => ({ entries: [], modelContent: null }))
@@ -871,7 +874,7 @@ export class Agent {
     if (recallPart) {
       const target =
         userMessage ??
-        ([...history].reverse().find((m) => m.role === "user") as
+        ([...modelHistory].reverse().find((m) => m.role === "user") as
           | UIMessage
           | undefined);
       if (target) {
@@ -936,7 +939,7 @@ export class Agent {
     try {
       const result = await this.runStream({
         sessionId,
-        history,
+        history: modelHistory,
         signal: timeoutAbort.signal,
         prepareStep,
         onError: ({ error }) => {
@@ -1125,10 +1128,20 @@ export class Agent {
         finalizeOrphanToolParts(assistantParts),
       );
       const assistantId = assistantMessage.id ?? randomUUID();
+      const responseMetadata =
+        contextSnapshotId || assistantMessage.metadata
+          ? {
+              ...(assistantMessage.metadata as Record<string, unknown> | null),
+              ...(contextSnapshotId
+                ? { contextSnapshotId, contextCompressed: true }
+                : {}),
+            }
+          : undefined;
       this.messageStore.append(sessionId, {
         id: assistantId,
         role: "assistant",
         parts: sanitized as unknown[],
+        metadata: responseMetadata,
       });
       // Final broadcast of the assembled assistant message so SSE
       // subscribers settle on the same id+parts shape the DB sees.
@@ -1142,6 +1155,7 @@ export class Agent {
             id: assistantId,
             role: "assistant",
             parts: sanitized as unknown[],
+            metadata: responseMetadata,
           },
         ],
       });
@@ -1225,6 +1239,7 @@ export class Agent {
         parentMessages,
         config: this.config.compression,
         mainModel: this.config.model,
+        resolveModel: this.resolveModel,
         reason,
         onUsage: (u) =>
           this.reportUsage({
@@ -1388,12 +1403,209 @@ export class Agent {
   }
 
   /**
-   * Preflight token-budget check + compression. Estimates the next
-   * request's token cost (system + history + tool schemas + per-image
-   * cost) and, if it would cross the configured threshold, compacts
-   * the session via `compress(..., "proactive")`. Returns the session
-   * id (unchanged under rename-swap — preserved for API symmetry with
-   * the old fork-based shape).
+   * Prepare the history that will be sent to the provider without mutating
+   * canonical chat history. Runtime compaction is a model-context projection:
+   * the UI/audit history stays in MessageStore, while the returned
+   * `modelHistory` may be `[head + summary + tail]`.
+   */
+  async prepareModelHistory(
+    sessionId: string,
+    history: UIMessage[],
+    reason: ContextSnapshotReason = "proactive",
+  ): Promise<{
+    modelHistory: UIMessage[];
+    compressed: boolean;
+    snapshotId?: string;
+  }> {
+    if (!this.config.compression) {
+      return { modelHistory: history, compressed: false };
+    }
+
+    const effectiveWindow = getEffectiveContextWindow(this.config.model);
+    const threshold = resolveThreshold(
+      this.config.compression,
+      effectiveWindow,
+    );
+    if (threshold === null) {
+      return { modelHistory: history, compressed: false };
+    }
+
+    let currentHistory = history;
+    let lastResult:
+      | Awaited<ReturnType<Compressor["compress"]>>
+      | null = null;
+
+    for (let pass = 0; pass < 3; pass++) {
+      const tokens = this.estimateRequestTokens(sessionId, currentHistory);
+      if (!this.compressor.shouldCompress(sessionId, tokens, threshold)) {
+        break;
+      }
+      log.info(
+        {
+          sessionId,
+          tokens,
+          threshold,
+          effectiveWindow,
+          pass,
+        },
+        "preflight compression: tokens >= threshold, preparing model context",
+      );
+
+      const beforeLen = currentHistory.length;
+      const compressionStartedAt = Date.now();
+      this.reportTimelineEvent({
+        sessionId,
+        agentId: this.config.id,
+        eventType: "session.compression.started",
+        source: "agent",
+        status: "running",
+        payload: {
+          reason,
+          parentMessageCount: currentHistory.length,
+          mode: "model_context",
+        },
+      });
+
+      await this.flushMemoryBeforeCompression(sessionId, currentHistory);
+
+      let result: Awaited<ReturnType<Compressor["compress"]>>;
+      try {
+        result = await this.compressor.compress({
+          parentSessionId: sessionId,
+          parentMessages: currentHistory,
+          config: this.config.compression,
+          mainModel: this.config.model,
+          resolveModel: this.resolveModel,
+          reason,
+          onUsage: (u) =>
+            this.reportUsage({
+              agentId: this.config.id,
+              sessionId,
+              kind: "summarizer",
+              model: u.model,
+              tokens: u.tokens,
+              steps: 1,
+              durationMs: u.durationMs,
+              traceId: u.traceId,
+              spanId: u.spanId,
+              forensicRunId: u.forensicRunId,
+              forensicPath: u.forensicPath,
+              providerRequestCount: u.providerRequestCount,
+            }),
+          onTimelineEvent: (event) =>
+            this.reportTimelineEvent({
+              sessionId,
+              agentId: this.config.id,
+              eventType: event.eventType,
+              source: "agent",
+              status: event.status ?? null,
+              traceId: event.traceId ?? null,
+              spanId: event.spanId ?? null,
+              forensicRunId: event.forensicRunId ?? null,
+              durationMs: event.durationMs ?? null,
+              payload: event.payload,
+            }),
+        });
+      } catch (e) {
+        this.reportTimelineEvent({
+          sessionId,
+          agentId: this.config.id,
+          eventType: "session.compression.failed",
+          source: "agent",
+          status: "error",
+          durationMs: Date.now() - compressionStartedAt,
+          payload: {
+            reason,
+            stage: "compressor",
+            mode: "model_context",
+            error: extractErrorText(e),
+          },
+        });
+        throw e;
+      }
+
+      if (result.noOp || result.childMessages.length === 0) {
+        this.reportTimelineEvent({
+          sessionId,
+          agentId: this.config.id,
+          eventType: "session.compression.noop",
+          source: "agent",
+          status: "skipped",
+          durationMs: Date.now() - compressionStartedAt,
+          payload: {
+            reason,
+            noOpReason: result.noOpReason ?? "unknown",
+            parentMessageCount: currentHistory.length,
+            mode: "model_context",
+          },
+        });
+        break;
+      }
+
+      currentHistory = result.childMessages;
+      lastResult = result;
+      this.compressor.recordResult(
+        sessionId,
+        result.savingsRatio,
+        result.summary,
+      );
+      this.reportTimelineEvent({
+        sessionId,
+        agentId: this.config.id,
+        eventType: "session.compression.finished",
+        source: "agent",
+        status: "ok",
+        durationMs: Date.now() - compressionStartedAt,
+        payload: {
+          reason,
+          parentMessageCount: beforeLen,
+          childMessageCount: result.childMessages.length,
+          savingsRatio: result.savingsRatio,
+          usedFallback: result.usedFallback,
+          summaryBytes: result.summary
+            ? Buffer.byteLength(result.summary, "utf-8")
+            : 0,
+          summarySha256: result.summary ? sha256Text(result.summary) : null,
+          mode: "model_context",
+        },
+      });
+
+      if (currentHistory.length >= Math.floor(beforeLen * 0.95)) {
+        break;
+      }
+    }
+
+    if (!lastResult) {
+      return { modelHistory: history, compressed: false };
+    }
+
+    const sourceLastMessageId = history[history.length - 1]?.id ?? null;
+    const snapshot = this.contextSnapshotStore?.create({
+      sessionId,
+      reason,
+      compressed: true,
+      modelMessages: currentHistory,
+      canonicalMessageCount: history.length,
+      sourceLastMessageId,
+      summaryText: lastResult.summary,
+      summarySha256: lastResult.summary
+        ? sha256Text(lastResult.summary)
+        : null,
+    });
+
+    return {
+      modelHistory: currentHistory,
+      compressed: true,
+      snapshotId: snapshot?.id,
+    };
+  }
+
+  /**
+   * Legacy preflight wrapper. New chat/autonomous paths call
+   * `prepareModelHistory()` directly so they can send the compacted
+   * projection to the provider without mutating canonical chat history.
+   * Kept for callers that only need "try compression if warranted" and
+   * still expect the session id back.
    *
    * Loops up to 3 passes — one is enough for most sessions, but very
    * long histories with a tight context window need a second or third.
@@ -1406,51 +1618,7 @@ export class Agent {
     sessionId: string,
     history: UIMessage[],
   ): Promise<string> {
-    if (!this.config.compression) return sessionId;
-    // The registry-resolved contextWindow (e.g. 1M for opus-4-7) is
-    // aspirational on accounts that don't have the 1M-context tier
-    // entitlement — the API quietly caps them at 200K and returns
-    // "Request size exceeds model context window" once they cross it.
-    // `getEffectiveContextWindow` consults the in-process latch set by
-    // the llm-provider fetch wrapper when it sees the entitlement
-    // rejection and returns 200K in that case, so threshold fires at
-    // 50% × 200K = 100K — well before the wall.
-    const effectiveWindow = getEffectiveContextWindow(this.config.model);
-    const threshold = resolveThreshold(
-      this.config.compression,
-      effectiveWindow,
-    );
-    if (threshold === null) return sessionId;
-
-    let currentHistory = history;
-    for (let pass = 0; pass < 3; pass++) {
-      const tokens = this.estimateRequestTokens(sessionId, currentHistory);
-      if (!this.compressor.shouldCompress(sessionId, tokens, threshold)) {
-        return sessionId;
-      }
-      log.info(
-        {
-          sessionId,
-          tokens,
-          threshold,
-          effectiveWindow,
-          pass,
-        },
-        "preflight compression: tokens >= threshold, compacting",
-      );
-      const beforeLen = currentHistory.length;
-      await this.compress(sessionId, "proactive");
-      // Rename-swap keeps the same id; re-read history under the same
-      // id to see post-compaction state.
-      currentHistory = sanitizeStoredHistory(
-        this.messageStore.getHistory(sessionId),
-      ) as unknown as UIMessage[];
-      // If the message-count drop is negligible (<5%) the algorithm
-      // can't compact further — stop instead of spinning.
-      if (currentHistory.length >= Math.floor(beforeLen * 0.95)) {
-        return sessionId;
-      }
-    }
+    await this.prepareModelHistory(sessionId, history, "proactive");
     return sessionId;
   }
 
@@ -1639,7 +1807,7 @@ export class Agent {
         try {
           return {
             result: await generateText({
-              model: getModel(flushModel),
+              model: this.resolveModel(flushModel),
               system,
               messages: flushMessages,
               tools: tools as Parameters<typeof generateText>[0]["tools"],

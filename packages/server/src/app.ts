@@ -1781,16 +1781,17 @@ export async function createApp(
   });
 
   // ── Static Web UI ──
-  // Skipped when the embedded Vite dev server fronts the UI. Otherwise
-  // prefer the bundled path (published install, filled by prepack) and fall
-  // back to the workspace build (e.g. test daemons after `pnpm build`).
+  // Skipped when the embedded Vite dev server fronts the UI. In a workspace
+  // checkout, prefer the fresh Vite build; a stale prepack artifact under
+  // packages/server/web can otherwise shadow recent UI changes. Published
+  // installs do not have ../../../apps/web/out, so they use bundled web.
   const inWebDev = !!process.env["OPENACME_WEB_DEV"];
   const bundledWebDir = path.resolve(__dirname, "../web");
   const workspaceWebDir = path.resolve(__dirname, "../../../apps/web/out");
-  const webDir = !inWebDev && fs.existsSync(path.join(bundledWebDir, "index.html"))
-    ? bundledWebDir
-    : !inWebDev && fs.existsSync(path.join(workspaceWebDir, "index.html"))
-      ? workspaceWebDir
+  const webDir = !inWebDev && fs.existsSync(path.join(workspaceWebDir, "index.html"))
+    ? workspaceWebDir
+    : !inWebDev && fs.existsSync(path.join(bundledWebDir, "index.html"))
+      ? bundledWebDir
       : null;
   if (webDir) {
     const { serveStatic } = await import("@hono/node-server/serve-static");

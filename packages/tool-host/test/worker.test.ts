@@ -23,6 +23,31 @@ function policyFor(dir: string) {
   });
 }
 
+function oversizedPolicyFor(dir: string) {
+  return (agentId: string): PathPolicy => {
+    const manyRules = Array.from({ length: 250 }, (_, i) =>
+      path.join(
+        dir,
+        "coworkers",
+        `agent-${String(i).padStart(3, "0")}`,
+        "private-state-that-must-not-be-readable-or-writable"
+      )
+    );
+    return {
+      agentId,
+      readWrite: ["/"],
+      denyWrite: manyRules,
+      denyRead: manyRules,
+      readAllow: [],
+      notes: {
+        workspaceDir: path.join(dir, "agents", agentId, "workspace"),
+        teamWorkspaces: [],
+        extraGrants: [],
+      },
+    };
+  };
+}
+
 async function waitUntil(
   fn: () => boolean,
   timeoutMs = 3000
@@ -92,6 +117,37 @@ describe("tool-host worker round-trips (real child process)", () => {
     );
     expect(read.success).toBe(true);
     expect(read.content).toBe("from the worker");
+  });
+
+  it("starts the worker even when the daemon has an oversized environment variable", async () => {
+    const key = "OPENACME_TEST_OVERSIZED_ENV";
+    process.env[key] = "x".repeat(512 * 1024);
+    try {
+      fs.writeFileSync(path.join(ctx.workspaceDir, "env-smoke.txt"), "ok");
+      const read = JSON.parse(
+        await manager.dispatch("read_file", { path: "env-smoke.txt" }, ctx)
+      );
+      expect(read.success).toBe(true);
+      expect(read.content).toBe("ok");
+    } finally {
+      delete process.env[key];
+    }
+  });
+
+  it("starts the worker unconfined when the sandbox policy argv would be too large", async () => {
+    await manager.stopAll();
+    manager = new ToolHostManager({
+      dataDir: dir,
+      compilePolicyFor: oversizedPolicyFor(dir),
+      onProcessCompleted: (event) => completions.push(event),
+    });
+
+    fs.writeFileSync(path.join(ctx.workspaceDir, "policy-smoke.txt"), "ok");
+    const read = JSON.parse(
+      await manager.dispatch("read_file", { path: "policy-smoke.txt" }, ctx)
+    );
+    expect(read.success).toBe(true);
+    expect(read.content).toBe("ok");
   });
 
   it("keeps shell state (cd) across calls in the same session", async () => {

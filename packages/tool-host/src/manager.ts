@@ -28,6 +28,11 @@ const log = createLogger("tool-host.manager");
 const RPC_TIMEOUT_MS = 10 * 60 * 1000;
 const READY_TIMEOUT_MS = 15_000;
 const TERM_GRACE_MS = 3_000;
+// macOS returns E2BIG around a few hundred KB of argv+env. The sandbox
+// runtime expands every path rule into a profile string, so large workforces
+// can make a policy that is semantically fine but too large to exec. Leave
+// headroom for Node/srt wrapper overhead and fall back before the kernel does.
+const MAX_WORKER_SPAWN_PAYLOAD_BYTES = 512 * 1024;
 
 type WorkerProc = ChildProcessByStdio<Writable, Readable, Readable>;
 
@@ -62,13 +67,38 @@ export interface ToolHostManagerOptions {
 // are credentials — same posture as mcp-client's buildSafeEnv.
 const SENSITIVE_ENV =
   /(API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE_?KEY|AUTH)/i;
+const MAX_WORKER_ENV_VALUE_BYTES = 32 * 1024;
+const MAX_WORKER_INHERITED_ENV_BYTES = 128 * 1024;
+
+function envEntryBytes(key: string, value: string): number {
+  // execve accounts env entries as "KEY=value\0"; approximate in UTF-8.
+  return Buffer.byteLength(key, "utf-8") + 1 + Buffer.byteLength(value, "utf-8") + 1;
+}
+
+function envBytes(env: NodeJS.ProcessEnv): number {
+  let total = 0;
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) continue;
+    total += envEntryBytes(key, value);
+  }
+  return total;
+}
+
+function argvBytes(argv: string[]): number {
+  return argv.reduce((total, arg) => total + Buffer.byteLength(arg, "utf-8") + 1, 0);
+}
 
 function workerEnv(dataDir: string, agentId: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
+  let inheritedBytes = 0;
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined) continue;
     if (SENSITIVE_ENV.test(key)) continue;
+    const entryBytes = envEntryBytes(key, value);
+    if (entryBytes > MAX_WORKER_ENV_VALUE_BYTES) continue;
+    if (inheritedBytes + entryBytes > MAX_WORKER_INHERITED_ENV_BYTES) continue;
     env[key] = value;
+    inheritedBytes += entryBytes;
   }
   env["OPENACME_DATA_DIR"] = dataDir;
   // The worker's stdout is the RPC channel — divert pino to a file.
@@ -271,7 +301,24 @@ export class ToolHostManager implements ToolHostDispatcher {
     if (this.degradeReason !== null) {
       return { argv: baseArgv, env: {} };
     }
-    return wrapSpawn(baseArgv, policy);
+    const plan = await wrapSpawn(baseArgv, policy);
+    const payloadBytes = argvBytes(plan.argv) + envBytes(plan.env);
+    if (payloadBytes > MAX_WORKER_SPAWN_PAYLOAD_BYTES) {
+      log.error(
+        {
+          agentId: policy.agentId,
+          payloadBytes,
+          maxPayloadBytes: MAX_WORKER_SPAWN_PAYLOAD_BYTES,
+          argvCount: plan.argv.length,
+          denyWriteCount: policy.denyWrite.length,
+          denyReadCount: policy.denyRead.length,
+          readAllowCount: policy.readAllow.length,
+        },
+        "sandbox spawn payload too large; tool-host worker will run unconfined"
+      );
+      return { argv: baseArgv, env: {} };
+    }
+    return plan;
   }
 
   private async spawnWorker(agentId: string): Promise<WorkerHandle> {

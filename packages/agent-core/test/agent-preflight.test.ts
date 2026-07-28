@@ -368,6 +368,175 @@ describe("Agent.preflightCompress", () => {
     expect(generateTextMock).not.toHaveBeenCalled();
   });
 
+  it("matches the aux-failure compression decision matrix", async () => {
+    type MatrixCase = {
+      name: string;
+      history: UIMessage[];
+      expectedAttempt: boolean;
+      expectedFailureReason?: string;
+      expectedRawTurnMayProceed: boolean;
+    };
+    const turns = (
+      count: number,
+      charsPerMessage: number,
+      prefix: string,
+    ): UIMessage[] => {
+      const out: UIMessage[] = [];
+      for (let i = 0; i < count; i++) {
+        out.push(bigUserMsg(`${prefix}-u-${i}`, charsPerMessage));
+        out.push(bigAssistantMsg(`${prefix}-a-${i}`, charsPerMessage));
+      }
+      return out;
+    };
+    const cases: MatrixCase[] = [
+      {
+        name: "aux fail + very short single message",
+        history: [bigUserMsg("short-u", 2)],
+        expectedAttempt: false,
+        expectedRawTurnMayProceed: true,
+      },
+      {
+        name: "aux fail + normal single message",
+        history: [bigUserMsg("normal-u", 1_200)],
+        expectedAttempt: false,
+        expectedRawTurnMayProceed: true,
+      },
+      {
+        name: "aux fail + very long single message",
+        history: [bigUserMsg("huge-u", 300_000)],
+        expectedAttempt: false,
+        expectedRawTurnMayProceed: true,
+      },
+      {
+        name: "aux fail + small old history and huge latest message",
+        history: [
+          bigUserMsg("small-old-u", 20),
+          bigAssistantMsg("small-old-a", 20),
+          bigUserMsg("huge-latest-u", 300_000),
+        ],
+        expectedAttempt: false,
+        expectedRawTurnMayProceed: true,
+      },
+      {
+        name: "aux fail + normal length multi-turn history",
+        history: turns(8, 500, "normal-multi"),
+        expectedAttempt: true,
+        expectedFailureReason: "proactive_summarizer_failed",
+        expectedRawTurnMayProceed: false,
+      },
+      {
+        name: "aux fail + medium 50-turn history",
+        history: turns(50, 300, "medium-50"),
+        expectedAttempt: true,
+        expectedFailureReason: "proactive_summarizer_failed",
+        expectedRawTurnMayProceed: false,
+      },
+      {
+        name: "aux fail + large old history and small latest message",
+        history: [
+          ...turns(30, 800, "large-old"),
+          bigUserMsg("small-latest-u", 20),
+        ],
+        expectedAttempt: true,
+        expectedFailureReason: "proactive_summarizer_failed",
+        expectedRawTurnMayProceed: false,
+      },
+      {
+        name: "aux fail + tool-heavy old history",
+        history: turns(20, 900, "tool-heavy").map((message, index) =>
+          message.role === "assistant"
+            ? {
+                ...message,
+                parts: [
+                  {
+                    type: "text",
+                    text: `tool-result-${index}\n${"z".repeat(900)}`,
+                  },
+                ],
+              }
+            : message,
+        ) as UIMessage[],
+        expectedAttempt: true,
+        expectedFailureReason: "proactive_summarizer_failed",
+        expectedRawTurnMayProceed: false,
+      },
+    ];
+
+    const observedRows: Array<{
+      name: string;
+      expectedAttempt: boolean;
+      observedAttempt: boolean;
+      expectedFailureReason: string | null;
+      observedFailureReason: string | null;
+      expectedRawTurnMayProceed: boolean;
+      observedRawTurnMayProceed: boolean;
+      matches: boolean;
+    }> = [];
+
+    for (const [index, item] of cases.entries()) {
+      generateTextMock.mockReset();
+      generateTextMock
+        .mockResolvedValueOnce({ text: "## Active Task\nNone." })
+        .mockResolvedValueOnce({ text: "" });
+      const db = freshDb();
+      const sessions = createSessionStore(db);
+      const parent = sessions.create("a1", { id: `matrix-${index}` });
+      const agent = makeAgent({
+        db,
+        thresholdTokens: 1,
+        protectFirstN: 1,
+        tailTokenBudget: 200,
+      });
+      const prepared = await agent.prepareModelHistory(
+        parent.id,
+        item.history,
+        "proactive",
+      );
+      const observedAttempt = prepared.compressionRequired;
+      const observedFailureReason = prepared.compressionFailureReason ?? null;
+      const observedRawTurnMayProceed =
+        !prepared.compressionRequired ||
+        (prepared.compressed && !prepared.compressionFailureReason);
+      const expectedFailureReason = item.expectedFailureReason ?? null;
+      const matches =
+        observedAttempt === item.expectedAttempt &&
+        observedFailureReason === expectedFailureReason &&
+        observedRawTurnMayProceed === item.expectedRawTurnMayProceed;
+      observedRows.push({
+        name: item.name,
+        expectedAttempt: item.expectedAttempt,
+        observedAttempt,
+        expectedFailureReason,
+        observedFailureReason,
+        expectedRawTurnMayProceed: item.expectedRawTurnMayProceed,
+        observedRawTurnMayProceed,
+        matches,
+      });
+
+      expect(
+        observedAttempt,
+        `${item.name}: compression attempt mismatch`,
+      ).toBe(item.expectedAttempt);
+      expect(
+        observedFailureReason,
+        `${item.name}: failure reason mismatch`,
+      ).toBe(expectedFailureReason);
+      expect(
+        observedRawTurnMayProceed,
+        `${item.name}: raw turn continuation mismatch`,
+      ).toBe(item.expectedRawTurnMayProceed);
+      expect(
+        generateTextMock.mock.calls.length > 0,
+        `${item.name}: aux call mismatch`,
+      ).toBe(item.expectedAttempt);
+    }
+
+    console.info(
+      `COMPRESSION_AUX_FAILURE_MATRIX ${JSON.stringify(observedRows)}`,
+    );
+    expect(observedRows.every((row) => row.matches)).toBe(true);
+  });
+
   it("uses the effective context window override when the 1M-latch is on", async () => {
     const db = freshDb();
     const sessions = createSessionStore(db);

@@ -73,6 +73,16 @@ import { createAiHelperObservation } from "./helper-observation.js";
 
 const log = createLogger("agent-core.agent");
 
+export interface PreparedModelHistory {
+  modelHistory: UIMessage[];
+  compressed: boolean;
+  snapshotId?: string;
+  compressionRequired: boolean;
+  compressionFailureReason?: string;
+  estimatedTokens?: number;
+  compressionThreshold?: number;
+}
+
 function bindAgentToolObservation(): void {
   bindToolObservation({
     getSink: () => createEvidenceRecorder(),
@@ -1412,13 +1422,13 @@ export class Agent {
     sessionId: string,
     history: UIMessage[],
     reason: ContextSnapshotReason = "proactive",
-  ): Promise<{
-    modelHistory: UIMessage[];
-    compressed: boolean;
-    snapshotId?: string;
-  }> {
+  ): Promise<PreparedModelHistory> {
     if (!this.config.compression) {
-      return { modelHistory: history, compressed: false };
+      return {
+        modelHistory: history,
+        compressed: false,
+        compressionRequired: false,
+      };
     }
 
     const effectiveWindow = getEffectiveContextWindow(this.config.model);
@@ -1427,19 +1437,28 @@ export class Agent {
       effectiveWindow,
     );
     if (threshold === null) {
-      return { modelHistory: history, compressed: false };
+      return {
+        modelHistory: history,
+        compressed: false,
+        compressionRequired: false,
+      };
     }
 
     let currentHistory = history;
     let lastResult:
       | Awaited<ReturnType<Compressor["compress"]>>
       | null = null;
+    let compressionRequired = false;
+    let lastEstimatedTokens: number | undefined;
+    let compressionFailureReason: string | undefined;
 
     for (let pass = 0; pass < 3; pass++) {
       const tokens = this.estimateRequestTokens(sessionId, currentHistory);
+      lastEstimatedTokens = tokens;
       if (!this.compressor.shouldCompress(sessionId, tokens, threshold)) {
         break;
       }
+      compressionRequired = true;
       log.info(
         {
           sessionId,
@@ -1525,6 +1544,7 @@ export class Agent {
       }
 
       if (result.noOp || result.childMessages.length === 0) {
+        compressionFailureReason = result.noOpReason ?? "unknown";
         this.reportTimelineEvent({
           sessionId,
           agentId: this.config.id,
@@ -1576,7 +1596,14 @@ export class Agent {
     }
 
     if (!lastResult) {
-      return { modelHistory: history, compressed: false };
+      return {
+        modelHistory: history,
+        compressed: false,
+        compressionRequired,
+        compressionFailureReason,
+        estimatedTokens: lastEstimatedTokens,
+        compressionThreshold: threshold,
+      };
     }
 
     const sourceLastMessageId = history[history.length - 1]?.id ?? null;
@@ -1597,6 +1624,9 @@ export class Agent {
       modelHistory: currentHistory,
       compressed: true,
       snapshotId: snapshot?.id,
+      compressionRequired,
+      estimatedTokens: lastEstimatedTokens,
+      compressionThreshold: threshold,
     };
   }
 

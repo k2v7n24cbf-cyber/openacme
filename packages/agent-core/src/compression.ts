@@ -183,6 +183,7 @@ const MESSAGE_OVERHEAD_CHARS = MESSAGE_OVERHEAD_TOKENS * CHARS_PER_TOKEN;
  *  a flaky aux model doesn't burn budget on every turn, short enough that
  *  config fixes (rotated key, switched model) are picked up the same session. */
 export const SUMMARY_FAILURE_COOLDOWN_MS = 600_000;
+const EMPTY_SUMMARY_ERROR = "compression summarizer returned empty output";
 
 /** Substantial-enough threshold for a tool result to be worth pruning/dedup. */
 const SIGNIFICANT_TOOL_RESULT_CHARS = 200;
@@ -1580,7 +1581,11 @@ export class Compressor {
         }
         return res;
       });
-      return res.text.trim();
+      const summary = res.text.trim();
+      if (summary.length === 0) {
+        throw new Error(EMPTY_SUMMARY_ERROR);
+      }
+      return summary;
     };
 
     const modelToUse = useAux ? opts.primaryModel : opts.fallbackModel;
@@ -1596,6 +1601,10 @@ export class Compressor {
       return { kind: "ok", summary, usedFallback: !useAux };
     } catch (err) {
       const errStr = errorMessage(err);
+      if (errStr.includes(EMPTY_SUMMARY_ERROR)) {
+        state.failure.cooldownUntil = now + SUMMARY_FAILURE_COOLDOWN_MS;
+        return { kind: "err", error: errStr };
+      }
       if (useAux) {
         // Aux failure → record + fall back to main model once.
         state.failure.auxFallenBack = true;

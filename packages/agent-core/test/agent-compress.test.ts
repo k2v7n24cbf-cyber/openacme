@@ -193,6 +193,7 @@ function makeAgent(opts: {
   tailTokenBudget?: number;
   attachmentsRoot?: string;
   auth?: "api_key" | "oauth";
+  summarizerModel?: AgentConfig["model"];
   onUsage?: (report: UsageReport) => void;
   onTimelineEvent?: (event: SessionTimelineEventInput) => void;
 }): Agent {
@@ -218,6 +219,7 @@ function makeAgent(opts: {
       tailTokenBudget: opts.tailTokenBudget ?? 200,
       summaryTargetRatio: 0.2,
       summarizerInputCharBudget: 80_000,
+      summarizerModel: opts.summarizerModel,
     },
   };
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agent-core-test-"));
@@ -426,6 +428,105 @@ describe("Agent — compress() over UIMessage[]", () => {
       );
     });
     expect(summaryRow).toBeDefined();
+  });
+
+  it("does not compact when OpenAI OAuth streaming summarization returns empty text", async () => {
+    const db = freshDb();
+    const sessions = createSessionStore(db);
+    const messages = createMessageStore(db);
+    const parent = sessions.create("a1", { id: "p-oauth-empty" });
+
+    const seed: UIMessage[] = [];
+    for (let i = 0; i < 6; i++) {
+      seed.push(userUI(`u${i}`));
+      seed.push(assistantUI(`a${i}`.repeat(40)));
+    }
+    messages.appendMany(
+      parent.id,
+      seed.map((m) => ({
+        id: m.id,
+        role: m.role as "user" | "assistant",
+        parts: m.parts,
+      })),
+    );
+
+    streamTextMock.mockReturnValue({
+      textStream: (async function* () {
+        yield "";
+      })(),
+      totalUsage: Promise.resolve({}),
+    });
+
+    const agent = makeAgent({
+      db,
+      thresholdTokens: 1000,
+      protectFirstN: 1,
+      tailTokenBudget: 100,
+      auth: "oauth",
+    });
+    await agent.compress(parent.id, "proactive");
+
+    expect(streamTextMock).toHaveBeenCalled();
+    expect(sessions.get(parent.id)?.parentSessionId).toBeNull();
+    const postHistory = messages.getHistory(parent.id);
+    expect(postHistory.map((m) => m.id)).toEqual(seed.map((m) => m.id));
+    expect(
+      postHistory.some((m) =>
+        JSON.stringify(m.parts).includes("[CONTEXT COMPACTION"),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not fall back to the main model when an aux summarizer returns empty text", async () => {
+    const db = freshDb();
+    const sessions = createSessionStore(db);
+    const messages = createMessageStore(db);
+    const parent = sessions.create("a1", { id: "p-oauth-empty-aux" });
+
+    const seed: UIMessage[] = [];
+    for (let i = 0; i < 6; i++) {
+      seed.push(userUI(`u${i}`));
+      seed.push(assistantUI(`a${i}`.repeat(40)));
+    }
+    messages.appendMany(
+      parent.id,
+      seed.map((m) => ({
+        id: m.id,
+        role: m.role as "user" | "assistant",
+        parts: m.parts,
+      })),
+    );
+
+    streamTextMock.mockReturnValue({
+      textStream: (async function* () {
+        yield "";
+      })(),
+      totalUsage: Promise.resolve({}),
+    });
+
+    const agent = makeAgent({
+      db,
+      thresholdTokens: 1000,
+      protectFirstN: 1,
+      tailTokenBudget: 100,
+      auth: "oauth",
+      summarizerModel: {
+        provider: "openai",
+        model: "gpt-5.2",
+        apiKey: "x",
+        auth: "oauth",
+      },
+    });
+    await agent.compress(parent.id, "proactive");
+
+    expect(streamTextMock).toHaveBeenCalledTimes(1);
+    expect(getModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "gpt-5.2" }),
+    );
+    expect(sessions.get(parent.id)?.parentSessionId).toBeNull();
+    expect(messages.getHistory(parent.id).map((m) => m.id)).toEqual(
+      seed.map((m) => m.id),
+    );
   });
 
   it("emits forensic-grade compression timeline, helper locators, and usage paths", async () => {

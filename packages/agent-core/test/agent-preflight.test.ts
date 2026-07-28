@@ -274,6 +274,53 @@ describe("Agent.preflightCompress", () => {
     expect(snapshot?.modelMessages.length).toBe(prepared.modelHistory.length);
   });
 
+  it("reports required compression failure without mutating canonical history", async () => {
+    const db = freshDb();
+    const sessions = createSessionStore(db);
+    const messages = createMessageStore(db);
+    const parent = sessions.create("a1", { id: "preflight-empty-summary" });
+
+    const seed: UIMessage[] = [];
+    for (let i = 0; i < 20; i++) {
+      seed.push(bigUserMsg(`u${i}`, 500));
+      seed.push(bigAssistantMsg(`a${i}`, 500));
+    }
+    messages.appendMany(
+      parent.id,
+      seed.map((m) => ({
+        id: m.id,
+        role: m.role as "user" | "assistant",
+        parts: m.parts,
+      }))
+    );
+    generateTextMock
+      .mockResolvedValueOnce({ text: "## Active Task\nNone." })
+      .mockResolvedValueOnce({ text: "" });
+
+    const agent = makeAgent({
+      db,
+      thresholdTokens: 1000,
+      protectFirstN: 1,
+      tailTokenBudget: 200,
+    });
+    const prepared = await agent.prepareModelHistory(
+      parent.id,
+      seed,
+      "proactive"
+    );
+
+    expect(prepared.compressionRequired).toBe(true);
+    expect(prepared.compressed).toBe(false);
+    expect(prepared.compressionFailureReason).toBe(
+      "proactive_summarizer_failed"
+    );
+    expect(prepared.modelHistory).toBe(seed);
+    expect(sessions.get(parent.id)?.parentSessionId).toBeNull();
+    expect(messages.getHistory(parent.id).map((m) => m.id)).toEqual(
+      seed.map((m) => m.id)
+    );
+  });
+
   it("uses the effective context window override when the 1M-latch is on", async () => {
     const db = freshDb();
     const sessions = createSessionStore(db);

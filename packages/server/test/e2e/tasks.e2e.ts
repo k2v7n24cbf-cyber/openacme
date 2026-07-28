@@ -244,4 +244,53 @@ describe("autonomous dispatch (e2e)", () => {
       sse.close();
     }
   });
+
+  it("marks an in-progress task system_blocked on interactive context overflow", async () => {
+    const session = srv.manager.sessionStore.create("worker");
+    const sessionId = session.id;
+    const task = await srv.manager.taskStore.create({
+      title: "Overflowing interactive work",
+      assignee: "worker",
+      created_by: "user",
+      session_id: sessionId,
+      status: "in_progress",
+    });
+    const providerError = {
+      type: "error",
+      sequence_number: 2,
+      error: {
+        type: "invalid_request_error",
+        code: "context_length_exceeded",
+        message:
+          "Your input exceeds the context window of this model. Please adjust your input and try again.",
+        param: "input",
+      },
+    };
+    const sse = await openSSE(`${srv.baseUrl}/api/sessions/${sessionId}/stream`);
+    try {
+      const res = await c.chat(
+        "worker",
+        `interactive overflow [[mock:error-anywhere:${JSON.stringify(providerError)}]]`,
+        sessionId
+      );
+      expect(res.sessionId).toBe(sessionId);
+      await sse.waitFor(isState("idle"), 12_000);
+      await waitUntil(
+        async () =>
+          (await c.json(`/api/tasks/${task.id}`)).task.status ===
+          "system_blocked",
+        { timeoutMs: 8_000 }
+      );
+
+      const blocked = (await c.json(`/api/tasks/${task.id}`)).task;
+      expect(blocked.status).toBe("system_blocked");
+      const { comments } = await c.json(`/api/tasks/${task.id}/comments`);
+      expect(comments.at(-1)?.body).toContain("context_length_exceeded");
+      expect(comments.at(-1)?.body).toContain(
+        "Your input exceeds the context window"
+      );
+    } finally {
+      sse.close();
+    }
+  });
 });

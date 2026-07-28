@@ -937,7 +937,7 @@ export class Dispatcher {
    * model context. The session binding is preserved for debugging, but the
    * dispatcher will not wake the session again until the status is changed.
    */
-  private async systemBlockInProgress(
+  async systemBlockInProgress(
     sessionId: string,
     note: { reason: string; message: string }
   ): Promise<void> {

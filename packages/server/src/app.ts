@@ -16,6 +16,7 @@ import {
   type UIMessage,
 } from "ai";
 import {
+  classifyError,
   ensureStepBoundaries,
   extractErrorText,
   extractStatusCode,
@@ -1889,6 +1890,82 @@ function buildUpstreamErrorPart(
   };
 }
 
+function buildCompressionFailureError(args: {
+  failureReason?: string;
+  estimatedTokens?: number;
+  threshold?: number;
+}): Error {
+  const details = [
+    args.failureReason ? `reason=${args.failureReason}` : null,
+    args.estimatedTokens != null ? `estimated_tokens=${args.estimatedTokens}` : null,
+    args.threshold != null ? `threshold=${args.threshold}` : null,
+  ].filter(Boolean);
+  return new Error(
+    [
+      "Context compaction was required before sending this turn, but compaction failed.",
+      "The turn was not sent with raw/uncompacted history.",
+      details.length > 0 ? details.join(" ") : null,
+    ]
+      .filter(Boolean)
+      .join("\n")
+  );
+}
+
+function persistChatTurnError(args: {
+  manager: AgentManager;
+  agentId: string;
+  sessionId: string;
+  responseMessageId: string;
+  error: unknown;
+  contextSnapshotId?: string;
+}): void {
+  const {
+    manager,
+    agentId,
+    sessionId,
+    responseMessageId,
+    error,
+    contextSnapshotId,
+  } = args;
+  const upstreamErrorPart = buildUpstreamErrorPart(error, agentId, manager);
+  const metadata = contextSnapshotId
+    ? { contextSnapshotId, contextCompressed: true }
+    : undefined;
+  manager.messageStore.append(sessionId, {
+    id: responseMessageId,
+    role: "assistant",
+    parts: [upstreamErrorPart] as unknown[],
+    metadata,
+  });
+  manager.broadcaster.broadcast(sessionId, {
+    kind: "messages_appended",
+    messages: [
+      {
+        id: responseMessageId,
+        role: "assistant",
+        parts: [upstreamErrorPart] as unknown[],
+        metadata,
+      },
+    ],
+  });
+  manager.sessionStore.touch(sessionId);
+}
+
+async function maybeSystemBlockInProgressTask(args: {
+  manager: AgentManager;
+  sessionId: string;
+  error: unknown;
+  fallbackReason?: string;
+}): Promise<void> {
+  const classification = classifyError(args.error);
+  const reason = classification.systemBlockReason ?? args.fallbackReason;
+  if (!reason) return;
+  await args.manager.dispatcher.systemBlockInProgress(args.sessionId, {
+    reason,
+    message: extractErrorText(args.error),
+  });
+}
+
 async function runChatTurn(args: {
   manager: AgentManager;
   agentId: string;
@@ -1959,11 +2036,62 @@ async function runChatTurn(args: {
     );
     history = prepared.modelHistory;
     contextSnapshotId = prepared.snapshotId;
+    if (
+      prepared.compressionRequired &&
+      !prepared.compressed &&
+      prepared.compressionFailureReason
+    ) {
+      const error = buildCompressionFailureError({
+        failureReason: prepared.compressionFailureReason,
+        estimatedTokens: prepared.estimatedTokens,
+        threshold: prepared.compressionThreshold,
+      });
+      await maybeSystemBlockInProgressTask({
+        manager,
+        sessionId,
+        error,
+        fallbackReason: "compression_failed",
+      });
+      persistChatTurnError({
+        manager,
+        agentId,
+        sessionId,
+        responseMessageId,
+        error,
+        contextSnapshotId,
+      });
+      manager.dispatcher.clearInteractiveBusy(sessionId);
+      manager.broadcaster.broadcast(sessionId, {
+        kind: "session_state",
+        state: "idle",
+      });
+      return;
+    }
   } catch (e) {
+    await maybeSystemBlockInProgressTask({
+      manager,
+      sessionId,
+      error: e,
+      fallbackReason: "compression_failed",
+    });
+    persistChatTurnError({
+      manager,
+      agentId,
+      sessionId,
+      responseMessageId,
+      error: e,
+      contextSnapshotId,
+    });
+    manager.dispatcher.clearInteractiveBusy(sessionId);
+    manager.broadcaster.broadcast(sessionId, {
+      kind: "session_state",
+      state: "idle",
+    });
     log.warn(
       { err: e, sessionId },
-      "chat preflight compression failed; continuing on uncompacted history"
+      "chat preflight compression failed; aborting raw provider turn"
     );
+    return;
   } finally {
     // Clear the in-progress chip. Same id + empty `message` removes
     // the entry from the client's statusBoard.
@@ -2143,6 +2271,11 @@ async function runChatTurn(args: {
         );
         let parts = baseParts;
         if (capturedError && !signal.aborted) {
+          void maybeSystemBlockInProgressTask({
+            manager,
+            sessionId,
+            error: capturedError,
+          });
           const upstreamErrorPart = buildUpstreamErrorPart(
             capturedError,
             agentId,

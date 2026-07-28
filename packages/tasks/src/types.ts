@@ -4,6 +4,7 @@ export const TASK_STATUSES = [
   "open",
   "in_progress",
   "blocked",
+  "system_blocked",
   "done",
   "canceled",
 ] as const;
@@ -72,8 +73,10 @@ export const TaskFrontmatterSchema = z
      * Session binding. Three semantically distinct meanings depending
      * on status — don't clear this field without understanding which
      * applies:
-     *  - non-terminal (open / in_progress / blocked): the live session
-     *    where work is happening or will happen on pickup.
+     *  - non-terminal (open / in_progress / blocked / system_blocked):
+     *    the live session where work is happening or will happen on pickup,
+     *    except system_blocked, which preserves the stuck session for
+     *    diagnosis until a human changes state.
      *  - done / canceled: historical audit trail. The session where the
      *    work happened. Do NOT null this out — readers (event log, web
      *    detail view, prompt rendering of past activity) rely on it.

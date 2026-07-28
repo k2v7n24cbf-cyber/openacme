@@ -29,10 +29,14 @@
  *
  *   in_progress ──► blocked      (via TaskStore.park, by scheduler on
  *                                 timeout/error or watchdog)
+ *   in_progress ──► system_blocked (non-retryable platform/provider failure;
+ *                                   requires human status change)
  *   in_progress ──► done/canceled (terminal; assignee or human)
  *
  *   blocked ──► open             (auto, when deps satisfy via unblockDependents)
  *   blocked ──► done/canceled    (terminal; bypasses in_progress)
+ *   system_blocked ──► open/blocked/done/canceled (human/system repair only;
+ *                                                   dispatcher never retries)
  *
  *   done ────► open              (ONLY for recurring tasks — self-reset
  *                                 to next fire. Non-recurring done is
@@ -55,6 +59,7 @@ import {
   RecurrenceSchema,
   TaskFrontmatterSchema,
   TaskIdSchema,
+  TaskStatusSchema,
   type Recurrence,
   type Task,
   type TaskCreate,
@@ -94,18 +99,14 @@ const TaskCreateInputSchema = z.object({
   depends_on: z.array(TaskIdSchema).optional(),
   start_at: NullableIso.optional(),
   due_at: NullableIso.optional(),
-  status: z
-    .enum(["open", "in_progress", "blocked", "done", "canceled"])
-    .optional(),
+  status: TaskStatusSchema.optional(),
   recurrence: RecurrenceSchema.nullable().optional(),
   team: z.string().min(1).nullable().optional(),
 });
 const TaskUpdateInputSchema = z.object({
   title: z.string().min(1).max(500).optional(),
   body: z.string().optional(),
-  status: z
-    .enum(["open", "in_progress", "blocked", "done", "canceled"])
-    .optional(),
+  status: TaskStatusSchema.optional(),
   assignee: z.string().min(1).optional(),
   session_id: z.string().min(1).nullable().optional(),
   depends_on: z.array(TaskIdSchema).optional(),
@@ -343,7 +344,7 @@ export class TaskStore {
     return eligible.sort((a, b) => a.created_at.localeCompare(b.created_at));
   }
 
-  /** Top of `queueFor` excluding already in_progress / done / canceled. */
+  /** Top of `queueFor` excluding in_progress / system_blocked / done / canceled. */
   nextEligibleFor(sessionId: string, now: Date = new Date()): Task | null {
     const queue = this.queueFor(sessionId, now);
     const head = queue.find(
@@ -632,7 +633,11 @@ export class TaskStore {
         session_id: nextSessionId,
         depends_on: nextDeps,
         start_at:
-          patch.start_at !== undefined ? patch.start_at : existing.start_at,
+          patch.start_at !== undefined
+            ? patch.start_at
+            : nextStatus === "system_blocked"
+              ? null
+              : existing.start_at,
         due_at: patch.due_at !== undefined ? patch.due_at : existing.due_at,
         updated_at: now,
         closed_at:
@@ -1202,7 +1207,13 @@ function isQueueEligible(
   byId: Map<string, Task>,
   now: Date,
 ): boolean {
-  if (task.status === "done" || task.status === "canceled") return false;
+  if (
+    task.status === "done" ||
+    task.status === "canceled" ||
+    task.status === "system_blocked"
+  ) {
+    return false;
+  }
   if (!depsSatisfied(task.depends_on, byId, task.id)) return false;
   if (isFutureStart(task.start_at, now)) return false;
   return true;

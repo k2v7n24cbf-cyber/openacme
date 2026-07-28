@@ -13,9 +13,12 @@
 //                                            (a multi-step agent loop)
 //   [[mock:slow-long]]                   -> longer delayed stream for concurrency
 //   [[mock:error:boom]]                  -> emits a stream error
+//   [[mock:error-anywhere:boom]]         -> emits a stream error if found anywhere
+//                                            in the prompt
 import { MockLanguageModelV3, simulateReadableStream } from "ai/test";
 
 const DIRECTIVE = /\[\[mock:(text|tool|error):([\s\S]*?)\]\]/;
+const ANYWHERE_ERROR_DIRECTIVE = /\[\[mock:error-anywhere:([\s\S]*?)\]\]/;
 
 function lastUserText(prompt) {
   for (let i = prompt.length - 1; i >= 0; i--) {
@@ -50,7 +53,12 @@ function hasToolResult(prompt) {
 
 function plan(prompt) {
   const text = lastUserText(prompt);
-  if (allText(prompt).includes("[[mock:slow-anywhere]]")) {
+  const textEverywhere = allText(prompt);
+  const anywhereError = ANYWHERE_ERROR_DIRECTIVE.exec(textEverywhere);
+  if (anywhereError) {
+    return { kind: "error", message: anywhereError[1] };
+  }
+  if (textEverywhere.includes("[[mock:slow-anywhere]]")) {
     return { kind: "slow", text: "tick ".repeat(40) };
   }
   // Multi-step loop: emit a tool call, then another after the first result,

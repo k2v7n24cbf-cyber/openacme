@@ -515,6 +515,23 @@ export async function createApp(
 
     const effectiveSessionId = sessionId || randomUUID();
 
+    const systemBlockedTask = sessionId
+      ? manager.taskStore
+          .list({ session_id: effectiveSessionId })
+          .find((t) => t.status === "system_blocked")
+      : null;
+    if (systemBlockedTask) {
+      return c.json(
+        {
+          error: "session_system_blocked",
+          taskId: systemBlockedTask.id,
+          message:
+            "This session has a system-blocked task. Change the task status before starting another turn.",
+        },
+        409
+      );
+    }
+
     // Validate-then-commit: walk the incoming messages once to collect
     // every pending id; verify they're all known; only then commit (move
     // files under the session dir). Naive map-and-commit has a partial-

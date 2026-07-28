@@ -5,6 +5,7 @@ export type TaskStatus =
   | "open"
   | "in_progress"
   | "blocked"
+  | "system_blocked"
   | "done"
   | "canceled";
 
@@ -57,6 +58,7 @@ export const STATUS_ORDER: TaskStatus[] = [
   "in_progress",
   "open",
   "blocked",
+  "system_blocked",
   "done",
   "canceled",
 ];
@@ -65,6 +67,7 @@ export const STATUS_LABEL: Record<TaskStatus, string> = {
   in_progress: "In progress",
   open: "Open",
   blocked: "Blocked",
+  system_blocked: "System blocked",
   done: "Done",
   canceled: "Canceled",
 };
@@ -86,6 +89,7 @@ export const STATUS_VARIANT: Record<
   open: "default",
   // WAIT role — amber chip. Distinct from canceled (terminal, outline).
   blocked: "attention",
+  system_blocked: "destructive",
   done: "secondary",
   canceled: "outline",
 };

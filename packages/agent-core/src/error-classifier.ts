@@ -12,10 +12,13 @@ import { APICallError } from "ai";
  */
 
 export type CompressionReason = "payload_too_large" | "context_overflow";
+export type SystemBlockReason = "context_length_exceeded";
 
 export interface ClassifiedError {
   /** Non-null iff this error should trigger reactive compression + retry. */
   compressionReason: CompressionReason | null;
+  /** Non-null iff retry/backoff should stop until a human changes state. */
+  systemBlockReason: SystemBlockReason | null;
 }
 
 const PAYLOAD_TOO_LARGE_PATTERNS = [
@@ -252,8 +255,15 @@ function extractText(err: unknown): string {
 export function classifyError(err: unknown): ClassifiedError {
   const statusCode = extractStatusCode(err);
   const text = extractText(err);
+  const systemBlockReason =
+    text.includes("context_length_exceeded") ||
+    text.includes("your input exceeds the context window")
+      ? "context_length_exceeded"
+      : null;
 
-  if (statusCode === 413) return { compressionReason: "payload_too_large" };
+  if (statusCode === 413) {
+    return { compressionReason: "payload_too_large", systemBlockReason };
+  }
 
   // Anthropic long-context tier gate. Match BEFORE generic 429 → no-op
   // (we don't classify rate limits at all).
@@ -262,15 +272,15 @@ export function classifyError(err: unknown): ClassifiedError {
     text.includes("extra usage") &&
     text.includes("long context")
   ) {
-    return { compressionReason: "context_overflow" };
+    return { compressionReason: "context_overflow", systemBlockReason };
   }
 
   if (PAYLOAD_TOO_LARGE_PATTERNS.some((p) => text.includes(p))) {
-    return { compressionReason: "payload_too_large" };
+    return { compressionReason: "payload_too_large", systemBlockReason };
   }
   if (CONTEXT_OVERFLOW_PATTERNS.some((p) => text.includes(p))) {
-    return { compressionReason: "context_overflow" };
+    return { compressionReason: "context_overflow", systemBlockReason };
   }
 
-  return { compressionReason: null };
+  return { compressionReason: null, systemBlockReason };
 }

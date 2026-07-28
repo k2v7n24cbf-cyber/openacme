@@ -1039,6 +1039,66 @@ describe("Dispatcher failure handling", () => {
     expect(retryAt).toBeLessThan(Date.now() + 6 * 60_000);
   });
 
+  it("marks an in-progress task system_blocked on OpenAI context overflow", async () => {
+    const providerError = {
+      type: "error",
+      sequence_number: 2,
+      error: {
+        type: "invalid_request_error",
+        code: "context_length_exceeded",
+        message:
+          "Your input exceeds the context window of this model. Please adjust your input and try again.",
+        param: "input",
+      },
+    };
+    const { manager, calls } = fakeManager(["a1"], async () => {
+      throw providerError;
+    });
+    const { session, task } = await makeBoundTask("a1", {
+      status: "in_progress",
+    });
+
+    const d = makeDispatcher(manager);
+    await d.start();
+    await d.drain(5_000);
+
+    expect(calls).toEqual([{ agentId: "a1", sessionId: session.id }]);
+    const blocked = taskStore.get(task.id);
+    expect(blocked?.status).toBe("system_blocked");
+    expect(blocked?.start_at).toBeNull();
+    const comments = taskStore.listComments(task.id, { kinds: ["system"] });
+    expect(comments.at(-1)?.body).toContain("context_length_exceeded");
+    expect(comments.at(-1)?.body).toContain(
+      "Your input exceeds the context window"
+    );
+    expect(comments.at(-1)?.body).not.toContain("[object Object]");
+  });
+
+  it("does not wake a system_blocked task, even with queued inbox", async () => {
+    const { manager, calls } = fakeManager(["a1"]);
+    const { session } = await makeBoundTask("a1", {
+      status: "system_blocked",
+    });
+    inboxStore.deliver({
+      agentId: "a1",
+      kind: "user_message",
+      source: "user",
+      sourceId: "msg-1",
+      relatedSession: session.id,
+      payload: {
+        id: "msg-1",
+        role: "user",
+        parts: [{ type: "text", text: "try again" }],
+      },
+    });
+
+    const d = makeDispatcher(manager);
+    await d.start();
+    await d.drain(5_000);
+
+    expect(calls).toEqual([]);
+  });
+
   it("emits autonomous and wake failure timeline events when a turn errors", async () => {
     const timelineEvents: SessionTimelineEventInput[] = [];
     const { manager, calls } = fakeManager(["a1"], async () => {

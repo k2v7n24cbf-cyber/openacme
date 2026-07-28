@@ -23,7 +23,7 @@ const ISO_LOCAL_SHAPE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
 describe("status constants", () => {
   it("STATUS_ORDER lists each status exactly once", () => {
     expect(new Set(STATUS_ORDER).size).toBe(STATUS_ORDER.length);
-    expect(STATUS_ORDER).toHaveLength(5);
+    expect(STATUS_ORDER).toHaveLength(6);
   });
 
   it("label and variant maps cover every status in STATUS_ORDER", () => {

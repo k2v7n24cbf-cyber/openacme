@@ -32,7 +32,8 @@ export function renderForPrompt(
       t.created_by === agentId &&
       t.assignee !== agentId &&
       t.status !== "done" &&
-      t.status !== "canceled"
+      t.status !== "canceled" &&
+      t.status !== "system_blocked"
   );
 
   const inThisSession = mine.filter(
@@ -55,7 +56,13 @@ export function renderForPrompt(
 
   const otherSessions = mine.filter((t) => {
     if (t.session_id === currentSessionId) return false;
-    if (t.status === "done" || t.status === "canceled") return false;
+    if (
+      t.status === "done" ||
+      t.status === "canceled" ||
+      t.status === "system_blocked"
+    ) {
+      return false;
+    }
     if (!t.session_id) return false;
     return sessionExistsFn(t.session_id);
   });

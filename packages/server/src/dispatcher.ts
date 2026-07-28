@@ -6,8 +6,8 @@
  *   - One `setInterval(60_000)` tick is the autonomous floor.
  *   - Per-agent capacity (`maxConcurrentSessions`, default 1) bounds
  *     how many distinct sessions can run for one canonical agent.
- *   - Spawn rule: capacity free AND (inbox rows OR in_progress OR ready
- *     open OR only-blocked tasks).
+ *   - Spawn rule: capacity free AND no system_blocked task in the session AND
+ *     (inbox rows OR in_progress OR ready open OR only-blocked tasks).
  *   - `sessions.defer_until` honoured — skips routine spawns while
  *     active, bypassed by new inbox rows.
  *   - Startup sweep flips stale `in_progress` → `open` (crash recovery
@@ -28,7 +28,11 @@
  */
 
 import type { TaskStore, Task } from "@openacme/tasks";
-import { AutonomousTurnTimeout, extractErrorText } from "@openacme/agent-core";
+import {
+  AutonomousTurnTimeout,
+  classifyError,
+  extractErrorText,
+} from "@openacme/agent-core";
 import type {
   SessionStore,
   InboxStore,
@@ -579,6 +583,10 @@ export class Dispatcher {
     nowMs: number,
     hasInbox: boolean
   ): SpawnDecision | null {
+    const tasks = this.taskStore.list({ session_id: sessionId });
+    if (tasks.some((t) => t.status === "system_blocked")) {
+      return null;
+    }
     if (hasInbox) {
       return {
         reason: "inbox",
@@ -586,7 +594,6 @@ export class Dispatcher {
         hasInbox,
       };
     }
-    const tasks = this.taskStore.list({ session_id: sessionId });
     let readyTask: Task | null = null;
     let blockedTask: Task | null = null;
     for (const t of tasks) {
@@ -860,12 +867,20 @@ export class Dispatcher {
       if (!isTimeout) {
         log.warn({ sessionId, message }, "autonomous turn failed");
       }
-      await this.parkInProgress(sessionId, {
-        action: isTimeout ? "timeout" : "error",
-        message: isTimeout
-          ? `turn timed out at ${this.now().toISOString()}`
-          : `turn errored at ${this.now().toISOString()}: ${message}`,
-      });
+      const classification = classifyError(e);
+      if (classification.systemBlockReason) {
+        await this.systemBlockInProgress(sessionId, {
+          reason: classification.systemBlockReason,
+          message,
+        });
+      } else {
+        await this.parkInProgress(sessionId, {
+          action: isTimeout ? "timeout" : "error",
+          message: isTimeout
+            ? `turn timed out at ${this.now().toISOString()}`
+            : `turn errored at ${this.now().toISOString()}: ${message}`,
+        });
+      }
       this.recordTimeline({
         sessionId,
         agentId,
@@ -913,6 +928,38 @@ export class Dispatcher {
         });
       } catch (e) {
         log.warn({ err: e, taskId: task.id }, "parkInProgress failed");
+      }
+    }
+  }
+
+  /**
+   * Stop retrying a task when the provider says the request cannot fit the
+   * model context. The session binding is preserved for debugging, but the
+   * dispatcher will not wake the session again until the status is changed.
+   */
+  private async systemBlockInProgress(
+    sessionId: string,
+    note: { reason: string; message: string }
+  ): Promise<void> {
+    const inProg = this.taskStore.list({
+      session_id: sessionId,
+      status: "in_progress",
+    });
+    for (const task of inProg) {
+      try {
+        await this.taskStore.update(
+          task.id,
+          { status: "system_blocked", start_at: null },
+          { actor: "system:scheduler" }
+        );
+        await this.taskStore.addComment({
+          taskId: task.id,
+          author: "system:scheduler",
+          kind: "system",
+          body: `[system_blocked:${note.reason}] ${note.message}`,
+        });
+      } catch (e) {
+        log.warn({ err: e, taskId: task.id }, "systemBlockInProgress failed");
       }
     }
   }

@@ -28,13 +28,15 @@ import {
 
 // Column eyebrow + count tint by status role (DESIGN.md §2).
 // open → neutral (ink-soft); in_progress → WORKING (signal-blue);
-// blocked → WAIT (signal-amber); done/canceled → terminal recess.
+// blocked → WAIT (signal-amber); system_blocked → ERROR; done/canceled → terminal recess.
 function statusTint(status: TaskStatus): { label: string; dot: string } {
   switch (status) {
     case "in_progress":
       return { label: "text-signal-blue", dot: "bg-signal-blue" };
     case "blocked":
       return { label: "text-signal-amber", dot: "bg-signal-amber" };
+    case "system_blocked":
+      return { label: "text-plot-red", dot: "bg-plot-red" };
     case "done":
       return { label: "text-ink-soft", dot: "bg-ink-soft" };
     case "canceled":

@@ -16,7 +16,7 @@ export interface TeamTasks {
   tasks: Task[];
   loading: boolean;
   error: string | null;
-  /** Open + in_progress + blocked — what the tab count shows. */
+  /** Open + in_progress + blocked + system_blocked — what the tab count shows. */
   activeCount: number;
   retry: () => void;
 }
@@ -60,7 +60,8 @@ export function useTeamTasks(teamId: string | null): TeamTasks {
         (t) =>
           t.status === "open" ||
           t.status === "in_progress" ||
-          t.status === "blocked"
+          t.status === "blocked" ||
+          t.status === "system_blocked"
       ).length,
     [tasks]
   );

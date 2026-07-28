@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractErrorText } from "../src/error-classifier.js";
+import { classifyError, extractErrorText } from "../src/error-classifier.js";
 
 describe("extractErrorText", () => {
   it("extracts nested provider error messages from plain objects", () => {
@@ -44,5 +44,26 @@ describe("extractErrorText", () => {
     expect(text).toContain('"code":"123"');
     expect(text).toContain('"retry":"[Function retry]"');
     expect(text).toContain('"marker":"Symbol(provider)"');
+  });
+});
+
+describe("classifyError", () => {
+  it("classifies OpenAI context_length_exceeded responses as context overflow", () => {
+    const err = {
+      type: "error",
+      sequence_number: 2,
+      error: {
+        type: "invalid_request_error",
+        code: "context_length_exceeded",
+        message:
+          "Your input exceeds the context window of this model. Please adjust your input and try again.",
+        param: "input",
+      },
+    };
+
+    expect(classifyError(err)).toMatchObject({
+      compressionReason: "context_overflow",
+      systemBlockReason: "context_length_exceeded",
+    });
   });
 });

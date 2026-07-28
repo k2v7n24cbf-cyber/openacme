@@ -185,6 +185,8 @@ function statusDot(status: TaskStatus): string {
       return "bg-signal-blue";
     case "blocked":
       return "bg-signal-amber";
+    case "system_blocked":
+      return "bg-plot-red";
     case "done":
       return "bg-signal-green";
     case "canceled":

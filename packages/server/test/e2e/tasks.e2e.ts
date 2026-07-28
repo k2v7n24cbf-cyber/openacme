@@ -179,4 +179,69 @@ describe("autonomous dispatch (e2e)", () => {
       sse.close();
     }
   });
+
+  it("marks a task system_blocked on context_length_exceeded provider errors", async () => {
+    srv.manager.dispatcher.stop();
+    const session = srv.manager.sessionStore.create("worker");
+    const sessionId = session.id;
+    const task = await srv.manager.taskStore.create({
+      title: "Overflowing autonomous work",
+      assignee: "worker",
+      created_by: "user",
+      session_id: sessionId,
+      status: "in_progress",
+    });
+    const sse = await openSSE(`${srv.baseUrl}/api/sessions/${sessionId}/stream`);
+    const providerError = {
+      type: "error",
+      sequence_number: 2,
+      error: {
+        type: "invalid_request_error",
+        code: "context_length_exceeded",
+        message:
+          "Your input exceeds the context window of this model. Please adjust your input and try again.",
+        param: "input",
+      },
+    };
+    const messageId = randomUUID();
+    srv.manager.inboxStore.deliver({
+      agentId: "worker",
+      kind: "user_message",
+      source: "user",
+      sourceId: messageId,
+      relatedSession: sessionId,
+      payload: {
+        id: messageId,
+        role: "user",
+        parts: [
+          {
+            type: "text",
+            text: `break with context overflow [[mock:error-anywhere:${JSON.stringify(providerError)}]]`,
+          },
+        ],
+      },
+    });
+    await srv.manager.dispatcher.start();
+    srv.manager.dispatcher.kick("e2e_context_overflow");
+
+    try {
+      await sse.waitFor(isState("running"), 8_000);
+      await sse.waitFor(isState("idle"), 12_000);
+      await waitUntil(
+        async () =>
+          (await c.json(`/api/tasks/${task.id}`)).task.status ===
+          "system_blocked",
+        { timeoutMs: 8_000 }
+      );
+
+      const blocked = (await c.json(`/api/tasks/${task.id}`)).task;
+      expect(blocked.status).toBe("system_blocked");
+      expect(blocked.start_at).toBeNull();
+      const { comments } = await c.json(`/api/tasks/${task.id}/comments`);
+      expect(comments.at(-1)?.body).toContain("context_length_exceeded");
+      expect(comments.at(-1)?.body).toContain("Your input exceeds the context window");
+    } finally {
+      sse.close();
+    }
+  });
 });

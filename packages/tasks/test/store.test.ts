@@ -446,6 +446,21 @@ describe("TaskStore session queue", () => {
     expect(store.nextEligibleFor("s1")?.id).toBeUndefined();
   });
 
+  it("does not include system_blocked tasks in the session queue", async () => {
+    const sessionId = "sess-system-blocked";
+    const task = await store.create({
+      title: "too much context",
+      assignee: "agent",
+      created_by: "user",
+      session_id: sessionId,
+      status: "system_blocked",
+    });
+
+    expect(store.get(task.id)?.status).toBe("system_blocked");
+    expect(store.queueFor(sessionId)).toEqual([]);
+    expect(store.nextEligibleFor(sessionId)).toBeNull();
+  });
+
   it("reassignment clears session_id automatically", async () => {
     const t = await store.create({
       title: "x",
@@ -793,6 +808,21 @@ describe("TaskStore recurrence", () => {
     const r = await store.update(t.id, { status: "blocked" });
     expect(r.status).toBe("blocked");
     expect(r.runs).toBe(0);
+  });
+
+  it("system_blocked never self-resets for recurring tasks", async () => {
+    const t = await store.create({
+      title: "recurring provider overflow",
+      assignee: "a",
+      created_by: "u",
+      recurrence: { kind: "interval", every_ms: 60_000, session: "reuse" },
+    });
+
+    const r = await store.update(t.id, { status: "system_blocked" });
+
+    expect(r.status).toBe("system_blocked");
+    expect(r.closed_at).toBeNull();
+    expect(r.start_at).toBeNull();
   });
 
   it("recurrence: null on update strips recurrence; subsequent done sticks", async () => {

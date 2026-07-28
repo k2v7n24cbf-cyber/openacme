@@ -1976,6 +1976,10 @@ function buildCompressionFailureError(args: {
   );
 }
 
+function isBlockingCompressionFailureReason(reason: string): boolean {
+  return reason === "proactive_summarizer_failed";
+}
+
 function persistChatTurnError(args: {
   manager: AgentManager;
   agentId: string;
@@ -2104,7 +2108,8 @@ async function runChatTurn(args: {
     if (
       prepared.compressionRequired &&
       !prepared.compressed &&
-      prepared.compressionFailureReason
+      prepared.compressionFailureReason &&
+      isBlockingCompressionFailureReason(prepared.compressionFailureReason)
     ) {
       const error = buildCompressionFailureError({
         failureReason: prepared.compressionFailureReason,

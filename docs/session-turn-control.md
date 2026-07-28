@@ -65,6 +65,12 @@ Compression failure before provider send is also a hard stop:
 - Mark the attached task `system_blocked` when present.
 - Set `turns_blocked_reason = "compression_failed"` on the session.
 
+Benign compression no-ops are not hard stops. If the request crosses the
+proactive threshold only because the base prompt/tool/context overhead is large
+and there is no older history to compact, compression is skipped and the turn
+continues. In particular, `too_short` must not set
+`turns_blocked_reason`.
+
 ## Milestones
 
 ### Milestone 1 - Architecture And Contract
@@ -202,9 +208,20 @@ Completed on 2026-07-28:
 - `pnpm exec vitest run --config vitest.e2e.config.ts test/e2e/tasks.e2e.ts`
   passed outside the sandbox.
 - `pnpm --filter @openacme/server build` passed.
+- `pnpm --filter @openacme/agent-core test -- agent-preflight.test.ts` passed
+  after adding the `too_short` regression.
+- `pnpm --filter @openacme/agent-core build` passed.
+- `pnpm exec vitest run --config vitest.e2e.config.ts test/e2e/chat.e2e.ts`
+  passed with the `too_short` regression.
 
 Live `~/.openacme-test` evidence:
 
+- False-positive `too_short` block repair:
+  - session `aa6bf7dc-6303-4e7d-bf1a-9ac212284dd6`
+  - false `turnsBlockedReason = "compression_failed"` cleared
+  - retry message returned `200`
+  - assistant response had no `data-upstream-error`
+  - session remained `turnsBlockedReason = null`
 - Taskless chat overflow:
   - session `live-session-only-1785261180100-198448ba-d5da-4736-9188-0acefabf4ff1`
   - `kind = "chat"`

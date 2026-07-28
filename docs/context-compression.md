@@ -24,11 +24,16 @@ replace canonical chat messages.
 When no compression is needed, `runStream()` receives the canonical history and
 no snapshot is written.
 
-If compression is required but the summarizer fails or returns no usable
-compacted model context, OpenAcme must not fall back to sending raw canonical
-history. The turn is aborted with a provider-error style assistant message,
-the session gets `turns_blocked_reason = "compression_failed"`, and any
-attached in-progress task becomes `system_blocked`.
+Compression is attempted only when the request is over the proactive threshold
+and the conversation has compressible older history. A large base request
+(system prompt, tool schemas, memory/context, and the latest user message) must
+not trigger compaction by itself when there are no older turns to summarize.
+
+If compression is genuinely required but the summarizer fails or returns no
+usable compacted model context, OpenAcme must not fall back to sending raw
+canonical history. The turn is aborted with a provider-error style assistant
+message, the session gets `turns_blocked_reason = "compression_failed"`, and
+any attached in-progress task becomes `system_blocked`.
 
 ## Debugging
 
@@ -76,3 +81,7 @@ Expected evidence:
 The session turn-control live verification separately covers compression
 failure: when compaction is required but fails, retrying the same session returns
 `409 session_system_blocked`.
+
+The `too_short` compression no-op is not a failure. It means the request crossed
+the proactive threshold, but there is not enough older conversation history to
+compact, so the turn should continue normally.

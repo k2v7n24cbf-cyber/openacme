@@ -1061,6 +1061,22 @@ function noOpResult(
   };
 }
 
+export function canCompressHistory(
+  parentMessages: UIMessage[],
+  config: CompressionConfig,
+): boolean {
+  const parentSteps = flattenUIMessages(parentMessages);
+  const minForCompress = config.protectFirstN + 3 + 1;
+  if (parentSteps.length <= minForCompress) return false;
+
+  const rawHeadEnd = alignBoundaryForward(parentSteps, config.protectFirstN);
+  const rawCut = findTailCutByTokens(parentSteps, {
+    headEnd: rawHeadEnd,
+    tailTokenBudget: config.tailTokenBudget,
+  });
+  return rawHeadEnd < rawCut;
+}
+
 export interface CompressOpts {
   /** The session whose history we're summarizing. */
   parentSessionId: string;

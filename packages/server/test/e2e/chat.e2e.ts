@@ -212,4 +212,76 @@ describe("chat turn (e2e)", () => {
 
     sse.close();
   });
+
+  it("does not block a fresh chat when proactive compression no-ops as too_short", async () => {
+    const lowThreshold = await startE2EServer({
+      behavior: {
+        compressionThresholdTokens: 1,
+        compressionThresholdPercent: null,
+        compressionProtectFirstN: 1,
+        compressionTailTokenBudget: 200,
+      },
+    });
+    const authHeaders = {
+      authorization: `Bearer ${lowThreshold.authToken}`,
+      host: "127.0.0.1",
+    };
+    try {
+      const create = await fetch(`${lowThreshold.baseUrl}/api/agents`, {
+        method: "POST",
+        headers: { ...authHeaders, "content-type": "application/json" },
+        body: JSON.stringify({ id: "helper", name: "Helper" }),
+      });
+      expect(create.status).toBe(201);
+
+      const sessionId = randomUUID();
+      const sse = await openSSE(
+        `${lowThreshold.baseUrl}/api/sessions/${sessionId}/stream`,
+      );
+      const chat = await fetch(`${lowThreshold.baseUrl}/api/chat`, {
+        method: "POST",
+        headers: { ...authHeaders, "content-type": "application/json" },
+        body: JSON.stringify({
+          agentId: "helper",
+          sessionId,
+          messages: [
+            {
+              id: randomUUID(),
+              role: "user",
+              parts: [{ type: "text", text: "hi" }],
+            },
+          ],
+        }),
+      });
+      expect(chat.status).toBe(200);
+      await sse.waitFor(isState("idle"), 15_000);
+
+      const messagesRes = await fetch(
+        `${lowThreshold.baseUrl}/api/sessions/${sessionId}/messages`,
+        { headers: authHeaders },
+      );
+      expect(messagesRes.status).toBe(200);
+      const messages = (await messagesRes.json()) as Array<{
+        role: string;
+        parts: any[];
+      }>;
+      const assistant = messages.find(
+        (message) => message.role === "assistant",
+      );
+      expect(assistantText(assistant?.parts ?? [])).toContain(
+        "Mock reply. You said: hi",
+      );
+
+      const sessionRes = await fetch(
+        `${lowThreshold.baseUrl}/api/sessions/${sessionId}`,
+        { headers: authHeaders },
+      );
+      expect(sessionRes.status).toBe(200);
+      const session = await sessionRes.json();
+      expect(session.turnsBlockedReason).toBeNull();
+      sse.close();
+    } finally {
+      await lowThreshold.close();
+    }
+  });
 });

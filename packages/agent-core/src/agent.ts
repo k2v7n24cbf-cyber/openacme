@@ -50,7 +50,11 @@ import type {
   ContextSnapshotReason,
 } from "@openacme/db";
 import { buildSystemPrompt } from "./prompt.js";
-import { Compressor, resolveThreshold } from "./compression.js";
+import {
+  Compressor,
+  canCompressHistory,
+  resolveThreshold,
+} from "./compression.js";
 import { findRelevantMemories, type RelevantMemory } from "./selector.js";
 import { collectSurfacedMemories } from "./surfaced.js";
 import { runExtractor } from "./extractor.js";
@@ -1445,9 +1449,7 @@ export class Agent {
     }
 
     let currentHistory = history;
-    let lastResult:
-      | Awaited<ReturnType<Compressor["compress"]>>
-      | null = null;
+    let lastResult: Awaited<ReturnType<Compressor["compress"]>> | null = null;
     let compressionRequired = false;
     let lastEstimatedTokens: number | undefined;
     let compressionFailureReason: string | undefined;
@@ -1456,6 +1458,9 @@ export class Agent {
       const tokens = this.estimateRequestTokens(sessionId, currentHistory);
       lastEstimatedTokens = tokens;
       if (!this.compressor.shouldCompress(sessionId, tokens, threshold)) {
+        break;
+      }
+      if (!canCompressHistory(currentHistory, this.config.compression)) {
         break;
       }
       compressionRequired = true;
@@ -1615,9 +1620,7 @@ export class Agent {
       canonicalMessageCount: history.length,
       sourceLastMessageId,
       summaryText: lastResult.summary,
-      summarySha256: lastResult.summary
-        ? sha256Text(lastResult.summary)
-        : null,
+      summarySha256: lastResult.summary ? sha256Text(lastResult.summary) : null,
     });
 
     return {

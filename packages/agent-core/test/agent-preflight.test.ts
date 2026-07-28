@@ -17,15 +17,19 @@ import type { UIMessage } from "ai";
 import { Agent } from "../src/agent.js";
 import type { AgentConfig } from "../src/types.js";
 
-const { streamTextMock, generateTextMock, getModelMock, getEffectiveContextWindowMock } =
-  vi.hoisted(() => ({
-    streamTextMock: vi.fn(),
-    generateTextMock: vi.fn(),
-    getModelMock: vi.fn(() => ({})),
-    getEffectiveContextWindowMock: vi.fn<(config: unknown) => number | null>(
-      () => null
-    ),
-  }));
+const {
+  streamTextMock,
+  generateTextMock,
+  getModelMock,
+  getEffectiveContextWindowMock,
+} = vi.hoisted(() => ({
+  streamTextMock: vi.fn(),
+  generateTextMock: vi.fn(),
+  getModelMock: vi.fn(() => ({})),
+  getEffectiveContextWindowMock: vi.fn<(config: unknown) => number | null>(
+    () => null,
+  ),
+}));
 
 vi.mock("ai", async () => {
   const actual = await vi.importActual<typeof import("ai")>("ai");
@@ -46,7 +50,7 @@ vi.mock("@openacme/llm-provider", () => ({
   getProviderRequestCountForRun: () => 1,
   buildEvidenceEventSelector: (
     eventType: string,
-    fields: Record<string, string | number | undefined | null> = {}
+    fields: Record<string, string | number | undefined | null> = {},
   ) =>
     [
       `type=${eventType}`,
@@ -63,8 +67,11 @@ vi.mock("@openacme/llm-provider", () => ({
     recordEvent: vi.fn(),
     writeRawFile: vi.fn(),
   }),
-  withOpenAcmeSpan: (_name: string, _attrs: unknown, fn: (span: unknown) => unknown) =>
-    fn({ traceId: "trace-helper", spanId: "span-helper" }),
+  withOpenAcmeSpan: (
+    _name: string,
+    _attrs: unknown,
+    fn: (span: unknown) => unknown,
+  ) => fn({ traceId: "trace-helper", spanId: "span-helper" }),
   startOpenAcmeSpan: () => ({
     setAttributes: vi.fn(),
     addEvent: vi.fn(),
@@ -124,7 +131,9 @@ function makeAgent(opts: {
       summarizerInputCharBudget: 80_000,
     },
   };
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agent-preflight-test-"));
+  const tmpRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "agent-preflight-test-"),
+  );
   return new Agent(config, {
     sessionStore,
     messageStore,
@@ -207,7 +216,7 @@ describe("Agent.preflightCompress", () => {
         id: m.id,
         role: m.role as "user" | "assistant",
         parts: m.parts,
-      }))
+      })),
     );
 
     const agent = makeAgent({
@@ -241,7 +250,7 @@ describe("Agent.preflightCompress", () => {
         id: m.id,
         role: m.role as "user" | "assistant",
         parts: m.parts,
-      }))
+      })),
     );
 
     const agent = makeAgent({
@@ -250,7 +259,11 @@ describe("Agent.preflightCompress", () => {
       protectFirstN: 1,
       tailTokenBudget: 200,
     });
-    const prepared = await agent.prepareModelHistory(parent.id, seed, "proactive");
+    const prepared = await agent.prepareModelHistory(
+      parent.id,
+      seed,
+      "proactive",
+    );
     expect(prepared.compressed).toBe(true);
     expect(prepared.snapshotId).toBeTruthy();
     expect(prepared.modelHistory.length).toBeLessThan(seed.length);
@@ -264,7 +277,10 @@ describe("Agent.preflightCompress", () => {
     const hasSummary = prepared.modelHistory.some((m) => {
       if (m.role !== "user") return false;
       const first = m.parts[0] as { type?: string; text?: string };
-      return first.type === "text" && (first.text ?? "").includes("[CONTEXT COMPACTION");
+      return (
+        first.type === "text" &&
+        (first.text ?? "").includes("[CONTEXT COMPACTION")
+      );
     });
     expect(hasSummary).toBe(true);
 
@@ -291,7 +307,7 @@ describe("Agent.preflightCompress", () => {
         id: m.id,
         role: m.role as "user" | "assistant",
         parts: m.parts,
-      }))
+      })),
     );
     generateTextMock
       .mockResolvedValueOnce({ text: "## Active Task\nNone." })
@@ -306,19 +322,50 @@ describe("Agent.preflightCompress", () => {
     const prepared = await agent.prepareModelHistory(
       parent.id,
       seed,
-      "proactive"
+      "proactive",
     );
 
     expect(prepared.compressionRequired).toBe(true);
     expect(prepared.compressed).toBe(false);
     expect(prepared.compressionFailureReason).toBe(
-      "proactive_summarizer_failed"
+      "proactive_summarizer_failed",
     );
     expect(prepared.modelHistory).toBe(seed);
     expect(sessions.get(parent.id)?.parentSessionId).toBeNull();
     expect(messages.getHistory(parent.id).map((m) => m.id)).toEqual(
-      seed.map((m) => m.id)
+      seed.map((m) => m.id),
     );
+  });
+
+  it("does not require compression when only the base request crosses threshold", async () => {
+    const db = freshDb();
+    const sessions = createSessionStore(db);
+    const parent = sessions.create("a1", { id: "preflight-too-short" });
+    const seed: UIMessage[] = [
+      {
+        id: "u1",
+        role: "user",
+        parts: [{ type: "text", text: "hi" }],
+      },
+    ];
+
+    const agent = makeAgent({
+      db,
+      thresholdTokens: 1,
+      protectFirstN: 1,
+      tailTokenBudget: 200,
+    });
+    const prepared = await agent.prepareModelHistory(
+      parent.id,
+      seed,
+      "proactive",
+    );
+
+    expect(prepared.compressionRequired).toBe(false);
+    expect(prepared.compressed).toBe(false);
+    expect(prepared.compressionFailureReason).toBeUndefined();
+    expect(prepared.modelHistory).toBe(seed);
+    expect(generateTextMock).not.toHaveBeenCalled();
   });
 
   it("uses the effective context window override when the 1M-latch is on", async () => {
@@ -341,7 +388,7 @@ describe("Agent.preflightCompress", () => {
         id: m.id,
         role: m.role as "user" | "assistant",
         parts: m.parts,
-      }))
+      })),
     );
 
     // Latch ON: getEffectiveContextWindow returns 200K. Threshold becomes
@@ -357,7 +404,11 @@ describe("Agent.preflightCompress", () => {
       tailTokenBudget: 1_000,
     });
 
-    const prepared = await agent.prepareModelHistory(parent.id, seed, "proactive");
+    const prepared = await agent.prepareModelHistory(
+      parent.id,
+      seed,
+      "proactive",
+    );
     expect(prepared.compressed).toBe(true);
     expect(prepared.modelHistory.length).toBeLessThan(seed.length);
     expect(sessions.get(parent.id)?.parentSessionId).toBeNull();
@@ -382,7 +433,7 @@ describe("Agent.preflightCompress", () => {
         id: m.id,
         role: m.role as "user" | "assistant",
         parts: m.parts,
-      }))
+      })),
     );
 
     // Latch OFF: full 1M window in play. Threshold = 500K. 130K is well under.

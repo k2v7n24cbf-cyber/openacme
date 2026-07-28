@@ -24,6 +24,12 @@ replace canonical chat messages.
 When no compression is needed, `runStream()` receives the canonical history and
 no snapshot is written.
 
+If compression is required but the summarizer fails or returns no usable
+compacted model context, OpenAcme must not fall back to sending raw canonical
+history. The turn is aborted with a provider-error style assistant message,
+the session gets `turns_blocked_reason = "compression_failed"`, and any
+attached in-progress task becomes `system_blocked`.
+
 ## Debugging
 
 Assistant messages produced from a compacted context include:
@@ -66,3 +72,7 @@ Expected evidence:
   context count.
 - The assistant message has `metadata.contextSnapshotId`.
 - The snapshot model context contains `[CONTEXT COMPACTION]`.
+
+The session turn-control live verification separately covers compression
+failure: when compaction is required but fails, retrying the same session returns
+`409 session_system_blocked`.

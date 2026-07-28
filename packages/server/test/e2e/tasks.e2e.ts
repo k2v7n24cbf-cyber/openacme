@@ -14,13 +14,15 @@ describe("task tools (e2e)", () => {
 
   async function chatAndWait(
     agentId: string,
-    text: string
+    text: string,
   ): Promise<{ sessionId: string; userMessageId: string }> {
     const result = await c.chat(agentId, text);
     await waitUntil(
       async () =>
-        (await c.messages(result.sessionId)).some((m) => m.role === "assistant"),
-      { timeoutMs: 15_000 }
+        (await c.messages(result.sessionId)).some(
+          (m) => m.role === "assistant",
+        ),
+      { timeoutMs: 15_000 },
     );
     return result;
   }
@@ -38,7 +40,7 @@ describe("task tools (e2e)", () => {
   it("an agent creates a task assigned to a coworker", async () => {
     await chatAndWait(
       "helper",
-      '[[mock:tool:task_create:{"title":"Ship the docs","assignee":"worker"}]]'
+      '[[mock:tool:task_create:{"title":"Ship the docs","assignee":"worker"}]]',
     );
 
     await waitUntil(async () => {
@@ -55,23 +57,28 @@ describe("task tools (e2e)", () => {
   it("an agent advances and resolves a task through its lifecycle", async () => {
     await chatAndWait(
       "helper",
-      '[[mock:tool:task_create:{"title":"Fix the bug","assignee":"helper"}]]'
+      '[[mock:tool:task_create:{"title":"Fix the bug","assignee":"helper"}]]',
     );
     await waitUntil(async () => {
       const { tasks } = await c.json("/api/tasks");
       return tasks.some((t: any) => t.title === "Fix the bug");
     });
-    const task = (await c.json("/api/tasks")).tasks.find((t: any) => t.title === "Fix the bug");
-
-    await chatAndWait(
-      "helper",
-      `[[mock:tool:task_update:${JSON.stringify({ id: task.id, status: "in_progress" })}]]`
+    const task = (await c.json("/api/tasks")).tasks.find(
+      (t: any) => t.title === "Fix the bug",
     );
-    await waitUntil(async () => (await c.json(`/api/tasks/${task.id}`)).task.status === "in_progress");
 
     await chatAndWait(
       "helper",
-      `[[mock:tool:task_comment:${JSON.stringify({ id: task.id, body: "shipped it", mode: "result" })}]]`
+      `[[mock:tool:task_update:${JSON.stringify({ id: task.id, status: "in_progress" })}]]`,
+    );
+    await waitUntil(
+      async () =>
+        (await c.json(`/api/tasks/${task.id}`)).task.status === "in_progress",
+    );
+
+    await chatAndWait(
+      "helper",
+      `[[mock:tool:task_comment:${JSON.stringify({ id: task.id, body: "shipped it", mode: "result" })}]]`,
     );
     await waitUntil(async () => {
       const { comments } = await c.json(`/api/tasks/${task.id}/comments`);
@@ -83,13 +90,20 @@ describe("task tools (e2e)", () => {
   });
 
   it("an agent can look up its coworkers", async () => {
-    const { sessionId } = await c.chat("helper", "who's around? [[mock:tool:agent_list:{}]]");
+    const { sessionId } = await c.chat(
+      "helper",
+      "who's around? [[mock:tool:agent_list:{}]]",
+    );
     await waitUntil(async () => {
       const msgs = await c.messages(sessionId);
       const a = msgs.find((m) => m.role === "assistant");
-      return !!a?.parts.some((p) => p?.type === "tool-agent_list" && p.state === "output-available");
+      return !!a?.parts.some(
+        (p) => p?.type === "tool-agent_list" && p.state === "output-available",
+      );
     });
-    const a = (await c.messages(sessionId)).find((m) => m.role === "assistant")!;
+    const a = (await c.messages(sessionId)).find(
+      (m) => m.role === "assistant",
+    )!;
     const toolPart = a.parts.find((p) => p?.type === "tool-agent_list");
     expect(JSON.stringify(toolPart)).toContain("worker");
   });
@@ -114,7 +128,9 @@ describe("autonomous dispatch (e2e)", () => {
     // session to exist), then open SSE before seeding the task.
     const session = srv.manager.sessionStore.create("worker");
     const sessionId = session.id;
-    const sse = await openSSE(`${srv.baseUrl}/api/sessions/${sessionId}/stream`);
+    const sse = await openSSE(
+      `${srv.baseUrl}/api/sessions/${sessionId}/stream`,
+    );
 
     // Seed a ready, assigned task bound to that session. The dispatcher's next
     // tick should spawn an autonomous turn into it.
@@ -135,7 +151,9 @@ describe("autonomous dispatch (e2e)", () => {
   it("surfaces autonomous model errors into the session", async () => {
     const session = srv.manager.sessionStore.create("worker");
     const sessionId = session.id;
-    const sse = await openSSE(`${srv.baseUrl}/api/sessions/${sessionId}/stream`);
+    const sse = await openSSE(
+      `${srv.baseUrl}/api/sessions/${sessionId}/stream`,
+    );
 
     const messageId = randomUUID();
     srv.manager.inboxStore.deliver({
@@ -162,17 +180,19 @@ describe("autonomous dispatch (e2e)", () => {
 
       await waitUntil(async () => {
         const messages = await c.messages(sessionId);
-        return messages.some((m) =>
-          m.role === "assistant" &&
-          m.parts.some((p) => p?.type === "data-upstream-error")
+        return messages.some(
+          (m) =>
+            m.role === "assistant" &&
+            m.parts.some((p) => p?.type === "data-upstream-error"),
         );
       });
-      const assistant = (await c.messages(sessionId)).find((m) =>
-        m.role === "assistant" &&
-        m.parts.some((p) => p?.type === "data-upstream-error")
+      const assistant = (await c.messages(sessionId)).find(
+        (m) =>
+          m.role === "assistant" &&
+          m.parts.some((p) => p?.type === "data-upstream-error"),
       );
       const errorPart = assistant!.parts.find(
-        (p) => p?.type === "data-upstream-error"
+        (p) => p?.type === "data-upstream-error",
       );
       expect(errorPart.data.message).toContain("autonomous failure");
     } finally {
@@ -191,7 +211,9 @@ describe("autonomous dispatch (e2e)", () => {
       session_id: sessionId,
       status: "in_progress",
     });
-    const sse = await openSSE(`${srv.baseUrl}/api/sessions/${sessionId}/stream`);
+    const sse = await openSSE(
+      `${srv.baseUrl}/api/sessions/${sessionId}/stream`,
+    );
     const providerError = {
       type: "error",
       sequence_number: 2,
@@ -231,15 +253,36 @@ describe("autonomous dispatch (e2e)", () => {
         async () =>
           (await c.json(`/api/tasks/${task.id}`)).task.status ===
           "system_blocked",
-        { timeoutMs: 8_000 }
+        { timeoutMs: 8_000 },
       );
 
       const blocked = (await c.json(`/api/tasks/${task.id}`)).task;
       expect(blocked.status).toBe("system_blocked");
       expect(blocked.start_at).toBeNull();
+      const sessionAfter = await c.json(`/api/sessions/${sessionId}`);
+      expect(sessionAfter.turnsBlockedReason).toBe("context_length_exceeded");
       const { comments } = await c.json(`/api/tasks/${task.id}/comments`);
       expect(comments.at(-1)?.body).toContain("context_length_exceeded");
-      expect(comments.at(-1)?.body).toContain("Your input exceeds the context window");
+      expect(comments.at(-1)?.body).toContain(
+        "Your input exceeds the context window",
+      );
+      const retry = await c.post("/api/chat", {
+        agentId: "worker",
+        sessionId,
+        messages: [
+          {
+            id: randomUUID(),
+            role: "user",
+            parts: [{ type: "text", text: "should be rejected" }],
+          },
+        ],
+      });
+      expect(retry.status).toBe(409);
+      expect(await retry.json()).toMatchObject({
+        error: "session_system_blocked",
+        sessionId,
+        reason: "context_length_exceeded",
+      });
     } finally {
       sse.close();
     }
@@ -266,12 +309,14 @@ describe("autonomous dispatch (e2e)", () => {
         param: "input",
       },
     };
-    const sse = await openSSE(`${srv.baseUrl}/api/sessions/${sessionId}/stream`);
+    const sse = await openSSE(
+      `${srv.baseUrl}/api/sessions/${sessionId}/stream`,
+    );
     try {
       const res = await c.chat(
         "worker",
         `interactive overflow [[mock:error-anywhere:${JSON.stringify(providerError)}]]`,
-        sessionId
+        sessionId,
       );
       expect(res.sessionId).toBe(sessionId);
       await sse.waitFor(isState("idle"), 12_000);
@@ -279,16 +324,35 @@ describe("autonomous dispatch (e2e)", () => {
         async () =>
           (await c.json(`/api/tasks/${task.id}`)).task.status ===
           "system_blocked",
-        { timeoutMs: 8_000 }
+        { timeoutMs: 8_000 },
       );
 
       const blocked = (await c.json(`/api/tasks/${task.id}`)).task;
       expect(blocked.status).toBe("system_blocked");
+      const sessionAfter = await c.json(`/api/sessions/${sessionId}`);
+      expect(sessionAfter.turnsBlockedReason).toBe("context_length_exceeded");
       const { comments } = await c.json(`/api/tasks/${task.id}/comments`);
       expect(comments.at(-1)?.body).toContain("context_length_exceeded");
       expect(comments.at(-1)?.body).toContain(
-        "Your input exceeds the context window"
+        "Your input exceeds the context window",
       );
+      const retry = await c.post("/api/chat", {
+        agentId: "worker",
+        sessionId,
+        messages: [
+          {
+            id: randomUUID(),
+            role: "user",
+            parts: [{ type: "text", text: "should be rejected" }],
+          },
+        ],
+      });
+      expect(retry.status).toBe(409);
+      expect(await retry.json()).toMatchObject({
+        error: "session_system_blocked",
+        sessionId,
+        reason: "context_length_exceeded",
+      });
     } finally {
       sse.close();
     }

@@ -27,15 +27,43 @@ describe("SessionStore — fork chain", () => {
   it("create roundtrips parent_session_id", () => {
     const parent = sessions.create("a1", { id: "s-parent" });
     expect(parent.parentSessionId).toBeNull();
+    expect(parent.kind).toBe("chat");
+    expect(parent.turnsBlockedReason).toBeNull();
+    expect(parent.turnsBlockedAt).toBeNull();
 
     const child = sessions.create("a1", {
       id: "s-child",
       parentSessionId: parent.id,
+      kind: "task",
     });
     expect(child.parentSessionId).toBe(parent.id);
+    expect(child.kind).toBe("task");
 
     const refetched = sessions.get(child.id);
     expect(refetched?.parentSessionId).toBe(parent.id);
+    expect(refetched?.kind).toBe("task");
+  });
+
+  it("sets and clears session turn blocks", () => {
+    const session = sessions.create("a1", { id: "blocked-session" });
+
+    sessions.blockTurns(session.id, "context_length_exceeded");
+    const blocked = sessions.get(session.id);
+    expect(blocked?.turnsBlockedReason).toBe("context_length_exceeded");
+    expect(blocked?.turnsBlockedAt).toEqual(expect.any(Number));
+
+    sessions.clearTurnBlock(session.id);
+    const cleared = sessions.get(session.id);
+    expect(cleared?.turnsBlockedReason).toBeNull();
+    expect(cleared?.turnsBlockedAt).toBeNull();
+  });
+
+  it("updates session kind", () => {
+    const session = sessions.create("a1", { id: "kind-session" });
+    expect(session.kind).toBe("chat");
+
+    sessions.setKind(session.id, "task");
+    expect(sessions.get(session.id)?.kind).toBe("task");
   });
 
   it("findChildOf returns null with no child, then the child once created", () => {
@@ -72,6 +100,24 @@ describe("SessionStore — fork chain", () => {
     // in the sidebar, otherwise the user loses access to their chat after
     // compression triggers.
     expect(active).toContain(child!.id);
+  });
+
+  it("preserves active session kind and turn block across rename-fork compaction", () => {
+    sessions.create("a1", { id: "compress-me", kind: "task" });
+    sessions.blockTurns("compress-me", "context_length_exceeded");
+
+    const fork = sessions.renameAndForkInTransaction("compress-me", {
+      title: "compressed",
+    });
+
+    const active = sessions.get(fork.originalId);
+    const archived = sessions.get(fork.archivedId);
+    expect(active?.kind).toBe("task");
+    expect(active?.turnsBlockedReason).toBe("context_length_exceeded");
+    expect(active?.turnsBlockedAt).toEqual(expect.any(Number));
+    expect(archived?.kind).toBe("task");
+    expect(archived?.turnsBlockedReason).toBeNull();
+    expect(archived?.turnsBlockedAt).toBeNull();
   });
 
   it("inherits title via opts when forking from a titled parent", () => {
@@ -113,7 +159,7 @@ describe("SessionStore — fork chain", () => {
       sessions.create("a1", { id: "y", parentSessionId: "x" });
       db.prepare("UPDATE sessions SET parent_session_id = ? WHERE id = ?").run(
         "y",
-        "x"
+        "x",
       );
       const root = sessions.getRoot("x");
       // Either node is acceptable; what matters is it returns rather than
@@ -139,7 +185,9 @@ describe("MessageStore — appendMany and ordering", () => {
   function getText(m: { parts: unknown[] }): string {
     const p = m.parts.find(
       (x): x is { type: "text"; text: string } =>
-        !!x && typeof x === "object" && (x as { type?: unknown }).type === "text"
+        !!x &&
+        typeof x === "object" &&
+        (x as { type?: unknown }).type === "text",
     );
     return p?.text ?? "";
   }
@@ -175,7 +223,7 @@ describe("MessageStore — appendMany and ordering", () => {
         id: `m-${i}`,
         role: m.role,
         parts: [{ type: "text", text: m.text }],
-      }))
+      })),
     );
 
     const loaded = messages.getHistory("s1");
@@ -195,7 +243,7 @@ describe("MessageStore — appendMany and ordering", () => {
           role: null as unknown as "user",
           parts: [{ type: "text", text: "bad" }],
         },
-      ])
+      ]),
     ).toThrow();
 
     // Neither row should have been persisted.
@@ -483,9 +531,7 @@ describe("InboxStore — session-aware claim", () => {
     });
 
     const summary = inbox.pendingSummaryFor("agent-a");
-    expect([...summary.userTaskCommentSessionIds]).toEqual([
-      "human-comment",
-    ]);
+    expect([...summary.userTaskCommentSessionIds]).toEqual(["human-comment"]);
   });
 
   it("cancels a queued user message only for the matching session", () => {
@@ -521,9 +567,7 @@ describe("InboxStore — session-aware claim", () => {
     });
 
     expect(cancelled).toBe(1);
-    expect(inbox.pendingFor("agent-a").map((row) => row.id)).toEqual([
-      second,
-    ]);
+    expect(inbox.pendingFor("agent-a").map((row) => row.id)).toEqual([second]);
     expect(inbox.pendingFor("agent-b").map((row) => row.id)).toEqual([
       otherAgent,
     ]);

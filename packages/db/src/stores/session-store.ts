@@ -11,6 +11,7 @@ import { messages, sessions, type Session } from "../schema.js";
 const log = createLogger("db.session-store");
 
 export type { Session } from "../schema.js";
+export type SessionKind = "chat" | "task";
 
 export interface SessionStoreOptions {
   /** Absolute path to <dataDir>/attachments. Used by `delete` to fan out
@@ -35,7 +36,7 @@ export interface SessionStoreOptions {
  */
 export function createSessionStore(
   db: WasmDatabase,
-  options: SessionStoreOptions = {}
+  options: SessionStoreOptions = {},
 ) {
   const orm = drizzle(db);
   const attachmentsRoot = options.attachmentsRoot;
@@ -44,7 +45,12 @@ export function createSessionStore(
   return {
     create(
       agentId: string,
-      opts: { id?: string; title?: string; parentSessionId?: string } = {}
+      opts: {
+        id?: string;
+        title?: string;
+        parentSessionId?: string;
+        kind?: SessionKind;
+      } = {},
     ): Session {
       const id = opts.id ?? randomUUID();
       return orm
@@ -55,6 +61,7 @@ export function createSessionStore(
           title: opts.title ?? null,
           systemPrompt: null,
           parentSessionId: opts.parentSessionId ?? null,
+          kind: opts.kind ?? "chat",
         })
         .returning()
         .get();
@@ -74,12 +81,12 @@ export function createSessionStore(
     createChildIfNoSibling(
       agentId: string,
       parentSessionId: string,
-      opts: { id?: string; title?: string } = {}
+      opts: { id?: string; title?: string; kind?: SessionKind } = {},
     ): Session | null {
       const id = opts.id ?? randomUUID();
       const result = orm.run(sql`
-        INSERT INTO ${sessions} (id, agent_id, title, system_prompt, parent_session_id, created_at, updated_at)
-        SELECT ${id}, ${agentId}, ${opts.title ?? null}, NULL, ${parentSessionId}, unixepoch(), unixepoch()
+        INSERT INTO ${sessions} (id, agent_id, title, system_prompt, parent_session_id, kind, turns_blocked_reason, turns_blocked_at, created_at, updated_at)
+        SELECT ${id}, ${agentId}, ${opts.title ?? null}, NULL, ${parentSessionId}, ${opts.kind ?? "chat"}, NULL, NULL, unixepoch(), unixepoch()
         WHERE NOT EXISTS (SELECT 1 FROM ${sessions} WHERE parent_session_id = ${parentSessionId})
       `);
       if (result.changes === 0) return null;
@@ -89,7 +96,9 @@ export function createSessionStore(
     },
 
     get(id: string): Session | null {
-      return orm.select().from(sessions).where(eq(sessions.id, id)).get() ?? null;
+      return (
+        orm.select().from(sessions).where(eq(sessions.id, id)).get() ?? null
+      );
     },
 
     list(agentId: string): Session[] {
@@ -119,9 +128,9 @@ export function createSessionStore(
               orm
                 .select({ one: sql`1` })
                 .from(child)
-                .where(eq(child.parentSessionId, sessions.id))
-            )
-          )
+                .where(eq(child.parentSessionId, sessions.id)),
+            ),
+          ),
         )
         .orderBy(desc(sessions.updatedAt))
         .all();
@@ -143,8 +152,8 @@ export function createSessionStore(
             orm
               .select({ one: sql`1` })
               .from(child)
-              .where(eq(child.parentSessionId, sessions.id))
-          )
+              .where(eq(child.parentSessionId, sessions.id)),
+          ),
         )
         .orderBy(desc(sessions.updatedAt))
         .all();
@@ -179,7 +188,7 @@ export function createSessionStore(
      */
     renameAndForkInTransaction(
       parentId: string,
-      opts: { title?: string } = {}
+      opts: { title?: string } = {},
     ): { archivedId: string; originalId: string } {
       return orm.transaction((tx) => {
         const parent = tx
@@ -189,7 +198,7 @@ export function createSessionStore(
           .get();
         if (!parent) {
           throw new Error(
-            `renameAndForkInTransaction: session ${parentId} not found`
+            `renameAndForkInTransaction: session ${parentId} not found`,
           );
         }
         const archivedId = randomUUID();
@@ -197,21 +206,22 @@ export function createSessionStore(
         //    `parent_session_id` is inherited so the chain continues
         //    pointing further back (Y2 → Y → … → root) when this is
         //    a second-or-later compaction.
-        tx
-          .insert(sessions)
+        tx.insert(sessions)
           .values({
             id: archivedId,
             agentId: parent.agentId,
             title: parent.title,
             systemPrompt: parent.systemPrompt,
             parentSessionId: parent.parentSessionId,
+            kind: parent.kind,
             // defer_until stays on the active row; archive doesn't need it
+            turnsBlockedReason: null,
+            turnsBlockedAt: null,
             deferUntil: null,
           })
           .run();
         // 2. Move parent's messages to the archive.
-        tx
-          .update(messages)
+        tx.update(messages)
           .set({ sessionId: archivedId })
           .where(eq(messages.sessionId, parentId))
           .run();
@@ -220,14 +230,16 @@ export function createSessionStore(
         // 4. Re-insert at the original id, pointing at the archive.
         //    system_prompt cleared so the next turn rebuilds; defer
         //    carried over so any standing window survives compaction.
-        tx
-          .insert(sessions)
+        tx.insert(sessions)
           .values({
             id: parentId,
             agentId: parent.agentId,
             title: opts.title ?? parent.title,
             systemPrompt: null,
             parentSessionId: archivedId,
+            kind: parent.kind,
+            turnsBlockedReason: parent.turnsBlockedReason,
+            turnsBlockedAt: parent.turnsBlockedAt,
             deferUntil: parent.deferUntil,
           })
           .run();
@@ -274,11 +286,7 @@ export function createSessionStore(
     },
 
     updateTitle(id: string, title: string): void {
-      orm
-        .update(sessions)
-        .set({ title })
-        .where(eq(sessions.id, id))
-        .run();
+      orm.update(sessions).set({ title }).where(eq(sessions.id, id)).run();
     },
 
     updateSystemPrompt(id: string, systemPrompt: string): void {
@@ -295,6 +303,42 @@ export function createSessionStore(
         .set({ updatedAt: sql`(unixepoch())` })
         .where(eq(sessions.id, id))
         .run();
+    },
+
+    setKind(id: string, kind: SessionKind): void {
+      const result = orm
+        .update(sessions)
+        .set({ kind })
+        .where(eq(sessions.id, id))
+        .run();
+      if (result.changes === 0) {
+        log.warn({ sessionId: id, kind }, "setKind: session not found");
+      }
+    },
+
+    blockTurns(id: string, reason: string): void {
+      const result = orm
+        .update(sessions)
+        .set({
+          turnsBlockedReason: reason,
+          turnsBlockedAt: sql`(unixepoch())`,
+        })
+        .where(eq(sessions.id, id))
+        .run();
+      if (result.changes === 0) {
+        log.warn({ sessionId: id, reason }, "blockTurns: session not found");
+      }
+    },
+
+    clearTurnBlock(id: string): void {
+      const result = orm
+        .update(sessions)
+        .set({ turnsBlockedReason: null, turnsBlockedAt: null })
+        .where(eq(sessions.id, id))
+        .run();
+      if (result.changes === 0) {
+        log.warn({ sessionId: id }, "clearTurnBlock: session not found");
+      }
     },
 
     // `getLastSeenEventTs` / `markEventsSeen` removed. The per-
@@ -317,7 +361,7 @@ export function createSessionStore(
       if (result.changes === 0) {
         log.warn(
           { sessionId: id },
-          "setDeferUntil: session not found — value not stored"
+          "setDeferUntil: session not found — value not stored",
         );
       }
     },
@@ -344,11 +388,7 @@ export function createSessionStore(
       // attachment files don't have a trigger, so we rm them explicitly.
       // Order is "fetch row, SQL delete, FS cleanup" — the row read has
       // to happen before deletion so onAfterDelete still sees agentId etc.
-      const row = orm
-        .select()
-        .from(sessions)
-        .where(eq(sessions.id, id))
-        .get();
+      const row = orm.select().from(sessions).where(eq(sessions.id, id)).get();
       orm.delete(sessions).where(eq(sessions.id, id)).run();
       if (attachmentsRoot) {
         const dir = path.join(attachmentsRoot, id);

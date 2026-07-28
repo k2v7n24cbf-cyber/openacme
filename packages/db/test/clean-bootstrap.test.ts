@@ -25,7 +25,7 @@ describe("database clean bootstrap", () => {
           { count: number }
         >("SELECT COUNT(*) AS count FROM __drizzle_migrations")
         .get()?.count;
-      expect(migrationCount).toBeGreaterThanOrEqual(14);
+      expect(migrationCount).toBeGreaterThanOrEqual(15);
 
       const tables = new Set(
         db
@@ -53,6 +53,15 @@ describe("database clean bootstrap", () => {
           "forensic_run_id",
           "forensic_path",
           "provider_request_count",
+        ]),
+      );
+
+      const sessionColumns = tableColumns(db, "sessions");
+      expect(sessionColumns).toEqual(
+        expect.arrayContaining([
+          "kind",
+          "turns_blocked_reason",
+          "turns_blocked_at",
         ]),
       );
 

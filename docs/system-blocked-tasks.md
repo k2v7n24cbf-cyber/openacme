@@ -32,6 +32,7 @@ window message.
 
 - `system_blocked` clears `start_at`.
 - The task keeps its `session_id` for debugging.
+- The owning session gets `turns_blocked_reason = "context_length_exceeded"`.
 - The dispatcher does not wake a session that has a `system_blocked` task, even
   if inbox rows arrive.
 - `/api/chat` rejects interactive turns for that session with
@@ -50,6 +51,10 @@ pnpm --filter @openacme/server test -- dispatcher.test.ts
 cd packages/server && pnpm vitest run --config vitest.e2e.config.ts test/e2e/tasks.e2e.ts
 ```
 
-The e2e suite includes a live-style autonomous task turn that injects the exact
-`context_length_exceeded` provider response and asserts the task becomes
-`system_blocked` with a system comment containing the parsed provider message.
+The e2e suite includes live-style autonomous and interactive task turns that
+inject the exact `context_length_exceeded` provider response and assert:
+
+- the task becomes `system_blocked`;
+- the session gets `turns_blocked_reason = "context_length_exceeded"`;
+- a retry to the same session returns `409 session_system_blocked`;
+- the system comment contains the parsed provider message.

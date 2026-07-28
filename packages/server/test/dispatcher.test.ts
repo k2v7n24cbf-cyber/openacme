@@ -31,16 +31,15 @@ type FakeAgentDef = {
 
 function fakeManager(
   agentDefs: Array<string | FakeAgentDef>,
-  turn: (sessionId: string) => Promise<void> = async () => {}
+  turn: (sessionId: string) => Promise<void> = async () => {},
 ): { manager: AgentManager; calls: TurnCall[] } {
   const calls: TurnCall[] = [];
   const defs = agentDefs.map((agent) =>
-    typeof agent === "string" ? { id: agent } : agent
+    typeof agent === "string" ? { id: agent } : agent,
   );
   const manager = {
     listAgents: () => defs,
-    getAgentDef: (id: string) =>
-      defs.find((agent) => agent.id === id) ?? null,
+    getAgentDef: (id: string) => defs.find((agent) => agent.id === id) ?? null,
     getAgent: (id: string) => ({
       runAutonomous: async ({ sessionId }: { sessionId: string }) => {
         calls.push({ agentId: id, sessionId });
@@ -93,7 +92,7 @@ function makeDispatcher(
   opts: {
     now?: () => Date;
     onTimelineEvent?: (event: SessionTimelineEventInput) => void;
-  } = {}
+  } = {},
 ): Dispatcher {
   dispatcher = new Dispatcher({
     taskStore,
@@ -122,7 +121,7 @@ async function waitForIdle(d: Dispatcher, sessionId: string): Promise<void> {
 
 async function releaseTurn(
   gate: DeferredTurns,
-  sessionId: string
+  sessionId: string,
 ): Promise<void> {
   await vi.waitFor(() => expect(gate.release.has(sessionId)).toBe(true), {
     timeout: 5_000,
@@ -132,7 +131,7 @@ async function releaseTurn(
 
 async function makeBoundTask(
   agentId: string,
-  overrides: Record<string, unknown> = {}
+  overrides: Record<string, unknown> = {},
 ) {
   const session = sessionStore.create(agentId);
   const task = await taskStore.create({
@@ -271,7 +270,7 @@ describe("Dispatcher spawn rule", () => {
 
     expect(taskStore.get(dependent.id)?.session_id).toBeNull();
     expect(calls.map((call) => call.sessionId)).not.toContain(
-      taskStore.get(dependent.id)?.session_id
+      taskStore.get(dependent.id)?.session_id,
     );
 
     for (const task of taskStore.list({ session_id: calls[0]?.sessionId })) {
@@ -318,7 +317,7 @@ describe("Dispatcher spawn rule", () => {
 
   it("wakes on a pending inbox row even with no tasks", async () => {
     const { manager, calls } = fakeManager(["a1"]);
-    const session = sessionStore.create("a1");
+    const session = sessionStore.create("a1", { kind: "task" });
     inboxStore.deliver({
       agentId: "a1",
       kind: "system_notice",
@@ -334,12 +333,49 @@ describe("Dispatcher spawn rule", () => {
     expect(calls).toEqual([{ agentId: "a1", sessionId: session.id }]);
   });
 
+  it("does not autonomously wake a taskless chat session with system inbox", async () => {
+    const { manager, calls } = fakeManager(["a1"]);
+    const session = sessionStore.create("a1");
+    expect(session.kind).toBe("chat");
+    inboxStore.deliver({
+      agentId: "a1",
+      kind: "system_notice",
+      source: "system",
+      relatedSession: session.id,
+      payload: { note: "background signal" },
+    });
+
+    const d = makeDispatcher(manager);
+    await tick(d);
+
+    expect(calls).toEqual([]);
+  });
+
+  it("does not wake a session with a turn block, even with queued inbox", async () => {
+    const { manager, calls } = fakeManager(["a1"]);
+    const session = sessionStore.create("a1", { kind: "task" });
+    sessionStore.blockTurns(session.id, "context_length_exceeded");
+    inboxStore.deliver({
+      agentId: "a1",
+      kind: "user_message",
+      source: "user",
+      sourceId: "m-blocked",
+      relatedSession: session.id,
+      payload: { id: "m-blocked", role: "user", parts: [] },
+    });
+
+    const d = makeDispatcher(manager);
+    await tick(d);
+
+    expect(calls).toEqual([]);
+  });
+
   it("defer_until suppresses routine wakes but an inbox row bypasses it", async () => {
     const { manager, calls } = fakeManager(["a1"]);
     const { session } = await makeBoundTask("a1");
     sessionStore.setDeferUntil(
       session.id,
-      Math.floor(Date.now() / 1000) + 3600
+      Math.floor(Date.now() / 1000) + 3600,
     );
 
     const d = makeDispatcher(manager);
@@ -374,7 +410,7 @@ describe("Dispatcher spawn rule", () => {
 
     expect(calls).toEqual([]);
     const deferEvents = timelineEvents.filter(
-      (event) => event.eventType === "session.dispatcher.defer.skipped"
+      (event) => event.eventType === "session.dispatcher.defer.skipped",
     );
     expect(deferEvents).toEqual([
       expect.objectContaining({
@@ -414,7 +450,10 @@ describe("Dispatcher spawn rule", () => {
     // agent would — otherwise the same session stays "ready" and wins
     // every subsequent tick.
     const turn = async (sessionId: string) => {
-      for (const t of taskStore.list({ session_id: sessionId, status: "open" })) {
+      for (const t of taskStore.list({
+        session_id: sessionId,
+        status: "open",
+      })) {
         await taskStore.update(t.id, { status: "done" });
       }
     };
@@ -430,7 +469,7 @@ describe("Dispatcher spawn rule", () => {
     await tick(d);
     expect(calls).toHaveLength(2);
     expect(new Set(calls.map((c) => c.sessionId))).toEqual(
-      new Set([a.session.id, b.session.id])
+      new Set([a.session.id, b.session.id]),
     );
   });
 
@@ -455,7 +494,7 @@ describe("Dispatcher spawn rule", () => {
     const gate = deferredTurns();
     const { manager, calls } = fakeManager(
       [{ id: "a1", maxConcurrentSessions: 1 }],
-      gate.turn
+      gate.turn,
     );
     const a = await makeBoundTask("a1");
     const b = await makeBoundTask("a1");
@@ -467,7 +506,7 @@ describe("Dispatcher spawn rule", () => {
 
     expect(calls).toHaveLength(1);
     const queued = timelineEvents.find(
-      (event) => event.eventType === "session.dispatcher.capacity_queued"
+      (event) => event.eventType === "session.dispatcher.capacity_queued",
     );
     expect(queued).toMatchObject({
       agentId: "a1",
@@ -529,7 +568,7 @@ describe("Dispatcher spawn rule", () => {
     const gate = deferredTurns();
     const { manager, calls } = fakeManager(
       [{ id: "a1", maxConcurrentSessions: 2 }],
-      gate.turn
+      gate.turn,
     );
     const a = await makeBoundTask("a1");
     const b = await makeBoundTask("a1");
@@ -539,10 +578,10 @@ describe("Dispatcher spawn rule", () => {
 
     expect(calls).toHaveLength(2);
     expect(new Set(calls.map((call) => call.sessionId))).toEqual(
-      new Set([a.session.id, b.session.id])
+      new Set([a.session.id, b.session.id]),
     );
     expect(new Set(d.runningSessionIds())).toEqual(
-      new Set([a.session.id, b.session.id])
+      new Set([a.session.id, b.session.id]),
     );
     expect(d.isRunning(a.session.id)).toBe(true);
     expect(d.isRunning(b.session.id)).toBe(true);
@@ -554,7 +593,7 @@ describe("Dispatcher spawn rule", () => {
     const gate = deferredTurns();
     const { manager, calls } = fakeManager(
       [{ id: "a1", maxConcurrentSessions: 2 }],
-      gate.turn
+      gate.turn,
     );
     const a = await makeBoundTask("a1");
     const b = await makeBoundTask("a1");
@@ -574,7 +613,7 @@ describe("Dispatcher spawn rule", () => {
     await releaseTurn(gate, firstFinished);
     await vi.waitFor(() => expect(calls).toHaveLength(3));
     expect(new Set(calls.map((call) => call.sessionId))).toEqual(
-      new Set([a.session.id, b.session.id, c.session.id])
+      new Set([a.session.id, b.session.id, c.session.id]),
     );
     for (const call of calls) await releaseTurn(gate, call.sessionId);
     await d.drain(5_000);
@@ -584,7 +623,7 @@ describe("Dispatcher spawn rule", () => {
     const gate = deferredTurns();
     const { manager, calls } = fakeManager(
       [{ id: "a1", maxConcurrentSessions: 1 }],
-      gate.turn
+      gate.turn,
     );
     const user = sessionStore.create("a1");
     const taskEvent = sessionStore.create("a1");
@@ -649,7 +688,7 @@ describe("Dispatcher spawn rule", () => {
             await taskStore.update(task.id, { status: "done" });
           }
           await gate.turn(sessionId);
-        }
+        },
       );
       const active = await makeBoundTask("a1");
 
@@ -658,6 +697,12 @@ describe("Dispatcher spawn rule", () => {
       expect(calls).toEqual([{ agentId: "a1", sessionId: active.session.id }]);
 
       const commentSession = sessionStore.create("a1");
+      await taskStore.create({
+        title: "commented task",
+        assignee: "a1",
+        created_by: "user",
+        session_id: commentSession.id,
+      });
       inboxStore.deliver({
         agentId: "a1",
         kind: "system_notice",
@@ -737,7 +782,7 @@ describe("Dispatcher spawn rule", () => {
             includeAgentWide: true,
           });
           await gate.turn(sessionId);
-        }
+        },
       );
       const active = await makeBoundTask("a1");
 
@@ -747,6 +792,13 @@ describe("Dispatcher spawn rule", () => {
 
       const firstUser = sessionStore.create("a1");
       const commentSession = sessionStore.create("a1");
+      await taskStore.create({
+        title: "commented task",
+        assignee: "a1",
+        created_by: "user",
+        session_id: commentSession.id,
+        status: "blocked",
+      });
       const secondUser = sessionStore.create("a1");
       inboxStore.deliver({
         agentId: "a1",
@@ -800,7 +852,7 @@ describe("Dispatcher spawn rule", () => {
       await (d as unknown as { tickSafe(): Promise<void> }).tickSafe();
       await vi.waitFor(() => expect(calls).toHaveLength(3));
       expect(new Set([calls[1]!.sessionId, calls[2]!.sessionId])).toEqual(
-        new Set([firstUser.id, secondUser.id])
+        new Set([firstUser.id, secondUser.id]),
       );
 
       await releaseTurn(gate, calls[2]!.sessionId);
@@ -842,7 +894,7 @@ describe("Dispatcher spawn rule", () => {
             session_id: sessionId,
           });
         }
-      }
+      },
     );
     const lane = sessionStore.create("a1");
     await taskStore.create({
@@ -860,11 +912,11 @@ describe("Dispatcher spawn rule", () => {
     });
     db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(
       1,
-      lane.id
+      lane.id,
     );
     db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(
       2,
-      chain.id
+      chain.id,
     );
 
     const d = makeDispatcher(manager);
@@ -901,7 +953,7 @@ describe("Dispatcher spawn rule", () => {
             session_id: sessionId,
           });
         }
-      }
+      },
     );
     const lane = sessionStore.create("a1");
     await taskStore.create({
@@ -919,11 +971,11 @@ describe("Dispatcher spawn rule", () => {
     });
     db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(
       1,
-      lane.id
+      lane.id,
     );
     db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(
       2,
-      chain.id
+      chain.id,
     );
 
     const d = makeDispatcher(manager);
@@ -966,7 +1018,7 @@ describe("Dispatcher spawn rule", () => {
     d.kick("test_capacity_update");
     await vi.waitFor(() => expect(calls).toHaveLength(2));
     expect(new Set(d.runningSessionIds())).toEqual(
-      new Set(calls.map((call) => call.sessionId))
+      new Set(calls.map((call) => call.sessionId)),
     );
 
     for (const call of calls) await releaseTurn(gate, call.sessionId);
@@ -987,11 +1039,10 @@ describe("Dispatcher spawn rule", () => {
 
     const bound = taskStore.get(task.id);
     expect(bound?.session_id).toBeTruthy();
-    expect(calls).toEqual([
-      { agentId: "a1", sessionId: bound!.session_id },
-    ]);
+    expect(calls).toEqual([{ agentId: "a1", sessionId: bound!.session_id }]);
     const session = sessionStore.get(bound!.session_id!);
     expect(session?.title).toBe("Write the launch post");
+    expect(session?.kind).toBe("task");
   });
 
   it("clears dangling session bindings before rebinding ready work", async () => {
@@ -1069,7 +1120,7 @@ describe("Dispatcher failure handling", () => {
     const comments = taskStore.listComments(task.id, { kinds: ["system"] });
     expect(comments.at(-1)?.body).toContain("context_length_exceeded");
     expect(comments.at(-1)?.body).toContain(
-      "Your input exceeds the context window"
+      "Your input exceeds the context window",
     );
     expect(comments.at(-1)?.body).not.toContain("[object Object]");
   });
@@ -1080,7 +1131,7 @@ describe("Dispatcher failure handling", () => {
       await taskStore.update(
         taskId,
         { status: "system_blocked", start_at: null },
-        { actor: "system:test" }
+        { actor: "system:test" },
       );
       throw new Error("late non-system cleanup error");
     });
@@ -1205,7 +1256,7 @@ describe("Dispatcher failure handling", () => {
     expect(parked?.status).toBe("blocked");
     const comments = taskStore.listComments(task.id, { kinds: ["system"] });
     expect(comments.at(-1)?.body).toContain(
-      "Unsupported model gpt-5.2 for OpenAI OAuth"
+      "Unsupported model gpt-5.2 for OpenAI OAuth",
     );
     expect(comments.at(-1)?.body).not.toContain("[object Object]");
   });
@@ -1223,7 +1274,7 @@ describe("Dispatcher failure handling", () => {
           throw new Error("fail one session");
         }
         await gate.turn(sessionId);
-      }
+      },
     );
 
     const d = makeDispatcher(manager);
@@ -1231,7 +1282,7 @@ describe("Dispatcher failure handling", () => {
 
     await vi.waitFor(() => expect(calls).toHaveLength(2));
     await vi.waitFor(() =>
-      expect(taskStore.get(failing.task.id)?.status).toBe("blocked")
+      expect(taskStore.get(failing.task.id)?.status).toBe("blocked"),
     );
     expect(taskStore.get(survivor.task.id)?.status).toBe("open");
     expect(d.isRunning(survivor.session.id)).toBe(true);

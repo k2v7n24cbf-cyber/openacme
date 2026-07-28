@@ -41,6 +41,11 @@ export const sessions = sqliteTable(
     title: text("title"),
     systemPrompt: text("system_prompt"),
     parentSessionId: text("parent_session_id"),
+    kind: text("kind", { enum: ["chat", "task"] })
+      .notNull()
+      .default("chat"),
+    turnsBlockedReason: text("turns_blocked_reason"),
+    turnsBlockedAt: integer("turns_blocked_at"),
     createdAt: integer("created_at")
       .notNull()
       .default(sql`(unixepoch())`),
@@ -59,7 +64,7 @@ export const sessions = sqliteTable(
   (t) => [
     index("idx_sessions_agent_id").on(t.agentId),
     index("idx_sessions_parent").on(t.parentSessionId),
-  ]
+  ],
 );
 
 /**
@@ -86,7 +91,7 @@ export const messages = sqliteTable(
       .notNull()
       .default(sql`(unixepoch())`),
   },
-  (t) => [index("idx_messages_session_id").on(t.sessionId)]
+  (t) => [index("idx_messages_session_id").on(t.sessionId)],
 );
 
 /**
@@ -117,7 +122,7 @@ export const sessionContextSnapshots = sqliteTable(
   (t) => [
     index("idx_context_snapshots_session").on(t.sessionId, t.createdAt),
     index("idx_context_snapshots_last_message").on(t.sourceLastMessageId),
-  ]
+  ],
 );
 
 export const userProfiles = sqliteTable("user_profiles", {
@@ -154,7 +159,7 @@ export const taskComments = sqliteTable(
   (t) => [
     index("idx_task_comments_task").on(t.taskId, t.createdAt),
     index("idx_task_comments_kind").on(t.taskId, t.kind),
-  ]
+  ],
 );
 
 /**
@@ -192,7 +197,7 @@ export const taskEvents = sqliteTable(
     index("idx_task_events_task").on(t.taskId, t.createdAt),
     index("idx_task_events_session").on(t.sessionId, t.createdAt),
     index("idx_task_events_created").on(t.createdAt),
-  ]
+  ],
 );
 
 /**
@@ -234,7 +239,7 @@ export const agentInbox = sqliteTable(
       .notNull()
       .default(sql`(unixepoch())`),
   },
-  (t) => [index("idx_inbox_agent").on(t.agentId, t.id)]
+  (t) => [index("idx_inbox_agent").on(t.agentId, t.id)],
 );
 
 /**
@@ -247,20 +252,17 @@ export const agentInbox = sqliteTable(
  * push payload. Treat the row as a credential — readable only to the
  * server process; never expose `p256dh` / `auth` in API responses.
  */
-export const pushSubscriptions = sqliteTable(
-  "push_subscriptions",
-  {
-    id: text("id").primaryKey(),
-    endpoint: text("endpoint").notNull().unique(),
-    p256dh: text("p256dh").notNull(),
-    auth: text("auth").notNull(),
-    userAgent: text("user_agent"),
-    createdAt: integer("created_at")
-      .notNull()
-      .default(sql`(unixepoch())`),
-    lastUsedAt: integer("last_used_at"),
-  }
-);
+export const pushSubscriptions = sqliteTable("push_subscriptions", {
+  id: text("id").primaryKey(),
+  endpoint: text("endpoint").notNull().unique(),
+  p256dh: text("p256dh").notNull(),
+  auth: text("auth").notNull(),
+  userAgent: text("user_agent"),
+  createdAt: integer("created_at")
+    .notNull()
+    .default(sql`(unixepoch())`),
+  lastUsedAt: integer("last_used_at"),
+});
 
 /**
  * Usage ledger: one row per LLM call (turn or overhead subagent call).
@@ -317,7 +319,7 @@ export const usageEvents = sqliteTable(
     index("idx_usage_task").on(t.taskId),
     index("idx_usage_trace").on(t.traceId),
     index("idx_usage_forensic_run").on(t.forensicRunId),
-  ]
+  ],
 );
 
 /**
@@ -353,7 +355,7 @@ export const sessionTimelineEvents = sqliteTable(
     index("idx_session_timeline_trace").on(t.traceId),
     index("idx_session_timeline_forensic_run").on(t.forensicRunId),
     index("idx_session_timeline_usage").on(t.usageEventId),
-  ]
+  ],
 );
 
 /**
@@ -396,7 +398,7 @@ export const authSessions = sqliteTable(
       .default(sql`(unixepoch())`),
     expiresAt: integer("expires_at").notNull(),
   },
-  (t) => [index("idx_auth_sessions_member").on(t.memberId)]
+  (t) => [index("idx_auth_sessions_member").on(t.memberId)],
 );
 
 /**
@@ -439,7 +441,8 @@ export type NewPushSubscriptionRow = typeof pushSubscriptions.$inferInsert;
 export type UsageEventRow = typeof usageEvents.$inferSelect;
 export type NewUsageEventRow = typeof usageEvents.$inferInsert;
 export type SessionTimelineEventRow = typeof sessionTimelineEvents.$inferSelect;
-export type NewSessionTimelineEventRow = typeof sessionTimelineEvents.$inferInsert;
+export type NewSessionTimelineEventRow =
+  typeof sessionTimelineEvents.$inferInsert;
 export type MemberRow = typeof members.$inferSelect;
 export type NewMemberRow = typeof members.$inferInsert;
 export type AuthSessionRow = typeof authSessions.$inferSelect;

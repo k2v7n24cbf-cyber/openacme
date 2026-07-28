@@ -10,11 +10,7 @@ import {
 
 const log = createLogger("server.app");
 
-import {
-  createUIMessageStream,
-  readUIMessageStream,
-  type UIMessage,
-} from "ai";
+import { createUIMessageStream, readUIMessageStream, type UIMessage } from "ai";
 import {
   classifyError,
   ensureStepBoundaries,
@@ -28,7 +24,10 @@ import {
 import { AgentManager } from "./agent-manager.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { registerAuthRoutes, registerMemberRoutes } from "./routes/auth.js";
-import { registerUploadsRoutes, type UploadsContext } from "./routes/uploads.js";
+import {
+  registerUploadsRoutes,
+  type UploadsContext,
+} from "./routes/uploads.js";
 import { registerFilesRoutes } from "./routes/files.js";
 import { registerFsRoutes } from "./routes/fs.js";
 import { registerTaskRoutes } from "./routes/tasks.js";
@@ -79,7 +78,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PKG_VERSION: string = (() => {
   try {
     const pkg = JSON.parse(
-      fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")
+      fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"),
     );
     return typeof pkg.version === "string" ? pkg.version : "0.0.0";
   } catch {
@@ -107,7 +106,10 @@ function isNewerVersion(latest: string, current: string): boolean {
 }
 
 async function fetchLatestCliVersion(): Promise<string | null> {
-  if (versionCheckCache && Date.now() - versionCheckCache.at < VERSION_CHECK_TTL_MS) {
+  if (
+    versionCheckCache &&
+    Date.now() - versionCheckCache.at < VERSION_CHECK_TTL_MS
+  ) {
     return versionCheckCache.latest;
   }
   try {
@@ -156,7 +158,7 @@ export interface ConfigModelUpdateResponse {
  */
 export async function createApp(
   config: Config,
-  opts?: { resolveModel?: ModelResolver; tickIntervalMs?: number }
+  opts?: { resolveModel?: ModelResolver; tickIntervalMs?: number },
 ): Promise<{ app: Hono; manager: AgentManager; close: () => Promise<void> }> {
   const app = new Hono();
   const manager = new AgentManager(config, opts);
@@ -219,7 +221,7 @@ export async function createApp(
     log.warn(
       { setupPath: `/setup?token=${token}` },
       `No operator account yet. Claim this instance at ${url}/setup?token=${token}` +
-        ` (use your domain/public IP if you reach this server by another name)`
+        ` (use your domain/public IP if you reach this server by another name)`,
     );
   }
 
@@ -280,7 +282,7 @@ export async function createApp(
       version: PKG_VERSION,
       agents: manager.listAgents().length,
       skills: manager.skillRegistry.size,
-    })
+    }),
   );
 
   // Update check for the web banner. Offline/registry error → upToDate:true so
@@ -325,7 +327,10 @@ export async function createApp(
     // Validate and apply defaults using Zod schema
     const parseResult = AgentDefinitionSchema.safeParse({ ...body, id });
     if (!parseResult.success) {
-      const errors = parseResult.error.issues.map((e: { path: PropertyKey[]; message: string }) => `${e.path.join(".")}: ${e.message}`);
+      const errors = parseResult.error.issues.map(
+        (e: { path: PropertyKey[]; message: string }) =>
+          `${e.path.join(".")}: ${e.message}`,
+      );
       return c.json({ error: "Validation failed", details: errors }, 400);
     }
 
@@ -389,7 +394,7 @@ export async function createApp(
     // Returns UIMessage[] verbatim — useChat consumes these directly via
     // setMessages on session change.
     const messages = sanitizeStoredHistory(
-      manager.messageStore.getHistory(c.req.param("id"))
+      manager.messageStore.getHistory(c.req.param("id")),
     );
     return c.json(messages);
   });
@@ -397,13 +402,13 @@ export async function createApp(
   app.get("/api/sessions/:id/context-snapshots/:snapshotId", (c) => {
     const sessionId = c.req.param("id");
     const snapshot = manager.contextSnapshotStore.get(
-      c.req.param("snapshotId")
+      c.req.param("snapshotId"),
     );
     if (!snapshot || snapshot.sessionId !== sessionId) {
       return c.json({ error: "Context snapshot not found" }, 404);
     }
     const canonical = sanitizeStoredHistory(
-      manager.messageStore.getHistory(sessionId)
+      manager.messageStore.getHistory(sessionId),
     );
     return c.json({
       snapshotId: snapshot.id,
@@ -454,7 +459,7 @@ export async function createApp(
       } catch (e) {
         log.warn(
           { err: e, taskId: t.id, sessionId: id },
-          "failed to clear task binding on session delete"
+          "failed to clear task binding on session delete",
         );
       }
     }
@@ -491,10 +496,7 @@ export async function createApp(
     };
 
     if (!agentId || !Array.isArray(messages)) {
-      return c.json(
-        { error: "agentId and messages[] are required" },
-        400
-      );
+      return c.json({ error: "agentId and messages[] are required" }, 400);
     }
 
     const def = manager.getAgentDef(agentId);
@@ -510,11 +512,27 @@ export async function createApp(
           error:
             "No model configured. Add an API key or sign in via OAuth in Settings.",
         },
-        400
+        400,
       );
     }
 
     const effectiveSessionId = sessionId || randomUUID();
+    const existingSession = sessionId
+      ? manager.sessionStore.get(effectiveSessionId)
+      : null;
+
+    if (existingSession?.turnsBlockedReason) {
+      return c.json(
+        {
+          error: "session_system_blocked",
+          sessionId: effectiveSessionId,
+          reason: existingSession.turnsBlockedReason,
+          message:
+            "This session is system-blocked. Clear the session block before starting another turn.",
+        },
+        409,
+      );
+    }
 
     const systemBlockedTask = sessionId
       ? manager.taskStore
@@ -525,11 +543,13 @@ export async function createApp(
       return c.json(
         {
           error: "session_system_blocked",
+          sessionId: effectiveSessionId,
           taskId: systemBlockedTask.id,
+          reason: "task_system_blocked",
           message:
             "This session has a system-blocked task. Change the task status before starting another turn.",
         },
-        409
+        409,
       );
     }
 
@@ -552,7 +572,7 @@ export async function createApp(
         if (!uploads.pending.has(pendingId)) {
           return c.json(
             { error: `Unknown or expired attachment: ${pendingId}` },
-            400
+            400,
           );
         }
         pendingIds.push(pendingId);
@@ -563,10 +583,7 @@ export async function createApp(
     // each id only commits once even if referenced by multiple parts
     // (defensive — useChat won't normally do that, but the user could
     // hand-craft a request).
-    const committedById = new Map<
-      string,
-      ReturnType<typeof uploads.commit>
-    >();
+    const committedById = new Map<string, ReturnType<typeof uploads.commit>>();
     const attachmentKinds: Array<"image" | "file" | "data"> = [];
     const committed = incoming.map((m) => {
       if (m.role !== "user") return m;
@@ -610,20 +627,16 @@ export async function createApp(
               error: `Model '${def.model.model}' does not accept images`,
               supportedModalities: meta.inputModalities,
             },
-            400
+            400,
           );
         }
-        if (
-          hasFile &&
-          !allowed.has("pdf") &&
-          !allowed.has("file")
-        ) {
+        if (hasFile && !allowed.has("pdf") && !allowed.has("file")) {
           return c.json(
             {
               error: `Model '${def.model.model}' does not accept PDFs/files`,
               supportedModalities: meta.inputModalities,
             },
-            400
+            400,
           );
         }
       }
@@ -680,7 +693,7 @@ export async function createApp(
       } catch (e) {
         log.warn(
           { err: e, sessionId: effectiveSessionId },
-          "inbox queue (mid-turn user message) failed"
+          "inbox queue (mid-turn user message) failed",
         );
         return c.json({ error: "queue_failed" }, 500);
       }
@@ -860,7 +873,7 @@ export async function createApp(
             inputModalities: meta.inputModalities,
           };
         }),
-      }))
+      })),
     );
   });
 
@@ -946,7 +959,7 @@ export async function createApp(
     }
     return c.json(
       { error: "Inherited server — exclude it from this agent instead" },
-      400
+      400,
     );
   });
 
@@ -987,10 +1000,10 @@ export async function createApp(
           error: "Validation failed",
           details: parsed.error.issues.map(
             (err: { path: PropertyKey[]; message: string }) =>
-              `${err.path.join(".")}: ${err.message}`
+              `${err.path.join(".")}: ${err.message}`,
           ),
         },
-        400
+        400,
       );
     }
     // `testConnection` opens a transport, lists tools, closes — never
@@ -1026,7 +1039,7 @@ export async function createApp(
       return c.json({ error: "mcpServers must be an object" }, 400);
     }
     const entries = Object.entries(
-      (body.mcpServers ?? {}) as Record<string, unknown>
+      (body.mcpServers ?? {}) as Record<string, unknown>,
     );
     const validated: Record<string, MCPServerConfig> = {};
     for (const [name, cfg] of entries) {
@@ -1037,10 +1050,10 @@ export async function createApp(
             error: `Invalid config for server '${name}'`,
             details: result.error.issues.map(
               (err: { path: PropertyKey[]; message: string }) =>
-                `${err.path.join(".")}: ${err.message}`
+                `${err.path.join(".")}: ${err.message}`,
             ),
           },
-          400
+          400,
         );
       }
       validated[name] = result.data;
@@ -1050,7 +1063,7 @@ export async function createApp(
     // minutes, and the catalog write is already durable. The UI polls
     // /api/mcp/status to watch connections come up.
     void Promise.all(
-      manager.listAgents().map((def) => manager.queueMcpReinit(def.id))
+      manager.listAgents().map((def) => manager.queueMcpReinit(def.id)),
     );
     return c.json({ mcpServers: validated });
   });
@@ -1078,11 +1091,14 @@ export async function createApp(
     ) {
       return c.json({ error: "mcpServers must be an object" }, 400);
     }
-    const patch: { mcpServers?: Record<string, MCPServerConfig>; mcpDisabled?: string[] } = {};
+    const patch: {
+      mcpServers?: Record<string, MCPServerConfig>;
+      mcpDisabled?: string[];
+    } = {};
     if (body.mcpServers !== undefined) {
       const validated: Record<string, MCPServerConfig> = {};
       for (const [name, cfg] of Object.entries(
-        body.mcpServers as Record<string, unknown>
+        body.mcpServers as Record<string, unknown>,
       )) {
         const result = MCPServerConfigSchema.safeParse(cfg);
         if (!result.success) {
@@ -1091,10 +1107,10 @@ export async function createApp(
               error: `Invalid config for server '${name}'`,
               details: result.error.issues.map(
                 (err: { path: PropertyKey[]; message: string }) =>
-                  `${err.path.join(".")}: ${err.message}`
+                  `${err.path.join(".")}: ${err.message}`,
               ),
             },
-            400
+            400,
           );
         }
         validated[name] = result.data;
@@ -1149,10 +1165,10 @@ export async function createApp(
           error: "Invalid server config",
           details: cfgResult.error.issues.map(
             (err: { path: PropertyKey[]; message: string }) =>
-              `${err.path.join(".")}: ${err.message}`
+              `${err.path.join(".")}: ${err.message}`,
           ),
         },
-        400
+        400,
       );
     }
     const next: Record<string, MCPServerConfig> = {
@@ -1197,7 +1213,12 @@ export async function createApp(
   });
 
   app.post("/api/skills", async (c) => {
-    let body: { name: string; description: string; tags: string[]; body: string };
+    let body: {
+      name: string;
+      description: string;
+      tags: string[];
+      body: string;
+    };
     try {
       body = await c.req.json();
     } catch {
@@ -1216,7 +1237,7 @@ export async function createApp(
         name,
         description,
         tags || [],
-        skillBody || ""
+        skillBody || "",
       );
       manager.reloadSkills();
       return c.json(skill, 201);
@@ -1250,7 +1271,7 @@ export async function createApp(
         name,
         description,
         body.tags ?? existing.tags,
-        body.body ?? existing.body
+        body.body ?? existing.body,
       );
       manager.reloadSkills();
       return c.json(skill);
@@ -1293,7 +1314,8 @@ export async function createApp(
     for (const [rawKey, raw] of Object.entries(form)) {
       const values = Array.isArray(raw) ? raw : [raw];
       for (const value of values) {
-        if (value instanceof File) entries.push({ relPath: rawKey, file: value });
+        if (value instanceof File)
+          entries.push({ relPath: rawKey, file: value });
       }
     }
     if (entries.length === 0) {
@@ -1318,15 +1340,16 @@ export async function createApp(
 
     const skillsDir = path.resolve(config.dataDir, config.skills.directory);
     const staging = await fs.promises.mkdtemp(
-      path.join(os.tmpdir(), "openacme-import-")
+      path.join(os.tmpdir(), "openacme-import-"),
     );
 
     try {
       for (const e of entries) {
         const rel = e.relPath.replace(/\\/g, "/");
-        const trimmed = stripPrefix && rel.startsWith(stripPrefix)
-          ? rel.slice(stripPrefix.length)
-          : rel;
+        const trimmed =
+          stripPrefix && rel.startsWith(stripPrefix)
+            ? rel.slice(stripPrefix.length)
+            : rel;
         if (!trimmed) continue;
         const target = path.join(staging, trimmed);
         const targetReal = path.resolve(target);
@@ -1346,14 +1369,16 @@ export async function createApp(
         return c.json({ success: true, name: result.name, skill }, 201);
       } catch (err) {
         if (err instanceof HubError) {
-          const code = err.code === "ALREADY_INSTALLED" || err.code === "LOCAL_SKILL_EXISTS"
-            ? 409
-            : 400;
+          const code =
+            err.code === "ALREADY_INSTALLED" ||
+            err.code === "LOCAL_SKILL_EXISTS"
+              ? 409
+              : 400;
           return c.json({ error: err.message }, code);
         }
         return c.json(
           { error: err instanceof Error ? err.message : String(err) },
-          500
+          500,
         );
       }
     } finally {
@@ -1382,10 +1407,7 @@ export async function createApp(
     try {
       manager.setAgentsMd(body.content);
     } catch (e) {
-      return c.json(
-        { error: e instanceof Error ? e.message : String(e) },
-        500
-      );
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
     }
     return c.json({ content: manager.getAgentsMd() ?? null });
   });
@@ -1432,7 +1454,7 @@ export async function createApp(
     if (!parsed.success) {
       return c.json(
         { error: "Invalid model config", issues: parsed.error.issues },
-        400
+        400,
       );
     }
     const raw = readRawConfig(config.dataDir);
@@ -1460,7 +1482,9 @@ export async function createApp(
   // ── API Keys ──
   const envPath = path.join(config.dataDir, ".env");
 
-  app.get("/api/keys", (c) => c.json(detectProviderCredentials(config.dataDir)));
+  app.get("/api/keys", (c) =>
+    c.json(detectProviderCredentials(config.dataDir)),
+  );
 
   // Save an API key to the .env file
   app.post("/api/keys", async (c) => {
@@ -1500,9 +1524,10 @@ export async function createApp(
     envVars[envVar] = apiKey.trim();
 
     // Write back as key=value lines
-    const newContent = Object.entries(envVars)
-      .map(([key, value]) => `${key}=${value}`)
-      .join("\n") + "\n";
+    const newContent =
+      Object.entries(envVars)
+        .map(([key, value]) => `${key}=${value}`)
+        .join("\n") + "\n";
 
     fs.writeFileSync(envPath, newContent);
 
@@ -1589,7 +1614,7 @@ export async function createApp(
     if (!provider || !(provider in WEB_SEARCH_PROVIDERS)) {
       return c.json(
         { error: "Unknown web search provider (use tavily, exa, or brave)" },
-        400
+        400,
       );
     }
     if (!apiKey || !apiKey.trim()) {
@@ -1645,16 +1670,27 @@ export async function createApp(
   // (executablePath, headless, noSandbox) live in config.yaml; the save route
   // calls reloadConfig, which hot-swaps the browser provider (live sessions
   // keep the old one; the next acquire uses the new one) — no restart.
-  const BROWSER_PROVIDERS = ["local", "browserbase", "browser-use", "firecrawl"] as const;
+  const BROWSER_PROVIDERS = [
+    "local",
+    "browserbase",
+    "browser-use",
+    "firecrawl",
+  ] as const;
   type BrowserProviderId = (typeof BROWSER_PROVIDERS)[number];
-  const BROWSER_CRED_VARS: Record<Exclude<BrowserProviderId, "local">, readonly string[]> = {
+  const BROWSER_CRED_VARS: Record<
+    Exclude<BrowserProviderId, "local">,
+    readonly string[]
+  > = {
     browserbase: ["BROWSERBASE_API_KEY", "BROWSERBASE_PROJECT_ID"],
     "browser-use": ["BROWSER_USE_API_KEY"],
     firecrawl: ["FIRECRAWL_API_KEY"],
   };
 
   function isBrowserProviderId(v: unknown): v is BrowserProviderId {
-    return typeof v === "string" && (BROWSER_PROVIDERS as readonly string[]).includes(v);
+    return (
+      typeof v === "string" &&
+      (BROWSER_PROVIDERS as readonly string[]).includes(v)
+    );
   }
 
   const LOCAL_BROWSERS = ["chromium", "camoufox"] as const;
@@ -1672,12 +1708,26 @@ export async function createApp(
     // AgentManager booted with; the UI needs to show what will apply on the
     // next restart (which is what was just saved).
     const raw = readRawConfig(config.dataDir);
-    const rawBrowser = (raw.browser as Record<string, unknown> | undefined) ?? {};
-    const active = isBrowserProviderId(rawBrowser.provider) ? rawBrowser.provider : config.browser.provider;
-    const localBrowser = isLocalBrowserId(rawBrowser.localBrowser) ? rawBrowser.localBrowser : config.browser.localBrowser;
-    const exePath = typeof rawBrowser.executablePath === "string" ? rawBrowser.executablePath : (config.browser.executablePath ?? "");
-    const headless = typeof rawBrowser.headless === "boolean" ? rawBrowser.headless : config.browser.headless;
-    const noSandbox = typeof rawBrowser.noSandbox === "boolean" ? rawBrowser.noSandbox : config.browser.noSandbox;
+    const rawBrowser =
+      (raw.browser as Record<string, unknown> | undefined) ?? {};
+    const active = isBrowserProviderId(rawBrowser.provider)
+      ? rawBrowser.provider
+      : config.browser.provider;
+    const localBrowser = isLocalBrowserId(rawBrowser.localBrowser)
+      ? rawBrowser.localBrowser
+      : config.browser.localBrowser;
+    const exePath =
+      typeof rawBrowser.executablePath === "string"
+        ? rawBrowser.executablePath
+        : (config.browser.executablePath ?? "");
+    const headless =
+      typeof rawBrowser.headless === "boolean"
+        ? rawBrowser.headless
+        : config.browser.headless;
+    const noSandbox =
+      typeof rawBrowser.noSandbox === "boolean"
+        ? rawBrowser.noSandbox
+        : config.browser.noSandbox;
     // Per-local-browser readiness — currently only Camoufox needs an
     // out-of-band binary fetch; Chromium auto-installs via Playwright on
     // first acquire and reports through normal channels. Anything not
@@ -1724,10 +1774,19 @@ export async function createApp(
       return c.json({ error: "Invalid JSON" }, 400);
     }
     if (body.provider !== undefined && !isBrowserProviderId(body.provider)) {
-      return c.json({ error: `Unknown browser provider: ${body.provider}` }, 400);
+      return c.json(
+        { error: `Unknown browser provider: ${body.provider}` },
+        400,
+      );
     }
-    if (body.localBrowser !== undefined && !isLocalBrowserId(body.localBrowser)) {
-      return c.json({ error: `Unknown local browser: ${body.localBrowser}` }, 400);
+    if (
+      body.localBrowser !== undefined &&
+      !isLocalBrowserId(body.localBrowser)
+    ) {
+      return c.json(
+        { error: `Unknown local browser: ${body.localBrowser}` },
+        400,
+      );
     }
     const raw = readRawConfig(config.dataDir);
     const existing = (raw.browser as Record<string, unknown> | undefined) ?? {};
@@ -1742,7 +1801,7 @@ export async function createApp(
         if (!fs.existsSync(trimmed)) {
           return c.json(
             { error: `Path does not exist on disk: ${trimmed}` },
-            400
+            400,
           );
         }
         try {
@@ -1750,20 +1809,20 @@ export async function createApp(
           if (stat.isDirectory()) {
             return c.json(
               { error: `Path is a directory, not a binary: ${trimmed}` },
-              400
+              400,
             );
           }
           // X-bit check on POSIX; permission-mode check is moot on Windows.
           if (process.platform !== "win32" && !(stat.mode & 0o111)) {
             return c.json(
               { error: `Path is not executable (chmod +x first): ${trimmed}` },
-              400
+              400,
             );
           }
         } catch (e) {
           return c.json(
             { error: `Could not stat ${trimmed}: ${(e as Error).message}` },
-            400
+            400,
           );
         }
         next.executablePath = trimmed;
@@ -1800,7 +1859,8 @@ export async function createApp(
       return c.json({ error: "apiKey is required" }, 400);
     }
     const envVars = readDotenv();
-    const vars = BROWSER_CRED_VARS[provider as Exclude<BrowserProviderId, "local">];
+    const vars =
+      BROWSER_CRED_VARS[provider as Exclude<BrowserProviderId, "local">];
     const apiKeyVar = vars[0]!;
     envVars[apiKeyVar] = apiKey.trim();
     process.env[apiKeyVar] = apiKey.trim();
@@ -1821,7 +1881,9 @@ export async function createApp(
       return c.json({ error: "Unknown cloud browser provider" }, 400);
     }
     const envVars = readDotenv();
-    for (const v of BROWSER_CRED_VARS[provider as Exclude<BrowserProviderId, "local">]) {
+    for (const v of BROWSER_CRED_VARS[
+      provider as Exclude<BrowserProviderId, "local">
+    ]) {
       delete envVars[v];
       delete process.env[v];
     }
@@ -1837,11 +1899,12 @@ export async function createApp(
   const inWebDev = !!process.env["OPENACME_WEB_DEV"];
   const bundledWebDir = path.resolve(__dirname, "../web");
   const workspaceWebDir = path.resolve(__dirname, "../../../apps/web/out");
-  const webDir = !inWebDev && fs.existsSync(path.join(workspaceWebDir, "index.html"))
-    ? workspaceWebDir
-    : !inWebDev && fs.existsSync(path.join(bundledWebDir, "index.html"))
-      ? bundledWebDir
-      : null;
+  const webDir =
+    !inWebDev && fs.existsSync(path.join(workspaceWebDir, "index.html"))
+      ? workspaceWebDir
+      : !inWebDev && fs.existsSync(path.join(bundledWebDir, "index.html"))
+        ? bundledWebDir
+        : null;
   if (webDir) {
     const { serveStatic } = await import("@hono/node-server/serve-static");
 
@@ -1852,7 +1915,7 @@ export async function createApp(
     // route. Read per-request so rebuilding apps/web refreshes a running
     // daemon without restart.
     app.get("*", (c) =>
-      c.html(fs.readFileSync(path.join(webDir, "index.html"), "utf-8"))
+      c.html(fs.readFileSync(path.join(webDir, "index.html"), "utf-8")),
     );
   }
 
@@ -1870,7 +1933,7 @@ const UPSTREAM_ERROR_MAX_CHARS = 4096;
 function buildUpstreamErrorPart(
   err: unknown,
   agentId: string,
-  manager: AgentManager
+  manager: AgentManager,
 ) {
   const statusCode = extractStatusCode(err);
   const raw = extractErrorText(err);
@@ -1897,7 +1960,9 @@ function buildCompressionFailureError(args: {
 }): Error {
   const details = [
     args.failureReason ? `reason=${args.failureReason}` : null,
-    args.estimatedTokens != null ? `estimated_tokens=${args.estimatedTokens}` : null,
+    args.estimatedTokens != null
+      ? `estimated_tokens=${args.estimatedTokens}`
+      : null,
     args.threshold != null ? `threshold=${args.threshold}` : null,
   ].filter(Boolean);
   return new Error(
@@ -1907,7 +1972,7 @@ function buildCompressionFailureError(args: {
       details.length > 0 ? details.join(" ") : null,
     ]
       .filter(Boolean)
-      .join("\n")
+      .join("\n"),
   );
 }
 
@@ -2032,7 +2097,7 @@ async function runChatTurn(args: {
     const prepared = await agent.prepareModelHistory(
       sessionId,
       history,
-      "proactive"
+      "proactive",
     );
     history = prepared.modelHistory;
     contextSnapshotId = prepared.snapshotId;
@@ -2089,7 +2154,7 @@ async function runChatTurn(args: {
     });
     log.warn(
       { err: e, sessionId },
-      "chat preflight compression failed; aborting raw provider turn"
+      "chat preflight compression failed; aborting raw provider turn",
     );
     return;
   } finally {
@@ -2143,7 +2208,7 @@ async function runChatTurn(args: {
       // loads replay identical bytes (prefix cache).
       const recallPart = agent.buildRelevantMemoryPart(
         recall.entries,
-        recall.modelContent
+        recall.modelContent,
       );
       if (recallPart) {
         const lastUser = history[history.length - 1];
@@ -2186,9 +2251,7 @@ async function runChatTurn(args: {
       // the start still get per-chunk streaming via branch A; the
       // snapshot broadcasts are redundant for them (upserting the same
       // assembled message they're already building) but harmless.
-      const [streamA, streamB] = (
-        uiStream as ReadableStream<unknown>
-      ).tee();
+      const [streamA, streamB] = (uiStream as ReadableStream<unknown>).tee();
       const SNAPSHOT_INTERVAL_MS = 500;
       let lastSnapshotAt = 0;
       const assembler = (async () => {
@@ -2265,9 +2328,7 @@ async function runChatTurn(args: {
         // drop, etc.). Append an upstream-error part so the user sees what
         // failed; preserve whatever assembled before the failure.
         const baseParts = ensureStepBoundaries(
-          finalizeOrphanToolParts(
-            responseMessage.parts as UIMessage["parts"]
-          )
+          finalizeOrphanToolParts(responseMessage.parts as UIMessage["parts"]),
         );
         let parts = baseParts;
         if (capturedError && !signal.aborted) {
@@ -2279,7 +2340,7 @@ async function runChatTurn(args: {
           const upstreamErrorPart = buildUpstreamErrorPart(
             capturedError,
             agentId,
-            manager
+            manager,
           );
           log.warn(
             {
@@ -2289,7 +2350,7 @@ async function runChatTurn(args: {
               statusCode: upstreamErrorPart.data.statusCode,
               message: upstreamErrorPart.data.message,
             },
-            "chat turn upstream provider error"
+            "chat turn upstream provider error",
           );
           parts = [...baseParts, upstreamErrorPart];
         }
@@ -2334,7 +2395,7 @@ async function runChatTurn(args: {
       });
 
       const turnHistory = sanitizeStoredHistory(
-        manager.messageStore.getHistory(sessionId)
+        manager.messageStore.getHistory(sessionId),
       ) as unknown as UIMessage[];
       try {
         manager.getAgent(agentId).fireExtractor({

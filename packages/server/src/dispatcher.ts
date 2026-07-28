@@ -35,6 +35,7 @@ import {
 } from "@openacme/agent-core";
 import type {
   SessionStore,
+  Session,
   InboxStore,
   SessionTimelineEventInput,
 } from "@openacme/db";
@@ -152,7 +153,7 @@ export class Dispatcher {
     await this.startupSweep();
     this.timer = setInterval(() => {
       this.tickSafe().catch((e) =>
-        log.warn({ err: e }, "dispatcher tick threw")
+        log.warn({ err: e }, "dispatcher tick threw"),
       );
     }, this.tickIntervalMs);
     if (typeof this.timer.unref === "function") this.timer.unref();
@@ -209,8 +210,7 @@ export class Dispatcher {
    */
   isRunning(sessionId: string): boolean {
     return (
-      this.runningSessions.has(sessionId) ||
-      this.interactiveBusy.has(sessionId)
+      this.runningSessions.has(sessionId) || this.interactiveBusy.has(sessionId)
     );
   }
 
@@ -245,7 +245,7 @@ export class Dispatcher {
     // without waiting up to 60 s for the periodic tick.
     if (!this.running) return;
     this.tickSafe().catch((e) =>
-      log.warn({ err: e, sessionId }, "post-interactive tick threw")
+      log.warn({ err: e, sessionId }, "post-interactive tick threw"),
     );
   }
 
@@ -257,7 +257,7 @@ export class Dispatcher {
       this.kickAfterRunAgents.add(agentId);
     }
     this.tickSafe().catch((e) =>
-      log.warn({ err: e, reason }, "dispatcher kick threw")
+      log.warn({ err: e, reason }, "dispatcher kick threw"),
     );
   }
 
@@ -268,7 +268,7 @@ export class Dispatcher {
     } catch (e) {
       log.warn(
         { err: e, sessionId: input.sessionId, eventType: input.eventType },
-        "dispatcher timeline event failed"
+        "dispatcher timeline event failed",
       );
     }
   }
@@ -277,7 +277,7 @@ export class Dispatcher {
     agentId: string,
     sessionId: string,
     decision: SpawnDecision,
-    facts: { deferUntilMs: number }
+    facts: { deferUntilMs: number },
   ): void {
     const key = [
       facts.deferUntilMs,
@@ -305,7 +305,7 @@ export class Dispatcher {
     agentId: string,
     sessionId: string,
     decision: SpawnDecision,
-    facts: { limit: number; activeCount: number }
+    facts: { limit: number; activeCount: number },
   ): void {
     const key = [
       facts.limit,
@@ -372,7 +372,9 @@ export class Dispatcher {
       : 1;
   }
 
-  private parallelSchedulingPolicy(agentDef: unknown): ParallelSchedulingPolicy {
+  private parallelSchedulingPolicy(
+    agentDef: unknown,
+  ): ParallelSchedulingPolicy {
     const raw = (agentDef as { parallelSchedulingPolicy?: unknown })
       .parallelSchedulingPolicy;
     return raw === "chain_first" ? "chain_first" : "lane_first";
@@ -435,8 +437,8 @@ export class Dispatcher {
         if (this.interactiveBusy.has(session.id)) continue;
 
         const hasTargetedInbox = targetedSessions.has(session.id);
-        const hasAgentWideInbox =
-          pending.hasAgentWide && !agentWideAssigned;
+        const hasDirectUserInbox = userMessageSessions.has(session.id);
+        const hasAgentWideInbox = pending.hasAgentWide && !agentWideAssigned;
         const hasInbox = hasTargetedInbox || hasAgentWideInbox;
 
         // Defer check — skip routine spawns until `defer_until`.
@@ -447,11 +449,10 @@ export class Dispatcher {
           session.deferUntil * 1000 > nowMs &&
           !hasInbox
         ) {
-          const deferredDecision = this.spawnDecision(
-            session.id,
-            nowMs,
-            false
-          );
+          const deferredDecision = this.spawnDecision(session, nowMs, {
+            hasInbox: false,
+            hasDirectUserInbox: false,
+          });
           if (deferredDecision) {
             this.recordDeferSkipped(agentId, session.id, deferredDecision, {
               deferUntilMs: session.deferUntil * 1000,
@@ -460,7 +461,10 @@ export class Dispatcher {
           continue;
         }
 
-        const decision = this.spawnDecision(session.id, nowMs, hasInbox);
+        const decision = this.spawnDecision(session, nowMs, {
+          hasInbox,
+          hasDirectUserInbox,
+        });
         if (decision) {
           if (available <= 0) {
             if (limit > 1 || hasInbox) {
@@ -490,7 +494,7 @@ export class Dispatcher {
       targetedSessions: Set<string>;
       userMessageSessions: Set<string>;
       userTaskCommentSessions: Set<string>;
-    }
+    },
   ): ReturnType<SessionStore["listActive"]> {
     const indexed = sessions.map((session, index) => ({ session, index }));
     indexed.sort((a, b) => {
@@ -529,7 +533,10 @@ export class Dispatcher {
    * walks sessions, so without this step unbound tasks would sit
    * invisibly forever.
    */
-  private async bindUnboundTasks(agentId: string, nowMs: number): Promise<void> {
+  private async bindUnboundTasks(
+    agentId: string,
+    nowMs: number,
+  ): Promise<void> {
     const tasks = this.taskStore.list({ assignee: agentId });
     for (const t of tasks) {
       if (t.session_id) {
@@ -539,7 +546,7 @@ export class Dispatcher {
         } catch (e) {
           log.warn(
             { err: e, taskId: t.id, sessionId: t.session_id, agentId },
-            "bindUnboundTasks: failed to clear dangling session binding"
+            "bindUnboundTasks: failed to clear dangling session binding",
           );
           continue;
         }
@@ -550,12 +557,13 @@ export class Dispatcher {
       try {
         const session = this.sessionStore.create(agentId, {
           title: t.title.slice(0, 80),
+          kind: "task",
         });
         await this.taskStore.update(t.id, { session_id: session.id });
       } catch (e) {
         log.warn(
           { err: e, taskId: t.id, agentId },
-          "bindUnboundTasks: failed to allocate session"
+          "bindUnboundTasks: failed to allocate session",
         );
       }
     }
@@ -579,19 +587,27 @@ export class Dispatcher {
    * unbound tasks aren't a dispatcher concern.
    */
   private spawnDecision(
-    sessionId: string,
+    session: Session,
     nowMs: number,
-    hasInbox: boolean
+    inbox: { hasInbox: boolean; hasDirectUserInbox: boolean },
   ): SpawnDecision | null {
+    const sessionId = session.id;
     const tasks = this.taskStore.list({ session_id: sessionId });
+    if (session.turnsBlockedReason) {
+      return null;
+    }
+    const sessionKind = tasks.length > 0 ? "task" : session.kind;
     if (tasks.some((t) => t.status === "system_blocked")) {
       return null;
     }
-    if (hasInbox) {
+    if (sessionKind === "chat" && !inbox.hasDirectUserInbox) {
+      return null;
+    }
+    if (inbox.hasInbox) {
       return {
         reason: "inbox",
         taskId: this.timelineTaskForSession(sessionId, nowMs)?.id ?? null,
-        hasInbox,
+        hasInbox: inbox.hasInbox,
       };
     }
     let readyTask: Task | null = null;
@@ -606,10 +622,7 @@ export class Dispatcher {
         // — ~30 wasted LLM calls per intended 30-min interval. Real
         // signals (inbox row, cross-agent comment) still bypass: that's
         // handled above by `hasInbox`.
-        if (
-          t.recurrence?.kind === "interval" &&
-          t.last_run_at != null
-        ) {
+        if (t.recurrence?.kind === "interval" && t.last_run_at != null) {
           const lastMs = Date.parse(t.last_run_at);
           if (
             Number.isFinite(lastMs) &&
@@ -618,7 +631,11 @@ export class Dispatcher {
             continue;
           }
         }
-        return { reason: "task_in_progress", taskId: t.id, hasInbox };
+        return {
+          reason: "task_in_progress",
+          taskId: t.id,
+          hasInbox: inbox.hasInbox,
+        };
       }
       if (
         t.status === "open" &&
@@ -638,20 +655,23 @@ export class Dispatcher {
       return {
         reason: "task_open_ready",
         taskId: readyTask.id,
-        hasInbox,
+        hasInbox: inbox.hasInbox,
       };
     }
     if (blockedTask) {
       return {
         reason: "task_blocked_revisit",
         taskId: blockedTask.id,
-        hasInbox,
+        hasInbox: inbox.hasInbox,
       };
     }
     return null;
   }
 
-  private timelineTaskForSession(sessionId: string, nowMs: number): Task | null {
+  private timelineTaskForSession(
+    sessionId: string,
+    nowMs: number,
+  ): Task | null {
     const tasks = this.taskStore.list({ session_id: sessionId });
     return (
       tasks.find((t) => t.status === "in_progress") ??
@@ -659,7 +679,7 @@ export class Dispatcher {
         (t) =>
           t.status === "open" &&
           isStartReady(t.start_at, nowMs) &&
-          this.depsSatisfied(t)
+          this.depsSatisfied(t),
       ) ??
       tasks.find((t) => t.status === "blocked") ??
       tasks[0] ??
@@ -693,7 +713,7 @@ export class Dispatcher {
   private enqueueTurn(
     agentId: string,
     sessionId: string,
-    decision: SpawnDecision
+    decision: SpawnDecision,
   ): boolean {
     if (this.runningSessions.has(sessionId)) return false;
     if (this.interactiveBusy.has(sessionId)) return false;
@@ -702,7 +722,7 @@ export class Dispatcher {
         this.missingAgentsLogged.add(agentId);
         log.warn(
           { agentId },
-          "agent referenced by sessions/tasks but no longer exists — wakes skipped"
+          "agent referenced by sessions/tasks but no longer exists — wakes skipped",
         );
       }
       return false;
@@ -777,10 +797,7 @@ export class Dispatcher {
         }
         if (this.kickAfterRunAgents.delete(agentId)) {
           this.tickSafe().catch((e) =>
-            log.warn(
-              { err: e, sessionId },
-              "post-run dispatcher kick threw"
-            )
+            log.warn({ err: e, sessionId }, "post-run dispatcher kick threw"),
           );
         }
       });
@@ -791,7 +808,7 @@ export class Dispatcher {
   private async runTurn(
     agentId: string,
     sessionId: string,
-    decision: SpawnDecision
+    decision: SpawnDecision,
   ): Promise<DispatcherRunResult> {
     if (!this.running) {
       return {
@@ -807,7 +824,7 @@ export class Dispatcher {
       const message = extractErrorText(e);
       log.warn(
         { agentId, sessionId, err: e },
-        "agent not available for session"
+        "agent not available for session",
       );
       this.recordTimeline({
         sessionId,
@@ -912,7 +929,7 @@ export class Dispatcher {
    */
   private async parkInProgress(
     sessionId: string,
-    note: { action: "timeout" | "error"; message: string }
+    note: { action: "timeout" | "error"; message: string },
   ): Promise<void> {
     if (
       this.taskStore
@@ -949,8 +966,9 @@ export class Dispatcher {
    */
   async systemBlockInProgress(
     sessionId: string,
-    note: { reason: string; message: string }
+    note: { reason: string; message: string },
   ): Promise<void> {
+    this.sessionStore.blockTurns(sessionId, note.reason);
     const inProg = this.taskStore.list({
       session_id: sessionId,
       status: "in_progress",
@@ -960,7 +978,7 @@ export class Dispatcher {
         await this.taskStore.update(
           task.id,
           { status: "system_blocked", start_at: null },
-          { actor: "system:scheduler" }
+          { actor: "system:scheduler" },
         );
         await this.taskStore.addComment({
           taskId: task.id,
@@ -988,7 +1006,7 @@ export class Dispatcher {
       if (reset.length > 0) {
         log.info(
           { count: reset.length },
-          "reset stale in-progress tasks on startup"
+          "reset stale in-progress tasks on startup",
         );
       }
     } catch (e) {

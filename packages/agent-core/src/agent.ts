@@ -3,6 +3,7 @@ import {
   readUIMessageStream,
   streamText,
   stepCountIs,
+  type LanguageModelUsage,
   type ToolSet,
   type UIMessage,
   type StreamTextResult,
@@ -120,6 +121,64 @@ function bindAgentToolObservation(): void {
 
 const DEFAULT_AUTONOMOUS_TIMEOUT_MS = 5 * 60 * 1000;
 const UPSTREAM_ERROR_MAX_CHARS = 4096;
+
+type MemoryFlushTextResult = {
+  text?: string;
+  totalUsage?: LanguageModelUsage;
+  steps?: ReadonlyArray<unknown>;
+};
+
+function requiresStreamingGenerate(model: AgentConfig["model"]): boolean {
+  return model.provider === "openai" && model.auth === "oauth";
+}
+
+async function runMemoryFlushText(args: {
+  modelConfig: AgentConfig["model"];
+  model: Parameters<typeof streamText>[0]["model"];
+  system: string;
+  messages: import("ai").ModelMessage[];
+  tools: Parameters<typeof streamText>[0]["tools"];
+  stopWhen: Parameters<typeof streamText>[0]["stopWhen"];
+  experimental_telemetry: Parameters<
+    typeof streamText
+  >[0]["experimental_telemetry"];
+}): Promise<MemoryFlushTextResult> {
+  if (requiresStreamingGenerate(args.modelConfig)) {
+    const stream = streamText({
+      model: args.model,
+      system: args.system,
+      messages: args.messages,
+      tools: args.tools,
+      stopWhen: args.stopWhen,
+      experimental_telemetry: args.experimental_telemetry,
+    });
+    let text = "";
+    for await (const delta of stream.textStream) {
+      text += delta;
+    }
+    let totalUsage: LanguageModelUsage | undefined;
+    try {
+      totalUsage = await stream.totalUsage;
+    } catch {
+      // Usage is telemetry-only; the flush output is authoritative.
+    }
+    return { text, totalUsage };
+  }
+
+  const generated = await generateText({
+    model: args.model,
+    system: args.system,
+    messages: args.messages,
+    tools: args.tools as Parameters<typeof generateText>[0]["tools"],
+    stopWhen: args.stopWhen,
+    experimental_telemetry: args.experimental_telemetry,
+  });
+  return {
+    text: generated.text,
+    totalUsage: generated.totalUsage,
+    steps: generated.steps,
+  };
+}
 
 function buildUpstreamErrorPart(err: unknown, provider?: string) {
   const statusCode = extractStatusCode(err);
@@ -1690,7 +1749,7 @@ export class Agent {
   }
 
   /**
-   * Pre-compaction memory flush. Runs `generateText` with the current
+   * Pre-compaction memory flush. Runs a text generation with the current
    * history + a one-line nudge prompting the agent to call the `memory`
    * tool for any context worth saving before older messages are summarized.
    *
@@ -1711,7 +1770,7 @@ export class Agent {
     try {
       // Skip the flush when history is already too big for the model's
       // effective context window. The flush sends the FULL history to
-      // generateText, so on a session that just tripped the
+      // the helper model, so on a session that just tripped the
       // compression threshold for being oversize we'd just immediately
       // get "Request size exceeds model context window" back. Failure
       // is swallowed below so it doesn't BLOCK compaction, but it's
@@ -1839,11 +1898,12 @@ export class Agent {
         });
         try {
           return {
-            result: await generateText({
+            result: await runMemoryFlushText({
+              modelConfig: flushModel,
               model: this.resolveModel(flushModel),
               system,
               messages: flushMessages,
-              tools: tools as Parameters<typeof generateText>[0]["tools"],
+              tools: tools as Parameters<typeof streamText>[0]["tools"],
               stopWhen: stepCountIs(this.config.maxSteps),
               experimental_telemetry: observation.telemetry.settings,
             }),

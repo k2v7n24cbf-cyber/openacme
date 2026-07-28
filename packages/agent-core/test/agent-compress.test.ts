@@ -252,6 +252,15 @@ function assistantUI(text: string): UIMessage {
   } as UIMessage;
 }
 
+function streamTextResult(text: string, usage: Record<string, unknown> = {}) {
+  return {
+    textStream: (async function* () {
+      yield text;
+    })(),
+    totalUsage: Promise.resolve(usage),
+  };
+}
+
 describe("Agent — compress() over UIMessage[]", () => {
   beforeEach(() => {
     streamTextMock.mockReset();
@@ -394,13 +403,9 @@ describe("Agent — compress() over UIMessage[]", () => {
     );
 
     generateTextMock.mockRejectedValue(new Error("non-stream rejected"));
-    streamTextMock.mockReturnValue({
-      textStream: (async function* () {
-        yield "## Active Task\n";
-        yield "None.";
-      })(),
-      totalUsage: Promise.resolve({}),
-    });
+    streamTextMock.mockImplementation(() =>
+      streamTextResult("## Active Task\nNone."),
+    );
 
     const agent = makeAgent({
       db,
@@ -411,7 +416,7 @@ describe("Agent — compress() over UIMessage[]", () => {
     });
     await agent.compress(parent.id, "proactive");
 
-    expect(streamTextMock).toHaveBeenCalled();
+    expect(streamTextMock).toHaveBeenCalledTimes(2);
     expect(
       generateTextMock.mock.calls.some(
         ([arg]) =>
@@ -428,6 +433,77 @@ describe("Agent — compress() over UIMessage[]", () => {
       );
     });
     expect(summaryRow).toBeDefined();
+  });
+
+  it("uses streaming memory flush for OpenAI OAuth compression", async () => {
+    const db = freshDb();
+    const sessions = createSessionStore(db);
+    const messages = createMessageStore(db);
+    const parent = sessions.create("a1", { id: "p-oauth-memory-flush" });
+
+    const seed: UIMessage[] = [];
+    for (let i = 0; i < 6; i++) {
+      seed.push(userUI(`u${i}`));
+      seed.push(assistantUI(`a${i}`.repeat(40)));
+    }
+    messages.appendMany(
+      parent.id,
+      seed.map((m) => ({
+        id: m.id,
+        role: m.role as "user" | "assistant",
+        parts: m.parts,
+      })),
+    );
+
+    generateTextMock.mockRejectedValue(
+      new Error('Bad Request {"detail":"Stream must be set to true"}'),
+    );
+    streamTextMock.mockImplementation((arg) => {
+      if (arg.experimental_telemetry?.functionId === "a1:memory-flush") {
+        return streamTextResult("ok", {
+          inputTokens: 10,
+          outputTokens: 1,
+          totalTokens: 11,
+        });
+      }
+      return streamTextResult("## Active Task\nNone.", {
+        inputTokens: 30,
+        outputTokens: 6,
+        totalTokens: 36,
+      });
+    });
+
+    const timelineEvents: SessionTimelineEventInput[] = [];
+    const usageReports: UsageReport[] = [];
+    const agent = makeAgent({
+      db,
+      thresholdTokens: 1000,
+      protectFirstN: 1,
+      tailTokenBudget: 100,
+      auth: "oauth",
+      onTimelineEvent: (event) => timelineEvents.push(event),
+      onUsage: (report) => usageReports.push(report),
+    });
+    await agent.compress(parent.id, "proactive");
+
+    const memoryFlushCalls = streamTextMock.mock.calls.filter(
+      ([arg]) => arg.experimental_telemetry?.functionId === "a1:memory-flush",
+    );
+    expect(memoryFlushCalls).toHaveLength(1);
+    expect(generateTextMock).not.toHaveBeenCalled();
+    expect(timelineEvents.map((event) => event.eventType)).toEqual(
+      expect.arrayContaining([
+        "session.compression.memory_flush.started",
+        "session.compression.memory_flush.finished",
+        "session.compression.finished",
+      ]),
+    );
+    expect(
+      timelineEvents.map((event) => event.eventType),
+    ).not.toContain("session.compression.memory_flush.failed");
+    expect(
+      usageReports.find((report) => report.kind === "extractor"),
+    ).toBeDefined();
   });
 
   it("does not compact when OpenAI OAuth streaming summarization returns empty text", async () => {
@@ -450,12 +526,7 @@ describe("Agent — compress() over UIMessage[]", () => {
       })),
     );
 
-    streamTextMock.mockReturnValue({
-      textStream: (async function* () {
-        yield "";
-      })(),
-      totalUsage: Promise.resolve({}),
-    });
+    streamTextMock.mockImplementation(() => streamTextResult(""));
 
     const agent = makeAgent({
       db,
@@ -497,12 +568,7 @@ describe("Agent — compress() over UIMessage[]", () => {
       })),
     );
 
-    streamTextMock.mockReturnValue({
-      textStream: (async function* () {
-        yield "";
-      })(),
-      totalUsage: Promise.resolve({}),
-    });
+    streamTextMock.mockImplementation(() => streamTextResult(""));
 
     const agent = makeAgent({
       db,
@@ -519,7 +585,7 @@ describe("Agent — compress() over UIMessage[]", () => {
     });
     await agent.compress(parent.id, "proactive");
 
-    expect(streamTextMock).toHaveBeenCalledTimes(1);
+    expect(streamTextMock).toHaveBeenCalledTimes(2);
     expect(getModelMock).toHaveBeenCalledWith(
       expect.objectContaining({ model: "gpt-5.2" }),
     );

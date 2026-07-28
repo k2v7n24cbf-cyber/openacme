@@ -1074,6 +1074,31 @@ describe("Dispatcher failure handling", () => {
     expect(comments.at(-1)?.body).not.toContain("[object Object]");
   });
 
+  it("does not downgrade a task that became system_blocked during a failed turn", async () => {
+    let taskId = "";
+    const { manager, calls } = fakeManager(["a1"], async () => {
+      await taskStore.update(
+        taskId,
+        { status: "system_blocked", start_at: null },
+        { actor: "system:test" }
+      );
+      throw new Error("late non-system cleanup error");
+    });
+    const { session, task } = await makeBoundTask("a1", {
+      status: "in_progress",
+    });
+    taskId = task.id;
+
+    const d = makeDispatcher(manager);
+    await d.start();
+    await d.drain(5_000);
+
+    expect(calls).toEqual([{ agentId: "a1", sessionId: session.id }]);
+    const blocked = taskStore.get(task.id);
+    expect(blocked?.status).toBe("system_blocked");
+    expect(blocked?.start_at).toBeNull();
+  });
+
   it("does not wake a system_blocked task, even with queued inbox", async () => {
     const { manager, calls } = fakeManager(["a1"]);
     const { session } = await makeBoundTask("a1", {

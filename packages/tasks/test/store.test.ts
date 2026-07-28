@@ -461,6 +461,27 @@ describe("TaskStore session queue", () => {
     expect(store.nextEligibleFor(sessionId)).toBeNull();
   });
 
+  it("does not park a task that is no longer in_progress", async () => {
+    const task = await store.create({
+      title: "provider overflow",
+      assignee: "agent",
+      created_by: "user",
+      session_id: "sess-system-blocked",
+      status: "in_progress",
+    });
+    await store.update(task.id, { status: "system_blocked", start_at: null });
+
+    await store.park({
+      id: task.id,
+      retryAt: new Date(Date.now() + 60_000),
+      reason: "[error] stale failure",
+    });
+
+    const current = store.get(task.id);
+    expect(current?.status).toBe("system_blocked");
+    expect(current?.start_at).toBeNull();
+  });
+
   it("reassignment clears session_id automatically", async () => {
     const t = await store.create({
       title: "x",

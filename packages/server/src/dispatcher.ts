@@ -914,6 +914,13 @@ export class Dispatcher {
     sessionId: string,
     note: { action: "timeout" | "error"; message: string }
   ): Promise<void> {
+    if (
+      this.taskStore
+        .list({ session_id: sessionId })
+        .some((task) => task.status === "system_blocked")
+    ) {
+      return;
+    }
     const inProg = this.taskStore.list({
       session_id: sessionId,
       status: "in_progress",
@@ -921,6 +928,9 @@ export class Dispatcher {
     const retryAt = new Date(this.now().getTime() + PARK_BACKOFF_MS);
     for (const task of inProg) {
       try {
+        if (this.taskStore.get(task.id)?.status !== "in_progress") {
+          continue;
+        }
         await this.taskStore.park({
           id: task.id,
           retryAt,

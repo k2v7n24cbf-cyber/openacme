@@ -838,11 +838,32 @@ export class TaskStore {
     reason: string;
   }): Promise<void> {
     const retryAtIso = input.retryAt.toISOString();
-    await this.update(
-      input.id,
-      { status: "blocked", start_at: retryAtIso },
-      { actor: "system:scheduler" },
-    );
+    const parked = await this.withMutex(input.id, async () => {
+      const existing = this.get(input.id);
+      if (!existing || existing.status !== "in_progress") {
+        return false;
+      }
+      const now = new Date().toISOString();
+      const next: Task = {
+        ...existing,
+        status: "blocked",
+        start_at: retryAtIso,
+        updated_at: now,
+        closed_at: null,
+      };
+      await this.writeFile(next);
+      this.emitEvent({
+        taskId: next.id,
+        sessionId: next.session_id,
+        agentId: next.assignee,
+        actor: "system:scheduler",
+        kind: "status_changed",
+        payload: { from: existing.status, to: next.status },
+      });
+      this.fireOnChange();
+      return true;
+    });
+    if (!parked) return;
     await this.addComment({
       taskId: input.id,
       author: "system:scheduler",

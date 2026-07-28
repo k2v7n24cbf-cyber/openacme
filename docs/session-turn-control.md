@@ -187,6 +187,60 @@ Acceptance:
 - Context overflow blocks further turns whether or not a task exists.
 - Documentation records exact validation commands and live evidence.
 
+### Milestone 6 - System Block Telemetry And Logging
+
+Goal: make hard-stop decisions auditable in the session timeline and platform
+logs without changing the turn-control state machine.
+
+Slices:
+
+1. Session block recording:
+   - whenever the server/dispatcher sets `turns_blocked_reason`, record
+     `session.turn_blocked`.
+   - payload includes `reason`, truncated `message`, and affected `taskIds`.
+2. User turn rejection:
+   - when `/api/chat` rejects a blocked session, record
+     `session.chat.rejected`.
+   - payload distinguishes session-owned blocks from task-owned
+     `system_blocked` gates.
+3. Dispatcher blocked skip:
+   - when the dispatcher sees inbox/task work that would wake a session but
+     skips because the session is blocked or a bound task is `system_blocked`,
+     record `session.dispatcher.blocked.skipped`.
+   - repeated identical skip facts are coalesced per session, matching existing
+     defer/capacity timeline behavior.
+4. Structured logs:
+   - write a platform log when a hard stop is set.
+   - write a platform log when `/api/chat` rejects a blocked turn.
+   - write a coalesced platform log when the dispatcher skips a blocked wake.
+
+TDD:
+
+- Dispatcher test: blocked session with queued inbox emits
+  `session.dispatcher.blocked.skipped` and does not run.
+- Dispatcher test: OpenAI context overflow emits `session.turn_blocked` before
+  the failed autonomous turn closes.
+- E2E chat test: taskless context overflow emits `session.turn_blocked`, and a
+  retry emits `session.chat.rejected`.
+
+Live acceptance:
+
+- In `~/.openacme-test`, force a taskless context overflow and confirm:
+  - `turnsBlockedReason = "context_length_exceeded"`.
+  - timeline contains `session.turn_blocked`.
+  - retry returns `409 session_system_blocked`.
+  - timeline contains `session.chat.rejected`.
+- In `~/.openacme-test`, force a compression failure on a task-bound session
+  and confirm:
+  - task status is `system_blocked`.
+  - session is blocked with `turnsBlockedReason = "compression_failed"`.
+  - timeline contains `session.turn_blocked`.
+  - retry returns `409 session_system_blocked`.
+
+Status:
+
+- Complete.
+
 ## Non-Goals
 
 - No change to task statuses or task lifecycle semantics.
@@ -214,6 +268,15 @@ Completed on 2026-07-28:
 - `pnpm exec vitest run --config vitest.e2e.config.ts test/e2e/chat.e2e.ts`
   passed with the `too_short` regression.
 
+System block telemetry slice completed on 2026-07-28:
+
+- `pnpm --filter @openacme/server test -- dispatcher.test.ts` passed with
+  `session.dispatcher.blocked.skipped` and `session.turn_blocked` assertions.
+- `cd packages/server && pnpm exec vitest run --config vitest.e2e.config.ts test/e2e/chat.e2e.ts`
+  passed outside the sandbox with `session.turn_blocked` and
+  `session.chat.rejected` assertions.
+- `pnpm --filter @openacme/server build` passed.
+
 Live `~/.openacme-test` evidence:
 
 - False-positive `too_short` block repair:
@@ -237,3 +300,22 @@ Live `~/.openacme-test` evidence:
   - task `280`
   - task status `system_blocked`
   - retry returned `409 session_system_blocked`
+- System block telemetry taskless overflow:
+  - session
+    `live-session-only-1785266723031-db6bb3cd-113d-412f-8d18-d284cbcd3ae0`
+  - `kind = "chat"`
+  - `turnsBlockedReason = "context_length_exceeded"`
+  - retry returned `409 session_system_blocked`
+  - timeline contained `session.turn_blocked` and `session.chat.rejected`
+- System block telemetry compression failure:
+  - session `live-1785266750357-4f8f2faa-a0fb-49cc-a476-147fa1a0b038`
+  - task `282`
+  - task status `system_blocked`
+  - retry returned `409 session_system_blocked`
+  - timeline contained `session.turn_blocked` and `session.chat.rejected`
+- System block telemetry task-bound context overflow:
+  - session `live-1785266764687-1d71ddeb-c9f1-4110-9366-ae4ec40a4e81`
+  - task `283`
+  - task status `system_blocked`
+  - retry returned `409 session_system_blocked`
+  - timeline contained `session.turn_blocked` and `session.chat.rejected`

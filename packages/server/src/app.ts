@@ -520,8 +520,51 @@ export async function createApp(
     const existingSession = sessionId
       ? manager.sessionStore.get(effectiveSessionId)
       : null;
+    const rejectedUserMessageId = [...messages]
+      .reverse()
+      .find(
+        (message): message is UIMessage =>
+          typeof message === "object" &&
+          message !== null &&
+          (message as { role?: unknown }).role === "user" &&
+          typeof (message as { id?: unknown }).id === "string",
+      )?.id;
+    const recordBlockedChatRejected = (facts: {
+      blockReason: string;
+      blockSource: "session" | "task";
+      taskId?: string | null;
+    }) => {
+      log.warn(
+        {
+          agentId,
+          sessionId: effectiveSessionId,
+          taskId: facts.taskId,
+          blockReason: facts.blockReason,
+          blockSource: facts.blockSource,
+        },
+        "chat turn rejected for blocked session",
+      );
+      manager.recordSessionTimeline({
+        sessionId: effectiveSessionId,
+        agentId,
+        taskId: facts.taskId ?? null,
+        messageId: rejectedUserMessageId,
+        eventType: "session.chat.rejected",
+        source: "server",
+        status: "blocked",
+        payload: {
+          reason: "session_system_blocked",
+          blockReason: facts.blockReason,
+          blockSource: facts.blockSource,
+        },
+      });
+    };
 
     if (existingSession?.turnsBlockedReason) {
+      recordBlockedChatRejected({
+        blockReason: existingSession.turnsBlockedReason,
+        blockSource: "session",
+      });
       return c.json(
         {
           error: "session_system_blocked",
@@ -540,6 +583,11 @@ export async function createApp(
           .find((t) => t.status === "system_blocked")
       : null;
     if (systemBlockedTask) {
+      recordBlockedChatRejected({
+        blockReason: "task_system_blocked",
+        blockSource: "task",
+        taskId: systemBlockedTask.id,
+      });
       return c.json(
         {
           error: "session_system_blocked",

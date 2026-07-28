@@ -352,6 +352,7 @@ describe("Dispatcher spawn rule", () => {
   });
 
   it("does not wake a session with a turn block, even with queued inbox", async () => {
+    const timelineEvents: SessionTimelineEventInput[] = [];
     const { manager, calls } = fakeManager(["a1"]);
     const session = sessionStore.create("a1", { kind: "task" });
     sessionStore.blockTurns(session.id, "context_length_exceeded");
@@ -364,10 +365,29 @@ describe("Dispatcher spawn rule", () => {
       payload: { id: "m-blocked", role: "user", parts: [] },
     });
 
-    const d = makeDispatcher(manager);
-    await tick(d);
+    const d = makeDispatcher(manager, {
+      onTimelineEvent: (event) => timelineEvents.push(event),
+    });
+    await d.start();
+    await d.drain(5_000);
 
     expect(calls).toEqual([]);
+    expect(timelineEvents).toContainEqual(
+      expect.objectContaining({
+        sessionId: session.id,
+        agentId: "a1",
+        taskId: null,
+        eventType: "session.dispatcher.blocked.skipped",
+        source: "dispatcher",
+        status: "skipped",
+        payload: expect.objectContaining({
+          reason: "inbox",
+          blockReason: "context_length_exceeded",
+          blockSource: "session",
+          hasInbox: true,
+        }),
+      }),
+    );
   });
 
   it("defer_until suppresses routine wakes but an inbox row bypasses it", async () => {
@@ -1091,6 +1111,7 @@ describe("Dispatcher failure handling", () => {
   });
 
   it("marks an in-progress task system_blocked on OpenAI context overflow", async () => {
+    const timelineEvents: SessionTimelineEventInput[] = [];
     const providerError = {
       type: "error",
       sequence_number: 2,
@@ -1109,7 +1130,9 @@ describe("Dispatcher failure handling", () => {
       status: "in_progress",
     });
 
-    const d = makeDispatcher(manager);
+    const d = makeDispatcher(manager, {
+      onTimelineEvent: (event) => timelineEvents.push(event),
+    });
     await d.start();
     await d.drain(5_000);
 
@@ -1123,6 +1146,22 @@ describe("Dispatcher failure handling", () => {
       "Your input exceeds the context window",
     );
     expect(comments.at(-1)?.body).not.toContain("[object Object]");
+    expect(timelineEvents).toContainEqual(
+      expect.objectContaining({
+        sessionId: session.id,
+        agentId: "a1",
+        taskId: task.id,
+        eventType: "session.turn_blocked",
+        source: "dispatcher",
+        status: "blocked",
+        payload: expect.objectContaining({
+          reason: "context_length_exceeded",
+          message:
+            "Your input exceeds the context window of this model. Please adjust your input and try again.",
+          taskIds: [task.id],
+        }),
+      }),
+    );
   });
 
   it("does not downgrade a task that became system_blocked during a failed turn", async () => {
@@ -1151,8 +1190,9 @@ describe("Dispatcher failure handling", () => {
   });
 
   it("does not wake a system_blocked task, even with queued inbox", async () => {
+    const timelineEvents: SessionTimelineEventInput[] = [];
     const { manager, calls } = fakeManager(["a1"]);
-    const { session } = await makeBoundTask("a1", {
+    const { session, task } = await makeBoundTask("a1", {
       status: "system_blocked",
     });
     inboxStore.deliver({
@@ -1168,11 +1208,29 @@ describe("Dispatcher failure handling", () => {
       },
     });
 
-    const d = makeDispatcher(manager);
+    const d = makeDispatcher(manager, {
+      onTimelineEvent: (event) => timelineEvents.push(event),
+    });
     await d.start();
     await d.drain(5_000);
 
     expect(calls).toEqual([]);
+    expect(timelineEvents).toContainEqual(
+      expect.objectContaining({
+        sessionId: session.id,
+        agentId: "a1",
+        taskId: task.id,
+        eventType: "session.dispatcher.blocked.skipped",
+        source: "dispatcher",
+        status: "skipped",
+        payload: expect.objectContaining({
+          reason: "inbox",
+          blockReason: "task_system_blocked",
+          blockSource: "task",
+          hasInbox: true,
+        }),
+      }),
+    );
   });
 
   it("emits autonomous and wake failure timeline events when a turn errors", async () => {

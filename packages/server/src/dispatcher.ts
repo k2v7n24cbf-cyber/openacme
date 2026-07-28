@@ -136,6 +136,7 @@ export class Dispatcher {
   private lastRunSequenceBySession = new Map<string, number>();
   private deferSkipKeysBySession = new Map<string, string>();
   private capacityQueuedKeysBySession = new Map<string, string>();
+  private blockedSkipKeysBySession = new Map<string, string>();
 
   constructor(opts: DispatcherOptions) {
     this.taskStore = opts.taskStore;
@@ -331,6 +332,49 @@ export class Dispatcher {
     });
   }
 
+  private recordBlockedSkipped(
+    agentId: string,
+    sessionId: string,
+    decision: SpawnDecision,
+    facts: { blockReason: string; blockSource: "session" | "task" },
+  ): void {
+    const key = [
+      facts.blockSource,
+      facts.blockReason,
+      decision.reason,
+      decision.taskId ?? "",
+      decision.hasInbox ? "inbox" : "routine",
+    ].join(":");
+    if (this.blockedSkipKeysBySession.get(sessionId) === key) return;
+    this.blockedSkipKeysBySession.set(sessionId, key);
+    log.info(
+      {
+        agentId,
+        sessionId,
+        taskId: decision.taskId,
+        blockReason: facts.blockReason,
+        blockSource: facts.blockSource,
+        reason: decision.reason,
+        hasInbox: decision.hasInbox,
+      },
+      "dispatcher skipped blocked session wake",
+    );
+    this.recordTimeline({
+      sessionId,
+      agentId,
+      taskId: decision.taskId,
+      eventType: "session.dispatcher.blocked.skipped",
+      source: "dispatcher",
+      status: "skipped",
+      payload: {
+        reason: decision.reason,
+        hasInbox: decision.hasInbox,
+        blockReason: facts.blockReason,
+        blockSource: facts.blockSource,
+      },
+    });
+  }
+
   // ── Internals ─────────────────────────────────────────────────────
 
   private async tickSafe(): Promise<void> {
@@ -441,6 +485,18 @@ export class Dispatcher {
         const hasAgentWideInbox = pending.hasAgentWide && !agentWideAssigned;
         const hasInbox = hasTargetedInbox || hasAgentWideInbox;
 
+        const blockedWake = this.blockedWakeDecision(session, nowMs, {
+          hasInbox,
+          hasDirectUserInbox,
+        });
+        if (blockedWake) {
+          this.recordBlockedSkipped(agentId, session.id, blockedWake.decision, {
+            blockReason: blockedWake.blockReason,
+            blockSource: blockedWake.blockSource,
+          });
+          continue;
+        }
+
         // Defer check — skip routine spawns until `defer_until`.
         // New inbox rows bypass: defer is "no routine checks," not
         // "ignore real signals."
@@ -477,14 +533,55 @@ export class Dispatcher {
             break;
           }
           if (this.enqueueTurn(agentId, session.id, decision)) {
+            this.blockedSkipKeysBySession.delete(session.id);
             available--;
             if (pending.hasAgentWide) agentWideAssigned = true;
           }
         } else {
           this.deferSkipKeysBySession.delete(session.id);
+          this.blockedSkipKeysBySession.delete(session.id);
         }
       }
     }
+  }
+
+  private blockedWakeDecision(
+    session: Session,
+    nowMs: number,
+    inbox: { hasInbox: boolean; hasDirectUserInbox: boolean },
+  ): {
+    decision: SpawnDecision;
+    blockReason: string;
+    blockSource: "session" | "task";
+  } | null {
+    const tasks = this.taskStore.list({ session_id: session.id });
+    const systemBlockedTask = tasks.find((t) => t.status === "system_blocked");
+    if (!session.turnsBlockedReason && !systemBlockedTask) return null;
+    const taskId = this.timelineTaskFromTasks(tasks, nowMs)?.id ?? null;
+    const sessionKind = tasks.length > 0 ? "task" : session.kind;
+
+    if (inbox.hasInbox) {
+      return {
+        decision: { reason: "inbox", taskId, hasInbox: true },
+        blockReason:
+          session.turnsBlockedReason ??
+          (systemBlockedTask ? "task_system_blocked" : "blocked"),
+        blockSource: session.turnsBlockedReason ? "session" : "task",
+      };
+    }
+    if (!session.turnsBlockedReason || sessionKind === "chat") return null;
+
+    const routineDecision = this.routineTaskDecisionFromTasks(
+      tasks,
+      nowMs,
+      false,
+    );
+    if (!routineDecision) return null;
+    return {
+      decision: routineDecision,
+      blockReason: session.turnsBlockedReason,
+      blockSource: "session",
+    };
   }
 
   private orderSessionsForScheduling(
@@ -673,6 +770,10 @@ export class Dispatcher {
     nowMs: number,
   ): Task | null {
     const tasks = this.taskStore.list({ session_id: sessionId });
+    return this.timelineTaskFromTasks(tasks, nowMs);
+  }
+
+  private timelineTaskFromTasks(tasks: Task[], nowMs: number): Task | null {
     return (
       tasks.find((t) => t.status === "in_progress") ??
       tasks.find(
@@ -685,6 +786,57 @@ export class Dispatcher {
       tasks[0] ??
       null
     );
+  }
+
+  private routineTaskDecisionFromTasks(
+    tasks: Task[],
+    nowMs: number,
+    hasInbox: boolean,
+  ): SpawnDecision | null {
+    let readyTask: Task | null = null;
+    let blockedTask: Task | null = null;
+    for (const t of tasks) {
+      if (t.status === "in_progress") {
+        if (t.recurrence?.kind === "interval" && t.last_run_at != null) {
+          const lastMs = Date.parse(t.last_run_at);
+          if (
+            Number.isFinite(lastMs) &&
+            lastMs + t.recurrence.every_ms > nowMs
+          ) {
+            continue;
+          }
+        }
+        return {
+          reason: "task_in_progress",
+          taskId: t.id,
+          hasInbox,
+        };
+      }
+      if (
+        t.status === "open" &&
+        isStartReady(t.start_at, nowMs) &&
+        this.depsSatisfied(t)
+      ) {
+        readyTask ??= t;
+      } else if (t.status === "blocked") {
+        blockedTask ??= t;
+      }
+    }
+    if (readyTask) {
+      return {
+        reason: "task_open_ready",
+        taskId: readyTask.id,
+        hasInbox,
+      };
+    }
+    if (blockedTask) {
+      return {
+        reason: "task_blocked_revisit",
+        taskId: blockedTask.id,
+        hasInbox,
+      };
+    }
+    return null;
   }
 
   private depsSatisfied(t: Task): boolean {
@@ -969,9 +1121,33 @@ export class Dispatcher {
     note: { reason: string; message: string },
   ): Promise<void> {
     this.sessionStore.blockTurns(sessionId, note.reason);
+    const session = this.sessionStore.get(sessionId);
     const inProg = this.taskStore.list({
       session_id: sessionId,
       status: "in_progress",
+    });
+    const taskIds = inProg.map((task) => task.id);
+    log.warn(
+      {
+        sessionId,
+        agentId: session?.agentId,
+        reason: note.reason,
+        taskIds,
+      },
+      "session turns blocked",
+    );
+    this.recordTimeline({
+      sessionId,
+      agentId: session?.agentId ?? "unknown",
+      taskId: taskIds[0] ?? null,
+      eventType: "session.turn_blocked",
+      source: "dispatcher",
+      status: "blocked",
+      payload: {
+        reason: note.reason,
+        message: truncateTimelineError(note.message),
+        taskIds,
+      },
     });
     for (const task of inProg) {
       try {

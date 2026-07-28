@@ -72,6 +72,26 @@ async function fetchMessages(
   return (await res.json()) as Array<{ role: string; parts: any[] }>;
 }
 
+async function fetchTimeline(sessionId: string): Promise<{
+  events: Array<{
+    eventType: string;
+    source: string;
+    status?: string | null;
+    payload?: unknown;
+  }>;
+}> {
+  const res = await req(`/api/sessions/${sessionId}/timeline?limit=100`);
+  expect(res.status).toBe(200);
+  return (await res.json()) as {
+    events: Array<{
+      eventType: string;
+      source: string;
+      status?: string | null;
+      payload?: unknown;
+    }>;
+  };
+}
+
 function assistantText(parts: any[]): string {
   return parts
     .filter((p) => p?.type === "text")
@@ -201,6 +221,17 @@ describe("chat turn (e2e)", () => {
     const session = await sessionRes.json();
     expect(session.kind).toBe("chat");
     expect(session.turnsBlockedReason).toBe("context_length_exceeded");
+    await waitUntil(async () => {
+      const timeline = await fetchTimeline(sessionId);
+      return timeline.events.some(
+        (event) =>
+          event.eventType === "session.turn_blocked" &&
+          event.source === "dispatcher" &&
+          event.status === "blocked" &&
+          (event.payload as { reason?: string } | null)?.reason ===
+            "context_length_exceeded",
+      );
+    });
 
     const retry = await postChatResponse(sessionId, "should be rejected");
     expect(retry.status).toBe(409);
@@ -208,6 +239,19 @@ describe("chat turn (e2e)", () => {
       error: "session_system_blocked",
       sessionId,
       reason: "context_length_exceeded",
+    });
+    await waitUntil(async () => {
+      const timeline = await fetchTimeline(sessionId);
+      return timeline.events.some(
+        (event) =>
+          event.eventType === "session.chat.rejected" &&
+          event.source === "server" &&
+          event.status === "blocked" &&
+          (event.payload as { reason?: string; blockReason?: string } | null)
+            ?.reason === "session_system_blocked" &&
+          (event.payload as { blockReason?: string } | null)?.blockReason ===
+            "context_length_exceeded",
+      );
     });
 
     sse.close();

@@ -503,10 +503,22 @@ function AgentsPage() {
 
   // ── Derived ──────────────────────────────────────────────────────────────
 
+  const agentAskTool = useMemo<ToolInfo>(
+    () =>
+      tools.find((t) => t.name === "agent_ask") ?? {
+        name: "agent_ask",
+        description: "Ask another agent for a direct synchronous answer.",
+        toolset: "System",
+        system: true,
+      },
+    [tools],
+  );
+
   const toolsByToolset = useMemo(() => {
     const map = new Map<string, ToolInfo[]>();
     for (const t of tools) {
-      // System tools are always on for every agent — hide from the picker.
+      // Most system tools are always on for every agent. `agent_ask` is
+      // separately gated by agentAskEnabled and rendered as a system tool.
       if (t.system) continue;
       const list = map.get(t.toolset) ?? [];
       list.push(t);
@@ -1010,6 +1022,7 @@ function AgentsPage() {
                 providers={providers}
                 allSkills={allSkills}
                 toolGroups={toolsByToolset}
+                agentAskTool={agentAskTool}
                 onAgentUpdated={(updated) => {
                   setSelectedAgent(updated);
                   void reloadAgents();
@@ -1142,6 +1155,16 @@ function AgentsPage() {
                         onToggle={toggleTool}
                         onSetGroup={setToolGroup}
                       />
+                      <AgentAskToolPicker
+                        tool={agentAskTool}
+                        enabled={formData.agentAskEnabled}
+                        onChange={(agentAskEnabled) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            agentAskEnabled,
+                          }))
+                        }
+                      />
 
                       <McpCreateField
                         globalServers={globalMcp}
@@ -1177,15 +1200,6 @@ function AgentsPage() {
                           setFormData((prev) => ({
                             ...prev,
                             memoryExtractionEnabled,
-                          }))
-                        }
-                      />
-                      <AgentAskSetting
-                        enabled={formData.agentAskEnabled}
-                        onChange={(agentAskEnabled) =>
-                          setFormData((prev) => ({
-                            ...prev,
-                            agentAskEnabled,
                           }))
                         }
                       />
@@ -1555,6 +1569,41 @@ function ToolToggle({
   );
 }
 
+function AgentAskToolPicker({
+  tool,
+  enabled,
+  onChange,
+}: {
+  tool: ToolInfo;
+  enabled: boolean;
+  onChange: (enabled: boolean) => void;
+}) {
+  return (
+    <div className="grid gap-3">
+      <div className="flex items-center justify-between">
+        <Label>System tools</Label>
+        <span className="font-mono text-[11px] tabular-nums text-ink-soft">
+          {enabled ? "1 / 1" : "0 / 1"}
+        </span>
+      </div>
+      <div>
+        <div className="mb-2 flex items-center gap-2">
+          <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+            {tool.toolset || "System"}
+          </span>
+        </div>
+        <div className="grid grid-cols-1 gap-px md:grid-cols-2">
+          <ToolToggle
+            tool={tool}
+            checked={enabled}
+            onClick={() => onChange(!enabled)}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ImportPreviewBlock({
   preview,
 }: {
@@ -1780,6 +1829,7 @@ function AgentDetail({
   providers,
   allSkills,
   toolGroups,
+  agentAskTool,
   tab,
   onTabChange,
   onAgentUpdated,
@@ -1790,6 +1840,7 @@ function AgentDetail({
   providers: ProviderInfo[];
   allSkills: SkillIndexEntry[];
   toolGroups: [string, ToolInfo[]][];
+  agentAskTool: ToolInfo;
   tab: AgentTab;
   onTabChange: (tab: AgentTab) => void;
   onAgentUpdated: (updated: Agent) => void;
@@ -1963,7 +2014,7 @@ function AgentDetail({
           <TabsTrigger value="tools">
             Tools
             <span className="tabular-nums text-ink-faint">
-              {agent.tools.length}
+              {agent.tools.length + ((agent.agentAskEnabled ?? true) ? 1 : 0)}
             </span>
           </TabsTrigger>
           <TabsTrigger value="skills">Skills</TabsTrigger>
@@ -1984,6 +2035,7 @@ function AgentDetail({
           <AgentToolsTab
             agent={agent}
             groups={toolGroups}
+            agentAskTool={agentAskTool}
             onSaved={onAgentUpdated}
             onDraftChange={setTabSlice}
           />
@@ -2009,10 +2061,6 @@ function AgentDetail({
             schedulingPolicy={draft.parallelSchedulingPolicy}
             onSchedulingPolicyChange={(parallelSchedulingPolicy) =>
               setDraft({ ...draft, parallelSchedulingPolicy })
-            }
-            agentAskEnabled={draft.agentAskEnabled}
-            onAgentAskChange={(agentAskEnabled) =>
-              setDraft({ ...draft, agentAskEnabled })
             }
             instantMessagesEnabled={draft.instantMessagesEnabled}
             onInstantMessagesChange={(instantMessagesEnabled) =>
@@ -2449,28 +2497,43 @@ function sameStringSet(a: string[], b: string[]): boolean {
 function AgentToolsTab({
   agent,
   groups,
+  agentAskTool,
   onSaved,
   onDraftChange,
 }: {
   agent: Agent;
   groups: [string, ToolInfo[]][];
+  agentAskTool: ToolInfo;
   onSaved: (updated: Agent) => void;
   onDraftChange?: (slice: Partial<Agent>) => void;
 }) {
   const [selected, setSelected] = useState<string[]>(agent.tools);
+  const [agentAskEnabled, setAgentAskEnabled] = useState(
+    agent.agentAskEnabled ?? true,
+  );
   useEffect(() => {
     setSelected(agent.tools);
-  }, [agent.id, agent.tools]);
+    setAgentAskEnabled(agent.agentAskEnabled ?? true);
+  }, [agent.id, agent.tools, agent.agentAskEnabled]);
   useEffect(() => {
-    onDraftChange?.({ tools: selected });
-  }, [selected, onDraftChange]);
+    onDraftChange?.({ tools: selected, agentAskEnabled });
+  }, [selected, agentAskEnabled, onDraftChange]);
   const { saving, save } = useSliceSave(agent, onSaved);
+  const savedAgentAskEnabled = agent.agentAskEnabled ?? true;
+  const dirty =
+    !sameStringSet(selected, agent.tools) ||
+    agentAskEnabled !== savedAgentAskEnabled;
+  const discard = () => {
+    setSelected(agent.tools);
+    setAgentAskEnabled(savedAgentAskEnabled);
+  };
 
   if (agent.managed) {
     return (
-      <div className="py-2">
+      <div className="grid gap-5 py-2">
         <p className="mb-3 font-mono text-[12px] text-ink-faint">
-          Platform-managed — tools are owned by the bundled template.
+          Platform-managed — template tools are owned by the bundled template.
+          System tool availability can still be configured.
         </p>
         <div className="flex flex-wrap gap-1.5">
           {agent.tools.map((t) => (
@@ -2479,12 +2542,23 @@ function AgentToolsTab({
             </Badge>
           ))}
         </div>
+        <AgentAskToolPicker
+          tool={agentAskTool}
+          enabled={agentAskEnabled}
+          onChange={setAgentAskEnabled}
+        />
+        <ConfigSaveBar
+          dirty={agentAskEnabled !== savedAgentAskEnabled}
+          saving={saving}
+          onSave={() => void save({ agentAskEnabled }, "Tools")}
+          onDiscard={discard}
+        />
       </div>
     );
   }
 
   return (
-    <div className="py-2">
+    <div className="grid gap-5 py-2">
       <ToolPicker
         groups={groups}
         selected={selected}
@@ -2499,11 +2573,16 @@ function AgentToolsTab({
           setSelected((prev) => setGroupSelection(prev, names, checked))
         }
       />
+      <AgentAskToolPicker
+        tool={agentAskTool}
+        enabled={agentAskEnabled}
+        onChange={setAgentAskEnabled}
+      />
       <ConfigSaveBar
-        dirty={!sameStringSet(selected, agent.tools)}
+        dirty={dirty}
         saving={saving}
-        onSave={() => void save({ tools: selected }, "Tools")}
-        onDiscard={() => setSelected(agent.tools)}
+        onSave={() => void save({ tools: selected, agentAskEnabled }, "Tools")}
+        onDiscard={discard}
       />
     </div>
   );
@@ -2740,45 +2819,6 @@ function InstantMessagesSetting({
   );
 }
 
-function AgentAskSetting({
-  enabled,
-  onChange,
-}: {
-  enabled: boolean;
-  onChange: (enabled: boolean) => void;
-}) {
-  return (
-    <div className="grid gap-3 border-t border-paper-rule pt-4">
-      <div>
-        <Label htmlFor="agent-ask">Agent ask tool</Label>
-        <p className="mt-1 text-[12px] leading-relaxed text-ink-soft">
-          Allow this agent to ask other agents for immediate answers with
-          agent_ask.
-        </p>
-      </div>
-      <label
-        htmlFor="agent-ask"
-        className="flex max-w-2xl cursor-pointer items-start gap-3 border border-paper-rule bg-paper px-3 py-3 text-sm transition-colors hover:border-plot-red"
-      >
-        <input
-          id="agent-ask"
-          type="checkbox"
-          checked={enabled}
-          onChange={(e) => onChange(e.target.checked)}
-          className="mt-0.5 size-4 accent-plot-red"
-        />
-        <span className="grid gap-1">
-          <span className="font-medium text-ink">Can call agent_ask</span>
-          <span className="text-[12px] leading-relaxed text-ink-soft">
-            When disabled, this agent must coordinate through tasks and comments
-            instead.
-          </span>
-        </span>
-      </label>
-    </div>
-  );
-}
-
 function AgentSettingsTab({
   memoryExtractionEnabled,
   onMemoryExtractionChange,
@@ -2786,8 +2826,6 @@ function AgentSettingsTab({
   onMaxConcurrentSessionsChange,
   schedulingPolicy,
   onSchedulingPolicyChange,
-  agentAskEnabled,
-  onAgentAskChange,
   instantMessagesEnabled,
   onInstantMessagesChange,
 }: {
@@ -2797,14 +2835,11 @@ function AgentSettingsTab({
   onMaxConcurrentSessionsChange: (value: number) => void;
   schedulingPolicy: ParallelSchedulingPolicy;
   onSchedulingPolicyChange: (value: ParallelSchedulingPolicy) => void;
-  agentAskEnabled: boolean;
-  onAgentAskChange: (enabled: boolean) => void;
   instantMessagesEnabled: boolean;
   onInstantMessagesChange: (enabled: boolean) => void;
 }) {
   return (
     <div className="grid max-w-4xl gap-5 py-5">
-      <AgentAskSetting enabled={agentAskEnabled} onChange={onAgentAskChange} />
       <InstantMessagesSetting
         enabled={instantMessagesEnabled}
         onChange={onInstantMessagesChange}

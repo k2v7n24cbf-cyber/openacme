@@ -78,6 +78,27 @@ const DEFAULT_LIMIT = 25;
 const AGENT_ASK_DEFAULT_TIMEOUT_MS = 5 * 60_000;
 const AGENT_ASK_MIN_TIMEOUT_MS = 60_000;
 const AGENT_ASK_MAX_TIMEOUT_MS = 15 * 60_000;
+const AGENT_ASK_FRESH_SESSION_SENTINELS = new Set([
+  "",
+  "fresh",
+  "new",
+  "none",
+  "null",
+  "undefined",
+  "__omit__",
+  "<omit>",
+]);
+
+function normalizeAgentAskSessionId(
+  sessionId: string | null | undefined,
+): string | undefined {
+  if (sessionId === undefined || sessionId === null) return undefined;
+  const cleaned = sessionId.replace(/\0/g, "").trim();
+  if (AGENT_ASK_FRESH_SESSION_SENTINELS.has(cleaned.toLowerCase())) {
+    return undefined;
+  }
+  return sessionId;
+}
 
 function truncateNote(
   content: string,
@@ -201,6 +222,8 @@ const ASK_DESCRIPTION =
   "target agent's result immediately. For durable delegated work, multi-turn work, " +
   "work with dependencies, or work the peer should own independently, use " +
   "`task_create` instead. Omit `session_id` to start a fresh peer session; " +
+  "if your tool caller requires a value for that optional field, pass JSON `null`. " +
+  "Do not pass literal strings like `fresh`, `null`, empty values, or placeholders. " +
   "pass a `session_id` returned by a previous `agent_ask` call to continue " +
   "that same peer conversation. Pass your own `agent_id` when you explicitly " +
   "want a fresh same-agent session.";
@@ -221,10 +244,10 @@ registry.register({
       .describe("The question or request to send to the coworker."),
     session_id: z
       .string()
-      .min(1)
+      .nullable()
       .optional()
       .describe(
-        "Session id returned by an earlier `agent_ask` call. Omit to create a fresh session.",
+        "Session id returned by an earlier `agent_ask` call. Omit this key or pass null to create a fresh session.",
       ),
     timeout_ms: z
       .number()
@@ -259,7 +282,7 @@ registry.register({
     const a = args as {
       agent_id: string;
       message: string;
-      session_id?: string;
+      session_id?: string | null;
       timeout_ms?: number;
     };
 
@@ -268,7 +291,7 @@ registry.register({
       callerSessionId,
       targetAgentId: a.agent_id,
       message: a.message,
-      sessionId: a.session_id,
+      sessionId: normalizeAgentAskSessionId(a.session_id),
       timeoutMs: a.timeout_ms ?? AGENT_ASK_DEFAULT_TIMEOUT_MS,
     });
     return JSON.stringify(result);

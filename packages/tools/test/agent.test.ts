@@ -29,7 +29,7 @@ interface ListResult {
 
 async function runList(
   args: Record<string, unknown>,
-  callerAgentId?: string
+  callerAgentId?: string,
 ): Promise<ListResult> {
   const tool = registry.get("agent_list");
   if (!tool) throw new Error("agent_list not registered");
@@ -43,7 +43,7 @@ async function runList(
 async function runAsk(
   args: Record<string, unknown>,
   callerAgentId?: string,
-  callerSessionId = "caller-session"
+  callerSessionId = "caller-session",
 ): Promise<AgentAskResult> {
   const tool = registry.get("agent_ask");
   if (!tool) throw new Error("agent_ask not registered");
@@ -55,7 +55,7 @@ async function runAsk(
           sessionId: callerSessionId,
           workspaceDir: "/tmp/openacme-test",
         },
-        exec
+        exec,
       )
     : await exec();
   return JSON.parse(out) as AgentAskResult;
@@ -117,7 +117,10 @@ describe("agent_list", () => {
       listAgents: () => SAMPLE,
       peerNoteFor: (caller, peer): PeerNote | null => {
         if (caller === "alice" && peer === "bob") {
-          return { content: "Bob is fast on auth; slow on infra.", mtimeMs: 1_000_000 };
+          return {
+            content: "Bob is fast on auth; slow on infra.",
+            mtimeMs: 1_000_000,
+          };
         }
         return null;
       },
@@ -201,7 +204,7 @@ describe("agent_ask", () => {
         timeout_ms: 60000,
       },
       "alice",
-      "alice-session"
+      "alice-session",
     );
 
     expect(res.ok).toBe(true);
@@ -224,5 +227,52 @@ describe("agent_ask", () => {
     const missing = await runAsk({ agent_id: "bob", message: "hi" });
     expect(missing.ok).toBe(false);
     expect(missing.error).toMatch(/active agent and session context/);
+  });
+
+  it("treats common fresh-session placeholders as omitted session_id", async () => {
+    const seen: Array<string | undefined> = [];
+    bindAgentAsk({
+      ask: async (request) => {
+        seen.push(request.sessionId);
+        return {
+          ok: true,
+          session_id: request.sessionId ?? "fresh-peer-session",
+          new_session: request.sessionId === undefined,
+        };
+      },
+    });
+
+    for (const session_id of [
+      null,
+      "",
+      "fresh",
+      " ",
+      "\0",
+      "__OMIT__",
+      "<omit>",
+    ]) {
+      const res = await runAsk(
+        { agent_id: "bob", message: "hi", session_id },
+        "alice",
+      );
+      expect(res.ok).toBe(true);
+      expect(res.new_session).toBe(true);
+    }
+
+    const existing = await runAsk(
+      { agent_id: "bob", message: "hi", session_id: "prior-peer-session" },
+      "alice",
+    );
+    expect(existing.new_session).toBe(false);
+    expect(seen).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "prior-peer-session",
+    ]);
   });
 });

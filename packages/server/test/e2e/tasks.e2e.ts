@@ -194,6 +194,28 @@ describe("task tools (e2e)", () => {
     ).toBe(true);
   });
 
+  it("agent_ask treats fresh session placeholders as a fresh session request", async () => {
+    const { sessionId } = await c.chat(
+      "helper",
+      'ask worker fresh [[mock:tool:agent_ask:{"agent_id":"worker","message":"fresh answer","session_id":"fresh"}]]',
+    );
+    await waitUntil(async () => {
+      const msgs = await c.messages(sessionId);
+      const a = msgs.find((m) => m.role === "assistant");
+      return !!a?.parts.some(
+        (p) => p?.type === "tool-agent_ask" && p.state === "output-available",
+      );
+    });
+    const a = (await c.messages(sessionId)).find(
+      (m) => m.role === "assistant",
+    )!;
+    const toolPart = a.parts.find((p) => p?.type === "tool-agent_ask");
+    expect(JSON.stringify(toolPart)).toContain("fresh answer");
+    expect(JSON.stringify(toolPart)).not.toContain(
+      'Session \\"fresh\\" not found',
+    );
+  });
+
   it("agent_ask refuses targets that disabled instant messages", async () => {
     const { sessionId } = await c.chat(
       "helper",

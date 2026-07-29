@@ -81,7 +81,7 @@ const AGENT_ASK_MAX_TIMEOUT_MS = 15 * 60_000;
 
 function truncateNote(
   content: string,
-  peerId: string
+  peerId: string,
 ): { content: string; truncated: boolean } {
   if (Buffer.byteLength(content, "utf-8") <= MAX_PEER_NOTE_BYTES) {
     return { content, truncated: false };
@@ -131,7 +131,7 @@ registry.register({
       .optional()
       .describe(
         "Optional substring filter (case-insensitive) over each agent's " +
-          "role, name, or id."
+          "role, name, or id.",
       ),
     limit: z
       .number()
@@ -161,7 +161,9 @@ registry.register({
     }
 
     const all = bindings.listAgents().filter((p) => p.id !== callerId);
-    const filtered = a.query ? all.filter((p) => matchesQuery(p, a.query!)) : all;
+    const filtered = a.query
+      ? all.filter((p) => matchesQuery(p, a.query!))
+      : all;
     const limited = filtered.slice(0, a.limit ?? DEFAULT_LIMIT);
 
     const enriched = limited.map((p) => {
@@ -194,13 +196,14 @@ registry.register({
 });
 
 const ASK_DESCRIPTION =
-  "Ask a coworker agent a direct question and wait for its answer in this " +
+  "Ask an agent a direct question and wait for its answer in this " +
   "same tool call. Use this for quick consultation where you need the " +
-  "peer's result immediately. For durable delegated work, multi-turn work, " +
+  "target agent's result immediately. For durable delegated work, multi-turn work, " +
   "work with dependencies, or work the peer should own independently, use " +
   "`task_create` instead. Omit `session_id` to start a fresh peer session; " +
   "pass a `session_id` returned by a previous `agent_ask` call to continue " +
-  "that same peer conversation.";
+  "that same peer conversation. Pass your own `agent_id` when you explicitly " +
+  "want a fresh same-agent session.";
 
 registry.register({
   name: "agent_ask",
@@ -210,7 +213,7 @@ registry.register({
     agent_id: z
       .string()
       .min(1)
-      .describe("Stable id of the coworker agent to ask."),
+      .describe("Stable id of the agent to ask. May be your own agent id."),
     message: z
       .string()
       .min(1)
@@ -221,7 +224,7 @@ registry.register({
       .min(1)
       .optional()
       .describe(
-        "Session id returned by an earlier `agent_ask` call. Omit to create a fresh session."
+        "Session id returned by an earlier `agent_ask` call. Omit to create a fresh session.",
       ),
     timeout_ms: z
       .number()
@@ -230,7 +233,7 @@ registry.register({
       .max(AGENT_ASK_MAX_TIMEOUT_MS)
       .optional()
       .describe(
-        "Wall-clock cap for the peer turn. Default 300000, min 60000, max 900000."
+        "Wall-clock cap for the peer turn. Default 300000, min 60000, max 900000.",
       ),
   }),
   emoji: "💬",

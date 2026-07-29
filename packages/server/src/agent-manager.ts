@@ -2264,10 +2264,6 @@ export class AgentManager {
   }
 
   private async askAgent(request: AgentAskRequest): Promise<AgentAskResult> {
-    if (request.targetAgentId === request.callerAgentId) {
-      return { ok: false, error: "agent_ask requires a different agent." };
-    }
-
     const targetDef = this.agentStore.get(request.targetAgentId);
     if (!targetDef) {
       return {

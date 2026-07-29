@@ -95,6 +95,7 @@ interface Agent {
   memoryExtractionEnabled?: boolean;
   maxConcurrentSessions?: number;
   parallelSchedulingPolicy?: ParallelSchedulingPolicy;
+  instantMessagesEnabled?: boolean;
   mcpServers?: Record<string, MCPServerConfigDto>;
   mcpDisabled?: string[];
   managed?: boolean;
@@ -167,6 +168,7 @@ interface FormState {
   memoryExtractionEnabled: boolean;
   maxConcurrentSessions: number;
   parallelSchedulingPolicy: ParallelSchedulingPolicy;
+  instantMessagesEnabled: boolean;
   mcpServers: Record<string, MCPServerConfigDto>;
   mcpDisabled: string[];
 }
@@ -190,6 +192,7 @@ const FALLBACK_FORM: FormState = {
   memoryExtractionEnabled: true,
   maxConcurrentSessions: 1,
   parallelSchedulingPolicy: "lane_first",
+  instantMessagesEnabled: true,
   mcpServers: {},
   mcpDisabled: [],
 };
@@ -401,18 +404,25 @@ function AgentsPage() {
       () => ({
         page: "/agents",
         entityType: "agent" as const,
-        entityId: isCreating ? null : selectedAgent?.id ?? null,
+        entityId: isCreating ? null : (selectedAgent?.id ?? null),
         tab: detailTab,
         // Create form → formData; existing agent → the detail view's live draft
         // (unsaved edits) when it has reported, else the saved row.
         content: editingForm
           ? formData
           : selectedAgent
-            ? detailDraft ?? selectedAgent
+            ? (detailDraft ?? selectedAgent)
             : null,
       }),
-      [selectedAgent, isCreating, editingForm, formData, detailDraft, detailTab]
-    )
+      [
+        selectedAgent,
+        isCreating,
+        editingForm,
+        formData,
+        detailDraft,
+        detailTab,
+      ],
+    ),
   );
 
   // Catalog state — bundled agent templates the user can import. Two-step
@@ -535,6 +545,7 @@ function AgentsPage() {
     memoryExtractionEnabled: formData.memoryExtractionEnabled,
     maxConcurrentSessions: formData.maxConcurrentSessions,
     parallelSchedulingPolicy: formData.parallelSchedulingPolicy,
+    instantMessagesEnabled: formData.instantMessagesEnabled,
     mcpServers: formData.mcpServers,
     mcpDisabled: formData.mcpDisabled,
   });
@@ -695,6 +706,7 @@ function AgentsPage() {
       maxConcurrentSessions: selectedAgent.maxConcurrentSessions ?? 1,
       parallelSchedulingPolicy:
         selectedAgent.parallelSchedulingPolicy ?? "lane_first",
+      instantMessagesEnabled: selectedAgent.instantMessagesEnabled ?? true,
       mcpServers: selectedAgent.mcpServers ?? {},
       mcpDisabled: selectedAgent.mcpDisabled ?? [],
     });
@@ -782,6 +794,7 @@ function AgentsPage() {
             memoryExtractionEnabled: true,
             maxConcurrentSessions: 1,
             parallelSchedulingPolicy: "lane_first",
+            instantMessagesEnabled: true,
             mcpServers: tpl.agentFields.mcpServers ?? {},
             mcpDisabled: tpl.agentFields.mcpDisabled ?? [],
           });
@@ -838,6 +851,7 @@ function AgentsPage() {
           maxConcurrentSessions: found.maxConcurrentSessions ?? 1,
           parallelSchedulingPolicy:
             found.parallelSchedulingPolicy ?? "lane_first",
+          instantMessagesEnabled: found.instantMessagesEnabled ?? true,
           mcpServers: found.mcpServers ?? {},
           mcpDisabled: found.mcpDisabled ?? [],
         });
@@ -1130,7 +1144,10 @@ function AgentsPage() {
                           setFormData((prev) => ({ ...prev, mcpServers: next }))
                         }
                         onDisabledChange={(next) =>
-                          setFormData((prev) => ({ ...prev, mcpDisabled: next }))
+                          setFormData((prev) => ({
+                            ...prev,
+                            mcpDisabled: next,
+                          }))
                         }
                       />
 
@@ -1156,6 +1173,15 @@ function AgentsPage() {
                           }))
                         }
                       />
+                      <InstantMessagesSetting
+                        enabled={formData.instantMessagesEnabled}
+                        onChange={(instantMessagesEnabled) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            instantMessagesEnabled,
+                          }))
+                        }
+                      />
                       <ParallelSessionsSetting
                         value={formData.maxConcurrentSessions}
                         onChange={(maxConcurrentSessions) =>
@@ -1174,7 +1200,6 @@ function AgentsPage() {
                       />
                     </>
                   )}
-
                 </div>
 
                 <div className="mt-4 flex items-center justify-between">
@@ -1712,6 +1737,7 @@ interface AgentDraft {
   memoryExtractionEnabled: boolean;
   maxConcurrentSessions: number;
   parallelSchedulingPolicy: ParallelSchedulingPolicy;
+  instantMessagesEnabled: boolean;
 }
 
 function draftFromAgent(agent: Agent): AgentDraft {
@@ -1727,6 +1753,7 @@ function draftFromAgent(agent: Agent): AgentDraft {
     memoryExtractionEnabled: agent.memoryExtractionEnabled ?? true,
     maxConcurrentSessions: agent.maxConcurrentSessions ?? 1,
     parallelSchedulingPolicy: agent.parallelSchedulingPolicy ?? "lane_first",
+    instantMessagesEnabled: agent.instantMessagesEnabled ?? true,
   };
 }
 
@@ -1780,9 +1807,10 @@ function AgentDetail({
       memoryExtractionEnabled: draft.memoryExtractionEnabled,
       maxConcurrentSessions: draft.maxConcurrentSessions,
       parallelSchedulingPolicy: draft.parallelSchedulingPolicy,
+      instantMessagesEnabled: draft.instantMessagesEnabled,
       ...tabSlice,
     }),
-    [agent, draft, tabSlice]
+    [agent, draft, tabSlice],
   );
   useEffect(() => {
     onDraftChange?.(liveAgent);
@@ -1797,7 +1825,8 @@ function AgentDetail({
       draft.cacheTtl !== saved.cacheTtl ||
       draft.memoryExtractionEnabled !== saved.memoryExtractionEnabled ||
       draft.maxConcurrentSessions !== saved.maxConcurrentSessions ||
-      draft.parallelSchedulingPolicy !== saved.parallelSchedulingPolicy
+      draft.parallelSchedulingPolicy !== saved.parallelSchedulingPolicy ||
+      draft.instantMessagesEnabled !== saved.instantMessagesEnabled
     : JSON.stringify(draft) !== JSON.stringify(saved);
   // Detail is ruled sections on the pane, not a floating card — one shared
   // measure with the skills + tasks detail panes.
@@ -1875,6 +1904,7 @@ function AgentDetail({
                       maxConcurrentSessions: draft.maxConcurrentSessions,
                       parallelSchedulingPolicy:
                         draft.parallelSchedulingPolicy,
+                      instantMessagesEnabled: draft.instantMessagesEnabled,
                     }
                   : {
                       name: draft.name,
@@ -1886,8 +1916,9 @@ function AgentDetail({
                       maxConcurrentSessions: draft.maxConcurrentSessions,
                       parallelSchedulingPolicy:
                         draft.parallelSchedulingPolicy,
+                      instantMessagesEnabled: draft.instantMessagesEnabled,
                     },
-                "Agent"
+                "Agent",
               );
             }}
           >
@@ -1959,6 +1990,10 @@ function AgentDetail({
             onSchedulingPolicyChange={(parallelSchedulingPolicy) =>
               setDraft({ ...draft, parallelSchedulingPolicy })
             }
+            instantMessagesEnabled={draft.instantMessagesEnabled}
+            onInstantMessagesChange={(instantMessagesEnabled) =>
+              setDraft({ ...draft, instantMessagesEnabled })
+            }
           />
         </TabsContent>
         <TabsContent value="mcp">
@@ -2001,8 +2036,9 @@ function AgentOverviewTab({
     [agent.id, agent.persona],
   );
   const fileLinks = useFileLinkResolver(linkOwner, linkSources);
-  const [previewTarget, setPreviewTarget] =
-    useState<FilePreviewTarget | null>(null);
+  const [previewTarget, setPreviewTarget] = useState<FilePreviewTarget | null>(
+    null,
+  );
 
   // Same field set + order as the create form — view and edit are one
   // surface; the header Save commits the shared draft. max-w keeps
@@ -2280,7 +2316,9 @@ function ModelConfigFields({
           <Label htmlFor={`${idPrefix}-cacheTtl`}>Prompt cache TTL</Label>
           <Select
             value={value.cacheTtl}
-            onValueChange={(v) => onChange({ ...value, cacheTtl: v as CacheTtl })}
+            onValueChange={(v) =>
+              onChange({ ...value, cacheTtl: v as CacheTtl })
+            }
           >
             <SelectTrigger id={`${idPrefix}-cacheTtl`} className="md:max-w-xs">
               <SelectValue />
@@ -2325,7 +2363,7 @@ function ConfigSaveBar({
 
 async function putAgentSlice(
   agentId: string,
-  slice: Record<string, unknown>
+  slice: Record<string, unknown>,
 ): Promise<Agent> {
   const res = await fetch(
     `${API_BASE}/api/agents/${encodeURIComponent(agentId)}`,
@@ -2333,7 +2371,7 @@ async function putAgentSlice(
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(slice),
-    }
+    },
   );
   if (!res.ok) {
     const data = (await res.json().catch(() => ({}))) as { error?: string };
@@ -2344,7 +2382,7 @@ async function putAgentSlice(
 
 function useSliceSave(
   agent: Agent,
-  onSaved: (updated: Agent) => void
+  onSaved: (updated: Agent) => void,
 ): {
   saving: boolean;
   save: (slice: Record<string, unknown>, label: string) => Promise<boolean>;
@@ -2430,7 +2468,7 @@ function AgentToolsTab({
           setSelected((prev) =>
             prev.includes(name)
               ? prev.filter((t) => t !== name)
-              : [...prev, name]
+              : [...prev, name],
           )
         }
         onSetGroup={(names, checked) =>
@@ -2482,7 +2520,11 @@ function AgentSkillsTab({
             </p>
           ) : (
             savedSkills.map((s) => (
-              <Badge key={s} variant="outline" className="font-mono text-[11px]">
+              <Badge
+                key={s}
+                variant="outline"
+                className="font-mono text-[11px]"
+              >
                 {s}
               </Badge>
             ))
@@ -2501,7 +2543,7 @@ function AgentSkillsTab({
           setSelected((prev) =>
             prev.includes(name)
               ? prev.filter((s) => s !== name)
-              : [...prev, name]
+              : [...prev, name],
           )
         }
       />
@@ -2635,6 +2677,47 @@ function ParallelSessionsSetting({
   );
 }
 
+function InstantMessagesSetting({
+  enabled,
+  onChange,
+}: {
+  enabled: boolean;
+  onChange: (enabled: boolean) => void;
+}) {
+  return (
+    <div className="grid gap-3 border-t border-paper-rule pt-4">
+      <div>
+        <Label htmlFor="instant-messages">Instant messages</Label>
+        <p className="mt-1 text-[12px] leading-relaxed text-ink-soft">
+          Allow other agents to ask this agent for an immediate answer with
+          agent_ask.
+        </p>
+      </div>
+      <label
+        htmlFor="instant-messages"
+        className="flex max-w-2xl cursor-pointer items-start gap-3 border border-paper-rule bg-paper px-3 py-3 text-sm transition-colors hover:border-plot-red"
+      >
+        <input
+          id="instant-messages"
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => onChange(e.target.checked)}
+          className="mt-0.5 size-4 accent-plot-red"
+        />
+        <span className="grid gap-1">
+          <span className="font-medium text-ink">
+            Accept direct agent_ask calls
+          </span>
+          <span className="text-[12px] leading-relaxed text-ink-soft">
+            When disabled, agents must delegate durable work through tasks
+            instead.
+          </span>
+        </span>
+      </label>
+    </div>
+  );
+}
+
 function AgentSettingsTab({
   memoryExtractionEnabled,
   onMemoryExtractionChange,
@@ -2642,6 +2725,8 @@ function AgentSettingsTab({
   onMaxConcurrentSessionsChange,
   schedulingPolicy,
   onSchedulingPolicyChange,
+  instantMessagesEnabled,
+  onInstantMessagesChange,
 }: {
   memoryExtractionEnabled: boolean;
   onMemoryExtractionChange: (enabled: boolean) => void;
@@ -2649,9 +2734,15 @@ function AgentSettingsTab({
   onMaxConcurrentSessionsChange: (value: number) => void;
   schedulingPolicy: ParallelSchedulingPolicy;
   onSchedulingPolicyChange: (value: ParallelSchedulingPolicy) => void;
+  instantMessagesEnabled: boolean;
+  onInstantMessagesChange: (enabled: boolean) => void;
 }) {
   return (
     <div className="grid max-w-4xl gap-5 py-5">
+      <InstantMessagesSetting
+        enabled={instantMessagesEnabled}
+        onChange={onInstantMessagesChange}
+      />
       <MemoryExtractionSetting
         enabled={memoryExtractionEnabled}
         onChange={onMemoryExtractionChange}

@@ -60,8 +60,9 @@ export interface OpenAcmeDataParts {
  * Tags persisted messages so the UI can route or filter them.
  * `autonomous_event` = scheduler-driven autonomous wake message,
  * hidden from the chat view (the agent's response renders standalone).
+ * `agent_chat` = direct peer-agent request created by `agent_ask`.
  */
-export type MessageMetadataKind = "autonomous_event";
+export type MessageMetadataKind = "autonomous_event" | "agent_chat";
 
 export interface MessageMetadata {
   kind?: MessageMetadataKind;

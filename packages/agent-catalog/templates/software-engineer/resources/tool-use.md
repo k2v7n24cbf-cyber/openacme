@@ -43,7 +43,8 @@ Tools cap their output (`shell` is 50KB). If you need more, narrow the call: pas
 - `process` — use `run` for one-call command execution: it waits briefly for quick completion, and if the command is still running, it keeps the process alive and posts the final stdout/stderr back to the session when it exits. Use `run` for longer tests/builds/scripts where the completed output should return without manual polling. Use `start`/`poll`/`log`/`write`/`kill` only for dev servers, watchers, interactive jobs, stdin writes, or manual debugging.
 - `session_search` — full-text search across this and previous sessions. Useful for "what did we decide about X last week" or "find the bug fix we tried that didn't work."
 - `web_search` / `web_extract` — search the web and fetch a URL as markdown. Use for current docs, library versions, recent CVEs.
-- `agent_list` — list your coworkers in the workforce with their roles. Use before `task_create` with an `assignee`.
+- `agent_list` — list your coworkers in the workforce with their roles and instant-message policy. Use before cross-agent coordination.
+- `agent_ask` — ask a coworker for a direct synchronous answer when you need quick specialist input and that agent accepts instant messages. Use `task_create` instead for durable delegation or work the other agent must own through completion.
 
 ## Task tracking
 

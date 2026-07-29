@@ -2,6 +2,7 @@
 name: openacme-platform
 description: How OpenAcme is laid out — data dir, agents, skills, MCP servers, tasks, memory, the peer-notes convention. Read this when the user asks you to manage their workforce, set up an agent, install a skill, configure an MCP server, or explain how the platform works.
 tags: [platform, admin, reference]
+related-skills: [openacme-forensic-investigation]
 ---
 
 # OpenAcme platform reference
@@ -116,6 +117,7 @@ name: Coder
 role: Owns implementation work and code review for the workforce. Reads
   existing patterns before writing new code. Hands off ambiguous design
   decisions to the user.
+instantMessagesEnabled: true
 model:
   provider: anthropic
   model: claude-sonnet-4-20250514
@@ -146,12 +148,17 @@ Key fields:
 
 - `name` — display name (any string).
 - `role` — third-person paragraph for coworkers (used by `agent_list`).
+- `instantMessagesEnabled` — whether this agent accepts direct
+  synchronous `agent_ask` calls from coworkers. Defaults to `true`.
+  Set `false` for agents that should only receive durable `task_create`
+  work. The same setting is exposed in the web UI under Agent →
+  Settings → Instant messages.
 - `model` — optional per-agent override; absent inherits the root
   `config.yaml`'s `model`.
 - `tools` — environment-touching tools (shell, file IO, web, exec,
   browser). Introspection / self-management tools (`memory`,
-  `skill_view`, `session_search`, `task_*`, `agent_list`, `ping_user`,
-  `defer_session`) are **always-on system tools** merged in
+  `skill_view`, `session_search`, `task_*`, `agent_list`, `agent_ask`,
+  `ping_user`, `defer_session`) are **always-on system tools** merged in
   automatically — do NOT list them here. Email tools (`email_list`,
   `email_send`, …) appear only for agents that have a mailbox bound.
 - `mcpServers` — agent-private MCP servers (names must not collide with
@@ -284,6 +291,27 @@ its session for one autonomous turn and the agent picks what to work
 on. Wake latency is bounded by the tick (~60s from task creation to
 the assignee starting).
 
+**Direct agent messaging.** `agent_ask` is the low-hurdle path for a
+quick synchronous answer from another agent: pass `agent_id` and
+`message`, plus an optional `session_id` to continue a target session
+that this caller previously opened via `agent_ask`. Without
+`session_id`, the platform creates a fresh target-agent session and
+returns the answer directly to the caller. Use it for short
+consultation, review, or specialist input where the current agent is
+still driving the user-facing task.
+
+`agent_ask` is not durable delegation. It is intentionally unavailable
+inside the recipient's turn to prevent recursive agent chatter. For
+multi-step work, work that should survive failures, scheduled work, or
+anything the assignee must own through completion, use `task_create`.
+
+`agent_list` surfaces each coworker's `instant_messages_enabled`
+policy. If it is `false`, or an `agent_ask` call reports that the
+recipient does not accept instant messages, use `task_create` instead.
+Acme can change the policy by editing `instantMessagesEnabled` in that
+agent's `AGENT.md`, then calling `reload_config`, or by directing the
+user to Agent → Settings → Instant messages.
+
 **Onboarding pattern.** When you create a new agent, file an
 **onboarding task** on them: `task_create(assignee: <newId>, title:
 "Onboarding: read your coworkers and save peer notes", body: "Run
@@ -344,6 +372,21 @@ spawns until the agent first calls a `browser_*` tool. Provider
 (local Chrome / Browserbase / Browser Use / Firecrawl) is set in
 `config.yaml` under `browser`.
 
+## Forensic investigations
+
+When the user asks about forensic logs, token or cost spikes,
+OpenTelemetry traces, session timelines, `usage_events`,
+`forensicRunId`, `evidenceRef`, provider requests, model inputs, tool
+outputs, or suspicious AI API consumption, read the
+`openacme-forensic-investigation` skill with `skill_view` before
+answering or touching evidence.
+
+That skill is the canonical investigation playbook. Follow its
+reference-loading rules, keep investigation work read-only unless the
+user explicitly asks for a test run or remediation change, and default
+to the test runtime `~/.openacme-test` unless the user explicitly names
+production.
+
 ## Everything applies live — almost
 
 The platform watches its config surfaces under the data dir, so **your
@@ -361,7 +404,9 @@ in place. Tell the user to restart only in that case.
 When the user asks you to create a new agent:
 
 1. Decide id, name, role, persona, tools, model (inherit from
-   `config.yaml` if no specific reason).
+   `config.yaml` if no specific reason), and whether the agent should
+   accept `agent_ask` instant messages (`instantMessagesEnabled`,
+   default `true`).
 2. Write `<dataDir>/agents/<id>/AGENT.md` with the frontmatter +
    persona body.
 3. File an onboarding task on the new agent so they learn the team.

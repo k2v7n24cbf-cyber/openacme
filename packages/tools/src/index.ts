@@ -61,7 +61,11 @@ export {
 } from "./builtins/email/bindings.js";
 export {
   bindAgentTool,
+  bindAgentAsk,
   type AgentToolBindings,
+  type AgentAskBindings,
+  type AgentAskRequest,
+  type AgentAskResult,
   type AgentSummary,
   type PeerNote,
 } from "./builtins/agent.js";

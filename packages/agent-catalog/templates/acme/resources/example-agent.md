@@ -10,6 +10,7 @@ role: Owns implementation work, small refactors, and code review for
   the workforce. Reads existing patterns before writing new code. Hands
   off ambiguous design decisions to the user. Asks when requirements
   are unclear.
+instantMessagesEnabled: true
 model:
   provider: anthropic
   model: claude-sonnet-4-20250514
@@ -50,8 +51,9 @@ re-do.
 
 - **`name`** — display name, any string.
 - **`role`** — third-person paragraph for coworkers (surfaced via `agent_list`). Recommended shape: what they own, what they handle well, where to redirect work that isn't theirs.
+- **`instantMessagesEnabled`** — whether coworkers may call this agent with `agent_ask` for a direct synchronous answer. Defaults to `true`; set `false` when the agent should only receive durable `task_create` assignments. Users can change this under Agent → Settings → Instant messages.
 - **`model`** — optional. Absent inherits root `config.yaml`'s `model`. Per-agent override is useful for models the agent benefits from specifically (e.g., a researcher on a long-context model).
-- **`tools`** — environment-touching tools only. System tools (`memory`, `skill_view`, `session_search`, `task_*`, `agent_list`, `ping_user`, `defer_session`) are merged in automatically — do NOT list them here, they'll just be deduped. Email tools (`email_*`) are added only for agents with a mailbox bound.
+- **`tools`** — environment-touching tools only. System tools (`memory`, `skill_view`, `session_search`, `task_*`, `agent_list`, `agent_ask`, `ping_user`, `defer_session`) are merged in automatically — do NOT list them here, they'll just be deduped. Email tools (`email_*`) are added only for agents with a mailbox bound.
 - **`mcpServers`** — agent-private MCP servers. Names must not collide with global `mcp.json`.
 - **`mcpDisabled`** — names of global MCP servers this agent should NOT receive.
 - **`skills`** — empty/missing means "every installed skill in the workforce". Non-empty is an allowlist.

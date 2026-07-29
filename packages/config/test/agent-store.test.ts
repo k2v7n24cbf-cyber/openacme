@@ -36,6 +36,7 @@ function makeAgent(
     memoryExtractionEnabled: true,
     maxConcurrentSessions: 1,
     parallelSchedulingPolicy: "lane_first",
+    instantMessagesEnabled: true,
     probeIntervalMs: 30 * 60 * 1000,
     paths: [],
   };

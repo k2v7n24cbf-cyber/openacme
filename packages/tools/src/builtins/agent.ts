@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { registry } from "../registry.js";
-import { getCurrentAgentId } from "../session-context.js";
+import { getCurrentAgentId, getCurrentSessionId } from "../session-context.js";
 
 /**
  * Minimal agent shape this tool surfaces to peers. Defined locally so
@@ -12,6 +12,7 @@ export interface AgentSummary {
   id: string;
   name: string;
   role: string;
+  instantMessagesEnabled?: boolean;
 }
 
 export interface PeerNote {
@@ -35,11 +36,48 @@ export function bindAgentTool(b: AgentToolBindings): void {
   bindings = b;
 }
 
+export interface AgentAskRequest {
+  callerAgentId: string;
+  callerSessionId: string;
+  targetAgentId: string;
+  message: string;
+  sessionId?: string;
+  timeoutMs: number;
+}
+
+export interface AgentAskResult {
+  ok: boolean;
+  target_agent_id?: string;
+  session_id?: string;
+  new_session?: boolean;
+  user_message_id?: string;
+  assistant_message_id?: string | null;
+  response?: string;
+  assistant_message?: {
+    role: "assistant";
+    parts: unknown[];
+  } | null;
+  error?: string;
+}
+
+export interface AgentAskBindings {
+  ask(request: AgentAskRequest): Promise<AgentAskResult>;
+}
+
+let askBindings: AgentAskBindings | null = null;
+
+export function bindAgentAsk(b: AgentAskBindings): void {
+  askBindings = b;
+}
+
 // Half of MAX_MEMORY_BYTES (4096) — the tool returns N peer notes at
 // once, so each individual one gets a tighter budget than the recall
 // pipeline applies to a single surfaced memory.
 const MAX_PEER_NOTE_BYTES = 2048;
 const DEFAULT_LIMIT = 25;
+const AGENT_ASK_DEFAULT_TIMEOUT_MS = 5 * 60_000;
+const AGENT_ASK_MIN_TIMEOUT_MS = 60_000;
+const AGENT_ASK_MAX_TIMEOUT_MS = 15 * 60_000;
 
 function truncateNote(
   content: string,
@@ -128,12 +166,16 @@ registry.register({
 
     const enriched = limited.map((p) => {
       const note = bindings!.peerNoteFor(callerId, p.id);
-      if (!note) return { id: p.id, name: p.name, role: p.role };
-      const { content, truncated } = truncateNote(note.content, p.id);
-      return {
+      const base = {
         id: p.id,
         name: p.name,
         role: p.role,
+        instant_messages_enabled: p.instantMessagesEnabled ?? true,
+      };
+      if (!note) return base;
+      const { content, truncated } = truncateNote(note.content, p.id);
+      return {
+        ...base,
         peer_note: {
           content,
           mtime: new Date(note.mtimeMs).toISOString(),
@@ -148,5 +190,84 @@ registry.register({
       total: filtered.length,
       agents: enriched,
     });
+  },
+});
+
+const ASK_DESCRIPTION =
+  "Ask a coworker agent a direct question and wait for its answer in this " +
+  "same tool call. Use this for quick consultation where you need the " +
+  "peer's result immediately. For durable delegated work, multi-turn work, " +
+  "work with dependencies, or work the peer should own independently, use " +
+  "`task_create` instead. Omit `session_id` to start a fresh peer session; " +
+  "pass a `session_id` returned by a previous `agent_ask` call to continue " +
+  "that same peer conversation.";
+
+registry.register({
+  name: "agent_ask",
+  toolset: "agents",
+  description: ASK_DESCRIPTION,
+  parameters: z.object({
+    agent_id: z
+      .string()
+      .min(1)
+      .describe("Stable id of the coworker agent to ask."),
+    message: z
+      .string()
+      .min(1)
+      .max(20000)
+      .describe("The question or request to send to the coworker."),
+    session_id: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Session id returned by an earlier `agent_ask` call. Omit to create a fresh session."
+      ),
+    timeout_ms: z
+      .number()
+      .int()
+      .min(AGENT_ASK_MIN_TIMEOUT_MS)
+      .max(AGENT_ASK_MAX_TIMEOUT_MS)
+      .optional()
+      .describe(
+        "Wall-clock cap for the peer turn. Default 300000, min 60000, max 900000."
+      ),
+  }),
+  emoji: "💬",
+  parallelSafe: false,
+  handler: async (args) => {
+    if (!askBindings) {
+      return JSON.stringify({
+        ok: false,
+        error:
+          "agent_ask not initialized — AgentManager must call bindAgentAsk().",
+      });
+    }
+    const callerAgentId = getCurrentAgentId();
+    const callerSessionId = getCurrentSessionId();
+    if (!callerAgentId || !callerSessionId) {
+      return JSON.stringify({
+        ok: false,
+        error:
+          "agent_ask requires an active agent and session context (use during a turn).",
+      });
+    }
+
+    const a = args as {
+      agent_id: string;
+      message: string;
+      session_id?: string;
+      timeout_ms?: number;
+    };
+
+    const result = await askBindings.ask({
+      callerAgentId,
+      callerSessionId,
+      targetAgentId: a.agent_id,
+      message: a.message,
+      sessionId: a.session_id,
+      timeoutMs: a.timeout_ms ?? AGENT_ASK_DEFAULT_TIMEOUT_MS,
+    });
+    return JSON.stringify(result);
   },
 });

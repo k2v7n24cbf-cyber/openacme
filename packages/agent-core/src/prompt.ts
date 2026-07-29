@@ -130,9 +130,11 @@ const TASKS_GUIDANCE =
   "use `\"current\"`. Per-session, at most one task is in_progress at a time — " +
   "the rest queue in created_at order. Try to claim a second concurrently and " +
   "the store rejects with a clear error.\n" +
-  "Cross-agent: passing a different `assignee` files work for that agent. They'll " +
-  "pick it up autonomously in a fresh session — you don't message them directly. " +
-  "Comments on a shared task are the coordination channel.\n" +
+  "Cross-agent: use `agent_ask` for quick synchronous consultation where you " +
+  "need a coworker's answer in this turn. Passing a different `assignee` to " +
+  "`task_create` files durable work for that agent; they'll pick it up " +
+  "autonomously in a fresh session. Comments on a shared task are the " +
+  "coordination channel for delegated work.\n" +
   "Task comment discipline: ordinary comments are for progress, checkpoints, " +
   "blockers, errors, corrections, and partial updates — call `task_comment` " +
   "with `id`, `body`, and `mode: \"comment\"` (or omit `mode`; comment is the " +

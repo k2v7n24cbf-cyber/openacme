@@ -8,6 +8,33 @@ import { makeClient, isState, waitUntil } from "./support/client.js";
  * agent assignment, coworker discovery, and the dispatcher waking an assignee.
  */
 
+function findJsonField(value: unknown, field: string): string | undefined {
+  if (!value) return undefined;
+  if (typeof value === "string") {
+    try {
+      return findJsonField(JSON.parse(value), field);
+    } catch {
+      return undefined;
+    }
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findJsonField(item, field);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    if (typeof obj[field] === "string") return obj[field];
+    for (const item of Object.values(obj)) {
+      const found = findJsonField(item, field);
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
 describe("task tools (e2e)", () => {
   let srv: E2EServer;
   let c: ReturnType<typeof makeClient>;
@@ -32,6 +59,12 @@ describe("task tools (e2e)", () => {
     c = makeClient(srv.baseUrl);
     await c.createAgent("helper");
     await c.createAgent("worker");
+    const quiet = await c.post("/api/agents", {
+      id: "quiet",
+      name: "Quiet",
+      instantMessagesEnabled: false,
+    });
+    expect(quiet.status).toBe(201);
   });
   afterAll(async () => {
     await srv.close();
@@ -106,6 +139,41 @@ describe("task tools (e2e)", () => {
     )!;
     const toolPart = a.parts.find((p) => p?.type === "tool-agent_list");
     expect(JSON.stringify(toolPart)).toContain("worker");
+  });
+
+  it("an agent can ask a coworker directly and receive the answer", async () => {
+    const { sessionId } = await c.chat(
+      "helper",
+      'ask worker [[mock:tool:agent_ask:{"agent_id":"worker","message":"peer answer"}]]'
+    );
+    await waitUntil(async () => {
+      const msgs = await c.messages(sessionId);
+      const a = msgs.find((m) => m.role === "assistant");
+      return !!a?.parts.some((p) => p?.type === "tool-agent_ask" && p.state === "output-available");
+    });
+    const a = (await c.messages(sessionId)).find((m) => m.role === "assistant")!;
+    const toolPart = a.parts.find((p) => p?.type === "tool-agent_ask");
+    expect(JSON.stringify(toolPart)).toContain("peer answer");
+
+    const peerSessionId = findJsonField(toolPart, "session_id");
+    expect(peerSessionId).toBeTruthy();
+    const peerMessages = await c.messages(peerSessionId!);
+    expect(peerMessages.some((m) => JSON.stringify(m).includes("peer-request"))).toBe(true);
+  });
+
+  it("agent_ask refuses targets that disabled instant messages", async () => {
+    const { sessionId } = await c.chat(
+      "helper",
+      'ask quiet [[mock:tool:agent_ask:{"agent_id":"quiet","message":"need this now"}]]'
+    );
+    await waitUntil(async () => {
+      const msgs = await c.messages(sessionId);
+      const a = msgs.find((m) => m.role === "assistant");
+      return !!a?.parts.some((p) => p?.type === "tool-agent_ask" && p.state === "output-available");
+    });
+    const a = (await c.messages(sessionId)).find((m) => m.role === "assistant")!;
+    const toolPart = a.parts.find((p) => p?.type === "tool-agent_ask");
+    expect(JSON.stringify(toolPart)).toContain("does not accept instant messages");
   });
 });
 

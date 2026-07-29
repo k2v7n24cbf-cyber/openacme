@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from "zod";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -122,7 +122,8 @@ export const MCPServerConfigSchema = z
   // instead of at connect time — tighter feedback for both the API and
   // the YAML/JSON loaders.
   .refine((cfg) => Boolean(cfg.command) || Boolean(cfg.url), {
-    message: "MCP server must specify either 'command' (stdio) or 'url' (HTTP/SSE)",
+    message:
+      "MCP server must specify either 'command' (stdio) or 'url' (HTTP/SSE)",
   });
 export type MCPServerConfig = z.infer<typeof MCPServerConfigSchema>;
 
@@ -156,7 +157,7 @@ export const AgentBrowserOverridesSchema = z
           .string()
           .optional()
           .describe(
-            "Browser Use profile UUID for THIS agent. Sessions inherit the profile's cookies / saved logins. Auto-provisioned on agent creation when BROWSER_USE_API_KEY is set; lazily on first acquire otherwise."
+            "Browser Use profile UUID for THIS agent. Sessions inherit the profile's cookies / saved logins. Auto-provisioned on agent creation when BROWSER_USE_API_KEY is set; lazily on first acquire otherwise.",
           ),
       })
       .strict()
@@ -167,7 +168,7 @@ export const AgentBrowserOverridesSchema = z
           .string()
           .optional()
           .describe(
-            "Firecrawl profile name for THIS agent. Auto-creates on first session use. Defaults to the agent id when unset."
+            "Firecrawl profile name for THIS agent. Auto-creates on first session use. Defaults to the agent id when unset.",
           ),
       })
       .strict()
@@ -178,7 +179,7 @@ export const AgentBrowserOverridesSchema = z
           .string()
           .optional()
           .describe(
-            "Browserbase Context UUID for THIS agent. Sessions inherit the context's cookies / saved logins. Auto-provisioned on agent creation when BROWSERBASE_API_KEY + BROWSERBASE_PROJECT_ID are set; lazily on first acquire otherwise."
+            "Browserbase Context UUID for THIS agent. Sessions inherit the context's cookies / saved logins. Auto-provisioned on agent creation when BROWSERBASE_API_KEY + BROWSERBASE_PROJECT_ID are set; lazily on first acquire otherwise.",
           ),
       })
       .strict()
@@ -215,7 +216,7 @@ export const AgentEmailSchema = z
       .boolean()
       .optional()
       .describe(
-        "IMAP only: implicit TLS (default true, port 993). Set false for a STARTTLS host (port 143) — the client still upgrades to TLS."
+        "IMAP only: implicit TLS (default true, port 993). Set false for a STARTTLS host (port 143) — the client still upgrades to TLS.",
       ),
   })
   .strict();
@@ -244,7 +245,7 @@ export const AgentDefinitionSchema = z.object({
       "Paragraph-length description of this agent for their coworkers (other agents " +
         "in the workforce). Recommended shape: what they own, what they handle well, " +
         "where to redirect work that isn't theirs. Distinct from `persona` (the " +
-        "agent's own system prompt body in second-person). Read in third-person."
+        "agent's own system prompt body in second-person). Read in third-person.",
     ),
   // Optional per-agent override. When absent, the root `config.yaml`'s
   // `model` is used at agent-manager resolution time. Don't prefault
@@ -314,6 +315,10 @@ export const AgentDefinitionSchema = z.object({
   parallelSchedulingPolicy: z
     .enum(["lane_first", "chain_first"])
     .default("lane_first"),
+  // Controls whether other agents can use `agent_ask` to synchronously ask
+  // this agent for an immediate answer. Task assignment remains available;
+  // this only gates direct instant peer messages.
+  instantMessagesEnabled: z.boolean().default(true),
   // Heartbeat / failsafe probe cadence (milliseconds). When an
   // autonomous turn ends with eligible non-terminal work AND the agent
   // didn't call `sleep` to set a per-turn override, the scheduler will
@@ -352,7 +357,7 @@ export const AgentDefinitionSchema = z.object({
       z.object({
         path: z.string().min(1),
         access: z.enum(["ro", "rw"]),
-      })
+      }),
     )
     .default([]),
 });
@@ -586,31 +591,31 @@ export const BrowserConfigSchema = z.object({
     .enum(["local", "browserbase", "browser-use", "firecrawl"])
     .default("local")
     .describe(
-      "Which backend supplies each agent's browser. 'local' spawns Chrome per agent; the cloud providers create one remote session per agent."
+      "Which backend supplies each agent's browser. 'local' spawns Chrome per agent; the cloud providers create one remote session per agent.",
     ),
   localBrowser: z
     .enum(["chromium", "camoufox"])
     .default("chromium")
     .describe(
-      "Local provider only: which browser to run. 'chromium' prefers a system Chrome/Brave/Edge install and falls back to Playwright's auto-installed Chromium. 'camoufox' uses the Firefox-based stealth browser; the binary auto-downloads on first use."
+      "Local provider only: which browser to run. 'chromium' prefers a system Chrome/Brave/Edge install and falls back to Playwright's auto-installed Chromium. 'camoufox' uses the Firefox-based stealth browser; the binary auto-downloads on first use.",
     ),
   executablePath: z
     .string()
     .optional()
     .describe(
-      "Local provider only: explicit path to a Chromium-family binary. When set, overrides `localBrowser`. Useful for custom builds or pinning a specific version."
+      "Local provider only: explicit path to a Chromium-family binary. When set, overrides `localBrowser`. Useful for custom builds or pinning a specific version.",
     ),
   headless: z
     .boolean()
     .default(false)
     .describe(
-      "Local provider only: run each agent's Chrome without a visible window. Default false — the user typically needs to see the window to log in to sites the agent will operate on."
+      "Local provider only: run each agent's Chrome without a visible window. Default false — the user typically needs to see the window to log in to sites the agent will operate on.",
     ),
   noSandbox: z
     .boolean()
     .default(false)
     .describe(
-      "Local provider only: pass --no-sandbox to Chrome. Required when running as root in Docker / certain CI images."
+      "Local provider only: pass --no-sandbox to Chrome. Required when running as root in Docker / certain CI images.",
     ),
 });
 export type BrowserConfig = z.infer<typeof BrowserConfigSchema>;
@@ -643,7 +648,9 @@ export const EmailConfigSchema = z.object({
       clientSecret: z.string(),
     })
     .optional()
-    .describe("BYO Google OAuth app (Gmail API) — your own client credentials."),
+    .describe(
+      "BYO Google OAuth app (Gmail API) — your own client credentials.",
+    ),
   microsoft: z
     .object({
       clientId: z.string(),

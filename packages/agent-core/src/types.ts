@@ -130,7 +130,7 @@ export interface OpenAcmeDataParts {
  * web UI / readers can route or filter them. Add new kinds here so
  * the discriminated union narrows at every read site.
  */
-export type MessageMetadataKind = "autonomous_event";
+export type MessageMetadataKind = "autonomous_event" | "agent_chat";
 
 export interface MessageMetadata {
   kind?: MessageMetadataKind;
@@ -144,10 +144,7 @@ export interface MessageMetadata {
  * `writer.write({type: "data-session", ...})` and the matching `onData`
  * callback are type-checked end-to-end against `OpenAcmeDataParts`.
  */
-export type OpenAcmeUIMessage = UIMessage<
-  MessageMetadata,
-  OpenAcmeDataParts
->;
+export type OpenAcmeUIMessage = UIMessage<MessageMetadata, OpenAcmeDataParts>;
 
 export interface AgentConfig {
   id: string;

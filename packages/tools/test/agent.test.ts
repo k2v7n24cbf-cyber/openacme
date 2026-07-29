@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { registry } from "../src/registry.js";
 import {
+  bindAgentAsk,
   bindAgentTool,
+  type AgentAskResult,
   type AgentSummary,
   type PeerNote,
 } from "../src/builtins/agent.js";
@@ -15,6 +17,7 @@ interface ListResult {
     id: string;
     name: string;
     role: string;
+    instant_messages_enabled?: boolean;
     peer_note?: {
       content: string;
       mtime: string;
@@ -37,9 +40,35 @@ async function runList(
   return JSON.parse(out) as ListResult;
 }
 
+async function runAsk(
+  args: Record<string, unknown>,
+  callerAgentId?: string,
+  callerSessionId = "caller-session"
+): Promise<AgentAskResult> {
+  const tool = registry.get("agent_ask");
+  if (!tool) throw new Error("agent_ask not registered");
+  const exec = () => tool.handler(args);
+  const out = callerAgentId
+    ? await toolCallContext.run(
+        {
+          agentId: callerAgentId,
+          sessionId: callerSessionId,
+          workspaceDir: "/tmp/openacme-test",
+        },
+        exec
+      )
+    : await exec();
+  return JSON.parse(out) as AgentAskResult;
+}
+
 const SAMPLE: AgentSummary[] = [
   { id: "alice", name: "Alice", role: "Researcher — owns citation gathering." },
-  { id: "bob", name: "Bob", role: "Backend engineer — owns auth + billing APIs." },
+  {
+    id: "bob",
+    name: "Bob",
+    role: "Backend engineer — owns auth + billing APIs.",
+    instantMessagesEnabled: false,
+  },
   { id: "carol", name: "Carol", role: "Ops — owns deploys, oncall." },
 ];
 
@@ -67,6 +96,14 @@ describe("agent_list", () => {
   it("query matches the id substring too", async () => {
     const res = await runList({ query: "carol" }, "alice");
     expect(res.agents.map((a) => a.id)).toEqual(["carol"]);
+  });
+
+  it("surfaces whether each coworker accepts instant messages", async () => {
+    const res = await runList({}, "alice");
+    const bob = res.agents.find((a) => a.id === "bob");
+    const carol = res.agents.find((a) => a.id === "carol");
+    expect(bob?.instant_messages_enabled).toBe(false);
+    expect(carol?.instant_messages_enabled).toBe(true);
   });
 
   it("returns total separate from count when limit applies", async () => {
@@ -135,5 +172,57 @@ describe("agent_list", () => {
     const sketchy = res.agents.find((a) => a.id === "../../../etc/passwd");
     expect(sketchy).toBeDefined();
     expect(sketchy?.peer_note).toBeUndefined();
+  });
+});
+
+describe("agent_ask", () => {
+  it("passes active caller context and arguments to the runtime binding", async () => {
+    bindAgentAsk({
+      ask: async (request) => ({
+        ok: true,
+        target_agent_id: request.targetAgentId,
+        session_id: request.sessionId ?? "fresh-peer-session",
+        new_session: request.sessionId === undefined,
+        user_message_id: "u1",
+        assistant_message_id: "a1",
+        response: `${request.callerAgentId}:${request.callerSessionId}:${request.message}:${request.timeoutMs}`,
+        assistant_message: {
+          role: "assistant",
+          parts: [{ type: "text", text: "ok" }],
+        },
+      }),
+    });
+
+    const res = await runAsk(
+      {
+        agent_id: "bob",
+        message: "check this",
+        session_id: "prior-peer-session",
+        timeout_ms: 60000,
+      },
+      "alice",
+      "alice-session"
+    );
+
+    expect(res.ok).toBe(true);
+    expect(res.target_agent_id).toBe("bob");
+    expect(res.session_id).toBe("prior-peer-session");
+    expect(res.response).toBe("alice:alice-session:check this:60000");
+  });
+
+  it("defaults timeout and reports missing active context cleanly", async () => {
+    bindAgentAsk({
+      ask: async (request) => ({
+        ok: true,
+        response: String(request.timeoutMs),
+      }),
+    });
+
+    const ok = await runAsk({ agent_id: "bob", message: "hi" }, "alice");
+    expect(ok.response).toBe("300000");
+
+    const missing = await runAsk({ agent_id: "bob", message: "hi" });
+    expect(missing.ok).toBe(false);
+    expect(missing.error).toMatch(/active agent and session context/);
   });
 });

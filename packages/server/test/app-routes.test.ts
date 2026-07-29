@@ -54,7 +54,7 @@ function req(p: string, init: RequestInit = {}): Promise<Response> {
 async function createAgent(
   id = "helper",
   name = "Helper",
-  extra: Record<string, unknown> = {}
+  extra: Record<string, unknown> = {},
 ) {
   const res = await req("/api/agents", {
     method: "POST",
@@ -140,6 +140,37 @@ describe("agents CRUD", () => {
     );
   });
 
+  it("persists per-agent agent_ask caller setting", async () => {
+    await createAgent();
+
+    let res = await req("/api/agents/helper", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agentAskEnabled: false }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).agentAskEnabled).toBe(false);
+
+    res = await req("/api/agents/helper");
+    expect(res.status).toBe(200);
+    expect((await res.json()).agentAskEnabled).toBe(false);
+
+    const agentFile = path.join(dataDir, "agents", "helper", "AGENT.md");
+    expect(readFileSync(agentFile, "utf8")).toContain("agentAskEnabled: false");
+
+    expect(manager.getAgent("helper").config.tools).not.toContain("agent_ask");
+  });
+
+  it("removes agent_ask from effective tools even when legacy frontmatter lists it", async () => {
+    await createAgent("helper", "Helper", {
+      agentAskEnabled: false,
+      tools: ["agent_ask"],
+    });
+
+    const agent = manager.getAgent("helper");
+    expect(agent.config.tools).not.toContain("agent_ask");
+  });
+
   it("persists and validates per-agent parallel session setting", async () => {
     await createAgent("helper", "Helper", {
       maxConcurrentSessions: 3,
@@ -167,10 +198,10 @@ describe("agents CRUD", () => {
 
     const agentFile = path.join(dataDir, "agents", "helper", "AGENT.md");
     expect(readFileSync(agentFile, "utf8")).toContain(
-      "maxConcurrentSessions: 5"
+      "maxConcurrentSessions: 5",
     );
     expect(readFileSync(agentFile, "utf8")).toContain(
-      "parallelSchedulingPolicy: lane_first"
+      "parallelSchedulingPolicy: lane_first",
     );
 
     res = await req("/api/agents/helper", {
@@ -204,6 +235,7 @@ describe("agents CRUD", () => {
       memoryExtractionEnabled: false,
       maxConcurrentSessions: 3,
       parallelSchedulingPolicy: "chain_first",
+      agentAskEnabled: false,
     });
 
     let res = await req("/api/agents/helper", {
@@ -216,6 +248,7 @@ describe("agents CRUD", () => {
     expect(body.memoryExtractionEnabled).toBe(false);
     expect(body.maxConcurrentSessions).toBe(4);
     expect(body.parallelSchedulingPolicy).toBe("chain_first");
+    expect(body.agentAskEnabled).toBe(false);
 
     res = await req("/api/agents/helper", {
       method: "PUT",
@@ -230,6 +263,7 @@ describe("agents CRUD", () => {
     expect(body.memoryExtractionEnabled).toBe(true);
     expect(body.maxConcurrentSessions).toBe(4);
     expect(body.parallelSchedulingPolicy).toBe("lane_first");
+    expect(body.agentAskEnabled).toBe(false);
   });
 
   it("rejects invalid definitions and unknown ids", async () => {

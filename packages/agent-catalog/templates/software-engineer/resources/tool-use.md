@@ -18,9 +18,11 @@ Quick reference for picking the right tool and using it efficiently.
 You can issue multiple tool calls in a single response. When the calls are independent — different file reads, an unrelated search, a status check — make them in parallel. When a later call depends on an earlier one's output, run them sequentially.
 
 Example (parallel — good):
+
 - Read `package.json`, read `tsconfig.json`, list files in `src/`.
 
 Example (sequential — required):
+
 - Read a file → determine which symbol to edit → call `edit`.
 
 Maximizing parallel calls cuts turns and latency. The cost of an unnecessary serial chain is real.
@@ -44,7 +46,7 @@ Tools cap their output (`shell` is 50KB). If you need more, narrow the call: pas
 - `session_search` — full-text search across this and previous sessions. Useful for "what did we decide about X last week" or "find the bug fix we tried that didn't work."
 - `web_search` / `web_extract` — search the web and fetch a URL as markdown. Use for current docs, library versions, recent CVEs.
 - `agent_list` — list your coworkers in the workforce with their roles and instant-message policy. Use before cross-agent coordination.
-- `agent_ask` — ask a coworker for a direct synchronous answer when you need quick specialist input and that agent accepts instant messages. Use `task_create` instead for durable delegation or work the other agent must own through completion.
+- `agent_ask` — if available to you, ask a coworker for a direct synchronous answer when you need quick specialist input and that agent accepts instant messages. Use `task_create` instead for durable delegation or work the other agent must own through completion.
 
 ## Task tracking
 

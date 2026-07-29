@@ -4,10 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import matter from "gray-matter";
 import { createAgentStore } from "../src/agent-store.js";
-import {
-  AgentDefinitionSchema,
-  type AgentDefinition,
-} from "../src/schema.js";
+import { AgentDefinitionSchema, type AgentDefinition } from "../src/schema.js";
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openacme-agent-store-"));
@@ -16,7 +13,7 @@ function tmpDir(): string {
 function makeAgent(
   id: string,
   provider = "anthropic",
-  persona = "You are a helpful assistant."
+  persona = "You are a helpful assistant.",
 ): AgentDefinition {
   return {
     id,
@@ -36,6 +33,7 @@ function makeAgent(
     memoryExtractionEnabled: true,
     maxConcurrentSessions: 1,
     parallelSchedulingPolicy: "lane_first",
+    agentAskEnabled: true,
     instantMessagesEnabled: true,
     probeIntervalMs: 30 * 60 * 1000,
     paths: [],
@@ -81,8 +79,8 @@ describe("file-based AgentStore (folder + AGENT.md)", () => {
       makeAgent(
         "foo",
         "anthropic",
-        "Multi-paragraph persona.\n\nSecond paragraph here."
-      )
+        "Multi-paragraph persona.\n\nSecond paragraph here.",
+      ),
     );
     const raw = fs.readFileSync(path.join(dir, "foo", "AGENT.md"), "utf-8");
     const { data, content } = matter(raw);
@@ -92,7 +90,7 @@ describe("file-based AgentStore (folder + AGENT.md)", () => {
     expect(data.name).toBe("foo Agent");
     expect(data.model).toMatchObject({ provider: "anthropic" });
     expect(content.trim()).toBe(
-      "Multi-paragraph persona.\n\nSecond paragraph here."
+      "Multi-paragraph persona.\n\nSecond paragraph here.",
     );
     // Persona must NOT live in the frontmatter when it's in the body.
     expect(data.persona).toBeUndefined();
@@ -140,6 +138,15 @@ describe("file-based AgentStore (folder + AGENT.md)", () => {
     expect(parsed.parallelSchedulingPolicy).toBe("lane_first");
   });
 
+  it("defaults agentAskEnabled to true", () => {
+    const parsed = AgentDefinitionSchema.parse({
+      id: "foo",
+      name: "Foo",
+      persona: "Helpful.",
+    });
+    expect(parsed.agentAskEnabled).toBe(true);
+  });
+
   it("rejects invalid parallelSchedulingPolicy values", () => {
     expect(() =>
       AgentDefinitionSchema.parse({
@@ -147,7 +154,7 @@ describe("file-based AgentStore (folder + AGENT.md)", () => {
         name: "Foo",
         persona: "Helpful.",
         parallelSchedulingPolicy: "random",
-      })
+      }),
     ).toThrow();
   });
 
@@ -158,7 +165,7 @@ describe("file-based AgentStore (folder + AGENT.md)", () => {
         name: "Foo",
         persona: "Helpful.",
         maxConcurrentSessions: 0,
-      })
+      }),
     ).toThrow();
   });
 
@@ -169,7 +176,7 @@ describe("file-based AgentStore (folder + AGENT.md)", () => {
         name: "Foo",
         persona: "Helpful.",
         maxConcurrentSessions: 6,
-      })
+      }),
     ).toThrow();
   });
 
@@ -180,7 +187,7 @@ describe("file-based AgentStore (folder + AGENT.md)", () => {
 
     const raw = fs.readFileSync(
       path.join(dir, "parallel", "AGENT.md"),
-      "utf-8"
+      "utf-8",
     );
     const { data } = matter(raw);
     expect(data.maxConcurrentSessions).toBe(3);
@@ -198,13 +205,22 @@ describe("file-based AgentStore (folder + AGENT.md)", () => {
 
     const raw = fs.readFileSync(
       path.join(dir, "parallel", "AGENT.md"),
-      "utf-8"
+      "utf-8",
     );
     const { data } = matter(raw);
     expect(data.parallelSchedulingPolicy).toBe("chain_first");
-    expect(store.get("parallel")?.parallelSchedulingPolicy).toBe(
-      "chain_first"
-    );
+    expect(store.get("parallel")?.parallelSchedulingPolicy).toBe("chain_first");
+  });
+
+  it("persists agentAskEnabled in AGENT.md frontmatter", () => {
+    const store = createAgentStore(dir);
+    const agent = { ...makeAgent("asker"), agentAskEnabled: false };
+    store.upsert(agent);
+
+    const raw = fs.readFileSync(path.join(dir, "asker", "AGENT.md"), "utf-8");
+    const { data } = matter(raw);
+    expect(data.agentAskEnabled).toBe(false);
+    expect(store.get("asker")?.agentAskEnabled).toBe(false);
   });
 
   it("parses existing AGENT.md files without maxConcurrentSessions", () => {
@@ -216,13 +232,14 @@ describe("file-based AgentStore (folder + AGENT.md)", () => {
         tools: ["shell"],
         mcpServers: {},
         skills: [],
-      })
+      }),
     );
 
     const store = createAgentStore(dir);
     const def = store.get("legacy");
     expect(def?.maxConcurrentSessions).toBe(1);
     expect(def?.parallelSchedulingPolicy).toBe("lane_first");
+    expect(def?.agentAskEnabled).toBe(true);
   });
 
   it("list returns all agents in id-sorted order", () => {
@@ -287,7 +304,7 @@ describe("file-based AgentStore (folder + AGENT.md)", () => {
         tools: ["shell"],
         mcpServers: {},
         skills: [],
-      })
+      }),
     );
     const store = createAgentStore(dir);
     const def = store.get("fm-only");
@@ -318,7 +335,7 @@ describe("file-based AgentStore (folder + AGENT.md)", () => {
     };
     expect(() => store.upsert(agentWithUndefineds)).not.toThrow();
     expect(fs.existsSync(path.join(dir, "openai-default", "AGENT.md"))).toBe(
-      true
+      true,
     );
     const reloaded = store.get("openai-default");
     expect(reloaded?.model.provider).toBe("openai");
@@ -343,7 +360,7 @@ describe("file-based AgentStore (folder + AGENT.md)", () => {
     fs.mkdirSync(path.join(dir, "broken"), { recursive: true });
     fs.writeFileSync(
       path.join(dir, "broken", "AGENT.md"),
-      "---\nid: broken\n---\n# missing required fields"
+      "---\nid: broken\n---\n# missing required fields",
     );
     const store = createAgentStore(dir);
     store.upsert(makeAgent("good"));

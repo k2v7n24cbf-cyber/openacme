@@ -123,25 +123,26 @@ const TASKS_GUIDANCE =
   "to a different agent. Don't file a task for something you can finish in the " +
   "current turn — just do it.\n" +
   "Each task binds to a session. The `session` field on `task_create` controls " +
-  "where the work lives: `\"current\"` (only when self-assigning) puts the task in " +
-  "your current session; `\"fresh\"` requests a brand-new session the dispatcher " +
+  'where the work lives: `"current"` (only when self-assigning) puts the task in ' +
+  'your current session; `"fresh"` requests a brand-new session the dispatcher ' +
   "allocates when ready; omit for the smart default (current when self-assigning, " +
   "fresh otherwise). If you intend to work on a task RIGHT NOW in this same turn, " +
-  "use `\"current\"`. Per-session, at most one task is in_progress at a time — " +
+  'use `"current"`. Per-session, at most one task is in_progress at a time — ' +
   "the rest queue in created_at order. Try to claim a second concurrently and " +
   "the store rejects with a clear error.\n" +
-  "Cross-agent: use `agent_ask` for quick synchronous consultation where you " +
-  "need a coworker's answer in this turn. Passing a different `assignee` to " +
+  "Cross-agent: if `agent_ask` is available, use it for quick synchronous " +
+  "consultation where you need a coworker's answer in this turn. Passing a " +
+  "different `assignee` to " +
   "`task_create` files durable work for that agent; they'll pick it up " +
   "autonomously in a fresh session. Comments on a shared task are the " +
   "coordination channel for delegated work.\n" +
   "Task comment discipline: ordinary comments are for progress, checkpoints, " +
   "blockers, errors, corrections, and partial updates — call `task_comment` " +
-  "with `id`, `body`, and `mode: \"comment\"` (or omit `mode`; comment is the " +
+  'with `id`, `body`, and `mode: "comment"` (or omit `mode`; comment is the ' +
   "default). Result comments are the assignee's single canonical final answer " +
-  "for the task — include `mode: \"result\"` only for that final answer, immediately before marking " +
+  'for the task — include `mode: "result"` only for that final answer, immediately before marking ' +
   "the task done.\n" +
-  "Teams: tag tasks with `team: \"<team-id>\"` when the work belongs to one of " +
+  'Teams: tag tasks with `team: "<team-id>"` when the work belongs to one of ' +
   "your teams; deliverables for team-tagged work go in that team's shared " +
   "workspace. With an explicit `assignee` the tag is organizational only. If you " +
   "don't know who in a team should do the work, set `team` and omit `assignee` — " +
@@ -151,14 +152,14 @@ const TASKS_GUIDANCE =
   "Recurring tasks: pass `recurrence` (cron or interval). When you mark a recurring " +
   "task `done`, the store self-resets it to `open` with the next fire time — the " +
   "returned status is `open`, not `done`, and `runs` increments. This is intentional. " +
-  "Use `status: \"canceled\"` to stop the recurrence permanently. Choose " +
-  "`recurrence.session: \"reuse\"` for an ongoing thread (context accumulates), " +
-  "`\"fresh\"` (default) for clean isolation each fire.\n" +
+  'Use `status: "canceled"` to stop the recurrence permanently. Choose ' +
+  '`recurrence.session: "reuse"` for an ongoing thread (context accumulates), ' +
+  '`"fresh"` (default) for clean isolation each fire.\n' +
   "Status discipline (focus model): every turn ends with the focus task in one of " +
-  "three explicit states. `done` (after the one `mode: \"result\"` final-answer " +
+  'three explicit states. `done` (after the one `mode: "result"` final-answer ' +
   "comment) when finished. `blocked` (with a reason) when you can't proceed without " +
   "external input — flip it back to `open` once unblocked. `open + start_at: " +
-  "\"<future ISO>\"` to snooze a task to a wall-clock time. If you leave it in " +
+  '"<future ISO>"` to snooze a task to a wall-clock time. If you leave it in ' +
   "`in_progress` and end the turn, the dispatcher will pick you back up on the " +
   "next tick to continue or close out — don't worry about forgetting it.\n" +
   "Constraints are enforced at the write boundary, not via the prompt. Try " +
@@ -174,7 +175,7 @@ const TASKS_GUIDANCE =
   "`deps_unsatisfied`.\n" +
   "Defer: if you have nothing actionable right now and only `blocked` tasks " +
   "remain — OR you've intentionally left work in_progress and want to be " +
-  "quiet until a specific time — call `defer_session(\"5m\" | \"2h\" | \"24h\")` " +
+  'quiet until a specific time — call `defer_session("5m" | "2h" | "24h")` ' +
   "to suppress routine 60s spawns until that timestamp. New inbox signals " +
   "(user messages, new tasks, comments) bypass the defer and wake you " +
   "immediately. Defer is sticky: a signal-driven wake fires the turn but the " +
@@ -204,9 +205,9 @@ const SLEEP_GUIDANCE =
   "`sleep(duration)` sets when the scheduler next probes this session if " +
   "nothing else moves the world. Default cadence is your agent's " +
   "`probeIntervalMs` (typically 30 min). Override when:\n" +
-  "- Polling external state that changes fast → `sleep(\"5m\")`.\n" +
-  "- Natural pause and nothing's likely to change for a while → `sleep(\"4h\")`.\n" +
-  "- You're confident only events will move things → `sleep(\"never\")` " +
+  '- Polling external state that changes fast → `sleep("5m")`.\n' +
+  '- Natural pause and nothing\'s likely to change for a while → `sleep("4h")`.\n' +
+  '- You\'re confident only events will move things → `sleep("never")` ' +
   "  (capped at 24h by the platform).\n" +
   "Events (tasks, comments, dep unblocks, user messages) wake you regardless. " +
   "The override resets each turn; call it again if you still want a custom cadence.";
@@ -262,7 +263,11 @@ function buildTeamsSection(teams: ReadonlyArray<PromptTeam>): string {
         budget -= charter.length;
       } else if (budget > 0) {
         const cutAt = charter.lastIndexOf("\n", budget);
-        lines.push("", charter.slice(0, cutAt > 0 ? cutAt : budget), "(charter truncated)");
+        lines.push(
+          "",
+          charter.slice(0, cutAt > 0 ? cutAt : budget),
+          "(charter truncated)",
+        );
         budget = 0;
         truncated = true;
       } else {
@@ -278,14 +283,14 @@ function buildTeamsSection(teams: ReadonlyArray<PromptTeam>): string {
           `right member via task_update, or split it into subtasks — decide, ` +
           `don't relay. Escalate to the human only when the team can't ` +
           `resolve it. Being manager grants no authority over teammates; ` +
-          `it's a routing duty.`
+          `it's a routing duty.`,
       );
     }
     parts.push(lines.join("\n"));
   }
   if (truncated) {
     parts.push(
-      `> WARNING: combined team charters exceed ${TEAM_CHARTER_CHAR_LIMIT} chars; some were cut. Read the full charter at <teamDir>/TEAM.md.`
+      `> WARNING: combined team charters exceed ${TEAM_CHARTER_CHAR_LIMIT} chars; some were cut. Read the full charter at <teamDir>/TEAM.md.`,
     );
   }
   return parts.join("\n\n");
@@ -331,7 +336,7 @@ export function buildSystemPrompt(options: {
   // Generic preface so AGENTS.md reads as shared background, not persona drift.
   if (options.agentsMd && options.agentsMd.trim().length > 0) {
     parts.push(
-      `\nShared context (from AGENTS.md):\n\n${options.agentsMd.trim()}`
+      `\nShared context (from AGENTS.md):\n\n${options.agentsMd.trim()}`,
     );
   }
 
@@ -353,7 +358,7 @@ export function buildSystemPrompt(options: {
         `Your shell maintains state across calls in this session — \`cd\`, ` +
         `exported environment variables, and shell functions all persist. ` +
         `Absolute paths are allowed; what you can actually read and write ` +
-        `is listed under Access below.`
+        `is listed under Access below.`,
     );
   }
 
@@ -371,7 +376,7 @@ export function buildSystemPrompt(options: {
   if (options.resources && options.resources.length > 0) {
     const shown = options.resources.slice(0, MAX_RESOURCE_LINES);
     const lines = shown.map(
-      (r) => `- \`${r.relPath}\` (${r.size}B) — ${r.absPath}`
+      (r) => `- \`${r.relPath}\` (${r.size}B) — ${r.absPath}`,
     );
     const overflow = options.resources.length - shown.length;
     const tail =
@@ -380,7 +385,7 @@ export function buildSystemPrompt(options: {
         : "";
     parts.push(
       `\n## Resources\nFiles in your folder. If your persona references a ` +
-        `file by name, find it here. Read via the absolute path.\n${lines.join("\n")}${tail}`
+        `file by name, find it here. Read via the absolute path.\n${lines.join("\n")}${tail}`,
     );
   }
 
@@ -398,7 +403,7 @@ export function buildSystemPrompt(options: {
       `\n## Available Tools\nYou have access to the following tools: ${options.toolNames.join(", ")}.\n` +
         `Use tools proactively to gather information and complete tasks. ` +
         `When a task requires multiple steps, use tools sequentially until complete. ` +
-        `MCP tools are namespaced \`mcp_<server>__<tool>\` — call them with that exact prefix, not the bare name.`
+        `MCP tools are namespaced \`mcp_<server>__<tool>\` — call them with that exact prefix, not the bare name.`,
     );
   }
 
@@ -432,7 +437,7 @@ export function buildSystemPrompt(options: {
   if (options.skillsIndex) {
     parts.push(
       `\n## Skills\nYou have the following skills available. Each entry is name + short description; ` +
-        `call \`skill_view\` with the name to load the full instructions when one applies.\n${options.skillsIndex}`
+        `call \`skill_view\` with the name to load the full instructions when one applies.\n${options.skillsIndex}`,
     );
   }
 

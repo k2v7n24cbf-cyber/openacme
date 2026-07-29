@@ -464,7 +464,7 @@ export class AgentManager {
           } catch (e) {
             log.warn(
               { err: e, eventId: event.id, agentId },
-              "inboxStore.deliver failed — signal lost for this agent"
+              "inboxStore.deliver failed — signal lost for this agent",
             );
           }
         }
@@ -695,7 +695,7 @@ export class AgentManager {
           agentId: event.agentId,
           processId: event.result.id,
         },
-        "dropping process completion for missing session"
+        "dropping process completion for missing session",
       );
       return;
     }
@@ -707,7 +707,7 @@ export class AgentManager {
           eventAgentId: event.agentId,
           processId: event.result.id,
         },
-        "dropping process completion for mismatched session agent"
+        "dropping process completion for mismatched session agent",
       );
       return;
     }
@@ -2123,11 +2123,17 @@ export class AgentManager {
     // Dedup defensively in case a legacy AGENT.md lists a system tool. Email
     // tools ship in the default list but are excluded when the agent has no
     // mailbox bound — gated here (we have the def) since a per-tool checkFn
-    // can't see the agent at tool-list build time.
+    // can't see the agent at tool-list build time. `agentAskEnabled: false`
+    // must remove agent_ask even if a legacy AGENT.md listed it under tools.
     const emailTools = new Set<string>(EMAIL_TOOL_NAMES);
+    const agentAskAllowed = def.agentAskEnabled !== false;
     const effectiveTools = Array.from(
       new Set([...def.tools, ...mcpToolNames, ...SYSTEM_TOOLS]),
-    ).filter((t) => def.email || !emailTools.has(t));
+    ).filter(
+      (t) =>
+        (agentAskAllowed || t !== "agent_ask") &&
+        (def.email || !emailTools.has(t)),
+    );
 
     const agentConfig: AgentConfig = {
       id: def.id,
@@ -2405,7 +2411,9 @@ export class AgentManager {
         sessionId: session.id,
         history,
         signal: timeout.signal,
-        toolFilter: new Set(agent.config.tools.filter((t) => t !== "agent_ask")),
+        toolFilter: new Set(
+          agent.config.tools.filter((t) => t !== "agent_ask"),
+        ),
         usage: { kind: "interactive", messageId: responseMessageId },
         onError: ({ error }) => {
           capturedError = error;
@@ -2641,7 +2649,7 @@ export class AgentManager {
       if (this.closing && isClosedDatabaseError(e)) return;
       log.warn(
         { err: e, sessionId: input.sessionId, eventType: input.eventType },
-        "session timeline record failed"
+        "session timeline record failed",
       );
     }
   }

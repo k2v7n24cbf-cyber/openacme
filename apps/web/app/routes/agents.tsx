@@ -95,6 +95,7 @@ interface Agent {
   memoryExtractionEnabled?: boolean;
   maxConcurrentSessions?: number;
   parallelSchedulingPolicy?: ParallelSchedulingPolicy;
+  agentAskEnabled?: boolean;
   instantMessagesEnabled?: boolean;
   mcpServers?: Record<string, MCPServerConfigDto>;
   mcpDisabled?: string[];
@@ -168,6 +169,7 @@ interface FormState {
   memoryExtractionEnabled: boolean;
   maxConcurrentSessions: number;
   parallelSchedulingPolicy: ParallelSchedulingPolicy;
+  agentAskEnabled: boolean;
   instantMessagesEnabled: boolean;
   mcpServers: Record<string, MCPServerConfigDto>;
   mcpDisabled: string[];
@@ -192,6 +194,7 @@ const FALLBACK_FORM: FormState = {
   memoryExtractionEnabled: true,
   maxConcurrentSessions: 1,
   parallelSchedulingPolicy: "lane_first",
+  agentAskEnabled: true,
   instantMessagesEnabled: true,
   mcpServers: {},
   mcpDisabled: [],
@@ -545,6 +548,7 @@ function AgentsPage() {
     memoryExtractionEnabled: formData.memoryExtractionEnabled,
     maxConcurrentSessions: formData.maxConcurrentSessions,
     parallelSchedulingPolicy: formData.parallelSchedulingPolicy,
+    agentAskEnabled: formData.agentAskEnabled,
     instantMessagesEnabled: formData.instantMessagesEnabled,
     mcpServers: formData.mcpServers,
     mcpDisabled: formData.mcpDisabled,
@@ -706,6 +710,7 @@ function AgentsPage() {
       maxConcurrentSessions: selectedAgent.maxConcurrentSessions ?? 1,
       parallelSchedulingPolicy:
         selectedAgent.parallelSchedulingPolicy ?? "lane_first",
+      agentAskEnabled: selectedAgent.agentAskEnabled ?? true,
       instantMessagesEnabled: selectedAgent.instantMessagesEnabled ?? true,
       mcpServers: selectedAgent.mcpServers ?? {},
       mcpDisabled: selectedAgent.mcpDisabled ?? [],
@@ -794,6 +799,7 @@ function AgentsPage() {
             memoryExtractionEnabled: true,
             maxConcurrentSessions: 1,
             parallelSchedulingPolicy: "lane_first",
+            agentAskEnabled: true,
             instantMessagesEnabled: true,
             mcpServers: tpl.agentFields.mcpServers ?? {},
             mcpDisabled: tpl.agentFields.mcpDisabled ?? [],
@@ -851,6 +857,7 @@ function AgentsPage() {
           maxConcurrentSessions: found.maxConcurrentSessions ?? 1,
           parallelSchedulingPolicy:
             found.parallelSchedulingPolicy ?? "lane_first",
+          agentAskEnabled: found.agentAskEnabled ?? true,
           instantMessagesEnabled: found.instantMessagesEnabled ?? true,
           mcpServers: found.mcpServers ?? {},
           mcpDisabled: found.mcpDisabled ?? [],
@@ -1170,6 +1177,15 @@ function AgentsPage() {
                           setFormData((prev) => ({
                             ...prev,
                             memoryExtractionEnabled,
+                          }))
+                        }
+                      />
+                      <AgentAskSetting
+                        enabled={formData.agentAskEnabled}
+                        onChange={(agentAskEnabled) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            agentAskEnabled,
                           }))
                         }
                       />
@@ -1737,6 +1753,7 @@ interface AgentDraft {
   memoryExtractionEnabled: boolean;
   maxConcurrentSessions: number;
   parallelSchedulingPolicy: ParallelSchedulingPolicy;
+  agentAskEnabled: boolean;
   instantMessagesEnabled: boolean;
 }
 
@@ -1753,6 +1770,7 @@ function draftFromAgent(agent: Agent): AgentDraft {
     memoryExtractionEnabled: agent.memoryExtractionEnabled ?? true,
     maxConcurrentSessions: agent.maxConcurrentSessions ?? 1,
     parallelSchedulingPolicy: agent.parallelSchedulingPolicy ?? "lane_first",
+    agentAskEnabled: agent.agentAskEnabled ?? true,
     instantMessagesEnabled: agent.instantMessagesEnabled ?? true,
   };
 }
@@ -1807,6 +1825,7 @@ function AgentDetail({
       memoryExtractionEnabled: draft.memoryExtractionEnabled,
       maxConcurrentSessions: draft.maxConcurrentSessions,
       parallelSchedulingPolicy: draft.parallelSchedulingPolicy,
+      agentAskEnabled: draft.agentAskEnabled,
       instantMessagesEnabled: draft.instantMessagesEnabled,
       ...tabSlice,
     }),
@@ -1826,6 +1845,7 @@ function AgentDetail({
       draft.memoryExtractionEnabled !== saved.memoryExtractionEnabled ||
       draft.maxConcurrentSessions !== saved.maxConcurrentSessions ||
       draft.parallelSchedulingPolicy !== saved.parallelSchedulingPolicy ||
+      draft.agentAskEnabled !== saved.agentAskEnabled ||
       draft.instantMessagesEnabled !== saved.instantMessagesEnabled
     : JSON.stringify(draft) !== JSON.stringify(saved);
   // Detail is ruled sections on the pane, not a floating card — one shared
@@ -1902,8 +1922,8 @@ function AgentDetail({
                       model,
                       memoryExtractionEnabled: draft.memoryExtractionEnabled,
                       maxConcurrentSessions: draft.maxConcurrentSessions,
-                      parallelSchedulingPolicy:
-                        draft.parallelSchedulingPolicy,
+                      parallelSchedulingPolicy: draft.parallelSchedulingPolicy,
+                      agentAskEnabled: draft.agentAskEnabled,
                       instantMessagesEnabled: draft.instantMessagesEnabled,
                     }
                   : {
@@ -1914,8 +1934,8 @@ function AgentDetail({
                       model,
                       memoryExtractionEnabled: draft.memoryExtractionEnabled,
                       maxConcurrentSessions: draft.maxConcurrentSessions,
-                      parallelSchedulingPolicy:
-                        draft.parallelSchedulingPolicy,
+                      parallelSchedulingPolicy: draft.parallelSchedulingPolicy,
+                      agentAskEnabled: draft.agentAskEnabled,
                       instantMessagesEnabled: draft.instantMessagesEnabled,
                     },
                 "Agent",
@@ -1989,6 +2009,10 @@ function AgentDetail({
             schedulingPolicy={draft.parallelSchedulingPolicy}
             onSchedulingPolicyChange={(parallelSchedulingPolicy) =>
               setDraft({ ...draft, parallelSchedulingPolicy })
+            }
+            agentAskEnabled={draft.agentAskEnabled}
+            onAgentAskChange={(agentAskEnabled) =>
+              setDraft({ ...draft, agentAskEnabled })
             }
             instantMessagesEnabled={draft.instantMessagesEnabled}
             onInstantMessagesChange={(instantMessagesEnabled) =>
@@ -2611,7 +2635,7 @@ function ParallelSessionsSetting({
 }) {
   const selectedPolicy =
     PARALLEL_SCHEDULING_POLICIES.find(
-      (policy) => policy.value === schedulingPolicy
+      (policy) => policy.value === schedulingPolicy,
     ) ?? PARALLEL_SCHEDULING_POLICIES[0]!;
 
   return (
@@ -2642,9 +2666,7 @@ function ParallelSessionsSetting({
       {value > 1 && (
         <>
           <div className="grid max-w-sm gap-2">
-            <Label htmlFor="parallel-scheduling-policy">
-              Task scheduling
-            </Label>
+            <Label htmlFor="parallel-scheduling-policy">Task scheduling</Label>
             <Select
               value={schedulingPolicy}
               onValueChange={(next) =>
@@ -2718,6 +2740,45 @@ function InstantMessagesSetting({
   );
 }
 
+function AgentAskSetting({
+  enabled,
+  onChange,
+}: {
+  enabled: boolean;
+  onChange: (enabled: boolean) => void;
+}) {
+  return (
+    <div className="grid gap-3 border-t border-paper-rule pt-4">
+      <div>
+        <Label htmlFor="agent-ask">Agent ask tool</Label>
+        <p className="mt-1 text-[12px] leading-relaxed text-ink-soft">
+          Allow this agent to ask other agents for immediate answers with
+          agent_ask.
+        </p>
+      </div>
+      <label
+        htmlFor="agent-ask"
+        className="flex max-w-2xl cursor-pointer items-start gap-3 border border-paper-rule bg-paper px-3 py-3 text-sm transition-colors hover:border-plot-red"
+      >
+        <input
+          id="agent-ask"
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => onChange(e.target.checked)}
+          className="mt-0.5 size-4 accent-plot-red"
+        />
+        <span className="grid gap-1">
+          <span className="font-medium text-ink">Can call agent_ask</span>
+          <span className="text-[12px] leading-relaxed text-ink-soft">
+            When disabled, this agent must coordinate through tasks and comments
+            instead.
+          </span>
+        </span>
+      </label>
+    </div>
+  );
+}
+
 function AgentSettingsTab({
   memoryExtractionEnabled,
   onMemoryExtractionChange,
@@ -2725,6 +2786,8 @@ function AgentSettingsTab({
   onMaxConcurrentSessionsChange,
   schedulingPolicy,
   onSchedulingPolicyChange,
+  agentAskEnabled,
+  onAgentAskChange,
   instantMessagesEnabled,
   onInstantMessagesChange,
 }: {
@@ -2734,11 +2797,14 @@ function AgentSettingsTab({
   onMaxConcurrentSessionsChange: (value: number) => void;
   schedulingPolicy: ParallelSchedulingPolicy;
   onSchedulingPolicyChange: (value: ParallelSchedulingPolicy) => void;
+  agentAskEnabled: boolean;
+  onAgentAskChange: (enabled: boolean) => void;
   instantMessagesEnabled: boolean;
   onInstantMessagesChange: (enabled: boolean) => void;
 }) {
   return (
     <div className="grid max-w-4xl gap-5 py-5">
+      <AgentAskSetting enabled={agentAskEnabled} onChange={onAgentAskChange} />
       <InstantMessagesSetting
         enabled={instantMessagesEnabled}
         onChange={onInstantMessagesChange}

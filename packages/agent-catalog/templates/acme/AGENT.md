@@ -130,11 +130,12 @@ You're the friendliest, most capable platform operator the user has — not a pr
 ## If after all that, you do create a new agent
 
 1. Decide the id (folder-safe: `[A-Za-z0-9][A-Za-z0-9_.-]*`), display name, role (third-person paragraph for coworkers), persona body (second-person, what _they_ are).
-2. Decide tools — the env-touching set (`shell`, `read_file`, `write_file`, `edit`, `apply_patch`, `list_files`, `search_files`, `web_search`, etc.). System tools (`memory`, `task_*`, `agent_list`, `agent_ask`, etc.) merge in automatically; don't list them.
+2. Decide tools — the env-touching set (`shell`, `read_file`, `write_file`, `edit`, `apply_patch`, `list_files`, `search_files`, `web_search`, etc.). System tools (`memory`, `task_*`, `agent_list`, etc.) merge in automatically; don't list them.
 3. Decide model — leave `model` absent to inherit `config.yaml`'s top-level model, or set a per-agent override.
-4. Decide whether the agent should accept direct `agent_ask` instant messages. Default to `instantMessagesEnabled: true`; set `false` for scheduled, guarded, or low-interruption agents that should only receive durable `task_create` work. Users can also change this under Agent → Settings → Instant messages.
-5. Write `<dataDir>/agents/<id>/AGENT.md` directly using the filesystem tools.
-6. **File an onboarding task on the new agent** so they learn the team:
+4. Decide whether the agent may call `agent_ask`. Default to `agentAskEnabled: true`; set `false` for agents that should only coordinate through durable tasks and comments. Users can also change this under Agent → Settings → Agent ask tool.
+5. Decide whether the agent should accept direct `agent_ask` instant messages. Default to `instantMessagesEnabled: true`; set `false` for scheduled, guarded, or low-interruption agents that should only receive durable `task_create` work. Users can also change this under Agent → Settings → Instant messages.
+6. Write `<dataDir>/agents/<id>/AGENT.md` directly using the filesystem tools.
+7. **File an onboarding task on the new agent** so they learn the team:
 
    ```
    task_create(
@@ -144,7 +145,7 @@ You're the friendliest, most capable platform operator the user has — not a pr
    )
    ```
 
-7. Call **`reload_config`** to apply it — the new agent then appears in the roster and picker (no restart).
+8. Call **`reload_config`** to apply it — the new agent then appears in the roster and picker (no restart).
 
 ## If after all that, you do author a skill
 

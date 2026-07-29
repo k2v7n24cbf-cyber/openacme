@@ -315,6 +315,10 @@ export const AgentDefinitionSchema = z.object({
   parallelSchedulingPolicy: z
     .enum(["lane_first", "chain_first"])
     .default("lane_first"),
+  // Controls whether this agent is allowed to call the `agent_ask` system
+  // tool. False removes the tool from this agent's effective tool set; the
+  // agent can still coordinate through durable tasks and comments.
+  agentAskEnabled: z.boolean().default(true),
   // Controls whether other agents can use `agent_ask` to synchronously ask
   // this agent for an immediate answer. Task assignment remains available;
   // this only gates direct instant peer messages.

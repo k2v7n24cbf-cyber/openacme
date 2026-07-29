@@ -49,13 +49,19 @@ const log = createLogger("server.dispatcher");
 const DEFAULT_TICK_MS = 60_000;
 /** Park-on-failure backoff. Same value the old TaskScheduler used. */
 const PARK_BACKOFF_MS = 5 * 60_000;
+/** Expired defer markers are a one-shot self-wake, but only near
+ *  their target time. Older rows can exist from previous daemon runs
+ *  or older scheduling semantics; replaying all of them on startup
+ *  can stampede production with stale autonomous turns. */
+const DEFER_EXPIRED_WAKE_GRACE_MS = 5 * 60_000;
 const TIMELINE_ERROR_MAX_CHARS = 4096;
 type ParallelSchedulingPolicy = "lane_first" | "chain_first";
 type DispatcherSpawnReason =
   | "inbox"
   | "task_in_progress"
   | "task_open_ready"
-  | "task_blocked_revisit";
+  | "task_blocked_revisit"
+  | "defer_expired";
 
 interface SpawnDecision {
   reason: DispatcherSpawnReason;
@@ -694,10 +700,20 @@ export class Dispatcher {
       return null;
     }
     const sessionKind = tasks.length > 0 ? "task" : session.kind;
+    const deferUntilMs =
+      session.deferUntil == null ? null : session.deferUntil * 1000;
+    const deferExpiredRecently =
+      deferUntilMs != null &&
+      deferUntilMs <= nowMs &&
+      nowMs - deferUntilMs <= DEFER_EXPIRED_WAKE_GRACE_MS;
     if (tasks.some((t) => t.status === "system_blocked")) {
       return null;
     }
-    if (sessionKind === "chat" && !inbox.hasDirectUserInbox) {
+    if (
+      sessionKind === "chat" &&
+      !inbox.hasDirectUserInbox &&
+      !deferExpiredRecently
+    ) {
       return null;
     }
     if (inbox.hasInbox) {
@@ -759,6 +775,13 @@ export class Dispatcher {
       return {
         reason: "task_blocked_revisit",
         taskId: blockedTask.id,
+        hasInbox: inbox.hasInbox,
+      };
+    }
+    if (deferExpiredRecently) {
+      return {
+        reason: "defer_expired",
+        taskId: null,
         hasInbox: inbox.hasInbox,
       };
     }
@@ -889,6 +912,10 @@ export class Dispatcher {
       this.activeByAgent.set(agentId, active);
     }
     active.add(sessionId);
+    if (decision.reason === "defer_expired") {
+      this.sessionStore.clearDeferUntil(sessionId);
+      this.deferSkipKeysBySession.delete(sessionId);
+    }
     if (this.broadcaster) {
       this.broadcaster.broadcast(sessionId, {
         kind: "session_state",

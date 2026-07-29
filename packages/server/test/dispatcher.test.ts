@@ -414,6 +414,43 @@ describe("Dispatcher spawn rule", () => {
     expect(calls).toEqual([{ agentId: "a1", sessionId: session.id }]);
   });
 
+  it("wakes a taskless chat session once when defer_until expires", async () => {
+    let nowMs = Date.now();
+    const { manager, calls } = fakeManager(["a1"]);
+    const session = sessionStore.create("a1", { kind: "chat" });
+    const deferUntil = Math.floor((nowMs + 60_000) / 1000);
+    sessionStore.setDeferUntil(session.id, deferUntil);
+
+    const d = makeDispatcher(manager, { now: () => new Date(nowMs) });
+    await d.start();
+    await d.drain(5_000);
+    expect(calls).toEqual([]);
+
+    nowMs = deferUntil * 1000;
+    await tick(d);
+    expect(calls).toEqual([{ agentId: "a1", sessionId: session.id }]);
+    expect(sessionStore.getDeferUntil(session.id)).toBeNull();
+
+    await tick(d);
+    expect(calls).toEqual([{ agentId: "a1", sessionId: session.id }]);
+  });
+
+  it("does not replay stale expired defer markers on startup", async () => {
+    const nowMs = Date.now();
+    const { manager, calls } = fakeManager(["a1"]);
+    const session = sessionStore.create("a1", { kind: "chat" });
+    sessionStore.setDeferUntil(
+      session.id,
+      Math.floor((nowMs - 10 * 60_000) / 1000),
+    );
+
+    const d = makeDispatcher(manager, { now: () => new Date(nowMs) });
+    await d.start();
+    await d.drain(5_000);
+
+    expect(calls).toEqual([]);
+  });
+
   it("emits a coalesced defer skipped timeline event when defer suppresses ready work", async () => {
     const timelineEvents: SessionTimelineEventInput[] = [];
     const { manager, calls } = fakeManager(["a1"]);

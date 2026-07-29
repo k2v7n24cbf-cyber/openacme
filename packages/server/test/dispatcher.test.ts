@@ -6,6 +6,7 @@ import { ConfigSchema } from "@openacme/config";
 import {
   createDatabase,
   createCommentStore,
+  createEventStore,
   createSessionStore,
   createInboxStore,
 } from "@openacme/db";
@@ -17,7 +18,7 @@ import type { AgentManager } from "../src/agent-manager.js";
 
 /**
  * Dispatcher tests against real stores (sqlite in a temp data dir,
- * filesystem TaskStore) with only the AgentManager faked — the
+ * SQL-backed TaskStore) with only the AgentManager faked — the
  * dispatcher only calls listAgents / getAgentDef / getAgent on it,
  * and a real manager would build a real Agent (LLM-backed) on spawn.
  */
@@ -76,7 +77,9 @@ beforeEach(() => {
   sessionStore = createSessionStore(db);
   inboxStore = createInboxStore(db);
   taskStore = new TaskStore(path.join(dataDir, "tasks"), {
+    db,
     commentStore: createCommentStore(db),
+    eventStore: createEventStore(db),
   });
   dispatcher = null;
 });

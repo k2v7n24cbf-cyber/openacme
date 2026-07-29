@@ -135,7 +135,25 @@ export class TaskStoreError extends Error {
 
 export type OnChangeFn = () => void;
 
+interface TaskSqlStatement<P extends unknown[] = unknown[], R = unknown> {
+  run(...params: P): unknown;
+  get(...params: P): R | undefined;
+  all(...params: P): R[];
+}
+
+export interface TaskSqlDatabase {
+  prepare<P extends unknown[] = unknown[], R = unknown>(
+    sql: string,
+  ): TaskSqlStatement<P, R>;
+  transaction(fn: (...args: unknown[]) => unknown): {
+    immediate: (...args: unknown[]) => unknown;
+  };
+}
+
 export interface TaskStoreOptions {
+  /** Optional SQLite handle. When present, task state is imported from
+   *  markdown once and subsequent task reads/writes use SQL. */
+  db?: TaskSqlDatabase;
   /** Optional: discussion thread store. If absent, comment methods no-op. */
   commentStore?: CommentStorePort;
   /** Optional: event log store. If absent, no events emitted. */
@@ -192,9 +210,80 @@ function serializeTask(task: Task): string {
   return matter.stringify(body ? `${body}\n` : "\n", cleaned);
 }
 
+interface TaskSqlRow {
+  id: string;
+  title: string;
+  status: string;
+  assignee: string;
+  session_id: string | null;
+  created_by: string;
+  created_in_session_id: string | null;
+  parent_id: string | null;
+  depends_on_json: string;
+  start_at: string | null;
+  due_at: string | null;
+  created_at: string;
+  updated_at: string;
+  closed_at: string | null;
+  recurrence_json: string | null;
+  runs: number;
+  last_run_at: string | null;
+  team: string | null;
+  body: string;
+}
+
+function taskFromSqlRow(row: TaskSqlRow): Task | null {
+  try {
+    const dependsOn = JSON.parse(row.depends_on_json) as unknown;
+    const recurrence =
+      row.recurrence_json === null
+        ? null
+        : (JSON.parse(row.recurrence_json) as unknown);
+    const fm = TaskFrontmatterSchema.parse({
+      id: row.id,
+      title: row.title,
+      status: row.status,
+      assignee: row.assignee,
+      session_id: row.session_id,
+      created_by: row.created_by,
+      created_in_session_id: row.created_in_session_id,
+      parent_id: row.parent_id,
+      depends_on: dependsOn,
+      start_at: row.start_at,
+      due_at: row.due_at,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      closed_at: row.closed_at,
+      recurrence,
+      runs: row.runs,
+      last_run_at: row.last_run_at,
+      team: row.team,
+    });
+    return { ...fm, body: row.body };
+  } catch (e) {
+    log.warn({ err: e, taskId: row.id }, "skipping malformed SQL task row");
+    return null;
+  }
+}
+
+function isSqlConstraint(err: unknown): boolean {
+  const message = sqlErrorMessage(err);
+  return /constraint|unique/i.test(message);
+}
+
+function sqlErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function normalizeSqlBody(body: string): string {
+  if (!body) return "";
+  return body.endsWith("\n") ? body : `${body}\n`;
+}
+
 export class TaskStore {
   private readonly inFlight = new Map<string, Promise<void>>();
   private onChange: OnChangeFn | null = null;
+  private db: TaskSqlDatabase | null = null;
   private readonly commentStore: CommentStorePort | null;
   private readonly eventStore: EventStorePort | null;
   private readonly validateSession: ((id: string) => boolean) | null;
@@ -211,13 +300,15 @@ export class TaskStore {
     this.validateSession = options.validateSession ?? null;
     this.resolveTeamManager = options.resolveTeamManager ?? null;
     this.adoptNonSequenceIds();
+    this.db = options.db ?? null;
+    if (this.db) this.initializeSqlStore();
   }
 
   /** Renumber tasks whose id isn't a sequence number (oldest first) and
    *  fix depends_on / parent_id references. Numeric ids are untouched. */
   private adoptNonSequenceIds(): void {
     if (!fs.existsSync(this.tasksDir)) return;
-    const all = this.list();
+    const all = this.listFromFiles();
     let seq = this.lastAllocated();
     const mapping = new Map<string, string>();
     for (const t of all) {
@@ -299,10 +390,20 @@ export class TaskStore {
 
   get(id: string): Task | null {
     if (!SAFE_ID.test(id)) return null;
+    if (this.db) return this.getFromSql(id);
+    return this.getFromFile(id);
+  }
+
+  private getFromFile(id: string): Task | null {
     return parseTaskFile(this.filePath(id));
   }
 
   list(filter?: TaskListFilter): Task[] {
+    if (this.db) return this.listFromSql(filter);
+    return this.listFromFiles(filter);
+  }
+
+  private listFromFiles(filter?: TaskListFilter): Task[] {
     if (!fs.existsSync(this.tasksDir)) return [];
     const entries = fs.readdirSync(this.tasksDir, { withFileTypes: true });
     const out: Task[] = [];
@@ -317,6 +418,621 @@ export class TaskStore {
     }
     out.sort((a, b) => a.created_at.localeCompare(b.created_at));
     return out;
+  }
+
+  private initializeSqlStore(): void {
+    const db = this.db;
+    if (!db) return;
+    db.transaction(() => {
+      const existing = db
+        .prepare<[], { count: number }>("SELECT COUNT(*) AS count FROM tasks")
+        .get()?.count;
+      if ((existing ?? 0) > 0) return;
+
+      const tasks = this.listFromFiles();
+      for (const task of tasks) {
+        try {
+          this.insertSqlTask(task);
+        } catch (e) {
+          if (isSqlConstraint(e)) {
+            throw new TaskStoreError(
+              "migration_conflict",
+              `Could not import legacy task ${task.id}: ${sqlErrorMessage(e)}`,
+            );
+          }
+          throw e;
+        }
+      }
+      db.prepare<[string, string]>(
+        "INSERT OR REPLACE INTO task_meta (key, value) VALUES (?, ?)",
+      ).run("next_id", String(this.lastAllocated()));
+    }).immediate();
+  }
+
+  private getFromSql(id: string): Task | null {
+    const db = this.db;
+    if (!db) return null;
+    const row = db
+      .prepare<[string], TaskSqlRow>("SELECT * FROM tasks WHERE id = ?")
+      .get(id);
+    return row ? taskFromSqlRow(row) : null;
+  }
+
+  private listFromSql(filter?: TaskListFilter): Task[] {
+    const db = this.db;
+    if (!db) return [];
+    const where: string[] = [];
+    const params: unknown[] = [];
+
+    if (filter?.assignee !== undefined) {
+      where.push("assignee = ?");
+      params.push(filter.assignee);
+    }
+    if (filter?.created_by !== undefined) {
+      where.push("created_by = ?");
+      params.push(filter.created_by);
+    }
+    if (filter?.session_id !== undefined) {
+      if (filter.session_id === null) {
+        where.push("session_id IS NULL");
+      } else {
+        where.push("session_id = ?");
+        params.push(filter.session_id);
+      }
+    }
+    if (filter?.parent_id !== undefined) {
+      if (filter.parent_id === null) {
+        where.push("parent_id IS NULL");
+      } else {
+        where.push("parent_id = ?");
+        params.push(filter.parent_id);
+      }
+    }
+    if (filter?.team !== undefined) {
+      where.push("team = ?");
+      params.push(filter.team);
+    }
+    if (filter?.status !== undefined) {
+      const statuses = Array.isArray(filter.status)
+        ? filter.status
+        : [filter.status];
+      if (statuses.length === 0) return [];
+      where.push(`status IN (${statuses.map(() => "?").join(", ")})`);
+      params.push(...statuses);
+    }
+
+    const sql = [
+      "SELECT * FROM tasks",
+      where.length > 0 ? `WHERE ${where.join(" AND ")}` : "",
+      "ORDER BY created_at ASC",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    const rows = db.prepare<unknown[], TaskSqlRow>(sql).all(...params);
+    return rows.flatMap((row) => {
+      const task = taskFromSqlRow(row);
+      return task ? [task] : [];
+    });
+  }
+
+  private insertSqlTask(task: Task): void {
+    const db = this.db;
+    if (!db) return;
+    db.prepare(
+      `INSERT INTO tasks (
+        id,
+        title,
+        status,
+        assignee,
+        session_id,
+        created_by,
+        created_in_session_id,
+        parent_id,
+        depends_on_json,
+        start_at,
+        due_at,
+        created_at,
+        updated_at,
+        closed_at,
+        recurrence_json,
+        runs,
+        last_run_at,
+        team,
+        body
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      task.id,
+      task.title,
+      task.status,
+      task.assignee,
+      task.session_id,
+      task.created_by,
+      task.created_in_session_id,
+      task.parent_id,
+      JSON.stringify(task.depends_on),
+      task.start_at,
+      task.due_at,
+      task.created_at,
+      task.updated_at,
+      task.closed_at,
+      task.recurrence ? JSON.stringify(task.recurrence) : null,
+      task.runs,
+      task.last_run_at,
+      task.team,
+      normalizeSqlBody(task.body),
+    );
+  }
+
+  private updateSqlTask(task: Task): void {
+    const db = this.db;
+    if (!db) return;
+    db.prepare(
+      `UPDATE tasks SET
+        title = ?,
+        status = ?,
+        assignee = ?,
+        session_id = ?,
+        created_by = ?,
+        created_in_session_id = ?,
+        parent_id = ?,
+        depends_on_json = ?,
+        start_at = ?,
+        due_at = ?,
+        created_at = ?,
+        updated_at = ?,
+        closed_at = ?,
+        recurrence_json = ?,
+        runs = ?,
+        last_run_at = ?,
+        team = ?,
+        body = ?
+      WHERE id = ?`,
+    ).run(
+      task.title,
+      task.status,
+      task.assignee,
+      task.session_id,
+      task.created_by,
+      task.created_in_session_id,
+      task.parent_id,
+      JSON.stringify(task.depends_on),
+      task.start_at,
+      task.due_at,
+      task.created_at,
+      task.updated_at,
+      task.closed_at,
+      task.recurrence ? JSON.stringify(task.recurrence) : null,
+      task.runs,
+      task.last_run_at,
+      task.team,
+      normalizeSqlBody(task.body),
+      task.id,
+    );
+  }
+
+  private runSqlImmediate<T>(work: () => T): T {
+    const db = this.db;
+    if (!db) return work();
+    return db.transaction(work).immediate() as T;
+  }
+
+  private lastSqlAllocated(): number {
+    const db = this.db;
+    if (!db) return 0;
+    const raw = db
+      .prepare<
+        [string],
+        { value: string }
+      >("SELECT value FROM task_meta WHERE key = ?")
+      .get("next_id")?.value;
+    let fromMeta = 0;
+    if (raw !== undefined) {
+      const n = Number.parseInt(raw, 10);
+      if (Number.isFinite(n) && n > 0) fromMeta = n;
+    }
+    const fromRows =
+      db
+        .prepare<
+          [],
+          { max_id: number | null }
+        >("SELECT MAX(CAST(id AS INTEGER)) AS max_id FROM tasks WHERE id GLOB '[0-9]*'")
+        .get()?.max_id ?? 0;
+    return Math.max(fromMeta, fromRows);
+  }
+
+  private writeSqlAllocated(n: number): void {
+    const db = this.db;
+    if (!db) return;
+    db.prepare<[string, string]>(
+      "INSERT OR REPLACE INTO task_meta (key, value) VALUES (?, ?)",
+    ).run("next_id", String(n));
+  }
+
+  private createSql(input: TaskCreate): Task {
+    return this.runSqlImmediate(() => {
+      let idNum = this.lastSqlAllocated() + 1;
+      while (this.getFromSql(String(idNum))) idNum += 1;
+      const id = String(idNum);
+      const all = this.listFromSql();
+      const byId = new Map(all.map((t) => [t.id, t]));
+
+      const deps = input.depends_on ?? [];
+      this.assertDepsExist(deps, byId);
+      this.assertNoCycle(id, deps, byId);
+
+      if (input.parent_id && !byId.has(input.parent_id)) {
+        throw new TaskStoreError(
+          "unknown_parent",
+          `parent_id ${JSON.stringify(input.parent_id)} not found`,
+        );
+      }
+
+      if (
+        input.session_id &&
+        this.validateSession &&
+        !this.validateSession(input.session_id)
+      ) {
+        throw new TaskStoreError(
+          "unknown_session",
+          `session_id ${JSON.stringify(input.session_id)} does not exist`,
+        );
+      }
+
+      const nowDate = new Date();
+      const now = nowDate.toISOString();
+      const recurrence = input.recurrence ?? null;
+      if (recurrence) {
+        const v = validateRecurrence(recurrence, nowDate);
+        if (!v.ok) {
+          throw new TaskStoreError("invalid_input", v.message);
+        }
+      }
+
+      const status = input.status ?? "open";
+
+      let startAt: string | null;
+      if (input.start_at !== undefined) {
+        startAt = input.start_at;
+      } else if (recurrence) {
+        if (recurrence.kind === "cron") {
+          const next = computeNextFire(recurrence, nowDate, 0);
+          startAt = next ? next.toISOString() : null;
+        } else {
+          startAt = now;
+        }
+      } else {
+        startAt = null;
+      }
+
+      const task: Task = {
+        id,
+        title: input.title,
+        status,
+        assignee: input.assignee!,
+        session_id: input.session_id ?? null,
+        created_by: input.created_by,
+        created_in_session_id: input.created_in_session_id ?? null,
+        parent_id: input.parent_id ?? null,
+        depends_on: deps,
+        start_at: startAt,
+        due_at: input.due_at ?? null,
+        created_at: now,
+        updated_at: now,
+        closed_at: null,
+        recurrence,
+        runs: 0,
+        last_run_at: null,
+        team: input.team ?? null,
+        body: input.body ?? "",
+      };
+
+      try {
+        this.insertSqlTask(task);
+      } catch (e) {
+        if (
+          status === "in_progress" &&
+          input.session_id &&
+          isSqlConstraint(e)
+        ) {
+          throw new TaskStoreError(
+            "session_busy",
+            `Another task is already in_progress in session ${input.session_id}`,
+          );
+        }
+        throw e;
+      }
+      this.writeSqlAllocated(Number(task.id));
+      this.emitEvent({
+        taskId: task.id,
+        sessionId: task.session_id,
+        agentId: task.assignee,
+        actor: input.created_by,
+        kind: "task_assigned",
+        payload: { assignee: task.assignee, created_by: task.created_by },
+      });
+      this.fireOnChange();
+      return task;
+    });
+  }
+
+  private updateSql(
+    id: string,
+    patch: TaskUpdate,
+    opts?: { actor?: string | null },
+  ): Task {
+    return this.runSqlImmediate(() => {
+      const existing = this.getFromSql(id);
+      if (!existing) {
+        throw new TaskStoreError("not_found", `Task ${id} not found`);
+      }
+
+      const all = this.listFromSql();
+      const byId = new Map(all.map((t) => [t.id, t]));
+
+      const reassigning =
+        patch.assignee !== undefined && patch.assignee !== existing.assignee;
+      const explicitSession = Object.prototype.hasOwnProperty.call(
+        patch,
+        "session_id",
+      );
+
+      let nextSessionId = existing.session_id;
+      if (explicitSession) {
+        nextSessionId = patch.session_id ?? null;
+      } else if (reassigning) {
+        nextSessionId = null;
+      }
+
+      if (
+        explicitSession &&
+        nextSessionId &&
+        nextSessionId !== existing.session_id &&
+        this.validateSession &&
+        !this.validateSession(nextSessionId)
+      ) {
+        throw new TaskStoreError(
+          "unknown_session",
+          `session_id ${JSON.stringify(nextSessionId)} does not exist`,
+        );
+      }
+
+      const nextDeps = patch.depends_on ?? existing.depends_on;
+      if (patch.depends_on) {
+        this.assertDepsExist(patch.depends_on, byId);
+        this.assertNoCycle(id, patch.depends_on, byId);
+      }
+
+      const requestedStatus = patch.status ?? existing.status;
+      const isClosing =
+        (requestedStatus === "done" || requestedStatus === "canceled") &&
+        existing.status !== requestedStatus;
+      const nextStatus: TaskStatus = requestedStatus;
+
+      if (nextStatus === "in_progress" && !depsSatisfied(nextDeps, byId, id)) {
+        throw new TaskStoreError(
+          "deps_unsatisfied",
+          `Cannot start task ${id}: not all dependencies are done`,
+        );
+      }
+
+      const effectiveRecurrence: Recurrence | null =
+        patch.recurrence !== undefined
+          ? patch.recurrence
+          : (existing.recurrence ?? null);
+      if (patch.recurrence !== undefined && patch.recurrence !== null) {
+        const v = validateRecurrence(patch.recurrence, new Date());
+        if (!v.ok) {
+          throw new TaskStoreError("invalid_input", v.message);
+        }
+      }
+
+      const nowDate = new Date();
+      const now = nowDate.toISOString();
+      let next: Task = {
+        ...existing,
+        title: patch.title ?? existing.title,
+        body: patch.body ?? existing.body,
+        status: nextStatus,
+        assignee: patch.assignee ?? existing.assignee,
+        session_id: nextSessionId,
+        depends_on: nextDeps,
+        start_at:
+          patch.start_at !== undefined
+            ? patch.start_at
+            : nextStatus === "system_blocked"
+              ? null
+              : existing.start_at,
+        due_at: patch.due_at !== undefined ? patch.due_at : existing.due_at,
+        updated_at: now,
+        closed_at:
+          nextStatus === "done" || nextStatus === "canceled"
+            ? (existing.closed_at ?? now)
+            : null,
+        recurrence: effectiveRecurrence,
+        runs: existing.runs ?? 0,
+        last_run_at: existing.last_run_at ?? null,
+        team: patch.team !== undefined ? patch.team : existing.team,
+      };
+
+      let didReset = false;
+      if (isClosing && nextStatus === "done" && effectiveRecurrence) {
+        const completedRuns = next.runs + 1;
+        next = { ...next, runs: completedRuns, last_run_at: now };
+        const startAtMs = next.start_at ? Date.parse(next.start_at) : NaN;
+        const fromMs = Math.max(
+          nowDate.getTime(),
+          Number.isFinite(startAtMs) ? startAtMs + 1 : 0,
+        );
+        const nextFire = computeNextFire(
+          effectiveRecurrence,
+          new Date(fromMs),
+          completedRuns,
+        );
+        if (nextFire) {
+          const resetSessionId =
+            effectiveRecurrence.session === "fresh" ? null : next.session_id;
+          next = {
+            ...next,
+            status: "open",
+            start_at: nextFire.toISOString(),
+            closed_at: null,
+            session_id: resetSessionId,
+          };
+          didReset = true;
+        }
+      }
+
+      try {
+        this.updateSqlTask(next);
+      } catch (e) {
+        if (
+          next.status === "in_progress" &&
+          next.session_id &&
+          isSqlConstraint(e)
+        ) {
+          throw new TaskStoreError(
+            "session_busy",
+            `Session ${next.session_id} already has an in_progress task`,
+          );
+        }
+        throw e;
+      }
+
+      if (didReset) {
+        this.emitEvent({
+          taskId: next.id,
+          sessionId: next.session_id,
+          agentId: next.assignee,
+          actor: opts?.actor ?? null,
+          kind: "task_completed_run",
+          payload: {
+            runs: next.runs,
+            last_run_at: next.last_run_at,
+            next_fire: next.start_at,
+          },
+        });
+      }
+
+      if (next.status !== existing.status) {
+        this.emitEvent({
+          taskId: next.id,
+          sessionId: next.session_id,
+          agentId: next.assignee,
+          actor: opts?.actor ?? null,
+          kind: "status_changed",
+          payload: { from: existing.status, to: next.status },
+        });
+      }
+
+      this.fireOnChange();
+      return next;
+    });
+  }
+
+  private backfillCreatedInSessionIdSql(
+    id: string,
+    createdInSessionId: string,
+  ): { task: Task; changed: boolean } {
+    return this.runSqlImmediate(() => {
+      const existing = this.getFromSql(id);
+      if (!existing) {
+        throw new TaskStoreError("not_found", `Task ${id} not found`);
+      }
+      if (existing.created_in_session_id) {
+        return { task: existing, changed: false };
+      }
+      const next: Task = {
+        ...existing,
+        created_in_session_id: createdInSessionId,
+      };
+      this.updateSqlTask(next);
+      this.fireOnChange();
+      return { task: next, changed: true };
+    });
+  }
+
+  private deleteSql(
+    id: string,
+    opts?: { force?: boolean; actor?: string | null },
+  ): void {
+    const dependentsToDelete = this.runSqlImmediate(() => {
+      const existing = this.getFromSql(id);
+      if (!existing) {
+        throw new TaskStoreError("not_found", `Task ${id} not found`);
+      }
+      const dependents = this.dependentsOf(id);
+      if (dependents.length > 0 && !opts?.force) {
+        throw new TaskStoreError(
+          "has_dependents",
+          `Task ${id} has ${dependents.length} dependent(s). Pass force to cascade.`,
+        );
+      }
+      this.db?.prepare<[string]>("DELETE FROM tasks WHERE id = ?").run(id);
+      try {
+        this.commentStore?.deleteByTask(id);
+      } catch (e) {
+        log.warn({ err: e, taskId: id }, "delete: failed to drop comments");
+      }
+      this.emitEvent({
+        taskId: id,
+        sessionId: existing.session_id,
+        agentId: existing.assignee,
+        actor: opts?.actor ?? null,
+        kind: "task_deleted",
+        payload: {
+          assignee: existing.assignee,
+          created_by: existing.created_by,
+          forced: opts?.force === true,
+        },
+      });
+      this.fireOnChange();
+      return opts?.force ? dependents : [];
+    });
+
+    for (const dep of dependentsToDelete) {
+      try {
+        this.deleteSql(dep.id, { force: true, actor: opts?.actor });
+      } catch (e) {
+        if (!(e instanceof TaskStoreError && e.code === "not_found")) {
+          throw e;
+        }
+      }
+    }
+  }
+
+  private parkSql(input: {
+    id: string;
+    retryAt: Date;
+    reason: string;
+  }): Promise<boolean> {
+    const retryAtIso = input.retryAt.toISOString();
+    return this.withMutex(input.id, async () =>
+      this.runSqlImmediate(() => {
+        const existing = this.getFromSql(input.id);
+        if (!existing || existing.status !== "in_progress") {
+          return false;
+        }
+        const now = new Date().toISOString();
+        const next: Task = {
+          ...existing,
+          status: "blocked",
+          start_at: retryAtIso,
+          updated_at: now,
+          closed_at: null,
+        };
+        this.updateSqlTask(next);
+        this.emitEvent({
+          taskId: next.id,
+          sessionId: next.session_id,
+          agentId: next.assignee,
+          actor: "system:scheduler",
+          kind: "status_changed",
+          payload: { from: existing.status, to: next.status },
+        });
+        this.fireOnChange();
+        return true;
+      }),
+    );
   }
 
   byAssignee(agentId: string): Task[] {
@@ -383,6 +1099,9 @@ export class TaskStore {
       );
     }
     input = parsed.data as TaskCreate;
+    if (this.db) {
+      return this.withMutex(CREATE_LOCK, async () => this.createSql(input));
+    }
     // Post-parse, assignee is schema-guaranteed (resolution above filled
     // any team-addressed omission).
     const assignee = input.assignee!;
@@ -526,6 +1245,9 @@ export class TaskStore {
       );
     }
     patch = parsed.data as TaskUpdate;
+    if (this.db) {
+      return this.withMutex(id, async () => this.updateSql(id, patch, opts));
+    }
     return this.withMutex(id, async () => {
       const existing = this.get(id);
       if (!existing) {
@@ -744,6 +1466,11 @@ export class TaskStore {
         "created_in_session_id must be a non-empty string",
       );
     }
+    if (this.db) {
+      return this.withMutex(id, async () =>
+        this.backfillCreatedInSessionIdSql(id, createdInSessionId),
+      );
+    }
     return this.withMutex(id, async () => {
       const existing = this.get(id);
       if (!existing) {
@@ -766,6 +1493,10 @@ export class TaskStore {
     id: string,
     opts?: { force?: boolean; actor?: string | null },
   ): Promise<void> {
+    if (this.db) {
+      await this.withMutex(id, async () => this.deleteSql(id, opts));
+      return;
+    }
     return this.withMutex(id, async () => {
       const existing = this.get(id);
       if (!existing) {
@@ -837,6 +1568,17 @@ export class TaskStore {
     retryAt: Date;
     reason: string;
   }): Promise<void> {
+    if (this.db) {
+      const parked = await this.parkSql(input);
+      if (!parked) return;
+      await this.addComment({
+        taskId: input.id,
+        author: "system:scheduler",
+        kind: "system",
+        body: `${input.reason} — retry not before ${input.retryAt.toISOString()}`,
+      });
+      return;
+    }
     const retryAtIso = input.retryAt.toISOString();
     const parked = await this.withMutex(input.id, async () => {
       const existing = this.get(input.id);

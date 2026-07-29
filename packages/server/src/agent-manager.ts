@@ -360,6 +360,7 @@ export class AgentManager {
     // about every state change and the agent's "Recent activity" prompt
     // surface stays current.
     this.taskStore = new TaskStore(path.join(config.dataDir, "tasks"), {
+      db: this.db,
       commentStore: this.commentStore,
       eventStore: this.eventStore,
       validateSession: (id) => this.sessionStore.get(id) !== null,

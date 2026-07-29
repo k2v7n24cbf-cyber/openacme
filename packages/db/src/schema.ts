@@ -5,12 +5,15 @@ import {
   integer,
   real,
   index,
+  uniqueIndex,
+  check,
 } from "drizzle-orm/sqlite-core";
 import {
   COMMENT_KINDS,
   EVENT_KINDS,
   INBOX_KINDS,
   INBOX_SOURCES,
+  TASK_STATUSES,
 } from "@openacme/tasks";
 import {
   USAGE_KINDS,
@@ -131,6 +134,54 @@ export const userProfiles = sqliteTable("user_profiles", {
   updatedAt: integer("updated_at")
     .notNull()
     .default(sql`(unixepoch())`),
+});
+
+/**
+ * Canonical task state. Markdown task files are imported once for local
+ * migration/backup; live task reads and writes move through this table.
+ */
+export const tasks = sqliteTable(
+  "tasks",
+  {
+    id: text("id").primaryKey(),
+    title: text("title").notNull(),
+    status: text("status", { enum: TASK_STATUSES }).notNull(),
+    assignee: text("assignee").notNull(),
+    sessionId: text("session_id"),
+    createdBy: text("created_by").notNull(),
+    createdInSessionId: text("created_in_session_id"),
+    parentId: text("parent_id"),
+    dependsOnJson: text("depends_on_json").notNull().default("[]"),
+    startAt: text("start_at"),
+    dueAt: text("due_at"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    closedAt: text("closed_at"),
+    recurrenceJson: text("recurrence_json"),
+    runs: integer("runs").notNull().default(0),
+    lastRunAt: text("last_run_at"),
+    team: text("team"),
+    body: text("body").notNull().default(""),
+  },
+  (t) => [
+    check(
+      "tasks_status_check",
+      sql`${t.status} IN ('open', 'in_progress', 'blocked', 'system_blocked', 'done', 'canceled')`,
+    ),
+    index("idx_tasks_assignee_status").on(t.assignee, t.status),
+    index("idx_tasks_session_status").on(t.sessionId, t.status),
+    index("idx_tasks_created_by").on(t.createdBy),
+    index("idx_tasks_team").on(t.team),
+    index("idx_tasks_parent").on(t.parentId),
+    uniqueIndex("idx_tasks_one_in_progress_per_session")
+      .on(t.sessionId)
+      .where(sql`${t.sessionId} IS NOT NULL AND ${t.status} = 'in_progress'`),
+  ],
+);
+
+export const taskMeta = sqliteTable("task_meta", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
 });
 
 /**

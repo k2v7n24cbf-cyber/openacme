@@ -40,8 +40,37 @@ describe("database clean bootstrap", () => {
           "__drizzle_migrations",
           "sessions",
           "messages",
+          "tasks",
+          "task_meta",
+          "task_comments",
+          "task_events",
           "usage_events",
           "session_timeline_events",
+        ]),
+      );
+
+      const taskColumns = tableColumns(db, "tasks");
+      expect(taskColumns).toEqual(
+        expect.arrayContaining([
+          "id",
+          "title",
+          "status",
+          "assignee",
+          "session_id",
+          "created_by",
+          "created_in_session_id",
+          "parent_id",
+          "depends_on_json",
+          "start_at",
+          "due_at",
+          "created_at",
+          "updated_at",
+          "closed_at",
+          "recurrence_json",
+          "runs",
+          "last_run_at",
+          "team",
+          "body",
         ]),
       );
 
@@ -93,6 +122,12 @@ describe("database clean bootstrap", () => {
         expect.arrayContaining([
           "idx_usage_trace",
           "idx_usage_forensic_run",
+          "idx_tasks_assignee_status",
+          "idx_tasks_session_status",
+          "idx_tasks_created_by",
+          "idx_tasks_team",
+          "idx_tasks_parent",
+          "idx_tasks_one_in_progress_per_session",
           "idx_session_timeline_session",
           "idx_session_timeline_trace",
           "idx_session_timeline_forensic_run",

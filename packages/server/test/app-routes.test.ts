@@ -93,6 +93,39 @@ describe("health", () => {
     expect(body.status).toBe("ok");
     expect(body.agents).toBe(0);
   });
+
+  it("serves home task state from the SQL-backed task store", async () => {
+    await createAgent();
+    const session = manager.sessionStore.create("helper", {
+      title: "Worker session",
+    });
+    const task = await manager.taskStore.create({
+      title: "SQL task state",
+      assignee: "helper",
+      created_by: "acme",
+      session_id: session.id,
+      status: "in_progress",
+    });
+
+    expect(existsSync(path.join(dataDir, "tasks", `${task.id}.md`))).toBe(
+      false,
+    );
+
+    const res = await req("/api/home");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      idle: Array<{
+        sessionId: string;
+        currentTaskTitle: string | null;
+        pendingTaskCount: number;
+      }>;
+    };
+    const row = body.idle.find((item) => item.sessionId === session.id);
+    expect(row).toMatchObject({
+      currentTaskTitle: "SQL task state",
+      pendingTaskCount: 1,
+    });
+  });
 });
 
 describe("agents CRUD", () => {

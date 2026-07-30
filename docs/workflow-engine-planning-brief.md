@@ -36,6 +36,32 @@ Current workflow milestone status:
 - Port `3456` is out of scope for workflow development and workflow smoke
   tests.
 
+## Commit And Push Practice
+
+- Prefer batching small workflow documentation and follow-up cleanup changes
+  into one local commit/push cycle, because the repository push hook runs the
+  full build and server e2e suite.
+- A local branch may temporarily be ahead of
+  `origin/local-stage-the-workflows` while a batch is still open. Production
+  rollout candidates must still come only from pushed commits whose hooks have
+  completed successfully.
+- Before a final batch push, rerun the smallest honest focused validation for
+  the changed surface. For workflow UI/runtime smoke, keep using port `3458`
+  and `/Users/alenbohcelyan/.openacme-the-workflow`.
+
+Batch close-out checklist:
+
+1. Confirm `git status --short --branch` shows only intended tracked workflow
+   changes plus the known unrelated untracked `output/`.
+2. Re-run the focused validation for the files changed in the batch.
+3. If workflow UI/runtime behavior changed, re-run the deployed-style
+   Playwright smoke on `3458` with
+   `/Users/alenbohcelyan/.openacme-the-workflow`.
+4. Commit the complete batch together.
+5. Push once, then wait for the full push-hook build and server e2e result.
+6. Promote the pushed commit to rollout candidate only after the hook suite
+   accepts it.
+
 ## Baseline Runtime Command
 
 Use this when we are ready to run the dev server:

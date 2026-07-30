@@ -27,6 +27,9 @@ Test data dir: `/Users/alenbohcelyan/.openacme-the-workflow`
   verification, not as test-environment validation.
 - Every workflow runtime/UI validation before production must use
   `/Users/alenbohcelyan/.openacme-the-workflow` and port `3458`.
+- Small workflow follow-up changes may be batched locally to avoid repeated
+  full push-hook cycles. Do not treat local-only commits as rollout candidates;
+  rollout candidates must be pushed and accepted by the hook suite first.
 - Take a production `state.db` backup before restarting production on a build
   that includes new workflow migrations.
 
@@ -84,9 +87,8 @@ Workflow-specific evidence recorded in `docs/workflow-engine-plan.md`:
 - Deployed-style canvas layout smoke passed on port `3458` using
   `/Users/alenbohcelyan/.openacme-the-workflow`.
 - Final pre-rollout deployed-style canvas layout smoke was rerun on
-  2026-07-31 against executable source `074d20c`, using port `3458` and
-  `/Users/alenbohcelyan/.openacme-the-workflow`. Later commits are
-  documentation-only unless this runbook explicitly says otherwise.
+  2026-07-31 against executable source `f252bb4`, using port `3458` and
+  `/Users/alenbohcelyan/.openacme-the-workflow`.
 
 ## Pre-Deploy Checks
 

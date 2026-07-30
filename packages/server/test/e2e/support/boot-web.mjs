@@ -35,7 +35,34 @@ const config = ConfigSchema.parse({
   model: { provider: "openrouter", model: "anthropic/claude-sonnet-4.6" },
 });
 
-const { app, manager } = await createApp(config, { resolveModel: () => createStubModel() });
+const { app, manager } = await createApp(config, {
+  resolveModel: () => createStubModel(),
+  workflowExecutionPorts: {
+    mcp: {
+      async listTools() {
+        return [
+          {
+            server: "demo",
+            tool: "echo",
+            name: "mcp_demo__echo",
+            description: "Echo a workflow message",
+            inputSchema: {
+              type: "object",
+              required: ["message"],
+              properties: {
+                message: { type: "string" },
+                customerId: { type: "string" },
+              },
+            },
+          },
+        ];
+      },
+      async callTool(req) {
+        return { output: req.input };
+      },
+    },
+  },
+});
 
 // Auth is always on. Seed one operator + session, and write a Playwright
 // storageState (localStorage bearer) so the browser specs start authenticated.
@@ -64,24 +91,17 @@ writeFileSync(
       },
     ],
     origins: [],
-  })
+  }),
 );
 
 serve({ fetch: app.fetch, port: PORT, hostname: "127.0.0.1" }, async () => {
-  // Seed one agent so the chat UI has someone to talk to.
-  const res = await fetch(`http://127.0.0.1:${PORT}/api/agents`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      host: "127.0.0.1",
-      authorization: `Bearer ${authToken}`,
-    },
-    body: JSON.stringify({ id: "helper", name: "Helper" }),
+  // Seed agents so workflow pickers exercise available and disabled states.
+  await seedAgent({ id: "helper", name: "Helper" });
+  await seedAgent({
+    id: "paused",
+    name: "Paused",
+    instantMessagesEnabled: false,
   });
-  if (res.status !== 201) {
-    console.error(`web-e2e: failed to seed agent (${res.status})`);
-    process.exit(1);
-  }
   // Seed a task so the board renders a real card (not the empty-state preview).
   await manager.taskStore.create({
     title: "Review the Q3 report",
@@ -90,3 +110,19 @@ serve({ fetch: app.fetch, port: PORT, hostname: "127.0.0.1" }, async () => {
   });
   console.log(`web-e2e daemon ready on http://127.0.0.1:${PORT}`);
 });
+
+async function seedAgent(body) {
+  const res = await fetch(`http://127.0.0.1:${PORT}/api/agents`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      host: "127.0.0.1",
+      authorization: `Bearer ${authToken}`,
+    },
+    body: JSON.stringify(body),
+  });
+  if (res.status !== 201) {
+    console.error(`web-e2e: failed to seed agent ${body.id} (${res.status})`);
+    process.exit(1);
+  }
+}

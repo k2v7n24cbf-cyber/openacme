@@ -45,10 +45,11 @@ export async function startServer(dataDirOverride?: string) {
   if (!process.env["OPENACME_DATA_DIR"]) {
     process.env["OPENACME_DATA_DIR"] = config.dataDir;
   }
-  const { app, manager } = await createApp(config);
+  const { app, manager, runtime } = await createApp(config);
 
   // Initialize MCP connections for all agents
   await manager.initMCP();
+  await runtime.initWorkflowMCP();
 
   // Materialize platform-managed catalog templates (today: Acme) that
   // aren't on disk yet. Per-template idempotent. Runs AFTER initMCP —
@@ -73,7 +74,7 @@ export async function startServer(dataDirOverride?: string) {
   } else if (lastVersion !== installedVersion) {
     log.info(
       { from: lastVersion, to: installedVersion },
-      "platform version changed — refreshing bundled artifacts"
+      "platform version changed — refreshing bundled artifacts",
     );
     await tryStep("refreshManagedAgents", () => manager.refreshManagedAgents());
     await tryStep("refreshBundledSkills", () => manager.refreshBundledSkills());
@@ -84,6 +85,7 @@ export async function startServer(dataDirOverride?: string) {
   // stale in_progress from any prior crash) and schedules the 60s
   // tick. Replaces the old event-driven `TaskScheduler`.
   await manager.dispatcher.start();
+  await runtime.startWorkflowDispatcher();
 
   const port = config.server.port;
   const host = config.server.host;

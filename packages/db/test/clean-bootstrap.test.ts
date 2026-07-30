@@ -46,6 +46,12 @@ describe("database clean bootstrap", () => {
           "task_events",
           "usage_events",
           "session_timeline_events",
+          "workflow_definitions",
+          "workflow_versions",
+          "workflow_runs",
+          "workflow_step_attempts",
+          "workflow_run_events",
+          "workflow_artifacts",
         ]),
       );
 
@@ -110,6 +116,34 @@ describe("database clean bootstrap", () => {
         ]),
       );
 
+      const workflowRunColumns = tableColumns(db, "workflow_runs");
+      expect(workflowRunColumns).toEqual(
+        expect.arrayContaining([
+          "workflow_id",
+          "workflow_version",
+          "definition_source",
+          "mode",
+          "trigger_json",
+          "status",
+          "input_json",
+          "context_json",
+        ]),
+      );
+
+      const workflowStepColumns = tableColumns(db, "workflow_step_attempts");
+      expect(workflowStepColumns).toEqual(
+        expect.arrayContaining([
+          "run_id",
+          "node_id",
+          "attempt",
+          "status",
+          "input_json",
+          "output_json",
+          "error_json",
+          "context_diff_json",
+        ]),
+      );
+
       const indexes = new Set(
         db
           .prepare<[], { name: string }>(
@@ -132,6 +166,15 @@ describe("database clean bootstrap", () => {
           "idx_session_timeline_trace",
           "idx_session_timeline_forensic_run",
           "idx_session_timeline_usage",
+          "idx_workflow_versions_workflow",
+          "idx_workflow_runs_workflow",
+          "idx_workflow_runs_status",
+          "idx_workflow_runs_mode",
+          "idx_workflow_steps_run",
+          "idx_workflow_steps_run_node_attempt",
+          "idx_workflow_events_run",
+          "idx_workflow_events_run_sequence",
+          "idx_workflow_artifacts_run",
         ]),
       );
     } finally {

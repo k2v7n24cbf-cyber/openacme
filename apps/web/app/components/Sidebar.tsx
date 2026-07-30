@@ -9,6 +9,8 @@ import {
   Gauge,
   ListChecks,
   Settings,
+  ScrollText,
+  Workflow,
   PanelLeftClose,
   PanelLeftOpen,
   Users,
@@ -35,6 +37,16 @@ const navItems = [
   { link: linkOptions({ to: "/agents" }), label: "Agents", icon: Bot },
   { link: linkOptions({ to: "/teams" }), label: "Teams", icon: Users },
   { link: linkOptions({ to: "/tasks" }), label: "Tasks", icon: ListChecks },
+  {
+    link: linkOptions({ to: "/workflows" }),
+    label: "Workflows",
+    icon: Workflow,
+  },
+  {
+    link: linkOptions({ to: "/workflow-runs" }),
+    label: "Runs",
+    icon: ScrollText,
+  },
   { link: linkOptions({ to: "/skills" }), label: "Skills", icon: BookOpen },
   { link: linkOptions({ to: "/usage" }), label: "Usage", icon: Gauge },
   { link: linkOptions({ to: "/settings" }), label: "Settings", icon: Settings },
@@ -99,214 +111,209 @@ export function Sidebar({ children }: { children?: React.ReactNode }) {
         // hides under md. Desktop keeps the persistent left rail with the
         // collapse toggle.
         "hidden shrink-0 flex-col border-r border-paper-rule bg-sidebar text-sidebar-foreground md:flex",
-        collapsed ? "md:w-14" : "md:w-60"
+        collapsed ? "md:w-14" : "md:w-60",
       )}
     >
-        <div
-          className={cn(
-            "flex items-center border-b border-paper-rule py-5",
-            // Drawer mode (mobile or expanded desktop) keeps the expanded
-            // layout; only the desktop-collapsed rail centers its single button.
-            collapsed
-              ? "justify-between px-4 md:justify-center md:px-3"
-              : "justify-between px-4"
-          )}
-        >
-          {collapsed ? (
+      <div
+        className={cn(
+          "flex items-center border-b border-paper-rule py-5",
+          // Drawer mode (mobile or expanded desktop) keeps the expanded
+          // layout; only the desktop-collapsed rail centers its single button.
+          collapsed
+            ? "justify-between px-4 md:justify-center md:px-3"
+            : "justify-between px-4",
+        )}
+      >
+        {collapsed ? (
+          <button
+            onClick={toggle}
+            title="Expand sidebar"
+            aria-label="Expand sidebar"
+            className="group/logo relative flex size-7 items-center justify-center text-ink transition-colors hover:text-plot-red focus:outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-plot-red"
+          >
+            <Logomark className="size-5 group-hover/logo:hidden" />
+            <PanelLeftOpen className="hidden size-4 group-hover/logo:block" />
+          </button>
+        ) : (
+          <>
+            <Logotype className="h-6 w-auto text-ink" />
             <button
               onClick={toggle}
-              title="Expand sidebar"
-              aria-label="Expand sidebar"
-              className="group/logo relative flex size-7 items-center justify-center text-ink transition-colors hover:text-plot-red focus:outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-plot-red"
+              title="Collapse sidebar"
+              aria-label="Collapse sidebar"
+              className="-mr-1 flex size-6 items-center justify-center text-ink-soft hover:bg-paper hover:text-ink focus:outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-plot-red"
             >
-              <Logomark className="size-5 group-hover/logo:hidden" />
-              <PanelLeftOpen className="hidden size-4 group-hover/logo:block" />
+              <PanelLeftClose className="size-4" />
             </button>
-          ) : (
-            <>
-              <Logotype className="h-6 w-auto text-ink" />
-              <button
-                onClick={toggle}
-                title="Collapse sidebar"
-                aria-label="Collapse sidebar"
-                className="-mr-1 flex size-6 items-center justify-center text-ink-soft hover:bg-paper hover:text-ink focus:outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-plot-red"
-              >
-                <PanelLeftClose className="size-4" />
-              </button>
-            </>
-          )}
-        </div>
+          </>
+        )}
+      </div>
 
-        <nav className="flex flex-col">
-          {/* Drawer mode renders nav labels even when desktop sidebar is
+      <nav className="flex flex-col">
+        {/* Drawer mode renders nav labels even when desktop sidebar is
               collapsed — the drawer is full-width. The "Console" header
               hides only when the desktop rail is in icon-only mode. */}
-          <div
-            className={cn(
-              "px-4 pt-4 pb-2 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint",
-              collapsed ? "md:hidden" : ""
-            )}
-          >
-            Console
-          </div>
-          {navItems.map((item) => {
-            const isActive =
-              item.link.to === "/"
-                ? pathname === "/"
-                : pathname.startsWith(item.link.to);
-            const Icon = item.icon;
-            return (
-              <Link
-                key={item.link.to}
-                {...item.link}
-                aria-current={isActive ? "page" : undefined}
-                title={collapsed ? item.label : undefined}
-                className={cn(
-                  "group relative flex items-center gap-3 text-sm transition-colors",
-                  // Mobile drawer + expanded desktop = labeled rows. Desktop
-                  // collapsed rail = centered icons only.
-                  "px-4 py-3 md:py-2",
-                  collapsed && "md:justify-center md:px-0 md:py-2.5",
-                  isActive
-                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                    : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-                )}
-              >
-                <ActiveMarker active={isActive} />
-                <Icon className="size-4 shrink-0" />
-                <span
-                  className={cn(
-                    "font-medium",
-                    collapsed ? "md:hidden" : ""
-                  )}
-                >
-                  {item.label}
-                </span>
-              </Link>
-            );
-          })}
-        </nav>
-
         <div
           className={cn(
-            "flex-1 overflow-y-auto",
-            collapsed ? "hidden md:block" : ""
+            "px-4 pt-4 pb-2 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint",
+            collapsed ? "md:hidden" : "",
           )}
         >
-          {children}
+          Console
         </div>
-
-        {/* Ask Acme — labeled nav-style row that opens the ambient panel
-            (the platform helper, summonable from anywhere). */}
-        <button
-          type="button"
-          onClick={() => setAcmeOpen(!acmeOpen)}
-          title="Ask Acme — the platform helper (⌘⇧K)"
-          aria-label="Ask Acme"
-          aria-expanded={acmeOpen}
-          aria-keyshortcuts="Meta+Shift+K Control+Shift+K"
-          className={cn(
-            "group relative flex w-full items-center gap-3 border-t border-paper-rule text-sm font-medium transition-colors",
-            "px-4 py-3 md:py-2.5",
-            collapsed && "md:justify-center md:px-0",
-            // Accent it: this isn't a page, it's the platform helper. plot-red
-            // icon + tinted hover, and a held plot-red state while the panel
-            // is open so you can tell it's active.
-            acmeOpen
-              ? "bg-plot-red/10 text-plot-red"
-              : "text-ink hover:bg-plot-red/10 hover:text-plot-red"
-          )}
-        >
-          <ActiveMarker active={acmeOpen} />
-          <Compass className="size-4 shrink-0 text-plot-red" />
-          <span className={cn(collapsed ? "md:hidden" : "")}>Ask Acme</span>
-          <span
-            className={cn(
-              "font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint",
-              collapsed ? "md:hidden" : "ml-auto"
-            )}
-            aria-hidden
-          >
-            ⌘⇧K
-          </span>
-        </button>
-
-        {/* Documentation — a labeled nav-style row directly above the bottom
-            bar (external link, opens the docs site). */}
-        <a
-          href={DOCS_URL}
-          target="_blank"
-          rel="noreferrer"
-          title={collapsed ? "Documentation" : undefined}
-          className={cn(
-            "group relative flex items-center gap-3 border-t border-paper-rule text-sm transition-colors",
-            "px-4 py-3 md:py-2",
-            collapsed && "md:justify-center md:px-0 md:py-2.5",
-            "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-          )}
-        >
-          <BookText className="size-4 shrink-0" />
-          <span className={cn("font-medium", collapsed ? "md:hidden" : "")}>
-            Documentation
-          </span>
-          <ArrowUpRight
-            className={cn(
-              "size-3.5 shrink-0 text-ink-faint transition-colors group-hover:text-ink",
-              collapsed ? "md:hidden" : "ml-auto"
-            )}
-            aria-hidden
-          />
-        </a>
-
-        <div
-          className={cn(
-            "flex items-center border-t border-paper-rule",
-            // Desktop-collapsed = stacked column; everything else = row.
-            collapsed
-              ? "justify-between gap-2 px-4 py-3 md:flex-col md:justify-center md:gap-1 md:px-2"
-              : "justify-between gap-2 px-4 py-3"
-          )}
-        >
-          <div
-            className={cn(
-              "font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint",
-              collapsed ? "md:hidden" : ""
-            )}
-          >
-            {version ? `v${version}` : "v—"}
-          </div>
-          <div
-            className={cn(
-              "flex items-center gap-1",
-              collapsed ? "md:flex-col" : ""
-            )}
-          >
-            <button
-              type="button"
-              onClick={() =>
-                window.dispatchEvent(new CustomEvent("openacme:open-palette"))
-              }
-              title="Open command palette (⌘K)"
-              aria-label="Open command palette"
-              aria-keyshortcuts="Meta+K Control+K"
+        {navItems.map((item) => {
+          const isActive =
+            item.link.to === "/"
+              ? pathname === "/"
+              : pathname.startsWith(item.link.to);
+          const Icon = item.icon;
+          return (
+            <Link
+              key={item.link.to}
+              {...item.link}
+              aria-current={isActive ? "page" : undefined}
+              title={collapsed ? item.label : undefined}
               className={cn(
-                "flex items-center gap-1.5 text-ink-soft transition-colors hover:text-ink focus:outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-plot-red",
-                collapsed ? "px-1 md:size-6 md:justify-center md:px-0" : "px-1"
+                "group relative flex items-center gap-3 text-sm transition-colors",
+                // Mobile drawer + expanded desktop = labeled rows. Desktop
+                // collapsed rail = centered icons only.
+                "px-4 py-3 md:py-2",
+                collapsed && "md:justify-center md:px-0 md:py-2.5",
+                isActive
+                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                  : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
               )}
             >
-              <Command className="size-3.5 shrink-0" aria-hidden />
-              <span
-                className={cn(
-                  "font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint",
-                  collapsed ? "md:hidden" : ""
-                )}
-              >
-                K
+              <ActiveMarker active={isActive} />
+              <Icon className="size-4 shrink-0" />
+              <span className={cn("font-medium", collapsed ? "md:hidden" : "")}>
+                {item.label}
               </span>
-            </button>
-            <ThemeToggle compact />
-          </div>
+            </Link>
+          );
+        })}
+      </nav>
+
+      <div
+        className={cn(
+          "flex-1 overflow-y-auto",
+          collapsed ? "hidden md:block" : "",
+        )}
+      >
+        {children}
+      </div>
+
+      {/* Ask Acme — labeled nav-style row that opens the ambient panel
+            (the platform helper, summonable from anywhere). */}
+      <button
+        type="button"
+        onClick={() => setAcmeOpen(!acmeOpen)}
+        title="Ask Acme — the platform helper (⌘⇧K)"
+        aria-label="Ask Acme"
+        aria-expanded={acmeOpen}
+        aria-keyshortcuts="Meta+Shift+K Control+Shift+K"
+        className={cn(
+          "group relative flex w-full items-center gap-3 border-t border-paper-rule text-sm font-medium transition-colors",
+          "px-4 py-3 md:py-2.5",
+          collapsed && "md:justify-center md:px-0",
+          // Accent it: this isn't a page, it's the platform helper. plot-red
+          // icon + tinted hover, and a held plot-red state while the panel
+          // is open so you can tell it's active.
+          acmeOpen
+            ? "bg-plot-red/10 text-plot-red"
+            : "text-ink hover:bg-plot-red/10 hover:text-plot-red",
+        )}
+      >
+        <ActiveMarker active={acmeOpen} />
+        <Compass className="size-4 shrink-0 text-plot-red" />
+        <span className={cn(collapsed ? "md:hidden" : "")}>Ask Acme</span>
+        <span
+          className={cn(
+            "font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint",
+            collapsed ? "md:hidden" : "ml-auto",
+          )}
+          aria-hidden
+        >
+          ⌘⇧K
+        </span>
+      </button>
+
+      {/* Documentation — a labeled nav-style row directly above the bottom
+            bar (external link, opens the docs site). */}
+      <a
+        href={DOCS_URL}
+        target="_blank"
+        rel="noreferrer"
+        title={collapsed ? "Documentation" : undefined}
+        className={cn(
+          "group relative flex items-center gap-3 border-t border-paper-rule text-sm transition-colors",
+          "px-4 py-3 md:py-2",
+          collapsed && "md:justify-center md:px-0 md:py-2.5",
+          "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+        )}
+      >
+        <BookText className="size-4 shrink-0" />
+        <span className={cn("font-medium", collapsed ? "md:hidden" : "")}>
+          Documentation
+        </span>
+        <ArrowUpRight
+          className={cn(
+            "size-3.5 shrink-0 text-ink-faint transition-colors group-hover:text-ink",
+            collapsed ? "md:hidden" : "ml-auto",
+          )}
+          aria-hidden
+        />
+      </a>
+
+      <div
+        className={cn(
+          "flex items-center border-t border-paper-rule",
+          // Desktop-collapsed = stacked column; everything else = row.
+          collapsed
+            ? "justify-between gap-2 px-4 py-3 md:flex-col md:justify-center md:gap-1 md:px-2"
+            : "justify-between gap-2 px-4 py-3",
+        )}
+      >
+        <div
+          className={cn(
+            "font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint",
+            collapsed ? "md:hidden" : "",
+          )}
+        >
+          {version ? `v${version}` : "v—"}
         </div>
-      </aside>
+        <div
+          className={cn(
+            "flex items-center gap-1",
+            collapsed ? "md:flex-col" : "",
+          )}
+        >
+          <button
+            type="button"
+            onClick={() =>
+              window.dispatchEvent(new CustomEvent("openacme:open-palette"))
+            }
+            title="Open command palette (⌘K)"
+            aria-label="Open command palette"
+            aria-keyshortcuts="Meta+K Control+K"
+            className={cn(
+              "flex items-center gap-1.5 text-ink-soft transition-colors hover:text-ink focus:outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-plot-red",
+              collapsed ? "px-1 md:size-6 md:justify-center md:px-0" : "px-1",
+            )}
+          >
+            <Command className="size-3.5 shrink-0" aria-hidden />
+            <span
+              className={cn(
+                "font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint",
+                collapsed ? "md:hidden" : "",
+              )}
+            >
+              K
+            </span>
+          </button>
+          <ThemeToggle compact />
+        </div>
+      </div>
+    </aside>
   );
 }

@@ -12,7 +12,7 @@ import type {
   OAuthClientMetadata,
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { z } from 'zod';
+import { z } from "zod";
 import type { MCPServerConfig, MCPTransport } from "@openacme/config";
 import type { ToolRegistry } from "@openacme/tools";
 import { buildSafeEnv, sanitizeError, scanDescription } from "./security.js";
@@ -164,7 +164,7 @@ export class MCPClient {
    */
   async connect(
     servers: Record<string, MCPServerConfig>,
-    opts: { skipOAuth?: boolean } = { skipOAuth: true }
+    opts: { skipOAuth?: boolean } = { skipOAuth: true },
   ): Promise<{ connected: string[]; failed: string[] }> {
     // Connect every server in parallel. Each `connectServer` writes its
     // own slot in `this.servers`; there's no shared mutable state. For a
@@ -174,7 +174,7 @@ export class MCPClient {
       Object.entries(servers).map(async ([name, config]) => {
         const result = await this.connectServer(name, config, opts);
         return { name, result };
-      })
+      }),
     );
 
     const connected: string[] = [];
@@ -217,7 +217,7 @@ export class MCPClient {
   async connectServer(
     name: string,
     config?: MCPServerConfig,
-    opts: { skipOAuth?: boolean } = {}
+    opts: { skipOAuth?: boolean } = {},
   ): Promise<ConnectResult> {
     const existing = this.servers.get(name);
     const cfg = config ?? existing?.config;
@@ -241,7 +241,10 @@ export class MCPClient {
 
     // Tear down any prior connection cleanly before reconnecting so we don't
     // leak a stdio child or leave stale tool handlers wired to a dead client.
-    if (existing && (existing.state === "connected" || existing.state === "connecting")) {
+    if (
+      existing &&
+      (existing.state === "connected" || existing.state === "connecting")
+    ) {
       await this.tearDown(existing);
     }
 
@@ -399,8 +402,13 @@ export class MCPClient {
    * NEVER touches `this.servers` or `this.registry`.
    */
   async testConnection(
-    config: MCPServerConfig
-  ): Promise<{ ok: boolean; error?: string; tools: string[]; transport?: ResolvedTransport }> {
+    config: MCPServerConfig,
+  ): Promise<{
+    ok: boolean;
+    error?: string;
+    tools: string[];
+    transport?: ResolvedTransport;
+  }> {
     let client: Client | undefined;
     let transport: AnyTransport | undefined;
     try {
@@ -409,7 +417,11 @@ export class MCPClient {
       transport = opened.transport;
       const response = await client.listTools();
       const toolNames = response.tools.map((t) => t.name);
-      return { ok: true, tools: toolNames, transport: opened.resolvedTransport };
+      return {
+        ok: true,
+        tools: toolNames,
+        transport: opened.resolvedTransport,
+      };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       return { ok: false, error: sanitizeError(msg), tools: [] };
@@ -462,7 +474,7 @@ export class MCPClient {
   private async tryOAuth(
     name: string,
     config: MCPServerConfig,
-    rec: ServerRecord
+    rec: ServerRecord,
   ): Promise<
     | {
         ok: true;
@@ -519,7 +531,7 @@ export class MCPClient {
         name,
         client,
         config,
-        config.timeout ?? DEFAULT_TOOL_TIMEOUT_SECONDS
+        config.timeout ?? DEFAULT_TOOL_TIMEOUT_SECONDS,
       );
       return {
         ok: true,
@@ -539,13 +551,12 @@ export class MCPClient {
           ok: false,
           state: "failed",
           error: sanitizeError(
-            err instanceof Error ? err.message : String(err)
+            err instanceof Error ? err.message : String(err),
           ),
         };
       }
-      authorizationUrl = (
-        authProvider as unknown as MCPOAuthProvider
-      ).capturedUrl;
+      authorizationUrl = (authProvider as unknown as MCPOAuthProvider)
+        .capturedUrl;
     }
 
     if (!authorizationUrl) {
@@ -579,9 +590,7 @@ export class MCPClient {
       return {
         ok: false,
         state: "failed",
-        error: sanitizeError(
-          err instanceof Error ? err.message : String(err)
-        ),
+        error: sanitizeError(err instanceof Error ? err.message : String(err)),
       };
     }
 
@@ -606,7 +615,9 @@ export class MCPClient {
     // shares the auth provider so the second connect picks up the saved
     // tokens automatically.
     try {
-      await (transport as StreamableHTTPClientTransport).finishAuth(result.code);
+      await (transport as StreamableHTTPClientTransport).finishAuth(
+        result.code,
+      );
       // Discard the now-poisoned transport.
       try {
         await client.close();
@@ -627,13 +638,13 @@ export class MCPClient {
       await connectWithTimeout(
         freshClient,
         freshTransport,
-        connectTimeoutSeconds
+        connectTimeoutSeconds,
       );
       const toolNames = await this.discoverTools(
         name,
         freshClient,
         config,
-        config.timeout ?? DEFAULT_TOOL_TIMEOUT_SECONDS
+        config.timeout ?? DEFAULT_TOOL_TIMEOUT_SECONDS,
       );
       return {
         ok: true,
@@ -651,9 +662,7 @@ export class MCPClient {
       return {
         ok: false,
         state: "failed",
-        error: sanitizeError(
-          err instanceof Error ? err.message : String(err)
-        ),
+        error: sanitizeError(err instanceof Error ? err.message : String(err)),
       };
     }
   }
@@ -664,7 +673,7 @@ export class MCPClient {
    */
   private async openServer(
     name: string,
-    config: MCPServerConfig
+    config: MCPServerConfig,
   ): Promise<{
     client: Client;
     transport: AnyTransport;
@@ -677,7 +686,7 @@ export class MCPClient {
       name,
       opened.client,
       config,
-      toolTimeoutSeconds
+      toolTimeoutSeconds,
     );
     return { ...opened, toolNames };
   }
@@ -689,7 +698,7 @@ export class MCPClient {
    */
   private async openTransport(
     name: string,
-    config: MCPServerConfig
+    config: MCPServerConfig,
   ): Promise<{
     client: Client;
     transport: AnyTransport;
@@ -702,7 +711,7 @@ export class MCPClient {
     if (kind === "stdio") {
       if (!config.command) {
         throw new Error(
-          `MCP server '${name}': stdio transport requires 'command'`
+          `MCP server '${name}': stdio transport requires 'command'`,
         );
       }
       const env = buildSafeEnv(config.env);
@@ -723,9 +732,7 @@ export class MCPClient {
     }
 
     if (!config.url) {
-      throw new Error(
-        `MCP server '${name}': URL transport requires 'url'`
-      );
+      throw new Error(`MCP server '${name}': URL transport requires 'url'`);
     }
     const url = new URL(config.url);
     const headers = config.headers;
@@ -814,12 +821,13 @@ export class MCPClient {
     serverName: string,
     client: Client,
     config: MCPServerConfig,
-    toolTimeoutSeconds: number
+    toolTimeoutSeconds: number,
   ): Promise<string[]> {
     const response = await client.listTools();
-    const allow = config.allowedTools && config.allowedTools.length > 0
-      ? new Set(config.allowedTools)
-      : null;
+    const allow =
+      config.allowedTools && config.allowedTools.length > 0
+        ? new Set(config.allowedTools)
+        : null;
     const toolNames: string[] = [];
     const toolSchemas: McpToolSchema[] = [];
 
@@ -837,7 +845,7 @@ export class MCPClient {
       scanDescription(serverName, tool.name, tool.description ?? "");
 
       const parameters = this.jsonSchemaToZod(tool.inputSchema).describe(
-        tool.description ?? `MCP tool: ${tool.name}`
+        tool.description ?? `MCP tool: ${tool.name}`,
       );
 
       this.registry.register({
@@ -868,6 +876,27 @@ export class MCPClient {
   }
 
   /**
+   * Direct MCP execution for non-agent orchestrators such as workflows.
+   * This intentionally bypasses the agent-facing tool registry dispatch path:
+   * callers choose an MCP server + bare tool name explicitly and receive the
+   * raw MCP text/JSON result.
+   */
+  async callToolDirect(
+    serverName: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    timeoutSeconds?: number,
+  ): Promise<string> {
+    const rec = this.servers.get(serverName);
+    return this.callTool(
+      serverName,
+      toolName,
+      args,
+      timeoutSeconds ?? rec?.config.timeout ?? DEFAULT_TOOL_TIMEOUT_SECONDS,
+    );
+  }
+
+  /**
    * Call a tool on an MCP server. Looks up the live client by name so
    * a tool handler that survives across reconnects keeps working as long
    * as the server is connected.
@@ -876,7 +905,7 @@ export class MCPClient {
     serverName: string,
     toolName: string,
     args: Record<string, unknown>,
-    timeoutSeconds: number
+    timeoutSeconds: number,
   ): Promise<string> {
     const rec = this.servers.get(serverName);
     if (!rec || rec.state !== "connected" || !rec.client) {
@@ -893,8 +922,8 @@ export class MCPClient {
       const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(
           () => reject(new Error(`Tool call timeout after ${timeoutSeconds}s`)),
-          timeoutSeconds * 1000
-        )
+          timeoutSeconds * 1000,
+        ),
       );
 
       const result = await Promise.race([callPromise, timeoutPromise]);
@@ -940,7 +969,10 @@ export function jsonSchemaToZod(schema: unknown): z.ZodTypeAny {
     const shape: Record<string, z.ZodTypeAny> = {};
     for (const [key, propSchema] of Object.entries(props)) {
       let propZod = jsonSchemaPrimitiveToZod(propSchema);
-      if (propSchema.description && typeof propSchema.description === "string") {
+      if (
+        propSchema.description &&
+        typeof propSchema.description === "string"
+      ) {
         propZod = propZod.describe(propSchema.description);
       }
       if (!required.has(key)) {
@@ -954,7 +986,9 @@ export function jsonSchemaToZod(schema: unknown): z.ZodTypeAny {
   return z.record(z.string(), z.unknown());
 }
 
-function jsonSchemaPrimitiveToZod(schema: Record<string, unknown>): z.ZodTypeAny {
+function jsonSchemaPrimitiveToZod(
+  schema: Record<string, unknown>,
+): z.ZodTypeAny {
   switch (schema.type) {
     case "string":
       if (Array.isArray(schema.enum)) {
@@ -969,7 +1003,7 @@ function jsonSchemaPrimitiveToZod(schema: Record<string, unknown>): z.ZodTypeAny
     case "array":
       if (schema.items && typeof schema.items === "object") {
         return z.array(
-          jsonSchemaPrimitiveToZod(schema.items as Record<string, unknown>)
+          jsonSchemaPrimitiveToZod(schema.items as Record<string, unknown>),
         );
       }
       return z.array(z.unknown());
@@ -985,21 +1019,21 @@ function jsonSchemaPrimitiveToZod(schema: Record<string, unknown>): z.ZodTypeAny
 function newClient(serverName: string): Client {
   return new Client(
     { name: `openacme-${serverName}`, version: "0.0.1" },
-    { capabilities: {} }
+    { capabilities: {} },
   );
 }
 
 async function connectWithTimeout(
   client: Client,
   transport: AnyTransport,
-  seconds: number
+  seconds: number,
 ): Promise<void> {
   const connectPromise = client.connect(transport);
   const timeoutPromise = new Promise<never>((_, reject) =>
     setTimeout(
       () => reject(new Error(`Connection timeout after ${seconds}s`)),
-      seconds * 1000
-    )
+      seconds * 1000,
+    ),
   );
   await Promise.race([connectPromise, timeoutPromise]);
 }
@@ -1031,7 +1065,9 @@ function isStreamableHttpUnsupported(err: unknown): boolean {
   if (e.code === 404 || e.code === 405) return true;
   // Some SDK versions stringify the status into the message instead.
   const msg = typeof e.message === "string" ? e.message : "";
-  return /\b(404|405)\b/.test(msg) && /(method not allowed|not found)/i.test(msg);
+  return (
+    /\b(404|405)\b/.test(msg) && /(method not allowed|not found)/i.test(msg)
+  );
 }
 
 /**
@@ -1107,7 +1143,7 @@ class MCPOAuthProvider implements OAuthClientProvider {
     const v = await this.tokenStore.getCodeVerifier(this.serverName);
     if (!v) {
       throw new Error(
-        `No PKCE verifier stored for MCP server '${this.serverName}'`
+        `No PKCE verifier stored for MCP server '${this.serverName}'`,
       );
     }
     return v;

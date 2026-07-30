@@ -22,6 +22,7 @@ import {
   type OpenAcmeUIMessage,
 } from "@openacme/agent-core";
 import { AgentManager } from "./agent-manager.js";
+import { ServerRuntime } from "./runtime.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { registerAuthRoutes, registerMemberRoutes } from "./routes/auth.js";
 import {
@@ -41,6 +42,7 @@ import { registerHomeRoutes } from "./routes/home.js";
 import { registerPushRoutes } from "./routes/push.js";
 import { registerUsageRoutes } from "./routes/usage.js";
 import { registerSessionTimelineRoutes } from "./routes/session-timeline.js";
+import { registerWorkflowRoutes } from "./routes/workflows.js";
 import { SkillHub, HubError } from "@openacme/skills";
 import {
   AgentDefinitionSchema,
@@ -158,10 +160,22 @@ export interface ConfigModelUpdateResponse {
  */
 export async function createApp(
   config: Config,
-  opts?: { resolveModel?: ModelResolver; tickIntervalMs?: number },
-): Promise<{ app: Hono; manager: AgentManager; close: () => Promise<void> }> {
+  opts?: {
+    resolveModel?: ModelResolver;
+    tickIntervalMs?: number;
+    workflowExecutionPorts?: import("@openacme/workflows").WorkflowExecutionPorts;
+    workflowDispatcherIntervalMs?: number;
+    workflowDispatcherNow?: () => Date;
+  },
+): Promise<{
+  app: Hono;
+  manager: AgentManager;
+  runtime: ServerRuntime;
+  close: () => Promise<void>;
+}> {
   const app = new Hono();
-  const manager = new AgentManager(config, opts);
+  const runtime = new ServerRuntime(config, opts);
+  const manager = runtime.agentManager;
 
   type ActiveTurn = {
     controller: AbortController;
@@ -178,7 +192,7 @@ export async function createApp(
     const turns = [...activeTurns.values()];
     for (const turn of turns) turn.controller.abort();
     await Promise.allSettled(turns.map((turn) => turn.promise));
-    await manager.close();
+    await runtime.close();
   }
 
   // Middleware. CORS stays permissive (tunnels / reverse proxies depend on
@@ -431,6 +445,9 @@ export async function createApp(
   });
 
   registerSessionTimelineRoutes(app, manager);
+  registerWorkflowRoutes(app, runtime.workflowStore, {
+    ports: runtime.workflowExecutionPorts,
+  });
 
   app.get("/api/sessions/:id", (c) => {
     // Session metadata (title, agent id, timestamps). Used by the chat
@@ -1967,7 +1984,7 @@ export async function createApp(
     );
   }
 
-  return { app, manager, close: closeApp };
+  return { app, manager, runtime, close: closeApp };
 }
 
 /**

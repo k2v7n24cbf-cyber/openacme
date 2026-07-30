@@ -9,6 +9,8 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as WorkflowsRouteImport } from './routes/workflows'
+import { Route as WorkflowRunsRouteImport } from './routes/workflow-runs'
 import { Route as UsageRouteImport } from './routes/usage'
 import { Route as TeamsRouteImport } from './routes/teams'
 import { Route as TasksRouteImport } from './routes/tasks'
@@ -20,6 +22,16 @@ import { Route as EnrollRouteImport } from './routes/enroll'
 import { Route as AgentsRouteImport } from './routes/agents'
 import { Route as IndexRouteImport } from './routes/index'
 
+const WorkflowsRoute = WorkflowsRouteImport.update({
+  id: '/workflows',
+  path: '/workflows',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const WorkflowRunsRoute = WorkflowRunsRouteImport.update({
+  id: '/workflow-runs',
+  path: '/workflow-runs',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const UsageRoute = UsageRouteImport.update({
   id: '/usage',
   path: '/usage',
@@ -82,6 +94,8 @@ export interface FileRoutesByFullPath {
   '/tasks': typeof TasksRoute
   '/teams': typeof TeamsRoute
   '/usage': typeof UsageRoute
+  '/workflow-runs': typeof WorkflowRunsRoute
+  '/workflows': typeof WorkflowsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -94,6 +108,8 @@ export interface FileRoutesByTo {
   '/tasks': typeof TasksRoute
   '/teams': typeof TeamsRoute
   '/usage': typeof UsageRoute
+  '/workflow-runs': typeof WorkflowRunsRoute
+  '/workflows': typeof WorkflowsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -107,6 +123,8 @@ export interface FileRoutesById {
   '/tasks': typeof TasksRoute
   '/teams': typeof TeamsRoute
   '/usage': typeof UsageRoute
+  '/workflow-runs': typeof WorkflowRunsRoute
+  '/workflows': typeof WorkflowsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -121,6 +139,8 @@ export interface FileRouteTypes {
     | '/tasks'
     | '/teams'
     | '/usage'
+    | '/workflow-runs'
+    | '/workflows'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -133,6 +153,8 @@ export interface FileRouteTypes {
     | '/tasks'
     | '/teams'
     | '/usage'
+    | '/workflow-runs'
+    | '/workflows'
   id:
     | '__root__'
     | '/'
@@ -145,6 +167,8 @@ export interface FileRouteTypes {
     | '/tasks'
     | '/teams'
     | '/usage'
+    | '/workflow-runs'
+    | '/workflows'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -158,10 +182,26 @@ export interface RootRouteChildren {
   TasksRoute: typeof TasksRoute
   TeamsRoute: typeof TeamsRoute
   UsageRoute: typeof UsageRoute
+  WorkflowRunsRoute: typeof WorkflowRunsRoute
+  WorkflowsRoute: typeof WorkflowsRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/workflows': {
+      id: '/workflows'
+      path: '/workflows'
+      fullPath: '/workflows'
+      preLoaderRoute: typeof WorkflowsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/workflow-runs': {
+      id: '/workflow-runs'
+      path: '/workflow-runs'
+      fullPath: '/workflow-runs'
+      preLoaderRoute: typeof WorkflowRunsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/usage': {
       id: '/usage'
       path: '/usage'
@@ -246,6 +286,8 @@ const rootRouteChildren: RootRouteChildren = {
   TasksRoute: TasksRoute,
   TeamsRoute: TeamsRoute,
   UsageRoute: UsageRoute,
+  WorkflowRunsRoute: WorkflowRunsRoute,
+  WorkflowsRoute: WorkflowsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

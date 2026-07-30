@@ -709,11 +709,7 @@ export class Dispatcher {
     if (tasks.some((t) => t.status === "system_blocked")) {
       return null;
     }
-    if (
-      sessionKind === "chat" &&
-      !inbox.hasDirectUserInbox &&
-      !deferExpiredRecently
-    ) {
+    if (sessionKind === "chat" && !inbox.hasInbox && !deferExpiredRecently) {
       return null;
     }
     if (inbox.hasInbox) {

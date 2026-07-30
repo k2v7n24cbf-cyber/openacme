@@ -166,6 +166,15 @@ function peerAskMetadata(
   };
 }
 
+function buildWorkflowAgentCallMessage(prompt: string, input: unknown): string {
+  return (
+    `<workflow-agent-call>\n` +
+    `<prompt>\n${prompt}\n</prompt>\n` +
+    `<input-json>\n${JSON.stringify(input ?? {}, null, 2)}\n</input-json>\n` +
+    `</workflow-agent-call>`
+  );
+}
+
 // Internal upper bound on agentic steps per turn — a safety net against
 // pathological tool-call loops, not a user-facing knob. High enough that the
 // agent stops when it has no more tool calls, never because we capped it.
@@ -1133,6 +1142,39 @@ export class AgentManager {
    */
   listAgents(): (AgentDefinition & { model: ModelConfig })[] {
     return this.agentStore.list().map((def) => this.withResolvedModel(def));
+  }
+
+  async callAgentFromWorkflow(req: {
+    runId: string;
+    agentId: string;
+    prompt: string;
+    input: unknown;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  }): Promise<{
+    response: string;
+    sessionId: string;
+    assistantMessageId?: string | null;
+  }> {
+    const result = await this.askAgent({
+      callerAgentId: "workflow",
+      callerSessionId: req.runId,
+      targetAgentId: req.agentId,
+      message: buildWorkflowAgentCallMessage(req.prompt, req.input),
+      timeoutMs: req.timeoutMs ?? 5 * 60_000,
+      signal: req.signal,
+    });
+    if (!result.ok) {
+      throw new Error(result.error ?? "Agent call failed");
+    }
+    if (!result.session_id) {
+      throw new Error("Agent call did not return a session id");
+    }
+    return {
+      response: result.response ?? "",
+      sessionId: result.session_id,
+      assistantMessageId: result.assistant_message_id,
+    };
   }
 
   /**
@@ -2339,6 +2381,12 @@ export class AgentManager {
 
     this.peerAskRunning.add(session.id);
     const timeout = new AbortController();
+    let canceledByCaller = false;
+    const onCallerAbort = () => {
+      canceledByCaller = true;
+      timeout.abort();
+    };
+    request.signal?.addEventListener("abort", onCallerAbort, { once: true });
     const timer = setTimeout(() => timeout.abort(), request.timeoutMs);
     const userMessage: UIMessage = {
       id: randomUUID(),
@@ -2438,7 +2486,11 @@ export class AgentManager {
         return await this.persistPeerAskFailure(
           session.id,
           request.targetAgentId,
-          new Error(`agent_ask timed out after ${request.timeoutMs}ms`),
+          new Error(
+            canceledByCaller
+              ? "agent_ask canceled by workflow"
+              : `agent_ask timed out after ${request.timeoutMs}ms`,
+          ),
         );
       }
 
@@ -2523,6 +2575,7 @@ export class AgentManager {
       );
     } finally {
       clearTimeout(timer);
+      request.signal?.removeEventListener("abort", onCallerAbort);
       this.peerAskRunning.delete(session.id);
     }
   }

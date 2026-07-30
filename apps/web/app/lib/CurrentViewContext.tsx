@@ -13,6 +13,8 @@ export type CurrentViewEntityType =
   | "settings"
   | "team"
   | "task"
+  | "workflow"
+  | "workflowRun"
   | null;
 
 /** What the user is currently looking at, published by each route and read by
@@ -22,7 +24,7 @@ export interface CurrentView {
   /** Route pathname, e.g. "/agents". */
   page: string;
   entityType: CurrentViewEntityType;
-  /** Focused entity id (agent/skill/team/task), or null. */
+  /** Focused entity id (agent/skill/team/task/workflow), or null. */
   entityId: string | null;
   /** Active sub-tab where the page has one (detail tab / settings tab). */
   tab?: string | null;

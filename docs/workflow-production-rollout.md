@@ -2,6 +2,8 @@
 
 Branch: `local-stage-the-workflows`
 
+Release readiness matrix: `docs/workflow-release-readiness.md`
+
 Current rollout candidate: latest approved commit on
 `origin/local-stage-the-workflows`
 

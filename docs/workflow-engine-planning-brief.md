@@ -8,6 +8,8 @@ Primary architecture note: `docs/workflow-engine-plan.md`
 
 Production rollout runbook: `docs/workflow-production-rollout.md`
 
+Release readiness matrix: `docs/workflow-release-readiness.md`
+
 Current workflow milestone status:
 
 - M0-M8 first-release workflow runtime, persistence, API, triggers, MCP,

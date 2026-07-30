@@ -2,7 +2,8 @@
 
 Branch: `local-stage-the-workflows`
 
-Current rollout candidate: `dd29c9a`
+Current rollout candidate: latest approved commit on
+`origin/local-stage-the-workflows`
 
 Production data dir: `/Users/alenbohcelyan/.openacme`
 
@@ -60,6 +61,11 @@ Latest local/origin evidence:
   - pre-commit hook passed full `test`: 32 tasks successful.
   - push hook passed full `build`: 19 tasks successful.
   - push hook passed server e2e: 19 files, 81 tests.
+- Commit `53e7bfb Document workflow production rollout gate`
+  - pre-commit hook passed full `check-types`.
+  - pre-commit hook passed full `test`: 32 tasks successful.
+  - push hook passed full `build`: 19 tasks successful.
+  - push hook passed server e2e: 19 files, 81 tests.
 
 Workflow-specific evidence recorded in `docs/workflow-engine-plan.md`:
 
@@ -84,7 +90,7 @@ git log -2 --oneline --decorate
 Expected:
 
 - Branch is `local-stage-the-workflows`.
-- `HEAD` and `origin/local-stage-the-workflows` point to `dd29c9a` or a later
+- `HEAD` and `origin/local-stage-the-workflows` point to the same latest
   approved workflow rollout commit.
 - No tracked file changes are present.
 - Existing unrelated untracked `output/` may remain untracked and must not be

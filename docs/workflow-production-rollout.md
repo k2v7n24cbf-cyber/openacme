@@ -82,8 +82,9 @@ Workflow-specific evidence recorded in `docs/workflow-engine-plan.md`:
 - Deployed-style canvas layout smoke passed on port `3458` using
   `/Users/alenbohcelyan/.openacme-the-workflow`.
 - Final pre-rollout deployed-style canvas layout smoke was rerun on
-  2026-07-31 at `HEAD`/`origin/local-stage-the-workflows` `074d20c`, using
-  port `3458` and `/Users/alenbohcelyan/.openacme-the-workflow`.
+  2026-07-31 against executable source `074d20c`, using port `3458` and
+  `/Users/alenbohcelyan/.openacme-the-workflow`. Later commits through
+  `303f763` are documentation-only.
 
 ## Pre-Deploy Checks
 

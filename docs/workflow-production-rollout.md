@@ -66,6 +66,11 @@ Latest local/origin evidence:
   - pre-commit hook passed full `test`: 32 tasks successful.
   - push hook passed full `build`: 19 tasks successful.
   - push hook passed server e2e: 19 files, 81 tests.
+- Commit `074d20c Clarify workflow rollout candidate reference`
+  - pre-commit hook passed full `check-types`.
+  - pre-commit hook passed full `test`: 32 tasks successful.
+  - push hook passed full `build`: 19 tasks successful.
+  - push hook passed server e2e: 19 files, 81 tests.
 
 Workflow-specific evidence recorded in `docs/workflow-engine-plan.md`:
 
@@ -76,6 +81,9 @@ Workflow-specific evidence recorded in `docs/workflow-engine-plan.md`:
 - Full `apps/web/e2e/workflows.spec.ts` passed on non-3456 test ports.
 - Deployed-style canvas layout smoke passed on port `3458` using
   `/Users/alenbohcelyan/.openacme-the-workflow`.
+- Final pre-rollout deployed-style canvas layout smoke was rerun on
+  2026-07-31 at `HEAD`/`origin/local-stage-the-workflows` `074d20c`, using
+  port `3458` and `/Users/alenbohcelyan/.openacme-the-workflow`.
 
 ## Pre-Deploy Checks
 

@@ -11034,6 +11034,17 @@ Deployed-style test-env validation:
   - failed after the smoke because the test server had shut down.
 - Port `3456` and production `~/.openacme` were not used.
 
+Final pre-rollout test-env rerun on 2026-07-31:
+
+- `curl -sS --max-time 2 http://127.0.0.1:3458/api/health`
+  - failed before the smoke because no test listener was running on `3458`.
+- `OPENACME_E2E_PORT=3458 OPENACME_E2E_DATA_DIR=/Users/alenbohcelyan/.openacme-the-workflow pnpm --dir apps/web exec playwright test workflows.spec.ts -g "canvas layout"`
+  - passed, 2 Chromium tests against commit `074d20c` on
+    `local-stage-the-workflows`.
+- `curl -sS --max-time 2 http://127.0.0.1:3458/api/health`
+  - failed after the smoke because the test server had shut down.
+- Port `3456` and production `~/.openacme` were not used.
+
 M9 visual canvas authoring milestone status: complete. The remaining workflow
 work should start a new milestone/slice instead of extending M9.
 

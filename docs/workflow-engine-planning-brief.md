@@ -6,6 +6,8 @@ Data dir for all manual/runtime work: `~/.openacme-the-workflow`
 
 Primary architecture note: `docs/workflow-engine-plan.md`
 
+Production rollout runbook: `docs/workflow-production-rollout.md`
+
 Current workflow milestone status:
 
 - M0-M8 first-release workflow runtime, persistence, API, triggers, MCP,
@@ -18,6 +20,8 @@ Current workflow milestone status:
 - Agent workflow authoring remains API/import-export driven through the
   `openacme-workflow-author` skill. Agents should not use Playwright to create
   workflows.
+- Production rollout must use the dedicated runbook and requires explicit
+  operator approval before touching `/Users/alenbohcelyan/.openacme`.
 
 ## Prepared State
 

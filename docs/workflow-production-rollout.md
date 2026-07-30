@@ -83,8 +83,8 @@ Workflow-specific evidence recorded in `docs/workflow-engine-plan.md`:
   `/Users/alenbohcelyan/.openacme-the-workflow`.
 - Final pre-rollout deployed-style canvas layout smoke was rerun on
   2026-07-31 against executable source `074d20c`, using port `3458` and
-  `/Users/alenbohcelyan/.openacme-the-workflow`. Later commits through
-  `303f763` are documentation-only.
+  `/Users/alenbohcelyan/.openacme-the-workflow`. Later commits are
+  documentation-only unless this runbook explicitly says otherwise.
 
 ## Pre-Deploy Checks
 

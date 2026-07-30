@@ -6,6 +6,19 @@ Data dir for all manual/runtime work: `~/.openacme-the-workflow`
 
 Primary architecture note: `docs/workflow-engine-plan.md`
 
+Current workflow milestone status:
+
+- M0-M8 first-release workflow runtime, persistence, API, triggers, MCP,
+  agent-call, foreach, Python, run history, and run inspection are complete.
+- M9 visual canvas authoring is complete and pushed on
+  `local-stage-the-workflows` at commit `6216f7d`.
+- The primary human authoring surface is now the `/workflows` canvas with node
+  palette, visual branch/foreach wiring, right-side inspector settings, run
+  overlays, run evidence selection, and optional persisted layout metadata.
+- Agent workflow authoring remains API/import-export driven through the
+  `openacme-workflow-author` skill. Agents should not use Playwright to create
+  workflows.
+
 ## Prepared State
 
 - Local worktree `worktrees/local-stage` is on branch
@@ -14,6 +27,8 @@ Primary architecture note: `docs/workflow-engine-plan.md`
 - Isolated runtime data dir exists at `~/.openacme-the-workflow`.
 - Isolated config sets `server.host = 127.0.0.1` and `server.port = 3458`.
 - `~/.openacme` is out of scope for workflow development and smoke tests.
+- Port `3456` is out of scope for workflow development and workflow smoke
+  tests.
 
 ## Baseline Runtime Command
 
@@ -40,31 +55,33 @@ cd /Users/alenbohcelyan/Documents/AIProjects/openacme-platform-engineering/workt
 pnpm agent start --data-dir "$HOME/.openacme-the-workflow" --no-service --no-browser
 ```
 
-## Decisions To Make Before Code
+## Locked Decisions
 
 1. Ownership scope:
-   Should workflows be global, team-scoped, or agent-owned in the first
-   release?
+   Workflows and workflow run history are global in the first release. Do not
+   send `teamId`, `agentId`, or `ownerId` filters to workflow list APIs.
 
 2. First editor shape:
-   Should MVP be a vertical card/list builder, or do we require a canvas from
-   day one?
+   M4 shipped with a JSON-backed structured card editor. M9 completed the
+   primary visual canvas authoring surface. The card/JSON path remains an
+   advanced fallback and import/export/debug escape hatch.
 
 3. Builtin taxonomy:
-   Confirm the stored type family:
-   `builtin.*`, `mcp.*`, and `agent.*`.
+   Stored node type families are `builtin.*`, `mcp.*`, and `agent.*`.
 
 4. Python isolation:
-   Should `builtin.python` state live per run, per step, or per workflow worker?
+   `builtin.python` runs through a dedicated `PythonExecutionPort` using
+   per-step subprocess isolation.
 
 5. Agent call semantics:
-   Should the first release support only `agent.call`, or also durable
-   `agent.task` waiting/resume?
+   The first release supports synchronous `agent.call`. Durable `agent.task`
+   wait/resume is explicitly deferred and must remain rejected with the
+   documented first-release message.
 
 6. Workflow triggers:
-   First release is manual-run only. Keep trigger storage/schema explicit so
-   scheduled, task, event, and webhook triggers can be added later without
-   changing the run contract.
+   Manual, scheduled, and webhook trigger foundations exist. Manual and
+   configured scheduled/webhook trigger runs use the shared persisted run path.
+   Task trigger dispatch remains deferred.
 
 7. Run audit and UI:
    Test runs and live runs are both durable. The UI must support run history,
@@ -79,10 +96,17 @@ pnpm agent start --data-dir "$HOME/.openacme-the-workflow" --no-service --no-bro
    while merge/append must be explicit.
 
 9. Storage versioning:
-   Confirm immutable published versions with mutable drafts.
+   Published workflow versions are immutable snapshots. Draft definitions remain
+   mutable.
 
 10. Expression language:
-    Confirm constrained expressions first, with no arbitrary JavaScript.
+    Workflow expressions are constrained. Do not add arbitrary JavaScript
+    expression execution.
+
+11. Visual layout metadata:
+    Workflow execution remains owned by `triggers` and `nodes`. Optional
+    `definition.ui.canvas.nodes.<nodeId>.position` metadata is visual-only,
+    can be omitted by agents, and can be cleared with `ui: null`.
 
 ## Recommended Milestone Order
 
@@ -95,10 +119,11 @@ pnpm agent start --data-dir "$HOME/.openacme-the-workflow" --no-service --no-bro
 7. Milestone 6 - Agent Calls.
 8. Milestone 7 - Foreach And Python.
 9. Milestone 8 - Future Trigger Expansion.
+10. Milestone 9 - Canvas Authoring UI.
 
-Start coding with Milestone 1 only. It settles the sibling boundary with
-`AgentManager`, gives later storage and UI slices a stable contract, and avoids
-building a visual editor before the runtime/audit contract is trustworthy.
+The current implementation has completed this order through Milestone 9. Future
+work should open a new milestone in `docs/workflow-engine-plan.md` before code
+changes start.
 
 Milestone 4 is the first point where the operator should be able to run a draft
 from the UI and inspect a persisted test run end to end.
@@ -129,28 +154,18 @@ runs. M4 is not complete until the web Workflows route, run history, run
 detail console, failed-run inspection, and Playwright smoke are done.
 
 Milestone 4 MVP UI is complete when `/workflows` lets an operator create a
-workflow, edit cards through the JSON-backed card list, save/publish, run test
-and live executions, reopen history, inspect step input/output/error/context
-diffs/logs, and verify a failed run in Playwright. Rich per-node forms and drag
-reordering are future hardening, not M4 blockers. The card list now exposes
-assignment summaries and primary assignment edit controls so operators can see
-and change direct variable sets, transformer write-back targets, source
-expressions, and write mode without opening raw node JSON. Transform cards also
-support structured input JSON map and transform JSON editing for
-`builtin.transform`. It also supports Move up, Move down, and Delete card
-actions over the same JSON-backed draft, so basic list editing no longer
-requires hand-editing the raw node array. Basic MCP and agent cards now also
-expose structured server/tool, agent id, prompt, timeout, and input JSON map
-controls, with inventory pickers when discovered options are available. IF and
-IF Else cards can also be appended and configured through structured
-condition/branch target controls over the same JSON-backed draft. Log cards now
-support structured level, message, and payload editing for
-`builtin.log.info/debug/error`, and Exit cards support structured status/output
-editing for `builtin.exit`. Foreach cards support structured items, item
-variable, body node list, and concurrency editing for `builtin.foreach` while
-the runtime cap remains sequential. The authoring path now validates duplicate
-node ids and missing IF/IF Else/Foreach target references before save, publish,
-or run.
+workflow, edit structured workflow cards, save/publish, run test and live
+executions, reopen history, inspect step input/output/error/context diffs/logs,
+and verify a failed run in Playwright. The M4 card editor remains an advanced
+fallback.
+
+Milestone 9 canvas authoring is complete when `/workflows` lets an operator
+create nodes from the palette, edit all selected-node settings from the
+right-side inspector, wire branch and foreach references visually, reorder
+linear node order, save/publish/test, inspect run overlays on the canvas,
+select run evidence from either the canvas or run console, export/import
+definitions including optional layout metadata, and persist dragged node
+positions without changing workflow execution semantics.
 
 Milestone 5 core MCP slice is complete when workflow execution has a dedicated
 MCP port, not an AgentManager or dispatcher dependency; `mcp.tool` runs through

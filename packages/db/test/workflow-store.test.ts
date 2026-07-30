@@ -62,6 +62,59 @@ describe("WorkflowStore definitions", () => {
     expect(updated.updatedAt).toBe(later);
   });
 
+  it("round-trips optional workflow UI metadata and snapshots it on publish", () => {
+    store.createDraft({
+      id: "wf_layout",
+      name: "Layout workflow",
+      nodes: [{ id: "exit", type: "builtin.exit", status: "succeeded" }],
+      ui: {
+        canvas: {
+          nodes: {
+            exit: { position: { x: 120, y: 80 } },
+          },
+        },
+      },
+      now,
+    });
+
+    expect(store.getDefinition("wf_layout")?.ui).toEqual({
+      canvas: {
+        nodes: {
+          exit: { position: { x: 120, y: 80 } },
+        },
+      },
+    });
+
+    const updated = store.updateDraft("wf_layout", {
+      ui: {
+        canvas: {
+          nodes: {
+            exit: { position: { x: 240, y: 160 } },
+          },
+        },
+      },
+      now: later,
+    });
+    expect(updated.ui).toEqual({
+      canvas: {
+        nodes: {
+          exit: { position: { x: 240, y: 160 } },
+        },
+      },
+    });
+
+    const published = store.publish("wf_layout", "2026-07-30T00:02:00.000Z");
+    expect(published.ui).toEqual(updated.ui);
+
+    store.updateDraft("wf_layout", {
+      ui: null,
+      now: "2026-07-30T00:03:00.000Z",
+    });
+
+    expect(store.getDefinition("wf_layout")?.ui).toBeUndefined();
+    expect(store.getVersion("wf_layout", 2)?.ui).toEqual(updated.ui);
+  });
+
   it("publishes immutable versions while later drafts remain editable", () => {
     store.createDraft({
       id: "wf_publish",

@@ -195,6 +195,69 @@ function runnableNodes() {
 }
 
 describe("workflow routes", () => {
+  it("round-trips optional workflow UI metadata without changing nodes", async () => {
+    let res = await jsonReq("/api/workflows", {
+      id: "wf_layout_api",
+      name: "Layout API",
+      nodes: runnableNodes(),
+      ui: {
+        canvas: {
+          nodes: {
+            set_customer: { position: { x: 120, y: 80 } },
+          },
+        },
+      },
+    });
+    expect(res.status).toBe(201);
+    expect((await res.json()).workflow).toMatchObject({
+      id: "wf_layout_api",
+      nodes: runnableNodes(),
+      ui: {
+        canvas: {
+          nodes: {
+            set_customer: { position: { x: 120, y: 80 } },
+          },
+        },
+      },
+    });
+
+    res = await jsonReq(
+      "/api/workflows/wf_layout_api",
+      {
+        ui: {
+          canvas: {
+            nodes: {
+              set_customer: { position: { x: 240, y: 160 } },
+            },
+          },
+        },
+      },
+      "PATCH",
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json()).workflow.ui).toEqual({
+      canvas: {
+        nodes: {
+          set_customer: { position: { x: 240, y: 160 } },
+        },
+      },
+    });
+
+    res = await jsonReq("/api/workflows/wf_layout_api/publish", {});
+    expect(res.status).toBe(200);
+    expect((await res.json()).workflow.ui).toEqual({
+      canvas: {
+        nodes: {
+          set_customer: { position: { x: 240, y: 160 } },
+        },
+      },
+    });
+
+    res = await jsonReq("/api/workflows/wf_layout_api", { ui: null }, "PATCH");
+    expect(res.status).toBe(200);
+    expect((await res.json()).workflow.ui).toBeUndefined();
+  });
+
   it("creates, lists, updates, and publishes workflow drafts", async () => {
     let res = await jsonReq("/api/workflows", {
       id: "wf_customer",

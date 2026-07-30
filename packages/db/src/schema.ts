@@ -421,6 +421,7 @@ export const workflowDefinitions = sqliteTable("workflow_definitions", {
   inputSchemaJson: text("input_schema_json"),
   triggersJson: text("triggers_json").notNull(),
   nodesJson: text("nodes_json").notNull(),
+  uiJson: text("ui_json"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -437,6 +438,7 @@ export const workflowVersions = sqliteTable(
     inputSchemaJson: text("input_schema_json"),
     triggersJson: text("triggers_json").notNull(),
     nodesJson: text("nodes_json").notNull(),
+    uiJson: text("ui_json"),
     createdAt: text("created_at").notNull(),
   },
   (t) => [

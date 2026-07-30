@@ -91,6 +91,56 @@ describe("workflow schemas", () => {
     ]);
   });
 
+  it("accepts optional workflow UI canvas layout metadata", () => {
+    const parsed = WorkflowDefinitionSchema.parse({
+      id: "customer-review",
+      version: 1,
+      status: "draft",
+      name: "Customer review",
+      triggers: [{ id: "manual", kind: "manual", enabled: true }],
+      nodes: [{ id: "exit", type: "builtin.exit", status: "succeeded" }],
+      ui: {
+        canvas: {
+          nodes: {
+            exit: { position: { x: 120, y: 80 } },
+          },
+        },
+      },
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    expect(parsed.ui).toEqual({
+      canvas: {
+        nodes: {
+          exit: { position: { x: 120, y: 80 } },
+        },
+      },
+    });
+  });
+
+  it("rejects invalid workflow UI canvas layout metadata", () => {
+    const parsed = WorkflowDefinitionSchema.safeParse({
+      id: "customer-review",
+      version: 1,
+      status: "draft",
+      name: "Customer review",
+      triggers: [{ id: "manual", kind: "manual", enabled: true }],
+      nodes: [{ id: "exit", type: "builtin.exit", status: "succeeded" }],
+      ui: {
+        canvas: {
+          nodes: {
+            exit: { position: { x: "left", y: 80 } },
+          },
+        },
+      },
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
   it("rejects unknown node families", () => {
     const parsed = WorkflowNodeSchema.safeParse({
       id: "bad",

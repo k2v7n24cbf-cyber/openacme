@@ -637,7 +637,8 @@
 /* React Flow charts — base.css only; the paper/ink tokens supply the
    theme. Handles exist for edge anchoring but are never shown. */
 .org-chart .react-flow__handle,
-.task-dependency-map .react-flow__handle {
+.task-dependency-map .react-flow__handle,
+.workflow-canvas .react-flow__handle {
   opacity: 0;
   width: 1px;
   height: 1px;
@@ -647,21 +648,25 @@
   pointer-events: none;
 }
 .org-chart .react-flow__edge-path,
-.task-dependency-map .react-flow__edge-path {
+.task-dependency-map .react-flow__edge-path,
+.workflow-canvas .react-flow__edge-path {
   stroke-width: 1;
 }
 .org-chart .react-flow__attribution,
-.task-dependency-map .react-flow__attribution {
+.task-dependency-map .react-flow__attribution,
+.workflow-canvas .react-flow__attribution {
   background: transparent;
   font-family: var(--font-mono);
   font-size: 9px;
 }
 .org-chart .react-flow__attribution a,
-.task-dependency-map .react-flow__attribution a {
+.task-dependency-map .react-flow__attribution a,
+.workflow-canvas .react-flow__attribution a {
   color: var(--ink-faint);
 }
 .org-chart .react-flow__pane,
-.task-dependency-map .react-flow__pane {
+.task-dependency-map .react-flow__pane,
+.workflow-canvas .react-flow__pane {
   cursor: grab;
 }
 .org-chart .react-flow__pane.dragging,

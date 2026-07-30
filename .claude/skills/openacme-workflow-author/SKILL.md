@@ -82,7 +82,7 @@ agents.
 ## Save, Test, Publish, Run
 
 - **Save Draft** persists current `name`, `description`, `inputSchema`,
-  `triggers`, and `nodes` into the draft definition.
+  `triggers`, `nodes`, and optional `ui` metadata into the draft definition.
 - **Test** creates a draft-mode run from current editor input.
 - **Publish** creates an immutable published version from the draft.
 - **Trigger-card Run** runs a published runnable trigger.
@@ -90,6 +90,18 @@ agents.
 - **Import** creates a new draft workflow from an export; it should not mutate
   the current workflow. There is no overwrite or merge import mode in the first
   workflow release.
+
+Optional UI metadata is for visual layout only:
+
+- Agents should omit `ui` unless they are preserving or intentionally updating
+  a visual canvas layout.
+- The supported shape is
+  `ui.canvas.nodes.<nodeId>.position = { "x": number, "y": number }`.
+- `ui` does not affect execution order, branch/foreach behavior, triggers,
+  assignments, MCP calls, agent calls, or Python execution.
+- `PATCH /api/workflows/:id` accepts `ui: null` to clear visual metadata.
+- Export/import preserves `ui` when present, but agent-authored workflows remain
+  valid without it.
 
 All run paths should be verified through the Run Console: check run status,
 trigger snapshot, step rail, selected step input/output/error, logs, timeline,

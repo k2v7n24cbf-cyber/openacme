@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type DragEvent,
+} from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { z } from "zod";
 import {
@@ -42,6 +49,41 @@ import { Textarea } from "@/app/components/ui/textarea";
 import { API_BASE } from "@/app/lib/api";
 import { usePublishCurrentView } from "@/app/lib/CurrentViewContext";
 import { cn } from "@/app/lib/utils";
+import {
+  appendWorkflowNode,
+  isAgentSummary,
+  isMcpToolSummary,
+  moveWorkflowNode,
+  type WorkflowPaletteKind,
+} from "@/app/workflows/authoring";
+import {
+  WorkflowCanvas,
+  type WorkflowCanvasConnection,
+  type WorkflowCanvasEdgeSelection,
+} from "@/app/workflows/canvas";
+import {
+  connectWorkflowReferenceEdge,
+  removeWorkflowReferenceEdge,
+  type WorkflowReferenceEdgeKind,
+} from "@/app/workflows/edges";
+import {
+  buildWorkflowGraphProjection,
+  type WorkflowCanvasNodeData,
+  type WorkflowGraphProjection,
+  type WorkflowGraphTrigger,
+} from "@/app/workflows/graph";
+import {
+  normalizeWorkflowDefinitionUi,
+  parseWorkflowDefinitionUi,
+  updateWorkflowCanvasNodePosition,
+  type WorkflowDefinitionUi,
+  type WorkflowCanvasPosition,
+} from "@/app/workflows/layout";
+import {
+  applyWorkflowRunOverlay,
+  latestWorkflowRunStepIdForNode,
+  type WorkflowRunOverlayInput,
+} from "@/app/workflows/run-overlay";
 
 const RUN_DETAIL_AUTO_REFRESH_MS = 1000;
 const WORKFLOW_SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
@@ -98,6 +140,7 @@ interface WorkflowDefinition {
   inputSchema?: JsonValue;
   triggers: JsonValue[];
   nodes: WorkflowNode[];
+  ui?: WorkflowDefinitionUi;
   createdAt: string;
   updatedAt: string;
 }
@@ -230,6 +273,14 @@ type LogLevel = (typeof LOG_LEVELS)[number];
 const EXIT_STATUSES = ["succeeded", "failed", "canceled"] as const;
 type ExitStatus = (typeof EXIT_STATUSES)[number];
 const RUN_CONSOLE_PAGE_SIZE = 25;
+const WORKFLOW_PALETTE_MIME = "application/x-openacme-workflow-node";
+
+interface WorkflowPalettePayload {
+  kind: WorkflowPaletteKind;
+  server?: string;
+  tool?: string;
+  agentId?: string;
+}
 
 const DEFAULT_NODES: WorkflowNode[] = [
   {
@@ -279,6 +330,12 @@ function WorkflowsPage() {
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const [workflows, setWorkflows] = useState<WorkflowDefinition[]>([]);
   const [selected, setSelected] = useState<WorkflowDefinition | null>(null);
+  const [selectedCanvasNodeId, setSelectedCanvasNodeId] = useState<
+    string | null
+  >(null);
+  const [selectedCanvasEdgeId, setSelectedCanvasEdgeId] = useState<
+    string | null
+  >(null);
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
@@ -292,6 +349,7 @@ function WorkflowsPage() {
   const [triggersDraft, setTriggersDraft] = useState(
     formatJson(DEFAULT_TRIGGERS),
   );
+  const [uiDraft, setUiDraft] = useState<WorkflowDefinitionUi | null>(null);
   const [inputDraft, setInputDraft] = useState(formatJson(DEFAULT_INPUT));
   const [mcpTools, setMcpTools] = useState<McpToolSummary[]>([]);
   const [agents, setAgents] = useState<AgentSummary[]>([]);
@@ -365,6 +423,34 @@ function WorkflowsPage() {
   }, [detail?.run.id, detail?.run.status, selected?.id]);
 
   const parsedNodes = useMemo(() => parseNodesDraft(nodesDraft), [nodesDraft]);
+  const parsedTriggersForCanvas = useMemo(() => {
+    const parsed = parseTriggersDraft(triggersDraft);
+    return parsed.ok
+      ? (parsed.value.filter(isRecord) as WorkflowGraphTrigger[])
+      : [];
+  }, [triggersDraft]);
+  const workflowRunOverlay = useMemo<WorkflowRunOverlayInput | null>(
+    () =>
+      detail
+        ? {
+            run: { currentNodeId: detail.run.currentNodeId },
+            steps: detail.steps,
+          }
+        : null,
+    [detail],
+  );
+  const workflowGraphProjection = useMemo(
+    () =>
+      applyWorkflowRunOverlay(
+        buildWorkflowGraphProjection({
+          nodes: parsedNodes.ok ? parsedNodes.value : [],
+          triggers: parsedTriggersForCanvas,
+          layout: uiDraft?.canvas,
+        }),
+        workflowRunOverlay,
+      ),
+    [parsedNodes, parsedTriggersForCanvas, uiDraft, workflowRunOverlay],
+  );
   const nodeReferences = useMemo(
     () =>
       parsedNodes.ok
@@ -372,6 +458,26 @@ function WorkflowsPage() {
         : ({ ok: true, message: "" } as NodeReferenceValidation),
     [parsedNodes],
   );
+  useEffect(() => {
+    if (
+      selectedCanvasNodeId &&
+      !workflowGraphProjection.nodes.some(
+        (node) => node.id === selectedCanvasNodeId,
+      )
+    ) {
+      setSelectedCanvasNodeId(null);
+    }
+  }, [selectedCanvasNodeId, workflowGraphProjection.nodes]);
+  useEffect(() => {
+    if (
+      selectedCanvasEdgeId &&
+      !workflowGraphProjection.edges.some(
+        (edge) => edge.id === selectedCanvasEdgeId,
+      )
+    ) {
+      setSelectedCanvasEdgeId(null);
+    }
+  }, [selectedCanvasEdgeId, workflowGraphProjection.edges]);
   const selectedStep =
     detail?.steps.find((step) => step.id === selectedStepId) ??
     detail?.steps[0] ??
@@ -407,11 +513,14 @@ function WorkflowsPage() {
 
   async function selectWorkflow(workflow: WorkflowDefinition, runId?: string) {
     setSelected(workflow);
+    setSelectedCanvasNodeId(null);
+    setSelectedCanvasEdgeId(null);
     setNameDraft(workflow.name);
     setDescriptionDraft(workflow.description ?? "");
     setInputSchemaDraft(formatOptionalJson(workflow.inputSchema));
     setNodesDraft(formatJson(workflow.nodes));
     setTriggersDraft(formatJson(workflow.triggers));
+    setUiDraft(workflow.ui ?? null);
     setTriggers(deriveTriggerSummaries(workflow.triggers));
     void navigate({
       search: workflowSearch({ id: workflow.id, run: runId }),
@@ -652,6 +761,11 @@ function WorkflowsPage() {
             inputSchema: parsed.value.inputSchema,
             triggers: parsed.value.triggers,
             nodes: parsed.value.nodes,
+            ui:
+              normalizeWorkflowDefinitionUi(
+                parsed.value.ui,
+                parsed.value.nodes,
+              ) ?? undefined,
           },
         },
       );
@@ -719,6 +833,7 @@ function WorkflowsPage() {
             inputSchema: inputSchema.value,
             triggers: triggerDraft.value,
             nodes: nodes.value,
+            ui: normalizeWorkflowDefinitionUi(uiDraft, nodes.value) ?? null,
           },
         },
       );
@@ -809,6 +924,7 @@ function WorkflowsPage() {
     }
 
     const description = descriptionDraft.trim();
+    const ui = normalizeWorkflowDefinitionUi(uiDraft, nodes.value);
     const payload = {
       format: "openacme.workflow.definition.v1",
       exportedAt: new Date().toISOString(),
@@ -821,6 +937,7 @@ function WorkflowsPage() {
         inputSchema: inputSchema.value ?? undefined,
         triggers: triggerDraft.value,
         nodes: nodes.value,
+        ...(ui ? { ui } : {}),
       },
     };
     const blob = new Blob([`${formatJson(payload)}\n`], {
@@ -981,17 +1098,7 @@ function WorkflowsPage() {
   }
 
   function appendNode(
-    kind:
-      | "set"
-      | "transform"
-      | "if"
-      | "if_else"
-      | "log"
-      | "exit"
-      | "foreach"
-      | "python"
-      | "mcp"
-      | "agent",
+    kind: WorkflowPaletteKind,
     tool?: McpToolSummary | AgentSummary,
   ) {
     const parsed = parseNodesDraft(nodesDraft);
@@ -1007,11 +1114,43 @@ function WorkflowsPage() {
       toast.error("No agents available");
       return;
     }
-    const next = [
-      ...parsed.value,
-      templateNode(kind, parsed.value.length + 1, tool),
-    ];
+    const next = appendWorkflowNode(parsed.value, kind, tool);
     setNodesDraft(formatJson(next));
+    setSelectedCanvasNodeId(next.at(-1)?.id ?? null);
+  }
+
+  function appendNodeFromPalette(payload: WorkflowPalettePayload) {
+    appendNode(payload.kind, toolForPalettePayload(payload));
+  }
+
+  function handlePaletteDrop(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    const payload = parseWorkflowPalettePayload(
+      event.dataTransfer.getData(WORKFLOW_PALETTE_MIME),
+    );
+    if (!payload) return;
+    appendNodeFromPalette(payload);
+  }
+
+  function toolForPalettePayload(
+    payload: WorkflowPalettePayload,
+  ): McpToolSummary | AgentSummary | undefined {
+    if (payload.kind === "mcp") {
+      if (payload.server && payload.tool) {
+        return mcpTools.find(
+          (tool) =>
+            tool.server === payload.server && tool.tool === payload.tool,
+        );
+      }
+      return firstMcpTool;
+    }
+    if (payload.kind === "agent") {
+      if (payload.agentId) {
+        return agents.find((agent) => agent.id === payload.agentId);
+      }
+      return firstAvailableAgent;
+    }
+    return undefined;
   }
 
   function moveNode(index: number, direction: -1 | 1) {
@@ -1022,11 +1161,101 @@ function WorkflowsPage() {
     }
     const target = index + direction;
     if (target < 0 || target >= parsed.value.length) return;
-    const next = [...parsed.value];
-    const [node] = next.splice(index, 1);
-    if (!node) return;
-    next.splice(target, 0, node);
-    setNodesDraft(formatJson(next));
+    setNodesDraft(formatJson(moveWorkflowNode(parsed.value, index, direction)));
+  }
+
+  function moveSelectedCanvasNode(direction: -1 | 1) {
+    if (!selectedCanvasNodeId) return;
+    const parsed = parseNodesDraft(nodesDraft);
+    if (!parsed.ok) {
+      toast.error(parsed.error);
+      return;
+    }
+    const index = parsed.value.findIndex(
+      (node) => node.id === selectedCanvasNodeId,
+    );
+    if (index < 0) return;
+    moveNode(index, direction);
+  }
+
+  function connectCanvasReferenceEdge(connection: WorkflowCanvasConnection) {
+    const kind = referenceEdgeKind(connection.sourceHandle);
+    if (!kind) {
+      toast.error("Only branch and foreach edges can be edited on the canvas");
+      return;
+    }
+    const parsed = parseNodesDraft(nodesDraft);
+    if (!parsed.ok) {
+      toast.error(parsed.error);
+      return;
+    }
+    const result = connectWorkflowReferenceEdge(parsed.value, {
+      sourceId: connection.sourceId,
+      targetId: connection.targetId,
+      kind,
+    });
+    if (!result.ok) {
+      toast.error(referenceMutationMessage(result.reason));
+      return;
+    }
+    setNodesDraft(formatJson(result.nodes));
+    setSelectedCanvasNodeId(connection.sourceId);
+    setSelectedCanvasEdgeId(
+      `edge:${kind}:${connection.sourceId}:${connection.targetId}`,
+    );
+  }
+
+  function removeSelectedCanvasReferenceEdge(
+    edge: WorkflowCanvasEdgeSelection,
+  ) {
+    const kind = referenceEdgeKind(edge.kind);
+    const targetId = edge.targetRef ?? edge.targetId;
+    if (!kind) {
+      toast.error("Only branch and foreach edges can be removed on the canvas");
+      return;
+    }
+    const parsed = parseNodesDraft(nodesDraft);
+    if (!parsed.ok) {
+      toast.error(parsed.error);
+      return;
+    }
+    const result = removeWorkflowReferenceEdge(parsed.value, {
+      sourceId: edge.sourceId,
+      targetId,
+      kind,
+    });
+    if (!result.ok) {
+      toast.error(referenceMutationMessage(result.reason));
+      return;
+    }
+    setNodesDraft(formatJson(result.nodes));
+    setSelectedCanvasEdgeId(null);
+    setSelectedCanvasNodeId(edge.sourceId);
+  }
+
+  function selectCanvasNode(nodeId: string) {
+    setSelectedCanvasNodeId(nodeId);
+    setSelectedCanvasEdgeId(null);
+    if (!detail) return;
+    const stepId = latestWorkflowRunStepIdForNode(detail.steps, nodeId);
+    if (stepId) setSelectedStepId(stepId);
+  }
+
+  function updateCanvasNodePosition(
+    nodeId: string,
+    position: WorkflowCanvasPosition,
+  ) {
+    setUiDraft((current) =>
+      updateWorkflowCanvasNodePosition(current, nodeId, position),
+    );
+  }
+
+  function selectRunConsoleStep(stepId: string) {
+    setSelectedStepId(stepId);
+    const step = detail?.steps.find((item) => item.id === stepId);
+    if (!step) return;
+    setSelectedCanvasNodeId(step.nodeId);
+    setSelectedCanvasEdgeId(null);
   }
 
   function deleteNode(index: number) {
@@ -1481,6 +1710,50 @@ function WorkflowsPage() {
     if (parsed.ok) setTriggers(deriveTriggerSummaries(parsed.value));
   }
 
+  function nodeCardProps(
+    node: WorkflowNode,
+    index: number,
+    nodeCount: number,
+  ): NodeCardProps {
+    return {
+      node,
+      index,
+      canMoveUp: index > 0,
+      canMoveDown: index < nodeCount - 1,
+      onMoveUp: () => moveNode(index, -1),
+      onMoveDown: () => moveNode(index, 1),
+      onDelete: () => deleteNode(index),
+      onLabelChange: (value) => updateNodeLabel(index, value),
+      onAssignmentTargetChange: (target, value) =>
+        updateAssignmentTarget(index, target, value),
+      onAssignmentSourceChange: (target, value) =>
+        updateAssignmentSource(index, target, value),
+      onAssignmentModeChange: (target, value) =>
+        updateAssignmentMode(index, target, value),
+      onTransformConfigChange: (field, value) =>
+        updateTransformConfig(index, field, value),
+      onBranchConfigChange: (field, value) =>
+        updateBranchConfig(index, field, value),
+      onLogConfigChange: (field, value) => updateLogConfig(index, field, value),
+      onExitConfigChange: (field, value) =>
+        updateExitConfig(index, field, value),
+      onForeachConfigChange: (field, value) =>
+        updateForeachConfig(index, field, value),
+      onPythonConfigChange: (field, value) =>
+        updatePythonConfig(index, field, value),
+      mcpTools,
+      agents,
+      onMcpToolConfigChange: (field, value) =>
+        updateMcpToolConfig(index, field, value),
+      onMcpToolSelect: (server, tool) =>
+        updateMcpToolSelection(index, server, tool),
+      onMcpSchemaInputChange: (key, value) =>
+        updateMcpSchemaInput(index, key, value),
+      onAgentConfigChange: (field, value) =>
+        updateAgentConfig(index, field, value),
+    };
+  }
+
   const firstMcpTool = mcpTools[0];
   const firstAvailableAgent = agents.find(
     (agent) => agent.instantMessagesEnabled !== false,
@@ -1664,7 +1937,7 @@ function WorkflowsPage() {
                     <SectionEyebrow>Triggers</SectionEyebrow>
                     <Badge variant="outline">{triggers.length}</Badge>
                   </div>
-                  <div className="grid gap-2">
+                  <div aria-label="Workflow Node Cards" className="grid gap-2">
                     {triggers.map((trigger) => {
                       const busyKey = `trigger:${trigger.id}`;
                       const canRun =
@@ -1885,159 +2158,41 @@ function WorkflowsPage() {
                   </label>
                 </section>
 
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => appendNode("set")}
-                  >
-                    <Plus className="size-3" />
-                    Set
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => appendNode("transform")}
-                  >
-                    <Plus className="size-3" />
-                    Transform
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => appendNode("if")}
-                  >
-                    <Plus className="size-3" />
-                    If
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => appendNode("if_else")}
-                  >
-                    <Plus className="size-3" />
-                    If Else
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => appendNode("log")}
-                  >
-                    <Plus className="size-3" />
-                    Log
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => appendNode("exit")}
-                  >
-                    <Plus className="size-3" />
-                    Exit
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => appendNode("foreach")}
-                  >
-                    <Plus className="size-3" />
-                    Foreach
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => appendNode("python")}
-                  >
-                    <Plus className="size-3" />
-                    Python
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => appendNode("mcp", firstMcpTool)}
-                    disabled={!firstMcpTool}
-                    title={
-                      firstMcpTool
-                        ? undefined
-                        : "No MCP tools are available for workflows"
-                    }
-                  >
-                    <Plus className="size-3" />
-                    MCP Tool
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => appendNode("agent", firstAvailableAgent)}
-                    disabled={!firstAvailableAgent}
-                    title={
-                      firstAvailableAgent
-                        ? undefined
-                        : "No enabled agents are available for workflows"
-                    }
-                  >
-                    <Plus className="size-3" />
-                    Agent Call
-                  </Button>
-                </div>
+                <section
+                  aria-label="Workflow Canvas"
+                  className="h-[420px] overflow-hidden border border-paper-rule bg-paper"
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={handlePaletteDrop}
+                >
+                  {parsedNodes.ok ? (
+                    <WorkflowCanvas
+                      projection={workflowGraphProjection}
+                      selectedNodeId={selectedCanvasNodeId}
+                      selectedEdgeId={selectedCanvasEdgeId}
+                      onSelectNode={selectCanvasNode}
+                      onSelectEdge={(edge) =>
+                        setSelectedCanvasEdgeId(edge?.id ?? null)
+                      }
+                      onConnectReference={connectCanvasReferenceEdge}
+                      onRemoveSelectedEdge={removeSelectedCanvasReferenceEdge}
+                      onMoveSelectedUp={() => moveSelectedCanvasNode(-1)}
+                      onMoveSelectedDown={() => moveSelectedCanvasNode(1)}
+                      onNodePositionChange={updateCanvasNodePosition}
+                    />
+                  ) : (
+                    <div className="flex h-full items-center justify-center p-6 text-sm text-ink-soft">
+                      Invalid node JSON
+                    </div>
+                  )}
+                </section>
 
-                {mcpTools.length > 0 && (
-                  <section className="space-y-2 border border-paper-rule bg-paper-sunk p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <SectionEyebrow>MCP Tools</SectionEyebrow>
-                      <Badge variant="outline">{mcpTools.length}</Badge>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {mcpTools.map((tool) => (
-                        <Button
-                          key={`${tool.server}:${tool.tool}`}
-                          type="button"
-                          variant="ghost"
-                          size="xs"
-                          onClick={() => appendNode("mcp", tool)}
-                          title={tool.description}
-                        >
-                          <Plus className="size-3" />
-                          {tool.server}/{tool.tool}
-                        </Button>
-                      ))}
-                    </div>
-                  </section>
-                )}
-
-                {agents.length > 0 && (
-                  <section className="space-y-2 border border-paper-rule bg-paper-sunk p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <SectionEyebrow>Agents</SectionEyebrow>
-                      <Badge variant="outline">{agents.length}</Badge>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {agents.map((agent) => (
-                        <Button
-                          key={agent.id}
-                          type="button"
-                          variant="ghost"
-                          size="xs"
-                          onClick={() => appendNode("agent", agent)}
-                          title={agent.role}
-                          disabled={agent.instantMessagesEnabled === false}
-                        >
-                          <Plus className="size-3" />
-                          {agent.name || agent.id}
-                        </Button>
-                      ))}
-                    </div>
-                  </section>
-                )}
+                <WorkflowNodePalette
+                  mcpTools={mcpTools}
+                  agents={agents}
+                  firstMcpTool={firstMcpTool}
+                  firstAvailableAgent={firstAvailableAgent}
+                  onAdd={appendNodeFromPalette}
+                />
 
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
@@ -2062,62 +2217,20 @@ function WorkflowsPage() {
                       <span>{nodeReferences.message}</span>
                     </div>
                   )}
-                  <div className="grid gap-2">
+                  <div
+                    role="group"
+                    aria-label="Workflow Node Cards"
+                    className="grid gap-2"
+                  >
                     {parsedNodes.ok
                       ? parsedNodes.value.map((node, index) => (
                           <NodeCard
                             key={`${node.id}-${index}`}
-                            node={node}
-                            index={index}
-                            canMoveUp={index > 0}
-                            canMoveDown={index < parsedNodes.value.length - 1}
-                            onMoveUp={() => moveNode(index, -1)}
-                            onMoveDown={() => moveNode(index, 1)}
-                            onDelete={() => deleteNode(index)}
-                            onLabelChange={(value) =>
-                              updateNodeLabel(index, value)
-                            }
-                            onAssignmentTargetChange={(target, value) =>
-                              updateAssignmentTarget(index, target, value)
-                            }
-                            onAssignmentSourceChange={(target, value) =>
-                              updateAssignmentSource(index, target, value)
-                            }
-                            onAssignmentModeChange={(target, value) =>
-                              updateAssignmentMode(index, target, value)
-                            }
-                            onTransformConfigChange={(field, value) =>
-                              updateTransformConfig(index, field, value)
-                            }
-                            onBranchConfigChange={(field, value) =>
-                              updateBranchConfig(index, field, value)
-                            }
-                            onLogConfigChange={(field, value) =>
-                              updateLogConfig(index, field, value)
-                            }
-                            onExitConfigChange={(field, value) =>
-                              updateExitConfig(index, field, value)
-                            }
-                            onForeachConfigChange={(field, value) =>
-                              updateForeachConfig(index, field, value)
-                            }
-                            onPythonConfigChange={(field, value) =>
-                              updatePythonConfig(index, field, value)
-                            }
-                            mcpTools={mcpTools}
-                            agents={agents}
-                            onMcpToolConfigChange={(field, value) =>
-                              updateMcpToolConfig(index, field, value)
-                            }
-                            onMcpToolSelect={(server, tool) =>
-                              updateMcpToolSelection(index, server, tool)
-                            }
-                            onMcpSchemaInputChange={(key, value) =>
-                              updateMcpSchemaInput(index, key, value)
-                            }
-                            onAgentConfigChange={(field, value) =>
-                              updateAgentConfig(index, field, value)
-                            }
+                            {...nodeCardProps(
+                              node,
+                              index,
+                              parsedNodes.value.length,
+                            )}
                           />
                         ))
                       : null}
@@ -2158,36 +2271,381 @@ function WorkflowsPage() {
             )}
           </section>
 
-          <RunConsole
-            workflowName={selected?.name ?? null}
-            detail={detail}
-            runs={runs}
-            selectedStep={selectedStep}
-            busy={busy}
-            hasMoreRuns={hasMoreRuns}
-            loadingMoreRuns={loadingMoreRuns}
-            filters={{
-              mode,
-              status,
-              triggerId,
-              createdFrom,
-              createdTo,
-            }}
-            onFiltersChange={updateRunFilters}
-            onSelectRun={(runId) => void loadRunDetail(runId)}
-            onLoadMoreRuns={() => void loadMoreRuns()}
-            onRefresh={() => {
-              if (!detail) return;
-              void loadRunDetail(detail.run.id, selected?.id);
-            }}
-            onSelectStep={setSelectedStepId}
-            onRerun={() => void rerun()}
-            onCancel={() => void cancelRun()}
-          />
+          <section className="flex min-h-0 flex-col bg-paper">
+            <WorkflowInspector
+              workflow={selected}
+              projection={workflowGraphProjection}
+              selectedNodeId={selectedCanvasNodeId}
+              nodeReferences={nodeReferences}
+              nodes={parsedNodes.ok ? parsedNodes.value : []}
+              nodeCardProps={nodeCardProps}
+            />
+            <RunConsole
+              workflowName={selected?.name ?? null}
+              detail={detail}
+              runs={runs}
+              selectedStep={selectedStep}
+              busy={busy}
+              hasMoreRuns={hasMoreRuns}
+              loadingMoreRuns={loadingMoreRuns}
+              filters={{
+                mode,
+                status,
+                triggerId,
+                createdFrom,
+                createdTo,
+              }}
+              onFiltersChange={updateRunFilters}
+              onSelectRun={(runId) => void loadRunDetail(runId)}
+              onLoadMoreRuns={() => void loadMoreRuns()}
+              onRefresh={() => {
+                if (!detail) return;
+                void loadRunDetail(detail.run.id, selected?.id);
+              }}
+              onSelectStep={selectRunConsoleStep}
+              onRerun={() => void rerun()}
+              onCancel={() => void cancelRun()}
+            />
+          </section>
         </div>
       </main>
     </div>
   );
+}
+
+function WorkflowInspector({
+  workflow,
+  projection,
+  selectedNodeId,
+  nodeReferences,
+  nodes,
+  nodeCardProps,
+}: {
+  workflow: WorkflowDefinition | null;
+  projection: WorkflowGraphProjection;
+  selectedNodeId: string | null;
+  nodeReferences: NodeReferenceValidation;
+  nodes: WorkflowNode[];
+  nodeCardProps: (
+    node: WorkflowNode,
+    index: number,
+    nodeCount: number,
+  ) => NodeCardProps;
+}) {
+  const selectedNode = selectedNodeId
+    ? (projection.nodes.find((node) => node.id === selectedNodeId) ?? null)
+    : null;
+  const data = selectedNode?.data as WorkflowCanvasNodeData | undefined;
+  const inspectedNodeIndex =
+    data?.kind === "step" ? nodes.findIndex((node) => node.id === data.id) : -1;
+  const inspectedNode =
+    inspectedNodeIndex >= 0 ? (nodes[inspectedNodeIndex] ?? null) : null;
+
+  return (
+    <aside
+      aria-label="Workflow Inspector"
+      className="max-h-[58dvh] min-h-[260px] shrink-0 overflow-y-auto border-b border-paper-rule bg-paper-sunk px-4 py-3"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <SectionEyebrow>Inspector</SectionEyebrow>
+        <Badge variant={nodeReferences.ok ? "healthy" : "destructive"}>
+          {nodeReferences.ok ? "refs ok" : "refs issue"}
+        </Badge>
+      </div>
+
+      {data ? (
+        <div className="mt-3 space-y-3">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold">{data.label}</div>
+            <div className="mt-1 truncate font-mono text-[11px] text-ink-faint">
+              {data.id}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            <Badge
+              variant={data.kind === "missing" ? "destructive" : "outline"}
+            >
+              {data.kind}
+            </Badge>
+            {data.badges.map((badge) => (
+              <Badge key={badge} variant="secondary">
+                {badge}
+              </Badge>
+            ))}
+          </div>
+          <dl className="grid gap-2 text-xs">
+            <div className="grid grid-cols-[96px_minmax(0,1fr)] gap-2">
+              <dt className="font-mono uppercase text-ink-faint">Type</dt>
+              <dd className="min-w-0 truncate text-ink-soft">{data.type}</dd>
+            </div>
+            {typeof data.index === "number" && (
+              <div className="grid grid-cols-[96px_minmax(0,1fr)] gap-2">
+                <dt className="font-mono uppercase text-ink-faint">Order</dt>
+                <dd className="text-ink-soft">{data.index + 1}</dd>
+              </div>
+            )}
+          </dl>
+          {data.warning && (
+            <div className="border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+              {data.warning}
+            </div>
+          )}
+          {inspectedNode && (
+            <div
+              aria-label={`Inspector settings ${inspectedNode.id}`}
+              className="pt-1"
+            >
+              <NodeCard
+                {...nodeCardProps(
+                  inspectedNode,
+                  inspectedNodeIndex,
+                  nodes.length,
+                )}
+              />
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="mt-3 space-y-2">
+          <div className="text-sm font-semibold">
+            {workflow?.name ?? "No workflow selected"}
+          </div>
+          {workflow && (
+            <div className="flex flex-wrap gap-1.5">
+              <Badge
+                variant={
+                  workflow.status === "published" ? "healthy" : "outline"
+                }
+              >
+                {workflow.status}
+              </Badge>
+              <Badge variant="outline">v{workflow.version}</Badge>
+              <Badge variant="outline">{projection.nodes.length} nodes</Badge>
+              <Badge variant="outline">{projection.edges.length} edges</Badge>
+            </div>
+          )}
+        </div>
+      )}
+
+      {projection.warnings.length > 0 && (
+        <div className="mt-3 border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          {projection.warnings.length} reference warning
+          {projection.warnings.length === 1 ? "" : "s"}
+        </div>
+      )}
+    </aside>
+  );
+}
+
+function WorkflowNodePalette({
+  mcpTools,
+  agents,
+  firstMcpTool,
+  firstAvailableAgent,
+  onAdd,
+}: {
+  mcpTools: McpToolSummary[];
+  agents: AgentSummary[];
+  firstMcpTool: McpToolSummary | undefined;
+  firstAvailableAgent: AgentSummary | undefined;
+  onAdd: (payload: WorkflowPalettePayload) => void;
+}) {
+  const baseItems: Array<{ label: string; payload: WorkflowPalettePayload }> = [
+    { label: "Set", payload: { kind: "set" } },
+    { label: "Transform", payload: { kind: "transform" } },
+    { label: "If", payload: { kind: "if" } },
+    { label: "If Else", payload: { kind: "if_else" } },
+    { label: "Foreach", payload: { kind: "foreach" } },
+    { label: "Python", payload: { kind: "python" } },
+    { label: "Log", payload: { kind: "log" } },
+    { label: "Exit", payload: { kind: "exit" } },
+  ];
+
+  return (
+    <section
+      aria-label="Workflow Node Palette"
+      className="space-y-3 border border-paper-rule bg-paper-sunk p-3"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <SectionEyebrow>Node Palette</SectionEyebrow>
+        <Badge variant="outline">drag or click</Badge>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {baseItems.map((item) => (
+          <PaletteButton
+            key={item.label}
+            label={item.label}
+            payload={item.payload}
+            onAdd={onAdd}
+          />
+        ))}
+        <PaletteButton
+          label="MCP Tool"
+          payload={
+            firstMcpTool
+              ? {
+                  kind: "mcp",
+                  server: firstMcpTool.server,
+                  tool: firstMcpTool.tool,
+                }
+              : { kind: "mcp" }
+          }
+          disabled={!firstMcpTool}
+          title={
+            firstMcpTool
+              ? undefined
+              : "No MCP tools are available for workflows"
+          }
+          onAdd={onAdd}
+        />
+        <PaletteButton
+          label="Agent Call"
+          payload={
+            firstAvailableAgent
+              ? { kind: "agent", agentId: firstAvailableAgent.id }
+              : { kind: "agent" }
+          }
+          disabled={!firstAvailableAgent}
+          title={
+            firstAvailableAgent
+              ? undefined
+              : "No enabled agents are available for workflows"
+          }
+          onAdd={onAdd}
+        />
+      </div>
+      {mcpTools.length > 0 && (
+        <div className="grid gap-2">
+          <SectionEyebrow>MCP Tools</SectionEyebrow>
+          <div className="flex flex-wrap gap-2">
+            {mcpTools.map((tool) => (
+              <PaletteButton
+                key={`${tool.server}:${tool.tool}`}
+                label={`${tool.server}/${tool.tool}`}
+                payload={{
+                  kind: "mcp",
+                  server: tool.server,
+                  tool: tool.tool,
+                }}
+                title={tool.description}
+                onAdd={onAdd}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+      {agents.length > 0 && (
+        <div className="grid gap-2">
+          <SectionEyebrow>Agents</SectionEyebrow>
+          <div className="flex flex-wrap gap-2">
+            {agents.map((agent) => (
+              <PaletteButton
+                key={agent.id}
+                label={agent.name || agent.id}
+                payload={{ kind: "agent", agentId: agent.id }}
+                title={agent.role}
+                disabled={agent.instantMessagesEnabled === false}
+                onAdd={onAdd}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function PaletteButton({
+  label,
+  payload,
+  disabled = false,
+  title,
+  onAdd,
+}: {
+  label: string;
+  payload: WorkflowPalettePayload;
+  disabled?: boolean;
+  title?: string;
+  onAdd: (payload: WorkflowPalettePayload) => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="xs"
+      draggable={!disabled}
+      disabled={disabled}
+      title={title}
+      onClick={() => onAdd(payload)}
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = "copy";
+        event.dataTransfer.setData(
+          WORKFLOW_PALETTE_MIME,
+          JSON.stringify(payload),
+        );
+      }}
+    >
+      <Plus className="size-3" />
+      {label}
+    </Button>
+  );
+}
+
+function parseWorkflowPalettePayload(
+  value: string,
+): WorkflowPalettePayload | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!isRecord(parsed)) return null;
+    const kind = parsed["kind"];
+    if (!isWorkflowPaletteKind(kind)) return null;
+    return {
+      kind,
+      ...(typeof parsed["server"] === "string"
+        ? { server: parsed["server"] }
+        : {}),
+      ...(typeof parsed["tool"] === "string" ? { tool: parsed["tool"] } : {}),
+      ...(typeof parsed["agentId"] === "string"
+        ? { agentId: parsed["agentId"] }
+        : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isWorkflowPaletteKind(value: unknown): value is WorkflowPaletteKind {
+  return (
+    value === "set" ||
+    value === "transform" ||
+    value === "if" ||
+    value === "if_else" ||
+    value === "log" ||
+    value === "exit" ||
+    value === "foreach" ||
+    value === "python" ||
+    value === "mcp" ||
+    value === "agent"
+  );
+}
+
+function referenceEdgeKind(value: unknown): WorkflowReferenceEdgeKind | null {
+  return value === "then" || value === "else" || value === "body"
+    ? value
+    : null;
+}
+
+function referenceMutationMessage(reason: string): string {
+  if (reason === "source_node_not_found") return "Source node not found";
+  if (reason === "target_node_not_found") return "Target node not found";
+  if (reason === "self_reference_not_supported") {
+    return "A node cannot reference itself";
+  }
+  if (reason === "edge_kind_not_supported") {
+    return "This edge cannot be represented by workflow JSON";
+  }
+  return "Workflow edge could not be updated";
 }
 
 function WorkflowList({
@@ -2261,31 +2719,7 @@ function WorkflowList({
   );
 }
 
-function NodeCard({
-  node,
-  index,
-  canMoveUp,
-  canMoveDown,
-  onMoveUp,
-  onMoveDown,
-  onDelete,
-  onLabelChange,
-  onAssignmentTargetChange,
-  onAssignmentSourceChange,
-  onAssignmentModeChange,
-  onTransformConfigChange,
-  onBranchConfigChange,
-  onLogConfigChange,
-  onExitConfigChange,
-  onForeachConfigChange,
-  onPythonConfigChange,
-  mcpTools,
-  agents,
-  onMcpToolConfigChange,
-  onMcpToolSelect,
-  onMcpSchemaInputChange,
-  onAgentConfigChange,
-}: {
+type NodeCardProps = {
   node: WorkflowNode;
   index: number;
   canMoveUp: boolean;
@@ -2330,7 +2764,33 @@ function NodeCard({
     field: "agentId" | "prompt" | "input" | "timeoutMs",
     value: string,
   ) => void;
-}) {
+};
+
+function NodeCard({
+  node,
+  index,
+  canMoveUp,
+  canMoveDown,
+  onMoveUp,
+  onMoveDown,
+  onDelete,
+  onLabelChange,
+  onAssignmentTargetChange,
+  onAssignmentSourceChange,
+  onAssignmentModeChange,
+  onTransformConfigChange,
+  onBranchConfigChange,
+  onLogConfigChange,
+  onExitConfigChange,
+  onForeachConfigChange,
+  onPythonConfigChange,
+  mcpTools,
+  agents,
+  onMcpToolConfigChange,
+  onMcpToolSelect,
+  onMcpSchemaInputChange,
+  onAgentConfigChange,
+}: NodeCardProps) {
   const Icon = iconForNode(node.type);
   const assignments = assignmentSummaries(node.assign);
   const primaryAssignment = primaryAssignmentControl(node.assign);
@@ -3028,7 +3488,7 @@ function RunConsole({
   return (
     <aside
       aria-label="Run Console"
-      className="min-h-0 overflow-y-auto bg-paper"
+      className="min-h-0 flex-1 overflow-y-auto bg-paper"
     >
       <div className="sticky top-0 z-10 border-b border-paper-rule bg-paper px-4 py-3">
         <div className="flex items-center justify-between gap-3">
@@ -3881,6 +4341,7 @@ interface WorkflowImportValue {
   inputSchema: JsonValue | null;
   triggers: JsonValue[];
   nodes: WorkflowNode[];
+  ui: WorkflowDefinitionUi | null;
 }
 
 function parseWorkflowImport(
@@ -3932,6 +4393,8 @@ function parseWorkflowImport(
   if (!nodeShape.ok) return { ok: false, error: nodeShape.message };
   const references = validateNodeReferences(workflowNodes);
   if (!references.ok) return { ok: false, error: references.message };
+  const ui = parseWorkflowDefinitionUi(workflow.ui);
+  if (!ui.ok) return ui;
   return {
     ok: true,
     value: {
@@ -3940,6 +4403,7 @@ function parseWorkflowImport(
       inputSchema,
       triggers,
       nodes: workflowNodes,
+      ui: ui.value,
     },
   };
 }
@@ -4338,147 +4802,6 @@ function parseOptionalTimeoutMs(
   return timeoutMs;
 }
 
-function templateNode(
-  kind:
-    | "set"
-    | "transform"
-    | "if"
-    | "if_else"
-    | "log"
-    | "exit"
-    | "foreach"
-    | "python"
-    | "mcp"
-    | "agent",
-  index: number,
-  tool?: McpToolSummary | AgentSummary,
-) {
-  const suffix = String(index).padStart(2, "0");
-  if (kind === "set") {
-    return {
-      id: `set_${suffix}`,
-      type: "builtin.set",
-      assign: { value: "$.input.value" },
-    };
-  }
-  if (kind === "transform") {
-    return {
-      id: `transform_${suffix}`,
-      type: "builtin.transform",
-      input: { value: "$.context.value" },
-      transform: "$.context.value",
-      assign: {
-        value: { from: `$.steps.transform_${suffix}.output`, mode: "replace" },
-      },
-    };
-  }
-  if (kind === "if") {
-    return {
-      id: `if_${suffix}`,
-      type: "builtin.if",
-      condition: "$.input.enabled == true",
-      then: [],
-    };
-  }
-  if (kind === "if_else") {
-    return {
-      id: `if_else_${suffix}`,
-      type: "builtin.if_else",
-      condition: "$.input.enabled == true",
-      then: [],
-      else: [],
-    };
-  }
-  if (kind === "log") {
-    return {
-      id: `log_${suffix}`,
-      type: "builtin.log.info",
-      message: "Workflow log",
-      payload: "$.context",
-    };
-  }
-  if (kind === "foreach") {
-    return {
-      id: `foreach_${suffix}`,
-      type: "builtin.foreach",
-      items: "$.input.items",
-      itemVar: "item",
-      body: [],
-      concurrency: 1,
-    };
-  }
-  if (kind === "python") {
-    return {
-      id: `python_${suffix}`,
-      type: "builtin.python",
-      input: { value: "$.input.value" },
-      code: "output = input.get('value')",
-      timeoutMs: 30000,
-      assign: {
-        pythonResult: {
-          from: `$.steps.python_${suffix}.output.value`,
-          mode: "replace",
-        },
-      },
-    };
-  }
-  if (kind === "mcp") {
-    const mcpTool = isMcpToolSummary(tool) ? tool : undefined;
-    const server = mcpTool?.server ?? "server";
-    const toolName = mcpTool?.tool ?? "tool";
-    const id = `mcp_${safeIdSegment(server)}_${safeIdSegment(toolName)}_${suffix}`;
-    return {
-      id,
-      type: "mcp.tool",
-      server,
-      tool: toolName,
-      input: {},
-      assign: {
-        [safeIdSegment(`${server}_${toolName}`)]: {
-          from: `$.steps.${id}.output`,
-          mode: "replace",
-        },
-      },
-    };
-  }
-  if (kind === "agent") {
-    const agent = isAgentSummary(tool) ? tool : undefined;
-    const agentId = agent?.id ?? "agent";
-    const id = `agent_${safeIdSegment(agentId)}_${suffix}`;
-    return {
-      id,
-      type: "agent.call",
-      agentId,
-      prompt: "Review workflow input",
-      input: {},
-      assign: {
-        [safeIdSegment(`${agentId}_result`)]: {
-          from: `$.steps.${id}.output`,
-          mode: "replace",
-        },
-      },
-    };
-  }
-  return {
-    id: `exit_${suffix}`,
-    type: "builtin.exit",
-    status: "succeeded",
-    output: "$.context",
-  };
-}
-
-function isMcpToolSummary(value: unknown): value is McpToolSummary {
-  return (
-    isRecord(value) &&
-    typeof value["server"] === "string" &&
-    typeof value["tool"] === "string"
-  );
-}
-
-function isAgentSummary(value: unknown): value is AgentSummary {
-  return isRecord(value) && typeof value["id"] === "string";
-}
-
 function deriveTriggerSummaries(
   triggers: JsonValue[],
 ): WorkflowTriggerSummary[] {
@@ -4542,11 +4865,6 @@ function triggerEnabledChecked(trigger: WorkflowTriggerSummary): boolean {
 
 function triggerEnabledEditable(trigger: WorkflowTriggerSummary): boolean {
   return trigger.kind === "scheduled" || trigger.kind === "webhook";
-}
-
-function safeIdSegment(value: string): string {
-  const segment = value.replace(/[^A-Za-z0-9_]+/g, "_").replace(/^_+/, "");
-  return segment || "tool";
 }
 
 function iconForNode(type: string) {

@@ -201,6 +201,35 @@ export type WorkflowAssignmentMap = z.infer<typeof WorkflowAssignmentMapSchema>;
 const NodeIdSchema = z.string().min(1);
 const InputMapSchema = z.record(z.string(), JsonValueSchema).optional();
 
+export const WorkflowCanvasPositionSchema = z
+  .object({
+    x: z.number().finite(),
+    y: z.number().finite(),
+  })
+  .strict();
+export type WorkflowCanvasPosition = z.infer<
+  typeof WorkflowCanvasPositionSchema
+>;
+
+export const WorkflowCanvasNodeUiSchema = z
+  .object({
+    position: WorkflowCanvasPositionSchema,
+  })
+  .strict();
+export type WorkflowCanvasNodeUi = z.infer<typeof WorkflowCanvasNodeUiSchema>;
+
+export const WorkflowDefinitionUiSchema = z
+  .object({
+    canvas: z
+      .object({
+        nodes: z.record(NodeIdSchema, WorkflowCanvasNodeUiSchema).default({}),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type WorkflowDefinitionUi = z.infer<typeof WorkflowDefinitionUiSchema>;
+
 const AssignableNodeBase = {
   id: NodeIdSchema,
   label: z.string().min(1).optional(),
@@ -336,6 +365,7 @@ export const WorkflowDefinitionSchema = z
       .array(WorkflowTriggerSchema)
       .default([{ id: "manual", kind: "manual", enabled: true }]),
     nodes: z.array(WorkflowNodeSchema),
+    ui: WorkflowDefinitionUiSchema.optional(),
     createdAt: z.string().datetime({ offset: true }),
     updatedAt: z.string().datetime({ offset: true }),
   })

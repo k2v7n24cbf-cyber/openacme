@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { WorkflowStore } from "@openacme/db";
 import {
   JsonValueSchema,
+  WorkflowDefinitionUiSchema,
   WorkflowNodeSchema,
   WorkflowRunner,
   WorkflowTriggerSchema,
@@ -29,6 +30,7 @@ const WorkflowCreateBodySchema = z
     inputSchema: JsonValueSchema.optional(),
     triggers: z.array(WorkflowTriggerSchema).optional(),
     nodes: z.array(WorkflowNodeSchema).optional(),
+    ui: WorkflowDefinitionUiSchema.optional(),
   })
   .strict();
 
@@ -39,6 +41,7 @@ const WorkflowUpdateBodySchema = z
     inputSchema: JsonValueSchema.nullable().optional(),
     triggers: z.array(WorkflowTriggerSchema).optional(),
     nodes: z.array(WorkflowNodeSchema).optional(),
+    ui: WorkflowDefinitionUiSchema.nullable().optional(),
   })
   .strict();
 

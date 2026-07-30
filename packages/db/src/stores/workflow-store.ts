@@ -35,6 +35,7 @@ export interface WorkflowDraftInput {
   inputSchema?: JsonValue;
   triggers?: WorkflowTrigger[];
   nodes?: WorkflowNode[];
+  ui?: WorkflowDefinition["ui"];
   now?: string;
 }
 
@@ -44,6 +45,7 @@ export interface WorkflowDraftUpdate {
   inputSchema?: JsonValue | null;
   triggers?: WorkflowTrigger[];
   nodes?: WorkflowNode[];
+  ui?: WorkflowDefinition["ui"] | null;
   now?: string;
 }
 
@@ -196,16 +198,17 @@ export function createWorkflowStore(
         inputSchema: input.inputSchema,
         triggers: input.triggers,
         nodes: input.nodes ?? [],
+        ui: input.ui,
         createdAt: now,
         updatedAt: now,
       });
       db.prepare(
         `INSERT INTO workflow_definitions
          (id, status, current_version, name, description, input_schema_json,
-          triggers_json, nodes_json, created_at, updated_at)
+          triggers_json, nodes_json, ui_json, created_at, updated_at)
          VALUES
          (@id, @status, @currentVersion, @name, @description, @inputSchemaJson,
-          @triggersJson, @nodesJson, @createdAt, @updatedAt)`,
+          @triggersJson, @nodesJson, @uiJson, @createdAt, @updatedAt)`,
       ).run(definitionToParams(definition));
       return definition;
     },
@@ -248,6 +251,7 @@ export function createWorkflowStore(
             : (patch.inputSchema ?? current.inputSchema),
         triggers: patch.triggers ?? current.triggers,
         nodes: patch.nodes ?? current.nodes,
+        ui: patch.ui === null ? undefined : (patch.ui ?? current.ui),
         updatedAt: patch.now ?? new Date().toISOString(),
       });
       db.prepare(
@@ -258,6 +262,7 @@ export function createWorkflowStore(
              input_schema_json = @inputSchemaJson,
              triggers_json = @triggersJson,
              nodes_json = @nodesJson,
+             ui_json = @uiJson,
              updated_at = @updatedAt
          WHERE id = @id`,
       ).run({
@@ -268,6 +273,7 @@ export function createWorkflowStore(
         inputSchemaJson: maybeStringify(updated.inputSchema),
         triggersJson: stringify(updated.triggers),
         nodesJson: stringify(updated.nodes),
+        uiJson: maybeStringify(updated.ui),
         updatedAt: updated.updatedAt,
       });
       return updated;
@@ -300,10 +306,10 @@ export function createWorkflowStore(
         db.prepare(
           `INSERT INTO workflow_versions
            (workflow_id, version, name, description, input_schema_json,
-            triggers_json, nodes_json, created_at)
+            triggers_json, nodes_json, ui_json, created_at)
            VALUES
            (@workflowId, @version, @name, @description, @inputSchemaJson,
-            @triggersJson, @nodesJson, @createdAt)`,
+            @triggersJson, @nodesJson, @uiJson, @createdAt)`,
         ).run(versionToParams(published, now));
         db.prepare(
           `UPDATE workflow_definitions
@@ -797,6 +803,7 @@ function definitionToParams(def: WorkflowDefinition) {
     inputSchemaJson: maybeStringify(def.inputSchema),
     triggersJson: stringify(def.triggers),
     nodesJson: stringify(def.nodes),
+    uiJson: maybeStringify(def.ui),
     createdAt: def.createdAt,
     updatedAt: def.updatedAt,
   };
@@ -811,6 +818,7 @@ function versionToParams(def: WorkflowDefinition, createdAt: string) {
     inputSchemaJson: maybeStringify(def.inputSchema),
     triggersJson: stringify(def.triggers),
     nodesJson: stringify(def.nodes),
+    uiJson: maybeStringify(def.ui),
     createdAt,
   };
 }
@@ -844,6 +852,7 @@ function definitionFromRow(row: WorkflowDefinitionRaw): WorkflowDefinition {
     inputSchema: parseOptionalJson(row.input_schema_json),
     triggers: parseJson(row.triggers_json),
     nodes: parseJson(row.nodes_json),
+    ui: parseOptionalJson(row.ui_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   });
@@ -859,6 +868,7 @@ function definitionFromVersionRow(row: WorkflowVersionRaw): WorkflowDefinition {
     inputSchema: parseOptionalJson(row.input_schema_json),
     triggers: parseJson(row.triggers_json),
     nodes: parseJson(row.nodes_json),
+    ui: parseOptionalJson(row.ui_json),
     createdAt: row.created_at,
     updatedAt: row.created_at,
   });
@@ -1319,6 +1329,7 @@ interface WorkflowDefinitionRaw {
   input_schema_json: string | null;
   triggers_json: string;
   nodes_json: string;
+  ui_json: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -1331,6 +1342,7 @@ interface WorkflowVersionRaw {
   input_schema_json: string | null;
   triggers_json: string;
   nodes_json: string;
+  ui_json: string | null;
   created_at: string;
 }
 

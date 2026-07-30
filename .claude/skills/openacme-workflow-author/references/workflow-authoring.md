@@ -41,6 +41,25 @@ Minimum workflow definition:
 Ids must match `[A-Za-z0-9][A-Za-z0-9_.-]*`. Use stable ids because branch
 references, assignments, run history, and step output paths depend on them.
 
+Optional visual layout metadata:
+
+```json
+{
+  "ui": {
+    "canvas": {
+      "nodes": {
+        "set_customer": { "position": { "x": 120, "y": 80 } }
+      }
+    }
+  }
+}
+```
+
+Agents should omit `ui` unless they are preserving or intentionally updating
+visual layout. The runner ignores `ui`; execution order, branch/foreach
+references, triggers, assignments, MCP calls, agent calls, and Python execution
+come only from `triggers` and `nodes`.
+
 ## Trigger Types
 
 Manual:
@@ -373,6 +392,8 @@ Every human UI operation must have an agent path:
 
 - Human **New**: agent calls `POST /api/workflows`.
 - Human **Edit cards / JSON**: agent edits the workflow definition JSON.
+- Human canvas drag/layout: agent may preserve or update optional
+  `ui.canvas.nodes.<nodeId>.position`, but usually omits `ui`.
 - Human MCP tool picker/inventory: agent calls `GET /api/workflows/mcp/tools`.
 - Human agent picker/inventory: agent calls `GET /api/workflows/agents`.
 - Human **Save**: agent calls `PATCH /api/workflows/:workflowId`.
@@ -402,6 +423,9 @@ Draft update:
 ```http
 PATCH /api/workflows/:workflowId
 ```
+
+`PATCH /api/workflows/:workflowId` accepts optional `ui` metadata. Send
+`ui: null` to clear visual layout without changing execution behavior.
 
 MCP tool inventory:
 

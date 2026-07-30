@@ -10348,6 +10348,715 @@ First workflow release audit record - 2026-07-30:
     Port `3456` remained occupied by pre-existing PID `92084`; this release
     audit did not use it.
 
+## Post-Release UI Hardening - Workflow Canvas Authoring
+
+Status: planned after the first workflow release. The current structured card
+editor remains a working fallback, but the primary human authoring experience
+should move to a drag-and-drop flow designer.
+
+### Milestone 9 - Canvas Authoring UI
+
+Goal: make workflow authoring understandable from the first screen by replacing
+the dense vertical card/JSON-first editor with a visual flow canvas, while
+keeping the runtime, API, persistence, and agent-authoring contracts stable.
+
+Product shape:
+
+- The center of `/workflows` becomes a drag-and-drop graph canvas.
+- The left side exposes workflow selection plus an add-node palette for manual
+  trigger, MCP tool, agent call, and flow-control nodes.
+- Selecting a canvas node opens a right-side inspector with all settings for
+  that node.
+- The right side keeps run debugging available through an `Inspector` /
+  `Run Console` tab model, or an equivalent split that never hides run history
+  and selected-step evidence.
+- JSON remains available only as an Advanced/Debug editor and import/export
+  fallback.
+- Operators can create, edit, save, publish, test-run, live-run, cancel, rerun,
+  and inspect historical runs without reading raw JSON.
+
+Architecture decisions:
+
+- Use the existing web dependencies:
+  - `@xyflow/react` for canvas, handles, viewport controls, minimap, selection,
+    and keyboard interaction.
+  - `@dagrejs/dagre` for deterministic auto-layout.
+  - Existing `@dnd-kit/*` packages only where palette or sortable fallback
+    interactions need them.
+- Treat the workflow definition as the canonical source of truth. Canvas nodes
+  and edges are a projection over `definition.nodes`, trigger definitions,
+  branch references, foreach body references, and node order.
+- Do not change runner semantics for this milestone. Sequential execution
+  remains driven by the canonical node array unless a node kind already owns
+  branch/body references.
+- Start without persistent layout metadata. M9.1 derives positions
+  deterministically so the first slice has no schema or storage blast radius.
+- If persistent layout becomes necessary, add it later as optional UI metadata
+  only after schema, API, import/export, and backward-compatibility tests are in
+  place. Candidate shape:
+  `definition.ui.canvas.nodes[nodeId].position = { x, y }`.
+- Extract graph conversion and edit operations into pure helpers before wiring
+  React state:
+  - workflow definition -> canvas nodes/edges
+  - canvas selection -> inspector model
+  - inspector edits -> canonical node patch
+  - edge edits -> canonical branch/body reference patch
+  - reorder edits -> canonical node array patch
+- Preserve API parity for agents. Agents should keep creating and inspecting
+  workflows through REST/import-export and the workflow authoring skill, not
+  through Playwright-driven UI automation.
+
+Non-goals:
+
+- No new workflow runtime graph engine in M9.
+- No change to MCP execution, agent-call execution, Python execution, trigger
+  dispatch, artifact storage, cancellation, or run history semantics.
+- No removal of the current JSON editor until the canvas has save/test/publish
+  parity.
+- No Playwright requirement for automated agents to author workflows.
+- No broad redesign of the global app navigation.
+
+### M9.0 - Canvas Plan And Test Harness
+
+Goal: create the implementation checklist and test fixtures before touching the
+editor behavior.
+
+Scope:
+
+- Add this plan to the canonical workflow plan.
+- Identify representative fixture workflows for linear, if, if-else, foreach,
+  MCP, agent-call, Python, set, transform, log, and exit nodes.
+- Decide the non-3456 local test ports for UI and deployed validation. Default
+  remains Playwright on `3998` and deployed workflow validation on `3458`.
+
+TDD / validation:
+
+- No product code change is required for this slice.
+- Before M9.1 code starts, add or identify fixtures that can be reused by unit
+  tests and Playwright specs.
+
+Acceptance:
+
+- The next slice can start with a testable canvas projection contract.
+- The plan explicitly protects deployed validation from using port `3456`.
+
+### M9.1 - Read-Only Canvas Projection
+
+Goal: show the current workflow definition as a visual graph without changing
+save behavior yet.
+
+Scope:
+
+- Add pure graph helpers under the web workflow route/component boundary.
+- Render an `@xyflow/react` canvas from the selected workflow's parsed
+  definition.
+- Auto-layout nodes with Dagre.
+- Show distinct node shells for:
+  - manual trigger
+  - `builtin.set`
+  - `builtin.transform`
+  - `builtin.log.info`, `builtin.log.debug`, `builtin.log.error`
+  - `builtin.exit`
+  - `builtin.python`
+  - `mcp.tool`
+  - `agent.call`
+  - `if`
+  - `ifElse`
+  - `foreach`
+- Selecting a canvas node opens an inspector shell in the right panel.
+- Keep the existing card editor and JSON editor available while the canvas is
+  read-only.
+
+TDD / validation:
+
+- Unit tests for graph conversion:
+  - linear workflow creates sequential edges
+  - if node creates branch edge(s) to configured targets
+  - if-else node creates true/false edges
+  - foreach node creates body edges
+  - missing references are surfaced as invalid canvas edges or warnings, not
+    silent drops
+- Web typecheck and build.
+- Playwright against a non-3456 port verifies:
+  - `/workflows` opens
+  - representative workflow nodes are visible on the canvas
+  - selecting MCP, agent, if-else, foreach, and Python nodes switches the right
+    panel to the matching inspector shell
+  - existing save/test/run-console flows still work through the old controls
+
+Acceptance:
+
+- A human can understand the workflow topology without opening raw JSON.
+- No workflow definition changes are produced by merely opening or selecting on
+  the canvas.
+
+Validation record - 2026-07-30:
+
+- Implemented read-only workflow canvas projection without changing workflow
+  save, publish, test-run, live-run, trigger-run, run history, or runner
+  behavior.
+- Added pure graph projection helper under `apps/web/app/workflows/graph.ts`:
+  - derives trigger, sequential, branch, if-else, foreach, and missing-ref
+    canvas edges from the canonical workflow draft
+  - uses Dagre for deterministic layout
+  - creates placeholder nodes for missing references so the visual graph does
+    not silently drop invalid branch/body targets
+- Added `WorkflowCanvas` under `apps/web/app/workflows/canvas.tsx`, using the
+  existing `@xyflow/react` dependency and the app's existing React Flow styling
+  pattern.
+- Integrated `/workflows` with:
+  - center read-only canvas section
+  - selected canvas node state
+  - right-side `Workflow Inspector` shell
+  - existing `Run Console` retained in the same right column
+  - existing card editor and JSON editor still available as the editable path
+    for this slice
+- Added Playwright coverage for a representative workflow containing manual
+  trigger, if-else, MCP, agent-call, foreach, Python, and exit nodes.
+- Focused validation:
+  - `pnpm --filter web test -- workflow-graph.test.ts` - passed, 5 Vitest
+    tests.
+  - `pnpm --filter web check-types` - passed.
+  - `pnpm --filter web build` - passed with the existing large chunk warnings.
+  - `env OPENACME_E2E_PORT=4000 pnpm --dir apps/web exec playwright test workflows.spec.ts`
+    - passed outside the sandbox, 14 Chromium tests, including the new canvas
+      smoke and the existing save/test/run-console flows.
+- Sandbox note:
+  - Playwright could not bind `127.0.0.1:3998` inside the restricted sandbox
+    (`listen EPERM`), so UI validation was rerun outside the sandbox on
+    non-production test ports.
+  - Port `3456` and `~/.openacme` were not used.
+- Status: complete for M9.1 read-only canvas projection. Full inspector
+  editing parity, drag/drop creation, edge editing, run overlays, and persisted
+  layout remain M9.2-M9.6 scope.
+
+### M9.2 - Inspector Editing Parity
+
+Goal: make the right-side inspector the primary place for node settings.
+
+Scope:
+
+- Move or extract the existing card setting controls into reusable inspector
+  sections.
+- Support full edit parity for:
+  - node id and label where allowed
+  - input expressions
+  - assignment targets and overwrite behavior
+  - transform output variable selection, including writing back to the same
+    variable
+  - MCP server/tool selection and schema-derived input rows
+  - agent selection, prompt/input mapping, and output assignment
+  - Python code, timeout, input, output assignment, and error/cancel behavior
+  - if/if-else conditions and target refs
+  - foreach item source, item variable, body nodes/refs, and summary variable
+  - log level/message/input mapping
+  - exit result/status
+- Add workflow-level inspector state when no node is selected for name,
+  description, triggers, publish/test metadata, and validation warnings.
+- Demote the vertical card editor to an Advanced fallback or remove it from the
+  primary visual path only after parity tests pass.
+
+TDD / validation:
+
+- Unit tests for inspector patch helpers so edits update the canonical
+  workflow JSON exactly as the old card controls did.
+- Playwright edits each representative node kind from the inspector, saves,
+  reloads, and verifies the value survived.
+- API route tests remain unchanged; no runner behavior should change.
+- Web typecheck and build.
+- Deployed UI smoke against
+  `OPENACME_DATA_DIR=/Users/alenbohcelyan/.openacme-the-workflow` and
+  `OPENACME_PORT=3458` creates/edits/saves a workflow through the canvas
+  inspector, then runs a test execution.
+
+Acceptance:
+
+- Clicking any canvas node shows all settings for that node on the right.
+- A normal workflow can be authored and test-run without touching JSON.
+- The run console remains available and can still reopen historical test/live
+  runs.
+
+Validation record - 2026-07-30, node-settings parity sub-slice:
+
+- Implemented selected-node inspector editing without changing workflow
+  runtime, REST API, persistence shape, trigger dispatch, or run history.
+- Refactored the existing node card control surface into shared typed
+  `NodeCardProps`, so the old vertical card editor and the new right-side
+  inspector use the same update functions against canonical `nodesDraft`.
+- When a step node is selected on the canvas, `Workflow Inspector` now renders
+  the full editable settings surface for that node:
+  - label
+  - assignment target/source/mode
+  - transform input/transform JSON
+  - if/if-else condition and target refs
+  - log level/message/payload
+  - exit status/output
+  - foreach item source/item var/body/concurrency
+  - Python input/code/timeout/reset
+  - MCP server/tool/timeout/schema input/input JSON
+  - agent id/prompt/timeout/picker/input JSON
+- Kept the existing card editor and JSON editor in place for this sub-slice;
+  M9.3+ will continue moving creation/reorder/edge editing toward the canvas.
+- Extended `packages/server/test/e2e/support/boot-web.mjs` so deployed UI
+  smokes can run against a caller-provided data dir without the Playwright
+  teardown deleting that shared test environment.
+- Added Playwright coverage that selects canvas nodes, edits settings from the
+  right inspector, saves, and verifies the persisted workflow definition via
+  `GET /api/workflows/:id`.
+- Focused validation:
+  - `pnpm --filter web test -- workflow-graph.test.ts` - passed, 5 Vitest
+    tests.
+  - `pnpm --filter web check-types` - passed.
+  - `pnpm --filter web build` - passed with the existing large chunk warnings.
+  - `env OPENACME_E2E_PORT=4001 pnpm --dir apps/web exec playwright test workflows.spec.ts -g "edits selected workflow canvas"`
+    - passed outside the sandbox, 1 Chromium test.
+  - `env OPENACME_E2E_PORT=4003 pnpm --dir apps/web exec playwright test workflows.spec.ts`
+    - passed outside the sandbox, 15 Chromium tests.
+- Deployed test-environment validation:
+  - `curl -sS --max-time 2 http://127.0.0.1:3458/api/health` failed before
+    the smoke, proving no pre-existing listener was reused.
+  - `env OPENACME_E2E_PORT=3458 OPENACME_E2E_DATA_DIR=/Users/alenbohcelyan/.openacme-the-workflow pnpm --dir apps/web exec playwright test workflows.spec.ts -g "edits selected workflow canvas"`
+    - passed outside the sandbox, 1 Chromium test, using the test data dir.
+  - A post-smoke `curl -sS --max-time 2 http://127.0.0.1:3458/api/health`
+    failed, proving the deployed smoke server stopped.
+  - Port `3456` and production `~/.openacme` were not used.
+- Status: complete for selected-node inspector setting parity. Workflow-level
+  inspector controls and demoting the old vertical cards further remain
+  follow-up UI polish, while drag/drop creation, edge editing, run overlays,
+  and persisted layout remain M9.3-M9.6 scope.
+
+### M9.3 - Palette Drag/Drop And Node Ordering
+
+Goal: let a human create workflow structure directly from the canvas.
+
+Scope:
+
+- Add a node palette for trigger, MCP tool, agent call, Python, set,
+  transform, logs, exit, if, if-else, and foreach.
+- Dragging from the palette onto the canvas creates a valid draft node with a
+  generated id and sensible defaults.
+- Provide click-to-add fallback for keyboard and test stability.
+- Support reordering linear execution nodes from the canvas.
+- Keep branch/body membership explicit; do not infer branch semantics from
+  arbitrary spatial placement.
+
+TDD / validation:
+
+- Unit tests for node creation defaults and id generation.
+- Unit tests for reorder operations preserving existing branch/body references.
+- Playwright creates a workflow by adding set, transform, MCP, agent-call,
+  if-else, foreach, log, and exit nodes from the palette.
+- Save, reload, publish, test-run, and inspect the run detail.
+
+Acceptance:
+
+- Canvas creation is functionally equivalent to old card append actions.
+- Drag/drop is useful, but every creation operation also has a deterministic
+  non-drag path for accessibility and agent-free test automation.
+
+Validation record - 2026-07-30, palette/order sub-slice:
+
+- Implemented a workflow node palette in the authoring UI for set, transform,
+  if, if-else, foreach, Python, log, exit, first available MCP tool, first
+  available agent, and explicit MCP/agent inventory entries.
+- Added deterministic click-to-add plus HTML drag payload/drop handling. The
+  automated browser coverage exercises click-to-add; the drop handler uses the
+  same typed palette payload path and remains a later hardening target for
+  native browser drag gesture coverage.
+- Extracted pure authoring helpers in `apps/web/app/workflows/authoring.ts` for
+  generated node defaults, safe id segments, MCP/agent inventory guards, append,
+  and reorder behavior.
+- Added canvas selected-node ordering controls with explicit up/down buttons.
+  Reorder mutates canonical node order while preserving branch/body reference
+  strings.
+- Added `Workflow Node Cards` semantics so tests and assistive tooling can
+  distinguish the fallback card editor from the right inspector, now that both
+  render the same setting controls.
+- Hardened `packages/server/test/e2e/support/boot-web.mjs` for persistent test
+  data dirs:
+  - caller-provided `OPENACME_E2E_DATA_DIR` is still preserved after test runs.
+  - existing `e2e@example.com` members are reused instead of recreated.
+  - existing seeded agents are treated as successful seed state.
+- Added Playwright coverage that creates a workflow from the palette, edits MCP
+  input from the inspector, reorders the selected log node from the canvas,
+  saves, verifies persisted node order through `GET /api/workflows/:id`,
+  publishes, runs a test execution, and verifies the run console reports
+  `succeeded`.
+- Focused validation:
+  - `pnpm --filter web test -- workflow-authoring.test.ts workflow-graph.test.ts`
+    - passed, 9 Vitest tests.
+  - `pnpm --filter web check-types` - passed.
+  - `pnpm --filter web build` - passed with the existing large chunk warnings.
+  - `env OPENACME_E2E_PORT=4011 pnpm --dir apps/web exec playwright test workflows.spec.ts -g "creates workflow nodes from canvas palette"`
+    - passed outside the sandbox, 1 Chromium test.
+- Regression validation:
+  - `env OPENACME_E2E_PORT=4010 pnpm --dir apps/web exec playwright test workflows.spec.ts`
+    - passed outside the sandbox, 16 Chromium tests.
+- Deployed test-environment validation:
+  - `curl -sS --max-time 2 http://127.0.0.1:3458/api/health` failed before
+    the smoke, proving no pre-existing listener was reused.
+  - `env OPENACME_E2E_PORT=3458 OPENACME_E2E_DATA_DIR=/Users/alenbohcelyan/.openacme-the-workflow pnpm --dir apps/web exec playwright test workflows.spec.ts -g "creates workflow nodes from canvas palette"`
+    - passed outside the sandbox, 1 Chromium test, using the persistent test
+      data dir.
+  - A post-smoke `curl -sS --max-time 2 http://127.0.0.1:3458/api/health`
+    failed, proving the deployed smoke server stopped.
+  - Port `3456` and production `~/.openacme` were not used.
+- Status: complete for M9.3 palette creation and selected-node ordering.
+  Visual edge editing, branch/body edge mutation, run overlays, and persisted
+  layout remain M9.4-M9.6 scope.
+
+### M9.4 - Edge Editing For Branch And Loop References
+
+Goal: make flow-control references editable visually without turning the
+runtime into a free-form graph engine.
+
+Scope:
+
+- Sequential edges remain derived from canonical node order.
+- If/if-else handles edit configured target refs.
+- Foreach handles edit body entry/body membership according to the existing
+  foreach model.
+- Invalid or missing references are shown inline on the canvas and in the
+  inspector validation section.
+- Save is blocked or warned according to the existing definition validation
+  behavior.
+
+TDD / validation:
+
+- Unit tests for edge-to-definition mutation:
+  - connect true branch
+  - connect false branch
+  - reconnect branch
+  - remove branch target
+  - connect foreach body reference
+  - reject edge kinds that cannot be represented by the canonical schema
+- Playwright connects an if-else workflow visually, saves, publishes, runs, and
+  verifies the expected branch step executed.
+
+Acceptance:
+
+- Branch and foreach wiring can be changed from the canvas.
+- The saved definition remains valid canonical workflow JSON.
+- The UI does not imply unsupported arbitrary graph execution.
+
+Validation record - 2026-07-31, visual edge-editing sub-slice:
+
+- Added a pure edge mutation helper in `apps/web/app/workflows/edges.ts` that
+  updates canonical workflow JSON for `then`, `else`, and `body` references.
+  It rejects self references, missing endpoints, and edge kinds that cannot be
+  represented by the existing workflow schema.
+- Extended the graph projection so if/if-else/foreach nodes expose explicit
+  source handles. Sequential edges are still derived from node order; only
+  branch and foreach reference edges are mutable from the canvas.
+- Extended `WorkflowCanvas` with source/target handles, deterministic
+  click-to-wire behavior, React Flow connect support, selected-edge state, and
+  selected-edge removal. The automated UI coverage uses click-to-wire because
+  native pointer drag between handles was not reliable enough in Playwright,
+  but both paths route through the same route-level reference mutation adapter.
+- Route behavior now updates `nodesDraft`, selects the source node, and keeps
+  edge deletion scoped to canonical branch/foreach references. Missing
+  references continue to render as invalid visual edges and remain governed by
+  existing definition validation.
+- Added Playwright coverage that visually wires an if-else node from the canvas,
+  saves, verifies persisted canonical JSON through `/api/workflows/:id`,
+  publishes, test-runs with the false branch, and verifies persisted run detail:
+  `branch` and `auto_approve` succeed while `manual_review` is skipped.
+
+Validation:
+
+- `pnpm --filter web test -- workflow-edges.test.ts workflow-authoring.test.ts workflow-graph.test.ts`
+  - passed, 3 files / 15 tests.
+- `pnpm --filter web check-types`
+  - passed.
+- `pnpm --filter web build`
+  - passed.
+- `env OPENACME_E2E_PORT=4017 pnpm --dir apps/web exec playwright test workflows.spec.ts -g "edits selected workflow canvas node settings from inspector"`
+  - passed, 1 Chromium test. This verifies the selected-edge controls do not
+    intercept normal node selection.
+- `env OPENACME_E2E_PORT=4018 pnpm --dir apps/web exec playwright test workflows.spec.ts`
+  - passed, 17 Chromium tests.
+- `curl -sS --max-time 2 http://127.0.0.1:3458/api/health`
+  - failed before the deployed smoke, confirming the isolated test port was not
+    already occupied.
+- `env OPENACME_E2E_PORT=3458 OPENACME_E2E_DATA_DIR=/Users/alenbohcelyan/.openacme-the-workflow pnpm --dir apps/web exec playwright test workflows.spec.ts -g "connects if-else branch references visually"`
+  - passed, 1 Chromium test against the isolated workflow runtime data dir.
+- `curl -sS --max-time 2 http://127.0.0.1:3458/api/health`
+  - failed after the deployed smoke, confirming no listener was left behind.
+- Production `~/.openacme` and port `3456` were not used.
+
+Status: complete for M9.4 visual branch/loop reference editing. Persisted
+layout and run overlays remain M9.5-M9.6 scope.
+
+### M9.5 - Run Overlay On Canvas
+
+Goal: connect authoring and debugging by showing run state directly on the
+graph.
+
+Scope:
+
+- During test/live runs, map step traces back to canvas nodes.
+- Show node-level state badges for pending, running, succeeded, failed,
+  canceled, skipped, and timed out where those states exist in the trace.
+- Selecting a run step selects the matching canvas node when possible.
+- Selecting a canvas node while a run is loaded opens input, output, error,
+  context diff, artifacts, logs, and timing in the Run Console tab.
+- Preserve the global run history list and filters.
+
+TDD / validation:
+
+- Unit tests for trace-to-node-status mapping.
+- Playwright starts a successful test run and verifies succeeded node badges.
+- Playwright starts a failing test run and verifies the failed node badge plus
+  selected-step input/output/error details.
+- Existing `workflow-runs.spec.ts` remains green.
+
+Acceptance:
+
+- A failed run can be diagnosed from the visual flow without losing the
+  step-by-step evidence view.
+- Historical runs can still be reopened and inspected exactly as before.
+
+Validation record - 2026-07-31, run-status overlay sub-slice:
+
+- Added `apps/web/app/workflows/run-overlay.ts` to project persisted run detail
+  onto canvas nodes without changing the canonical workflow definition graph.
+  For repeated attempts, the highest attempt number wins for each node.
+- Extended canvas node data and rendering with explicit run status badges and
+  `data-workflow-run-status` attributes for queued, running, succeeded, failed,
+  skipped, and canceled states. The badge text carries the state, so color is
+  not the only signal.
+- Wired `/workflows` route state so the selected run detail annotates the
+  canvas projection. Selecting a step in the Run Console now selects the
+  matching canvas node and clears selected edge state.
+- Added Playwright coverage that creates a workflow, publishes it, starts a
+  test run, verifies succeeded status badges on canvas nodes, then selects a
+  run-console step and verifies the inspector follows that node.
+- Important validation note: the Playwright web server boots the built server
+  and built web bundle via `packages/server/test/e2e/support/boot-web.mjs`.
+  After changing web UI code, `pnpm --filter web build` is required before
+  trusting Playwright results.
+
+Validation:
+
+- `pnpm --filter web test -- workflow-run-overlay.test.ts workflow-edges.test.ts workflow-authoring.test.ts workflow-graph.test.ts`
+  - passed, 4 files / 17 tests.
+- `pnpm --filter web check-types`
+  - passed.
+- `pnpm --filter web build`
+  - passed.
+- `env OPENACME_E2E_PORT=4022 pnpm --dir apps/web exec playwright test workflows.spec.ts -g "shows workflow run status overlay"`
+  - passed, 1 Chromium test against the current built bundle.
+- `env OPENACME_E2E_PORT=4023 pnpm --dir apps/web exec playwright test workflows.spec.ts`
+  - passed, 18 Chromium tests.
+- `curl -sS --max-time 2 http://127.0.0.1:3458/api/health`
+  - failed before the deployed smoke, confirming the isolated test port was not
+    already occupied.
+- `env OPENACME_E2E_PORT=3458 OPENACME_E2E_DATA_DIR=/Users/alenbohcelyan/.openacme-the-workflow pnpm --dir apps/web exec playwright test workflows.spec.ts -g "shows workflow run status overlay"`
+  - passed, 1 Chromium test against the isolated workflow runtime data dir.
+- `curl -sS --max-time 2 http://127.0.0.1:3458/api/health`
+  - failed after the deployed smoke, confirming no listener was left behind.
+- Production `~/.openacme` and port `3456` were not used.
+
+Checkpoint status: partial for M9.5 at this point. Run status badges and
+run-step-to-canvas selection are complete. Failed-run visual diagnosis with
+selected node input, output, error, context diff, artifacts, logs, and timing
+continues in the next M9.5 sub-slice.
+
+Validation record - 2026-07-31, failed-run canvas diagnosis sub-slice:
+
+- Added `latestWorkflowRunStepIdForNode` so canvas node selection can resolve
+  the latest persisted step attempt for that node. This keeps retry behavior
+  consistent with the overlay status mapper.
+- Updated `/workflows` canvas node selection so a selected node also selects
+  the matching Run Console step when a run is loaded. Selecting a Run Console
+  step still selects the matching canvas node.
+- Added Playwright coverage for a failed workflow run: the failed transform
+  node receives a failed canvas badge, clicking another canvas node moves the
+  selected step, and clicking the failed node opens its selected-step metadata
+  and Error JSON with the persisted failure message.
+
+Validation:
+
+- `pnpm --filter web test -- workflow-run-overlay.test.ts workflow-edges.test.ts workflow-authoring.test.ts workflow-graph.test.ts`
+  - passed, 4 files / 18 tests.
+- `pnpm --filter web check-types`
+  - passed.
+- `pnpm --filter web build`
+  - passed.
+- `env OPENACME_E2E_PORT=4024 pnpm --dir apps/web exec playwright test workflows.spec.ts -g "opens failed run step evidence"`
+  - passed, 1 Chromium test against the current built bundle.
+- `env OPENACME_E2E_PORT=4025 pnpm --dir apps/web exec playwright test workflows.spec.ts`
+  - passed, 19 Chromium tests.
+- `env OPENACME_E2E_PORT=4026 pnpm --dir apps/web exec playwright test workflow-runs.spec.ts`
+  - passed, 10 Chromium tests.
+- `curl -sS --max-time 2 http://127.0.0.1:3458/api/health`
+  - failed before the deployed smoke, confirming the isolated test port was not
+    already occupied.
+- `env OPENACME_E2E_PORT=3458 OPENACME_E2E_DATA_DIR=/Users/alenbohcelyan/.openacme-the-workflow pnpm --dir apps/web exec playwright test workflows.spec.ts -g "opens failed run step evidence"`
+  - passed, 1 Chromium test against the isolated workflow runtime data dir.
+- `curl -sS --max-time 2 http://127.0.0.1:3458/api/health`
+  - failed after the deployed smoke, confirming no listener was left behind.
+- Production `~/.openacme` and port `3456` were not used.
+
+Status: complete for M9.5 run overlay on canvas. Persisted canvas layout and
+hardening remain M9.6 scope.
+
+### M9.6 - Persisted Layout And Hardening
+
+Goal: persist layout only if the non-persistent canvas proves insufficient.
+
+Scope:
+
+- Add optional UI metadata to workflow definitions only after M9.1-M9.5 prove
+  the canvas model.
+- Persist node positions, collapsed state, viewport, or grouping only if they
+  are demonstrably useful.
+- Keep import/export behavior explicit: either preserve UI metadata or strip it
+  by documented option.
+- Update the workflow-authoring skill if the API gains optional UI metadata,
+  while making clear that agents do not need to provide it.
+
+M9.6 storage contract:
+
+- Workflow execution remains owned by `triggers` and `nodes`; UI metadata is
+  not read by the runner, dispatcher, trigger validation, node-reference
+  validation, or MCP/agent execution ports.
+- The persisted metadata shape for this slice is optional:
+
+  ```json
+  {
+    "ui": {
+      "canvas": {
+        "nodes": {
+          "node_id": { "position": { "x": 120, "y": 80 } }
+        }
+      }
+    }
+  }
+  ```
+
+- `ui` may be omitted by agents and imports. Omitted metadata means the web UI
+  derives layout from the canonical graph projection.
+- `PATCH /api/workflows/:id` accepts `ui: null` to clear UI metadata without
+  changing workflow execution behavior.
+- Publishing a workflow snapshots `ui` alongside the published definition for
+  historical inspection, while workflow runs continue to execute only the
+  published `nodes` and `triggers`.
+- Import/export preserves `ui` when present. Agents are not required to author
+  it; the workflow-authoring skill must tell agents to omit `ui` unless they
+  are intentionally preserving or updating visual layout metadata.
+
+TDD / validation:
+
+- Schema tests accept old definitions without UI metadata.
+- Schema tests accept valid optional layout metadata.
+- Store/API route tests round-trip layout metadata without affecting runner
+  input.
+- Import/export tests cover preserving or intentionally omitting layout.
+- Deployed smoke verifies old workflows still open in the canvas.
+
+Acceptance:
+
+- Layout persistence does not break old workflows, agent-authored workflows,
+  or runtime execution.
+- Agents can still create workflows through the API without knowing canvas
+  layout details.
+
+Status: complete for M9.6 persisted layout and hardening.
+
+Implementation:
+
+- Workflow definitions now accept optional visual-only `ui.canvas.nodes`
+  metadata with per-node `position` values. The workflow schema, DB draft
+  store, published version snapshots, and workflow API routes round-trip that
+  metadata.
+- The workflow runner and validation paths still execute only `triggers` and
+  `nodes`; `ui` is ignored by execution, dispatcher, MCP tool calls, agent
+  calls, and flow-control behavior.
+- The web workflow canvas reads persisted positions when present, keeps
+  auto-layout for nodes without positions, lets step cards be moved on the
+  canvas, and saves the resulting layout through the existing draft save path.
+- Import/export preserves valid `ui` metadata, prunes layout entries for
+  missing nodes, and continues to let agents omit `ui` entirely.
+- `PATCH /api/workflows/:id` supports `ui: null` to clear visual metadata
+  without changing the executable workflow definition.
+- The `openacme-workflow-author` skill documents the optional UI metadata
+  contract and tells agents to omit it unless preserving or intentionally
+  updating visual layout.
+
+Focused validation:
+
+- `pnpm --filter @openacme/workflows build`
+  - passed.
+- `pnpm --filter @openacme/db build`
+  - passed.
+- `pnpm --filter @openacme/server build`
+  - passed.
+- `pnpm --filter @openacme/workflows test -- schemas.test.ts`
+  - passed, 15 Vitest tests.
+- `pnpm --filter @openacme/db test -- workflow-store.test.ts`
+  - passed, 17 Vitest tests.
+- `pnpm --filter @openacme/server test -- workflow-routes.test.ts`
+  - passed, 33 Vitest tests.
+- `pnpm --filter web test -- workflow-layout.test.ts workflow-graph.test.ts workflow-run-overlay.test.ts workflow-edges.test.ts workflow-authoring.test.ts`
+  - passed, 22 Vitest tests across five files.
+- `pnpm --filter @openacme/workflows check-types`
+  - passed.
+- `pnpm --filter @openacme/db check-types`
+  - passed.
+- `pnpm --filter @openacme/server check-types`
+  - passed.
+- `pnpm --filter web check-types`
+  - passed.
+- `pnpm --filter web build`
+  - passed.
+- `python3.11 /Users/alenbohcelyan/.codex/skills/.system/skill-creator/scripts/quick_validate.py .claude/skills/openacme-workflow-author`
+  - passed with `Skill is valid!`.
+
+Playwright validation:
+
+- `OPENACME_E2E_PORT=4034 pnpm --dir apps/web exec playwright test workflows.spec.ts -g "canvas layout"`
+  - passed, 2 Chromium tests.
+- `OPENACME_E2E_PORT=4036 pnpm --dir apps/web exec playwright test workflows.spec.ts -g "connects if-else branch references visually"`
+  - passed, 1 Chromium regression test.
+- `OPENACME_E2E_PORT=4037 pnpm --dir apps/web exec playwright test workflows.spec.ts -g "runs configured manual workflow triggers from the console"`
+  - passed, 1 Chromium regression test.
+- `OPENACME_E2E_PORT=4038 pnpm --dir apps/web exec playwright test workflows.spec.ts`
+  - passed, 21 Chromium tests.
+
+Deployed-style test-env validation:
+
+- `curl -sS --max-time 2 http://127.0.0.1:3458/api/health`
+  - failed before the smoke because no test listener was running on `3458`.
+- `OPENACME_E2E_PORT=3458 OPENACME_E2E_DATA_DIR=/Users/alenbohcelyan/.openacme-the-workflow pnpm --dir apps/web exec playwright test workflows.spec.ts -g "canvas layout"`
+  - passed, 2 Chromium tests against the isolated workflow test data dir.
+- `curl -sS --max-time 2 http://127.0.0.1:3458/api/health`
+  - failed after the smoke because the test server had shut down.
+- Port `3456` and production `~/.openacme` were not used.
+
+M9 visual canvas authoring milestone status: complete. The remaining workflow
+work should start a new milestone/slice instead of extending M9.
+
+### M9 TDD And Close-Out Rules
+
+- Every slice starts with pure helper tests where possible, then web
+  typecheck/build, then Playwright for user-visible behavior.
+- Runtime packages should remain unchanged unless the slice explicitly requires
+  schema/API support. If runtime code changes, rerun the relevant
+  `@openacme/workflows` and `@openacme/server` tests.
+- UI Playwright must not use port `3456`; use the existing non-3456 test port
+  convention.
+- Deployed validation for M9.2 and later must use
+  `/Users/alenbohcelyan/.openacme-the-workflow` and port `3458`, not the
+  production `~/.openacme` data dir and not production port `3456`.
+- A slice is not complete until the plan records:
+  - changed files and behavioral scope
+  - focused tests
+  - web build/typecheck result
+  - Playwright result where UI changed
+  - deployed smoke result for M9.2 and later
+  - any known gaps carried into the next slice
+
 ## Open Questions
 
 - None for the first workflow release architecture captured in this plan.

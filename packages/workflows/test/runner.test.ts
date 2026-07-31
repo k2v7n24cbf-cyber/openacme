@@ -17,6 +17,12 @@ function definition(nodes: WorkflowDefinition["nodes"]): WorkflowDefinition {
   };
 }
 
+function steppedNow(stepMs = 25): () => string {
+  let tick = 0;
+  const start = Date.parse(now);
+  return () => new Date(start + tick++ * stepMs).toISOString();
+}
+
 describe("WorkflowRunner builtin MVP", () => {
   it("emits events to the event port while execution is still in progress", async () => {
     const eventKinds: string[] = [];
@@ -184,6 +190,75 @@ describe("WorkflowRunner builtin MVP", () => {
     ]);
   });
 
+  it("records non-null step durations for executed and skipped attempts", async () => {
+    const result = await new WorkflowRunner({ now: steppedNow() }).run({
+      runId: "run_durations",
+      definition: definition([
+        {
+          id: "route",
+          type: "builtin.if",
+          condition: "$.input.ready",
+          then: ["log_ready"],
+          else: ["log_not_ready"],
+        },
+        {
+          id: "log_ready",
+          type: "builtin.log.info",
+          message: "ready",
+        },
+        {
+          id: "log_not_ready",
+          type: "builtin.log.info",
+          message: "not ready",
+        },
+      ]),
+      input: { ready: true },
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(
+      result.stepAttempts.find((step) => step.nodeId === "route"),
+    ).toMatchObject({
+      status: "succeeded",
+      durationMs: expect.any(Number),
+    });
+    expect(
+      result.stepAttempts.find((step) => step.nodeId === "log_ready"),
+    ).toMatchObject({
+      status: "succeeded",
+      durationMs: expect.any(Number),
+    });
+    expect(
+      result.stepAttempts.find((step) => step.nodeId === "log_not_ready"),
+    ).toMatchObject({
+      status: "skipped",
+      durationMs: 0,
+    });
+  });
+
+  it("records non-null step durations for failed attempts", async () => {
+    const result = await new WorkflowRunner({ now: steppedNow() }).run({
+      runId: "run_failure_durations",
+      definition: definition([
+        {
+          id: "set_missing",
+          type: "builtin.set",
+          assign: { missing: "$.context.customer.missing" },
+        },
+      ]),
+      input: {},
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.stepAttempts).toEqual([
+      expect.objectContaining({
+        nodeId: "set_missing",
+        status: "failed",
+        durationMs: expect.any(Number),
+      }),
+    ]);
+  });
+
   it("records canceled exit as a run_canceled event", async () => {
     const result = await new WorkflowRunner().run({
       runId: "run_exit_canceled",
@@ -264,13 +339,13 @@ describe("WorkflowRunner builtin MVP", () => {
     });
   });
 
-  it("selects if_else branches and records skipped steps", async () => {
+  it("selects if true branches and records skipped false steps", async () => {
     const result = await new WorkflowRunner().run({
       runId: "run_branch",
       definition: definition([
         {
           id: "branch",
-          type: "builtin.if_else",
+          type: "builtin.if",
           condition: "$.input.riskScore >= 70",
           then: ["high_log"],
           else: ["low_log"],

@@ -87,7 +87,9 @@ function canUseReferenceKind(
   if (kind === "then") {
     return node.type === "builtin.if" || node.type === "builtin.if_else";
   }
-  if (kind === "else") return node.type === "builtin.if_else";
+  if (kind === "else") {
+    return node.type === "builtin.if" || node.type === "builtin.if_else";
+  }
   return node.type === "builtin.foreach";
 }
 

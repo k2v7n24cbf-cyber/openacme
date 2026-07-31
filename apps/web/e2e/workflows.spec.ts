@@ -1,4 +1,4 @@
-import { test, expect, type Locator } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 
 test("renders workflow canvas and opens selected node inspector", async ({
@@ -62,6 +62,9 @@ test("renders workflow canvas and opens selected node inspector", async ({
   await expect(
     page.getByRole("heading", { name: "Workflow Canvas Smoke" }),
   ).toBeVisible();
+  await expect(page.getByLabel("Workflow List", { exact: true })).toContainText(
+    "Workflow Canvas Smoke",
+  );
 
   const canvas = page.getByLabel("Workflow Canvas", { exact: true });
   await expect(canvas).toContainText("branch");
@@ -78,7 +81,107 @@ test("renders workflow canvas and opens selected node inspector", async ({
   await expect(inspector).toContainText("call_mcp");
   await expect(inspector).toContainText("mcp.tool");
 
+  await expect(page.getByLabel("Run Console", { exact: true })).toBeHidden();
+
+  await page.getByRole("tab", { name: "Run History", exact: true }).click();
   await expect(page.getByLabel("Run Console", { exact: true })).toBeVisible();
+  await expect(canvas).toContainText("branch");
+
+  await page
+    .getByRole("button", { name: "Exit Run History", exact: true })
+    .click();
+  await expect(page.getByLabel("Run Console", { exact: true })).toBeHidden();
+
+  await page
+    .getByRole("button", { name: "Workflow settings", exact: true })
+    .click();
+  await expect(
+    page.getByRole("tab", { name: "Test Configuration", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await page
+    .getByLabel("Run input", { exact: true })
+    .fill(JSON.stringify({ risky: true, message: "hello" }, null, 2));
+  await expect(page.getByLabel("Run input", { exact: true })).toHaveValue(
+    /"message": "hello"/,
+  );
+});
+
+test("starts new workflows empty and opens the manual trigger picker", async ({
+  page,
+}) => {
+  await page.goto("/workflows");
+  await page.getByRole("button", { name: "New", exact: true }).click();
+
+  const canvas = page.getByLabel("Workflow Canvas", { exact: true });
+  await expect(canvas).toContainText("0 nodes");
+  await expect(canvas).not.toContainText("set_customer");
+  await expect(canvas).not.toContainText("normalize");
+
+  const dialog = page.getByRole("dialog", {
+    name: "Select Trigger",
+    exact: true,
+  });
+  await expect(dialog).toBeVisible();
+  await expect(
+    dialog.getByRole("heading", { name: "Select Trigger" }),
+  ).toBeVisible();
+  await expect(
+    dialog.getByRole("button", { name: "Trigger", exact: true }),
+  ).toBeHidden();
+  await expect(
+    dialog.getByRole("button", { name: "Built-in", exact: true }),
+  ).toBeHidden();
+  await expect(
+    dialog.getByRole("button", { name: "Logic", exact: true }),
+  ).toBeHidden();
+  await expect(
+    dialog.getByRole("button", { name: "Manual Trigger", exact: true }),
+  ).toBeEnabled();
+  await dialog
+    .getByRole("button", { name: "Manual Trigger", exact: true })
+    .click();
+  await expect(dialog).toBeHidden();
+  await expect(canvas).toContainText("manual:manual");
+});
+
+test("deletes workflow from the list and keeps archived API history", async ({
+  page,
+  request,
+}) => {
+  const workflowId = `wf_ui_delete_${Date.now().toString(36)}`;
+  const workflowName = "Workflow Delete Smoke";
+
+  const created = await request.post("/api/workflows", {
+    data: {
+      id: workflowId,
+      name: workflowName,
+      triggers: [{ id: "manual", kind: "manual", enabled: true }],
+      nodes: [{ id: "exit", type: "builtin.exit", status: "succeeded" }],
+    },
+  });
+  expect(created.ok(), await created.text()).toBeTruthy();
+
+  await page.goto(`/workflows?id=${workflowId}`);
+  await expect(
+    page.getByRole("heading", { name: workflowName }),
+  ).toBeVisible();
+  const workflowList = page.getByLabel("Workflow List", { exact: true });
+  await expect(workflowList).toContainText(workflowName);
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await workflowList
+    .getByRole("button", { name: `Delete workflow ${workflowName}` })
+    .click();
+
+  await expect(workflowList).not.toContainText(workflowName);
+  const archived = await request.get("/api/workflows?status=archived");
+  expect(archived.ok(), await archived.text()).toBeTruthy();
+  const archivedBody = (await archived.json()) as {
+    workflows: Array<{ id: string; status: string }>;
+  };
+  expect(archivedBody.workflows).toContainEqual(
+    expect.objectContaining({ id: workflowId, status: "archived" }),
+  );
 });
 
 test("edits selected workflow canvas node settings from inspector", async ({
@@ -214,13 +317,12 @@ test("edits selected workflow canvas node settings from inspector", async ({
 
   await canvas.locator('[data-workflow-canvas-node-id="log_done"]').click();
   settings = inspector.getByLabel("Inspector settings log_done");
+  await expect(settings.getByText("Basics")).toBeVisible();
+  const logSection = settings.getByText("Log", { exact: true }).last();
+  await logSection.click();
+  await expect(settings.getByLabel("log_done log message")).toBeHidden();
+  await logSection.click();
   await expect(settings.getByLabel("log_done log message")).toHaveValue("done");
-
-  await canvas.locator('[data-workflow-canvas-node-id="exit"]').click();
-  settings = inspector.getByLabel("Inspector settings exit");
-  await expect(settings.getByLabel("exit exit output")).toHaveValue(
-    "$.context",
-  );
 
   await page.getByRole("button", { name: "Save", exact: true }).click();
 
@@ -280,7 +382,7 @@ test("creates workflow nodes from canvas palette and reorders selected node", as
     data: {
       id: workflowId,
       name: "Workflow Canvas Palette Smoke",
-      triggers: [{ id: "manual", kind: "manual", enabled: true }],
+      triggers: [],
       nodes: [],
     },
   });
@@ -291,29 +393,73 @@ test("creates workflow nodes from canvas palette and reorders selected node", as
     page.getByRole("heading", { name: "Workflow Canvas Palette Smoke" }),
   ).toBeVisible();
 
-  const palette = page.getByLabel("Workflow Node Palette", { exact: true });
-  for (const name of [
-    "Set",
-    "Transform",
-    "MCP Tool",
-    "Agent Call",
-    "If Else",
-    "Foreach",
-    "Log",
-    "Exit",
-  ]) {
-    await palette.getByRole("button", { name, exact: true }).click();
-  }
-
   const canvas = page.getByLabel("Workflow Canvas", { exact: true });
+  await expect(canvas).not.toContainText("manual:manual");
+  await addWorkflowStep(page, canvas, null, "Manual Trigger");
+  await expect(canvas).toContainText("manual:manual");
+  await expect(
+    canvas.locator('[data-workflow-add-after="trigger:manual"]'),
+  ).toBeVisible();
+  await addWorkflowStep(page, canvas, "trigger:manual", "Set");
+  await expect(
+    canvas.locator('[aria-label="Edge from trigger:manual to set_01"]'),
+  ).toHaveCount(1);
+  await expect(
+    canvas.locator('[data-workflow-add-after="set_01"]'),
+  ).toBeVisible();
+  await addWorkflowStep(page, canvas, "set_01", "Transform");
+  await expect(canvas).toContainText("2 edges");
+  await expect(canvas).not.toContainText("next");
+  await expect
+    .poll(() => canvas.locator(".react-flow__edge-path").count())
+    .toBe(2);
+  await expect
+    .poll(async () =>
+      canvas.locator(".react-flow__edge-path").evaluateAll((paths) =>
+        paths.every((path) => {
+          const style = window.getComputedStyle(path);
+          const strokeWidth = Number.parseFloat(style.strokeWidth);
+          return (
+            (path.getAttribute("d") ?? "").length > 0 &&
+            style.stroke !== "none" &&
+            Number.isFinite(strokeWidth) &&
+            strokeWidth > 0
+          );
+        }),
+      ),
+    )
+    .toBe(true);
+  await addWorkflowStep(page, canvas, "transform_02", "MCP Tool");
+  await addWorkflowStep(page, canvas, "mcp_demo_echo_03", "Agent Call");
+  await addWorkflowStep(page, canvas, null, "If");
+  await addWorkflowStep(page, canvas, null, "Foreach");
+  await addWorkflowStep(page, canvas, null, "Log");
+
   await expect(canvas).toContainText("set_01");
   await expect(canvas).toContainText("transform_02");
   await expect(canvas).toContainText("mcp_demo_echo_03");
   await expect(canvas).toContainText(/agent_[A-Za-z0-9_]+_04/);
-  await expect(canvas).toContainText("if_else_05");
+  await expect(canvas).toContainText("if_05");
   await expect(canvas).toContainText("foreach_06");
   await expect(canvas).toContainText("log_07");
-  await expect(canvas).toContainText("exit_08");
+  await expect(canvas).not.toContainText("exit_");
+
+  await canvas.locator('[data-workflow-canvas-node-id="set_01"]').click();
+  await canvas
+    .getByRole("button", {
+      name: "Clone workflow step set_01",
+      exact: true,
+    })
+    .click();
+  await expect(canvas).toContainText("set_01_copy");
+  await canvas.locator('[data-workflow-canvas-node-id="set_01_copy"]').click();
+  await canvas
+    .getByRole("button", {
+      name: "Delete workflow step set_01_copy",
+      exact: true,
+    })
+    .click();
+  await expect(canvas).not.toContainText("set_01_copy");
 
   await canvas
     .locator('[data-workflow-canvas-node-id="mcp_demo_echo_03"]')
@@ -381,10 +527,9 @@ test("creates workflow nodes from canvas palette and reorders selected node", as
         type: "agent.call",
         agentId: expect.any(String),
       }),
-      expect.objectContaining({ id: "if_else_05", type: "builtin.if_else" }),
+      expect.objectContaining({ id: "if_05", type: "builtin.if" }),
       expect.objectContaining({ id: "log_07", type: "builtin.log.info" }),
       expect.objectContaining({ id: "foreach_06", type: "builtin.foreach" }),
-      expect.objectContaining({ id: "exit_08", type: "builtin.exit" }),
     ]);
 
   await page.getByRole("button", { name: "Publish", exact: true }).click();
@@ -424,7 +569,7 @@ test("connects if-else branch references visually from the workflow canvas", asy
       nodes: [
         {
           id: "branch",
-          type: "builtin.if_else",
+          type: "builtin.if",
           condition: "$.input.risky == true",
           then: [],
           else: [],
@@ -456,6 +601,27 @@ test("connects if-else branch references visually from the workflow canvas", asy
   ).toBeVisible();
 
   const canvas = page.getByLabel("Workflow Canvas", { exact: true });
+  await expect(
+    canvas.locator('[data-workflow-add-branch="branch:then"]'),
+  ).toBeVisible();
+  await expect(
+    canvas
+      .locator('[data-workflow-add-branch="branch:then"]')
+      .locator("xpath=.."),
+  ).toContainText("true");
+  await expect(
+    canvas.locator('[data-workflow-add-branch="branch:else"]'),
+  ).toBeVisible();
+  await expect(
+    canvas
+      .locator('[data-workflow-add-branch="branch:else"]')
+      .locator("xpath=.."),
+  ).toContainText("false");
+  await expect(
+    canvas.locator('[aria-label="Edge from branch to manual_review"]'),
+  ).toHaveCount(0);
+  await addWorkflowStep(page, canvas, "branch", "Set", "true");
+  await addWorkflowStep(page, canvas, "branch", "Log", "false");
   await clickWorkflowHandles(
     canvas.locator('[data-workflow-source-handle="branch:then"]'),
     canvas.locator('[data-workflow-target-handle="manual_review"]'),
@@ -465,20 +631,14 @@ test("connects if-else branch references visually from the workflow canvas", asy
     canvas.locator('[data-workflow-target-handle="auto_approve"]'),
   );
 
-  const nodesJson = page.getByLabel("Nodes JSON");
-  await expect
-    .poll(async () => {
-      const nodes = JSON.parse(await nodesJson.inputValue()) as Array<{
-        id?: string;
-        then?: string[];
-        else?: string[];
-      }>;
-      return nodes.find((node) => node.id === "branch");
-    })
-    .toMatchObject({
-      then: ["manual_review"],
-      else: ["auto_approve"],
-    });
+  await canvas.locator('[data-workflow-canvas-node-id="branch"]').click();
+  const branchSettings = page.getByLabel("Inspector settings branch");
+  await expect(branchSettings.getByLabel("branch then nodes")).toHaveValue(
+    "set_05, manual_review",
+  );
+  await expect(branchSettings.getByLabel("branch else nodes")).toHaveValue(
+    "log_06, auto_approve",
+  );
 
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect
@@ -493,8 +653,8 @@ test("connects if-else branch references visually from the workflow canvas", asy
       return payload.workflow.nodes.find((node) => node.id === "branch");
     })
     .toMatchObject({
-      then: ["manual_review"],
-      else: ["auto_approve"],
+      then: ["set_05", "manual_review"],
+      else: ["log_06", "auto_approve"],
     });
 
   await page.getByRole("button", { name: "Publish", exact: true }).click();
@@ -529,6 +689,8 @@ test("connects if-else branch references visually from the workflow canvas", asy
     ),
   ).toMatchObject({
     branch: "succeeded",
+    set_05: "skipped",
+    log_06: "succeeded",
     manual_review: "skipped",
     auto_approve: "succeeded",
     exit: "succeeded",
@@ -538,8 +700,8 @@ test("connects if-else branch references visually from the workflow canvas", asy
       expect.objectContaining({
         kind: "branch_selected",
         payload: expect.objectContaining({
-          selected: ["auto_approve"],
-          skipped: ["manual_review"],
+          selected: ["log_06", "auto_approve"],
+          skipped: ["set_05", "manual_review"],
         }),
       }),
     ]),
@@ -608,16 +770,19 @@ test("shows workflow run status overlay on the canvas", async ({
   ).toContainText("succeeded");
   await expect(
     canvas.locator('[data-workflow-canvas-node-id="exit"]'),
-  ).toHaveAttribute("data-workflow-run-status", "succeeded");
+  ).toHaveCount(0);
 
   const inspector = page.getByLabel("Workflow Inspector", { exact: true });
-  await canvas.locator('[data-workflow-canvas-node-id="set_input"]').click();
-  await expect(inspector).toContainText("set_input");
-
   await page
     .getByLabel("Run Console", { exact: true })
     .getByRole("button", { name: /log_done/ })
     .click();
+  await page
+    .getByRole("button", { name: "Exit Run History", exact: true })
+    .click();
+  await canvas.locator('[data-workflow-canvas-node-id="set_input"]').click();
+  await expect(inspector).toContainText("set_input");
+  await canvas.locator('[data-workflow-canvas-node-id="log_done"]').click();
   await expect(inspector).toContainText("log_done");
 });
 
@@ -2224,8 +2389,21 @@ test("keeps external node actions disabled when no inventory is available", asyn
   await expect(
     page.getByRole("heading", { name: "Workflow Empty Inventory Smoke" }),
   ).toBeVisible();
-  await expect(page.getByRole("button", { name: "MCP Tool" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Agent Call" })).toBeDisabled();
+  await page
+    .getByRole("button", { name: "Add workflow step", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", { name: "Add Step", exact: true });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Built-in", exact: true }).click();
+  await expect(dialog.getByRole("button", { name: "Set", exact: true })).toBeEnabled();
+  await dialog.getByRole("button", { name: "Tools", exact: true }).click();
+  await expect(
+    dialog.getByRole("button", { name: "MCP Tool", exact: true }),
+  ).toBeDisabled();
+  await dialog.getByRole("button", { name: "AI", exact: true }).click();
+  await expect(
+    dialog.getByRole("button", { name: "Agent Call", exact: true }),
+  ).toBeDisabled();
   await expect(page.getByText("mcp_server_tool")).toHaveCount(0);
   await expect(page.getByText("agent_agent")).toHaveCount(0);
 });
@@ -2972,58 +3150,46 @@ test("runs configured manual workflow triggers from the console", async ({
       ),
     )
     .not.toContain("log_07");
-  await page.getByRole("button", { name: "If Else" }).click();
+  await page.getByRole("button", { name: "If", exact: true }).click();
   await expect
     .poll(async () => JSON.parse(await nodesJson.inputValue())[6]?.id)
-    .toBe("if_else_07");
+    .toBe("if_07");
   await nodeCards
-    .getByLabel("if_else_07 branch condition")
+    .getByLabel("if_07 branch condition")
     .fill("$.input.customer.riskScore >= 70");
   await expect
     .poll(async () => JSON.parse(await nodesJson.inputValue())[6]?.condition)
     .toBe("$.input.customer.riskScore >= 70");
-  await nodeCards.getByLabel("if_else_07 branch condition").fill("");
+  await nodeCards.getByLabel("if_07 branch condition").fill("");
   await expect
     .poll(async () => JSON.parse(await nodesJson.inputValue())[6]?.condition)
     .toBe("$.input.customer.riskScore >= 70");
   await nodeCards
-    .getByLabel("if_else_07 then nodes")
+    .getByLabel("if_07 then nodes")
     .fill("mcp_echo, missing_step");
   await expect(page.getByText("invalid refs")).toBeVisible();
   await expect(
-    page.getByText("Node if_else_07 then references missing node missing_step"),
+    page.getByText("Node if_07 then references missing node missing_step"),
   ).toBeVisible();
-  await nodeCards.getByLabel("if_else_07 then nodes").fill("mcp_echo, exit");
+  await nodeCards.getByLabel("if_07 then nodes").fill("mcp_echo, exit");
   await expect
     .poll(async () => JSON.parse(await nodesJson.inputValue())[6]?.then)
     .toEqual(["mcp_echo", "exit"]);
-  await nodeCards.getByLabel("if_else_07 else nodes").fill("agent_review");
+  await nodeCards.getByLabel("if_07 else nodes").fill("agent_review");
   await expect
     .poll(async () => JSON.parse(await nodesJson.inputValue())[6]?.else)
     .toEqual(["agent_review"]);
-  await page.getByRole("button", { name: "If", exact: true }).click();
-  await expect
-    .poll(async () => JSON.parse(await nodesJson.inputValue())[7]?.id)
-    .toBe("if_08");
-  await nodeCards.getByLabel("if_08 branch condition").fill("$.input.enabled");
-  await expect
-    .poll(async () => JSON.parse(await nodesJson.inputValue())[7]?.condition)
-    .toBe("$.input.enabled");
-  await nodeCards.getByLabel("if_08 then nodes").fill("exit");
-  await expect
-    .poll(async () => JSON.parse(await nodesJson.inputValue())[7]?.then)
-    .toEqual(["exit"]);
   await page.getByRole("button", { name: "Foreach" }).click();
   await expect
-    .poll(async () => JSON.parse(await nodesJson.inputValue())[8]?.id)
-    .toBe("foreach_09");
+    .poll(async () => JSON.parse(await nodesJson.inputValue())[7]?.id)
+    .toBe("foreach_08");
   await nodeCards
-    .getByLabel("foreach_09 foreach items")
+    .getByLabel("foreach_08 foreach items")
     .fill("$.input.customers");
   await expect
-    .poll(async () => JSON.parse(await nodesJson.inputValue())[8]?.items)
+    .poll(async () => JSON.parse(await nodesJson.inputValue())[7]?.items)
     .toBe("$.input.customers");
-  await nodeCards.getByLabel("foreach_09 foreach items").fill("");
+  await nodeCards.getByLabel("foreach_08 foreach items").fill("");
   await expect
     .poll(async () => JSON.parse(await nodesJson.inputValue())[8]?.items)
     .toBe("$.input.customers");
@@ -3782,6 +3948,56 @@ async function clickWorkflowHandles(source: Locator, target: Locator) {
   await expect(target).toBeVisible();
   await source.click();
   await target.click();
+}
+
+async function addWorkflowStep(
+  page: Page,
+  canvas: Locator,
+  afterNodeId: string | null,
+  stepName: string,
+  route?: "true" | "false" | "body",
+) {
+  if (afterNodeId && route) {
+    const handle = route === "true" ? "then" : route === "false" ? "else" : route;
+    await canvas
+      .locator(`[data-workflow-add-branch="${afterNodeId}:${handle}"]`)
+      .click();
+  } else if (afterNodeId) {
+    await canvas.locator(`[data-workflow-add-after="${afterNodeId}"]`).click();
+  } else {
+    await canvas
+      .getByRole("button", { name: "Add workflow step", exact: true })
+      .click();
+  }
+  const dialog = page.getByRole("dialog", {
+    name: stepName === "Manual Trigger" ? "Select Trigger" : "Add Step",
+    exact: true,
+  });
+  await expect(dialog).toBeVisible();
+  const category = workflowStepTestCategory(stepName);
+  if (stepName !== "Manual Trigger") {
+    await dialog.getByRole("button", { name: category, exact: true }).click();
+  }
+  if (stepName === "MCP Tool") {
+    await dialog.locator('button[aria-label^="MCP tool "]').first().click();
+  } else if (stepName === "Agent Call") {
+    await dialog.locator('button[aria-label^="Agent "]').first().click();
+  } else {
+    await dialog.getByRole("button", { name: stepName, exact: true }).click();
+  }
+  await expect(dialog).toBeHidden();
+}
+
+function workflowStepTestCategory(
+  stepName: string,
+): "Trigger" | "Built-in" | "Logic" | "AI" | "Tools" {
+  if (stepName === "Manual Trigger") return "Trigger";
+  if (stepName === "MCP Tool" || stepName.startsWith("MCP tool ")) {
+    return "Tools";
+  }
+  if (stepName === "Agent Call" || stepName.startsWith("Agent ")) return "AI";
+  if (["If", "Foreach"].includes(stepName)) return "Logic";
+  return "Built-in";
 }
 
 function workflowRun({

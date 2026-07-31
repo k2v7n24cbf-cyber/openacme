@@ -399,6 +399,9 @@ Every human UI operation must have an agent path:
 - Human **Save**: agent calls `PATCH /api/workflows/:workflowId`.
 - Human **Test**: agent calls `POST /api/workflows/:workflowId/runs/test`.
 - Human **Publish**: agent calls `POST /api/workflows/:workflowId/publish`.
+- Human **Delete**: agent calls `DELETE /api/workflows/:workflowId`; this
+  archives the definition, hides it from the default list, and preserves run
+  history.
 - Human trigger-card **Run**: agent calls
   `POST /api/workflows/:workflowId/triggers/:triggerId/runs`.
 - Human **Runs / history**: agent calls `GET /api/workflows/:workflowId/runs`
@@ -426,6 +429,19 @@ PATCH /api/workflows/:workflowId
 
 `PATCH /api/workflows/:workflowId` accepts optional `ui` metadata. Send
 `ui: null` to clear visual layout without changing execution behavior.
+
+Archive/delete:
+
+```http
+DELETE /api/workflows/:workflowId
+```
+
+Default workflow lists hide archived definitions. To inspect archived
+definitions intentionally:
+
+```http
+GET /api/workflows?status=archived
+```
 
 MCP tool inventory:
 

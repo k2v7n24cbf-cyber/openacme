@@ -658,6 +658,43 @@ Rules:
 - Record the exact deployed validation command and result in this plan before
   closing the milestone.
 
+## Clean Designer UI Slice
+
+The workflow authoring surface must be canvas-first. The default editor view is
+not a JSON workbench and not a stacked list of node cards; it is a flow
+designer:
+
+- The center of the screen is the workflow canvas.
+- Selecting a node opens all editable settings in the right inspector.
+- Run history is a separate view/tab, not always visible under the inspector.
+- Node cards on the canvas show only an operator-readable summary.
+- Add-node controls are compact canvas actions; the full palette must not
+  dominate the page.
+- Raw workflow JSON remains a data/export concern, not the primary authoring
+  surface.
+
+Acceptance for this slice:
+
+1. `/workflows` opens into an Edit tab with a large canvas and right inspector.
+2. The Run History tab shows persisted run details and can be toggled without
+   losing the selected workflow.
+3. The previous left definition list, node card stack, and raw Nodes JSON editor
+   are not visible in the default designer view.
+4. Node selection still drives the inspector and existing node setting controls.
+5. Existing graph layout, canvas drag persistence, edge wiring, run overlay, and
+   import/export contracts continue to work.
+6. Validation includes focused web tests plus deployed Playwright smoke against
+   `http://127.0.0.1:3458` with
+   `/Users/alenbohcelyan/.openacme-the-workflow`.
+
+TDD plan:
+
+1. Tighten the workflow UI e2e expectation around the clean designer shell.
+2. Implement only the layout/composition refactor; do not change runtime JSON or
+   workflow API contracts.
+3. Run focused `apps/web` tests for workflow graph/layout behavior.
+4. Run the deployed workflow UI smoke on port `3458`.
+
 ## Milestone Plan
 
 Development should move in strict milestones. Each milestone records its tests
@@ -995,6 +1032,7 @@ API slice validation record:
   - `POST /api/workflows`
   - `GET /api/workflows/:id`
   - `PATCH /api/workflows/:id`
+  - `DELETE /api/workflows/:id`
   - `POST /api/workflows/:id/publish`
   - `POST /api/workflows/:id/runs/test`
   - `POST /api/workflows/:id/runs/live`
@@ -11050,6 +11088,156 @@ Final pre-rollout test-env rerun on 2026-07-31:
 
 M9 visual canvas authoring milestone status: complete. The remaining workflow
 work should start a new milestone/slice instead of extending M9.
+
+## M10.1 Clean Add-Step Flow Slice
+
+Goal: make workflow construction feel like a connected flow, not a toolbox next
+to a canvas.
+
+Scope:
+
+- Each step card exposes a small `+` action below the card.
+- Clicking that `+` opens an Add Step modal with search, categories, step list,
+  and input/output preview.
+- The selected step is inserted immediately after the clicked card in the
+  canonical node order.
+- A global canvas `+` remains available for the first step or for adding after
+  the currently selected step.
+- Branch/foreach edge handles remain the way to connect explicit branch/body
+  references between cards.
+
+TDD / validation record - 2026-07-31:
+
+- Added helper coverage for `insertWorkflowNodeAfter`, including immutability
+  and duplicate suffix avoidance.
+- Updated workflow e2e coverage to create nodes through the Add Step modal and
+  specifically click a card-level `data-workflow-add-after` action.
+- Passed:
+  - `pnpm --dir apps/web exec tsc --noEmit`
+  - `pnpm --dir apps/web exec vitest run test/workflow-authoring.test.ts test/workflow-edges.test.ts test/workflow-layout.test.ts test/workflow-graph.test.ts test/workflow-run-overlay.test.ts`
+  - `pnpm --dir apps/web exec eslint --max-warnings 0 app/routes/workflows.tsx app/workflows/canvas.tsx app/workflows/authoring.ts test/workflow-authoring.test.ts e2e/workflows.spec.ts`
+  - `pnpm --dir apps/web build`
+  - `OPENACME_E2E_PORT=3458 OPENACME_E2E_DATA_DIR=/Users/alenbohcelyan/.openacme-the-workflow pnpm --dir apps/web exec playwright test workflows.spec.ts -g "renders workflow canvas|creates workflow nodes|persists dragged workflow canvas layout metadata|preserves workflow canvas layout metadata"`
+- Deployed test server:
+  - `OPENACME_DATA_DIR=/Users/alenbohcelyan/.openacme-the-workflow PORT=3458 node packages/server/dist/index.js`
+  - `/api/health` returned ok and `/workflows` returned HTTP 200.
+- Port `3456` and production `~/.openacme` were not used.
+
+## M10.2 Canvas Trigger And Terminal Simplification Slice
+
+Goal: remove workflow-engine implementation noise from the first canvas view and
+make the card-to-card flow easier to scan.
+
+Scope:
+
+- New workflows no longer create a default visible manual trigger.
+- The Add Step modal includes `Trigger -> Manual Trigger`; manual is the only
+  selectable trigger in this slice.
+- `builtin.exit` stays valid in persisted workflow JSON but is not shown as a
+  canvas card and is no longer offered in the Add Step catalog.
+- Canvas sequence edges are generated only between visible cards, so adding a
+  new card immediately produces a visible flow line between visible steps.
+- The canvas status panel now shows both node and edge counts.
+
+TDD / validation record - 2026-07-31:
+
+- Updated graph projection tests so exit nodes are hidden and sequence edges
+  connect visible workflow cards.
+- Updated workflow e2e coverage so a workflow starts without `manual:manual`,
+  adds `Manual Trigger` from the modal, adds cards, and verifies the visible
+  edge count after inserting the next card.
+- Passed:
+  - `pnpm --dir apps/web exec tsc --noEmit`
+  - `pnpm --dir apps/web exec vitest run test/workflow-authoring.test.ts test/workflow-edges.test.ts test/workflow-layout.test.ts test/workflow-graph.test.ts test/workflow-run-overlay.test.ts`
+  - `pnpm --dir apps/web exec eslint --max-warnings 0 app/routes/workflows.tsx app/workflows/graph.ts e2e/workflows.spec.ts test/workflow-graph.test.ts`
+  - `pnpm --dir apps/web build`
+  - `OPENACME_E2E_PORT=3458 OPENACME_E2E_DATA_DIR=/Users/alenbohcelyan/.openacme-the-workflow pnpm --dir apps/web exec playwright test workflows.spec.ts -g "renders workflow canvas|creates workflow nodes|shows workflow run status overlay|persists dragged workflow canvas layout metadata|preserves workflow canvas layout metadata"`
+- Port `3456` and production `~/.openacme` were not used.
+
+## M10.3 Canvas Navigation And Edge Visibility Slice
+
+Goal: keep the clean card canvas, but restore fast workflow switching and make
+card-to-card flow lines visually undeniable.
+
+Scope:
+
+- Restore the left workflow list as a compact desktop rail beside the canvas.
+- Keep the right inspector behavior unchanged: selecting a card still opens all
+  settings on the right.
+- Keep the Add Step modal entry points unchanged, including card-level `+`
+  insertion.
+- Make React Flow edge paths explicitly styled in the workflow theme so visible
+  connector lines do not depend on library default CSS.
+- Add a non-interactive default bottom source handle to each visible canvas card
+  and bind sequence/trigger edges to it, so React Flow renders connector SVG
+  paths for ordinary top-to-bottom flow edges.
+- Do not render `next`/`starts` labels on ordinary flow connector lines.
+- Render React Flow handles as small circular connection dots, not square
+  controls.
+- Show compact clone and trash icon actions on the selected workflow step card.
+- Clone inserts the copied step immediately after the selected card with a
+  unique id; delete removes the step and prunes branch/foreach references to it.
+- Extend Playwright coverage to assert both the workflow list and actual SVG
+  edge path visibility, not only the projected edge count.
+
+TDD / validation record - 2026-07-31:
+
+- Added e2e assertions for the restored Workflow List rail.
+- Added e2e assertions that newly inserted cards render `.react-flow__edge-path`
+  elements with non-empty path data and nonzero stroke.
+- Added e2e assertion that ordinary connector lines do not show `next`.
+- Added helper coverage for clone/delete behavior and e2e coverage for
+  selected-card clone/trash actions.
+- Passed:
+  - `pnpm --dir apps/web exec tsc --noEmit`
+  - `pnpm --dir apps/web exec vitest run test/workflow-authoring.test.ts test/workflow-graph.test.ts`
+  - `pnpm --dir apps/web exec eslint --max-warnings 0 app/workflows/authoring.ts app/workflows/canvas.tsx app/routes/workflows.tsx e2e/workflows.spec.ts test/workflow-authoring.test.ts`
+  - `pnpm --dir apps/web build`
+  - `OPENACME_E2E_PORT=3458 OPENACME_E2E_DATA_DIR=/Users/alenbohcelyan/.openacme-the-workflow pnpm --dir apps/web exec playwright test workflows.spec.ts -g "renders workflow canvas|creates workflow nodes|shows workflow run status overlay|persists dragged workflow canvas layout metadata|preserves workflow canvas layout metadata"`
+- Deployed test server:
+  - Playwright successfully started and used the test server on port `3458`.
+  - After the e2e run, the existing LaunchAgent
+    `com.openacme.workflow-test.3458` did not bind port `3458` even after a
+    clean restart and env parity update. Running the same server command in the
+    foreground did bind and return health, so this is a local launcher issue to
+    resolve before relying on the LaunchAgent again.
+- Port `3456` and production `~/.openacme` were not used.
+
+## M10.4 Inspector Progressive Disclosure Slice
+
+Goal: make the right workflow inspector easier to scan while preserving direct
+editing for the selected canvas card.
+
+Scope:
+
+- Replace the embedded flat selected-node settings surface with collapsible
+  inspector sections.
+- Keep the selected node's primary settings open by default so existing quick
+  edit flows still work.
+- Keep all existing field labels and canonical update handlers unchanged.
+- Make JSON, code, MCP input, agent input, and transform areas taller and
+  single-column inside the narrow right rail.
+- Do not change workflow runtime, API, persistence, canvas graph semantics, or
+  run history.
+
+TDD / validation record - 2026-07-31:
+
+- Added Playwright coverage that verifies selected-node inspector sections are
+  visible and can collapse/reopen without losing access to the existing log
+  message field.
+- Passed:
+  - `pnpm --dir apps/web exec tsc --noEmit`
+  - `pnpm --dir apps/web exec eslint --max-warnings 0 app/routes/workflows.tsx`
+  - `pnpm --dir apps/web exec playwright test e2e/workflows.spec.ts -g "edits selected workflow canvas node settings from inspector"`
+  - `pnpm --dir apps/web build`
+- Deployed test server:
+  - Built assets were synced to `packages/server/web`.
+  - `/api/health` returned ok on port `3458`.
+  - `/workflows?id=wf_manual_log_output_check_20260731_1415` served
+    `assets/index-CanS5TIc.js`.
+  - Playwright snapshot on port `3458` showed selected-node inspector sections
+    `Basics` and `Log` with larger editable fields.
+- Port `3456` and production `~/.openacme` were not used.
 
 ### M9 TDD And Close-Out Rules
 

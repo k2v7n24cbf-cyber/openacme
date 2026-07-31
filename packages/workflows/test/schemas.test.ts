@@ -215,7 +215,7 @@ describe("workflow schemas", () => {
       nodes: [
         {
           id: "branch",
-          type: "builtin.if_else",
+          type: "builtin.if",
           condition: "$.input.ready",
           then: ["notify"],
           else: ["missing_exit"],

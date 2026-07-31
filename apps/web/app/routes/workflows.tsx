@@ -5,6 +5,7 @@ import {
   useState,
   type ChangeEvent,
   type DragEvent,
+  type ReactNode,
 } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { z } from "zod";
@@ -13,9 +14,13 @@ import {
   ArrowDown,
   ArrowUp,
   Braces,
+  Bot,
   CheckCircle2,
+  Clock3,
   Circle,
+  Code2,
   Download,
+  Edit3,
   GitBranch,
   ListRestart,
   Loader2,
@@ -25,6 +30,8 @@ import {
   Save,
   ScrollText,
   Send,
+  Settings,
+  Search,
   Square,
   Trash2,
   Upload,
@@ -35,6 +42,14 @@ import { toast } from "sonner";
 import { Sidebar } from "@/app/components/Sidebar";
 import { Badge } from "@/app/components/ui/badge";
 import { Button } from "@/app/components/ui/button";
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/app/components/ui/dialog";
 import { Input } from "@/app/components/ui/input";
 import { LoadingHairline } from "@/app/components/ui/loading-hairline";
 import { SectionEyebrow } from "@/app/components/ui/section-eyebrow";
@@ -45,15 +60,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/app/components/ui/select";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/app/components/ui/tabs";
 import { Textarea } from "@/app/components/ui/textarea";
 import { API_BASE } from "@/app/lib/api";
 import { usePublishCurrentView } from "@/app/lib/CurrentViewContext";
 import { cn } from "@/app/lib/utils";
 import {
-  appendWorkflowNode,
+  cloneWorkflowNodeAfter,
+  insertWorkflowNodeAfter,
+  insertWorkflowNodeFirst,
   isAgentSummary,
   isMcpToolSummary,
   moveWorkflowNode,
+  removeWorkflowNode,
   type WorkflowPaletteKind,
 } from "@/app/workflows/authoring";
 import {
@@ -99,6 +123,7 @@ const RUN_STATUSES = [
 ] as const;
 type RunStatus = (typeof RUN_STATUSES)[number];
 type RunMode = "test" | "live";
+type WorkflowDesignerView = "edit" | "runs";
 
 export const Route = createFileRoute("/workflows")({
   validateSearch: z.object({
@@ -282,6 +307,14 @@ interface WorkflowPalettePayload {
   agentId?: string;
 }
 
+interface WorkflowTriggerPalettePayload {
+  kind: "manual_trigger";
+}
+
+type WorkflowAddPayload =
+  | WorkflowPalettePayload
+  | WorkflowTriggerPalettePayload;
+
 const DEFAULT_NODES: WorkflowNode[] = [
   {
     id: "set_customer",
@@ -312,9 +345,7 @@ const DEFAULT_NODES: WorkflowNode[] = [
   },
 ];
 
-const DEFAULT_TRIGGERS: JsonValue[] = [
-  { id: "manual", kind: "manual", enabled: true },
-];
+const DEFAULT_TRIGGERS: JsonValue[] = [];
 
 const DEFAULT_INPUT = {
   customer: {
@@ -338,10 +369,19 @@ function WorkflowsPage() {
   >(null);
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [detail, setDetail] = useState<RunDetail | null>(null);
+  const [pendingRunId, setPendingRunId] = useState<string | null>(null);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [loadingMoreRuns, setLoadingMoreRuns] = useState(false);
   const [hasMoreRuns, setHasMoreRuns] = useState(false);
   const [nextRunOffset, setNextRunOffset] = useState<number | null>(null);
+  const [designerView, setDesignerView] = useState<WorkflowDesignerView>(
+    search.run ? "runs" : "edit",
+  );
+  const [addStepTargetNodeId, setAddStepTargetNodeId] = useState<
+    string | null | undefined
+  >(undefined);
+  const [addStepTargetSourceHandle, setAddStepTargetSourceHandle] =
+    useState<WorkflowReferenceEdgeKind | null>(null);
   const [nameDraft, setNameDraft] = useState("");
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const [inputSchemaDraft, setInputSchemaDraft] = useState("null");
@@ -422,6 +462,10 @@ function WorkflowsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail?.run.id, detail?.run.status, selected?.id]);
 
+  useEffect(() => {
+    if (search.run) setDesignerView("runs");
+  }, [search.run]);
+
   const parsedNodes = useMemo(() => parseNodesDraft(nodesDraft), [nodesDraft]);
   const parsedTriggersForCanvas = useMemo(() => {
     const parsed = parseTriggersDraft(triggersDraft);
@@ -429,6 +473,16 @@ function WorkflowsPage() {
       ? (parsed.value.filter(isRecord) as WorkflowGraphTrigger[])
       : [];
   }, [triggersDraft]);
+  const effectiveTriggersForCanvas = useMemo(() => {
+    if (
+      designerView !== "runs" ||
+      parsedTriggersForCanvas.length > 0 ||
+      !detail
+    ) {
+      return parsedTriggersForCanvas;
+    }
+    return runTriggerCanvasFallback(detail.run);
+  }, [designerView, detail, parsedTriggersForCanvas]);
   const workflowRunOverlay = useMemo<WorkflowRunOverlayInput | null>(
     () =>
       detail
@@ -444,12 +498,12 @@ function WorkflowsPage() {
       applyWorkflowRunOverlay(
         buildWorkflowGraphProjection({
           nodes: parsedNodes.ok ? parsedNodes.value : [],
-          triggers: parsedTriggersForCanvas,
+          triggers: effectiveTriggersForCanvas,
           layout: uiDraft?.canvas,
         }),
         workflowRunOverlay,
       ),
-    [parsedNodes, parsedTriggersForCanvas, uiDraft, workflowRunOverlay],
+    [parsedNodes, effectiveTriggersForCanvas, uiDraft, workflowRunOverlay],
   );
   const nodeReferences = useMemo(
     () =>
@@ -694,6 +748,7 @@ function WorkflowsPage() {
         return false;
       }
       setDetail(data);
+      setPendingRunId(null);
       setRuns((current) =>
         reconcileWorkflowRunInLoadedList(current, data.run, {
           ...runFilters(),
@@ -708,6 +763,7 @@ function WorkflowsPage() {
       return true;
     } catch (err) {
       toast.error(errorMessage(err));
+      setPendingRunId(null);
       return false;
     }
   }
@@ -724,13 +780,53 @@ function WorkflowsPage() {
             id,
             name: "New workflow",
             triggers: DEFAULT_TRIGGERS,
-            nodes: DEFAULT_NODES,
+            nodes: [],
           },
         },
       );
       toast.success("Workflow created");
       void navigate({ search: { id: data.workflow.id }, replace: true });
       await loadWorkflows(data.workflow.id);
+      openAddStepDialog(null);
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function deleteWorkflow(workflow: WorkflowDefinition) {
+    if (
+      !confirm(
+        `Delete workflow "${workflow.name}"? Run history will stay available.`,
+      )
+    ) {
+      return;
+    }
+    setBusy(`delete:${workflow.id}`);
+    try {
+      await api<{ workflow: WorkflowDefinition }>(
+        `/api/workflows/${encodeURIComponent(workflow.id)}`,
+        { method: "DELETE" },
+      );
+      toast.success("Workflow deleted");
+      const remaining = workflows.filter((item) => item.id !== workflow.id);
+      const next = remaining.find((item) => item.id !== workflow.id) ?? null;
+      if (selected?.id === workflow.id) {
+        setSelected(next);
+        setDetail(null);
+        setRuns([]);
+        setSelectedStepId(null);
+        if (next) {
+          void navigate({ search: { id: next.id }, replace: true });
+          await loadWorkflows(next.id);
+        } else {
+          void navigate({ search: {}, replace: true });
+          await loadWorkflows();
+        }
+      } else {
+        await loadWorkflows(selected?.id);
+      }
     } catch (err) {
       toast.error(errorMessage(err));
     } finally {
@@ -1097,8 +1193,10 @@ function WorkflowsPage() {
     }
   }
 
-  function appendNode(
+  function insertNode(
     kind: WorkflowPaletteKind,
+    afterNodeId: string | null,
+    sourceHandle?: WorkflowReferenceEdgeKind | null,
     tool?: McpToolSummary | AgentSummary,
   ) {
     const parsed = parseNodesDraft(nodesDraft);
@@ -1114,13 +1212,79 @@ function WorkflowsPage() {
       toast.error("No agents available");
       return;
     }
-    const next = appendWorkflowNode(parsed.value, kind, tool);
+    const existingIds = new Set(parsed.value.map((node) => node.id));
+    const inserted = isTriggerCanvasNodeId(afterNodeId)
+      ? insertWorkflowNodeFirst(parsed.value, kind, tool)
+      : insertWorkflowNodeAfter(parsed.value, afterNodeId, kind, tool);
+    const addedNode = inserted.find((node) => !existingIds.has(node.id));
+    let next = inserted;
+    if (
+      afterNodeId &&
+      !isTriggerCanvasNodeId(afterNodeId) &&
+      sourceHandle &&
+      addedNode
+    ) {
+      const connected = connectWorkflowReferenceEdge(inserted, {
+        sourceId: afterNodeId,
+        targetId: addedNode.id,
+        kind: sourceHandle,
+      });
+      if (connected.ok) {
+        next = connected.nodes as WorkflowNode[];
+      } else {
+        toast.error(referenceMutationMessage(connected.reason));
+      }
+    }
     setNodesDraft(formatJson(next));
-    setSelectedCanvasNodeId(next.at(-1)?.id ?? null);
+    setSelectedCanvasNodeId(addedNode?.id ?? next.at(-1)?.id ?? null);
   }
 
-  function appendNodeFromPalette(payload: WorkflowPalettePayload) {
-    appendNode(payload.kind, toolForPalettePayload(payload));
+  function openAddStepDialog(afterNodeId: string | null, sourceHandle?: string) {
+    setDesignerView("edit");
+    void loadMcpTools();
+    void loadAgents();
+    setAddStepTargetNodeId(afterNodeId);
+    setAddStepTargetSourceHandle(referenceEdgeKind(sourceHandle));
+  }
+
+  function closeAddStepDialog() {
+    setAddStepTargetNodeId(undefined);
+    setAddStepTargetSourceHandle(null);
+  }
+
+  function addManualTriggerFromPalette() {
+    const parsed = parseTriggersDraft(triggersDraft);
+    if (!parsed.ok) {
+      toast.error(parsed.error);
+      return;
+    }
+    if (parsed.value.length > 0) {
+      toast.error("Workflow already has a trigger");
+      return;
+    }
+    const next = [{ id: "manual", kind: "manual", enabled: true }];
+    setTriggersDraft(formatJson(next));
+    setTriggers(deriveTriggerSummaries(next));
+    setSelectedCanvasNodeId("trigger:manual");
+  }
+
+  function insertNodeFromPalette(payload: WorkflowAddPayload) {
+    if (payload.kind === "manual_trigger") {
+      addManualTriggerFromPalette();
+      closeAddStepDialog();
+      return;
+    }
+    const targetNodeId =
+      addStepTargetNodeId === undefined
+        ? selectedCanvasNodeId
+        : addStepTargetNodeId;
+    insertNode(
+      payload.kind,
+      targetNodeId,
+      addStepTargetSourceHandle,
+      toolForPalettePayload(payload),
+    );
+    closeAddStepDialog();
   }
 
   function handlePaletteDrop(event: DragEvent<HTMLElement>) {
@@ -1129,7 +1293,12 @@ function WorkflowsPage() {
       event.dataTransfer.getData(WORKFLOW_PALETTE_MIME),
     );
     if (!payload) return;
-    appendNodeFromPalette(payload);
+    insertNode(
+      payload.kind,
+      selectedCanvasNodeId,
+      null,
+      toolForPalettePayload(payload),
+    );
   }
 
   function toolForPalettePayload(
@@ -1176,6 +1345,19 @@ function WorkflowsPage() {
     );
     if (index < 0) return;
     moveNode(index, direction);
+  }
+
+  function cloneSelectedCanvasNode(nodeId: string) {
+    const parsed = parseNodesDraft(nodesDraft);
+    if (!parsed.ok) {
+      toast.error(parsed.error);
+      return;
+    }
+    const result = cloneWorkflowNodeAfter(parsed.value, nodeId);
+    if (!result) return;
+    setNodesDraft(formatJson(result.nodes));
+    setSelectedCanvasNodeId(result.clonedId);
+    setSelectedCanvasEdgeId(null);
   }
 
   function connectCanvasReferenceEdge(connection: WorkflowCanvasConnection) {
@@ -1258,13 +1440,32 @@ function WorkflowsPage() {
     setSelectedCanvasEdgeId(null);
   }
 
+  function selectRunFromHistory(runId: string) {
+    if (detail?.run.id === runId && pendingRunId === null) return;
+    setPendingRunId(runId);
+    void loadRunDetail(runId, selected?.id);
+  }
+
   function deleteNode(index: number) {
     const parsed = parseNodesDraft(nodesDraft);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;
     }
-    setNodesDraft(formatJson(parsed.value.filter((_, item) => item !== index)));
+    const node = parsed.value[index];
+    if (!node) return;
+    deleteWorkflowNode(node.id);
+  }
+
+  function deleteWorkflowNode(nodeId: string) {
+    const parsed = parseNodesDraft(nodesDraft);
+    if (!parsed.ok) {
+      toast.error(parsed.error);
+      return;
+    }
+    setNodesDraft(formatJson(removeWorkflowNode(parsed.value, nodeId)));
+    setSelectedCanvasNodeId((current) => (current === nodeId ? null : current));
+    setSelectedCanvasEdgeId(null);
   }
 
   function validateCurrentNodeReferences() {
@@ -1419,7 +1620,6 @@ function WorkflowsPage() {
         if (!value) return node;
         return { ...node, condition: value };
       }
-      if (field === "else" && node.type !== "builtin.if_else") return node;
       return { ...node, [field]: parseNodeIdList(value) };
     });
   }
@@ -1704,12 +1904,6 @@ function WorkflowsPage() {
     setTriggers(deriveTriggerSummaries(next));
   }
 
-  function updateTriggersDraft(value: string) {
-    setTriggersDraft(value);
-    const parsed = parseTriggersDraft(value);
-    if (parsed.ok) setTriggers(deriveTriggerSummaries(parsed.value));
-  }
-
   function nodeCardProps(
     node: WorkflowNode,
     index: number,
@@ -1764,14 +1958,62 @@ function WorkflowsPage() {
       <Sidebar />
       <main className="flex min-w-0 flex-1 flex-col bg-paper text-ink">
         {loading && <LoadingHairline />}
-        <header className="flex shrink-0 flex-col gap-3 border-b border-paper-rule px-4 py-3 md:flex-row md:items-center md:justify-between">
+        <header className="flex shrink-0 flex-col gap-3 border-b border-paper-rule bg-paper px-4 py-3 md:flex-row md:items-center md:justify-between">
           <div className="min-w-0">
-            <SectionEyebrow>Workflows</SectionEyebrow>
-            <h1 className="truncate text-lg font-semibold tracking-tight">
-              {selected?.name ?? "Workflow console"}
-            </h1>
+            <div className="flex min-w-0 items-center gap-2 text-sm text-ink-faint">
+              <span>Workflows</span>
+              <span aria-hidden="true">›</span>
+              <h1 className="truncate text-sm font-semibold text-ink">
+                {selected?.name ?? "Workflow console"}
+              </h1>
+            </div>
+            {selected && (
+              <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                <Badge
+                  variant={
+                    selected.status === "published" ? "healthy" : "outline"
+                  }
+                >
+                  {selected.status}
+                </Badge>
+                <Badge variant="outline">v{selected.version}</Badge>
+                {parsedNodes.ok && (
+                  <Badge
+                    variant={nodeReferences.ok ? "outline" : "destructive"}
+                  >
+                    {parsedNodes.value.length} nodes
+                  </Badge>
+                )}
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {workflows.length > 0 && (
+              <Select
+                value={selected?.id ?? ""}
+                onValueChange={(workflowId) => {
+                  const workflow = workflows.find(
+                    (item) => item.id === workflowId,
+                  );
+                  if (workflow) void selectWorkflow(workflow);
+                }}
+              >
+                <SelectTrigger
+                  size="sm"
+                  aria-label="Open workflow"
+                  className="w-[190px]"
+                >
+                  <SelectValue placeholder="Open workflow" />
+                </SelectTrigger>
+                <SelectContent>
+                  {workflows.map((workflow) => (
+                    <SelectItem key={workflow.id} value={workflow.id}>
+                      {workflow.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
             <Button
               type="button"
               variant="ghost"
@@ -1830,6 +2072,20 @@ function WorkflowsPage() {
               <Download className="size-4" />
               Export
             </Button>
+            <Button
+              type="button"
+              variant="ghost-destructive"
+              size="sm"
+              onClick={() => selected && void deleteWorkflow(selected)}
+              disabled={!selected || busy !== null}
+            >
+              {selected && busy === `delete:${selected.id}` ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Trash2 className="size-4" />
+              )}
+              Delete
+            </Button>
             <Button asChild type="button" variant="ghost" size="sm">
               <Link to="/workflow-runs">
                 <ScrollText className="size-4" />
@@ -1863,404 +2119,104 @@ function WorkflowsPage() {
           </div>
         </header>
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[280px_minmax(420px,1fr)_420px]">
+        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[260px_minmax(0,1fr)_420px]">
           <WorkflowList
             workflows={workflows}
             selectedId={selected?.id ?? null}
-            runs={runs}
             onCreate={createWorkflow}
             onSelect={(workflow) => void selectWorkflow(workflow)}
+            onDelete={(workflow) => void deleteWorkflow(workflow)}
+            busy={busy}
           />
-
-          <section className="min-h-0 overflow-y-auto border-r border-paper-rule">
-            {selected ? (
-              <div className="space-y-4 p-4">
-                <div className="grid gap-3 md:grid-cols-[1fr_160px]">
-                  <label className="grid gap-1">
-                    <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                      Name
-                    </span>
-                    <Input
-                      value={nameDraft}
-                      onChange={(event) => setNameDraft(event.target.value)}
-                    />
-                  </label>
-                  <div className="grid gap-1">
-                    <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                      Version
-                    </span>
-                    <div className="flex h-9 items-center gap-2 border border-paper-rule bg-paper-sunk px-3">
-                      <Badge
-                        variant={
-                          selected.status === "published"
-                            ? "healthy"
-                            : "outline"
-                        }
-                      >
-                        {selected.status}
-                      </Badge>
-                      <span className="font-mono text-xs text-ink-soft">
-                        v{selected.version}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                <label className="grid gap-1">
-                  <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                    Description
-                  </span>
-                  <Input
-                    value={descriptionDraft}
-                    onChange={(event) =>
-                      setDescriptionDraft(event.target.value)
-                    }
-                  />
-                </label>
-
-                <label className="grid gap-1">
-                  <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                    Input Schema JSON
-                  </span>
-                  <Textarea
-                    aria-label="Input Schema JSON"
-                    value={inputSchemaDraft}
-                    rows={6}
-                    onChange={(event) =>
-                      setInputSchemaDraft(event.target.value)
-                    }
-                  />
-                </label>
-
-                <section className="space-y-2 border border-paper-rule bg-paper-sunk p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <SectionEyebrow>Triggers</SectionEyebrow>
-                    <Badge variant="outline">{triggers.length}</Badge>
-                  </div>
-                  <div aria-label="Workflow Node Cards" className="grid gap-2">
-                    {triggers.map((trigger) => {
-                      const busyKey = `trigger:${trigger.id}`;
-                      const canRun =
-                        trigger.runnable &&
-                        selected.status === "published" &&
-                        busy === null;
-                      return (
-                        <div
-                          key={trigger.id}
-                          role="group"
-                          aria-label={`Trigger ${trigger.id}`}
-                          className="grid min-w-0 gap-2 border border-paper-rule bg-paper px-2 py-2"
-                        >
-                          <div className="flex min-w-0 items-center gap-2">
-                            <label className="flex shrink-0 items-center gap-1 text-xs text-ink-soft">
-                              <input
-                                aria-label={`${trigger.id} trigger enabled`}
-                                type="checkbox"
-                                checked={triggerEnabledChecked(trigger)}
-                                disabled={!triggerEnabledEditable(trigger)}
-                                onChange={(event) =>
-                                  updateTriggerEnabled(
-                                    trigger.id,
-                                    event.target.checked,
-                                  )
-                                }
-                              />
-                              On
-                            </label>
-                            <Badge
-                              variant={trigger.runnable ? "healthy" : "outline"}
-                            >
-                              {trigger.kind}
-                            </Badge>
-                            <span className="min-w-0 flex-1 truncate font-mono text-xs text-ink-soft">
-                              {trigger.id}
-                            </span>
-                            <Badge
-                              variant={
-                                trigger.enabled === false
-                                  ? "outline"
-                                  : "secondary"
-                              }
-                            >
-                              {trigger.enabled === false
-                                ? "disabled"
-                                : "enabled"}
-                            </Badge>
-                            {trigger.inputSchema !== undefined && (
-                              <Badge variant="outline">input schema</Badge>
-                            )}
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="xs"
-                              onClick={() => void runTrigger(trigger)}
-                              disabled={!canRun}
-                              title={
-                                selected.status === "published"
-                                  ? undefined
-                                  : "Publish before running a trigger"
-                              }
-                            >
-                              {busy === busyKey ? (
-                                <Loader2 className="size-3 animate-spin" />
-                              ) : (
-                                <Play className="size-3" />
-                              )}
-                              Run
-                            </Button>
-                          </div>
-                          {(trigger.kind === "manual" ||
-                            trigger.kind === "webhook") && (
-                            <label className="grid gap-1 text-xs text-ink-soft">
-                              Input Schema JSON
-                              <Textarea
-                                aria-label={`${trigger.id} trigger input schema`}
-                                value={formatOptionalJson(trigger.inputSchema)}
-                                onChange={(event) =>
-                                  updateTriggerInputSchema(
-                                    trigger.id,
-                                    event.target.value,
-                                  )
-                                }
-                                className="min-h-24 font-mono text-xs"
-                              />
-                            </label>
-                          )}
-                          {trigger.kind === "scheduled" && (
-                            <div className="grid gap-2">
-                              <div className="grid gap-2 sm:grid-cols-2">
-                                <label className="grid gap-1 text-xs text-ink-soft">
-                                  Cron
-                                  <Input
-                                    aria-label={`${trigger.id} scheduled cron`}
-                                    value={scheduledTriggerExpr(trigger)}
-                                    onChange={(event) =>
-                                      updateScheduledTrigger(
-                                        trigger.id,
-                                        "expr",
-                                        event.target.value,
-                                      )
-                                    }
-                                    className="font-mono text-xs"
-                                  />
-                                </label>
-                                <label className="grid gap-1 text-xs text-ink-soft">
-                                  TZ
-                                  <Input
-                                    aria-label={`${trigger.id} scheduled timezone`}
-                                    value={scheduledTriggerTz(trigger)}
-                                    onChange={(event) =>
-                                      updateScheduledTrigger(
-                                        trigger.id,
-                                        "tz",
-                                        event.target.value,
-                                      )
-                                    }
-                                    className="font-mono text-xs"
-                                  />
-                                </label>
-                              </div>
-                              <label className="grid gap-1 text-xs text-ink-soft">
-                                Input JSON
-                                <Textarea
-                                  aria-label={`${trigger.id} scheduled input`}
-                                  value={formatOptionalJson(trigger.input)}
-                                  onChange={(event) =>
-                                    updateScheduledTriggerInput(
-                                      trigger.id,
-                                      event.target.value,
-                                    )
-                                  }
-                                  className="min-h-24 font-mono text-xs"
-                                />
-                              </label>
-                            </div>
-                          )}
-                          {trigger.kind === "webhook" && (
-                            <div className="grid gap-2">
-                              <label className="grid gap-1 text-xs text-ink-soft">
-                                Path
-                                <Input
-                                  aria-label={`${trigger.id} webhook path`}
-                                  value={
-                                    typeof trigger.path === "string"
-                                      ? trigger.path
-                                      : ""
-                                  }
-                                  onChange={(event) =>
-                                    updateWebhookTriggerPath(
-                                      trigger.id,
-                                      event.target.value,
-                                    )
-                                  }
-                                  className="font-mono text-xs"
-                                />
-                              </label>
-                              <label className="grid gap-1 text-xs text-ink-soft">
-                                Secret SHA-256
-                                <Input
-                                  aria-label={`${trigger.id} webhook secret sha-256`}
-                                  value={
-                                    typeof trigger.secretSha256 === "string"
-                                      ? trigger.secretSha256
-                                      : ""
-                                  }
-                                  onChange={(event) =>
-                                    updateWebhookTriggerSecretSha256(
-                                      trigger.id,
-                                      event.target.value,
-                                    )
-                                  }
-                                  className="font-mono text-xs"
-                                />
-                              </label>
-                            </div>
-                          )}
-                          {trigger.kind === "task" && (
-                            <label className="grid gap-1 text-xs text-ink-soft">
-                              Filter JSON
-                              <Textarea
-                                aria-label={`${trigger.id} task filter`}
-                                value={
-                                  trigger.filter === undefined
-                                    ? "null"
-                                    : formatJson(trigger.filter)
-                                }
-                                onChange={(event) =>
-                                  updateTaskTriggerFilter(
-                                    trigger.id,
-                                    event.target.value,
-                                  )
-                                }
-                                className="min-h-24 font-mono text-xs"
-                              />
-                            </label>
-                          )}
-                        </div>
-                      );
-                    })}
-                    {triggers.length === 0 && (
-                      <div className="text-sm text-ink-soft">No triggers</div>
-                    )}
-                  </div>
-                  <label className="grid gap-1">
-                    <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                      Triggers JSON
-                    </span>
-                    <Textarea
-                      aria-label="Triggers JSON"
-                      value={triggersDraft}
-                      rows={6}
-                      onChange={(event) =>
-                        updateTriggersDraft(event.target.value)
-                      }
-                    />
-                  </label>
-                </section>
-
-                <section
-                  aria-label="Workflow Canvas"
-                  className="h-[420px] overflow-hidden border border-paper-rule bg-paper"
-                  onDragOver={(event) => event.preventDefault()}
-                  onDrop={handlePaletteDrop}
+          <section className="flex min-h-0 flex-col border-r border-paper-rule">
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-paper-rule bg-paper px-4 py-2">
+              <div
+                role="tablist"
+                aria-label="Workflow designer views"
+                className="inline-flex overflow-hidden border border-paper-rule bg-paper-sunk"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={designerView === "edit"}
+                  className={cn(
+                    "flex h-9 items-center gap-2 px-3 text-sm",
+                    designerView === "edit"
+                      ? "bg-paper text-signal-blue"
+                      : "text-ink-faint hover:text-ink",
+                  )}
+                  onClick={() => setDesignerView("edit")}
                 >
-                  {parsedNodes.ok ? (
-                    <WorkflowCanvas
-                      projection={workflowGraphProjection}
-                      selectedNodeId={selectedCanvasNodeId}
-                      selectedEdgeId={selectedCanvasEdgeId}
-                      onSelectNode={selectCanvasNode}
-                      onSelectEdge={(edge) =>
-                        setSelectedCanvasEdgeId(edge?.id ?? null)
-                      }
-                      onConnectReference={connectCanvasReferenceEdge}
-                      onRemoveSelectedEdge={removeSelectedCanvasReferenceEdge}
-                      onMoveSelectedUp={() => moveSelectedCanvasNode(-1)}
-                      onMoveSelectedDown={() => moveSelectedCanvasNode(1)}
-                      onNodePositionChange={updateCanvasNodePosition}
-                    />
-                  ) : (
-                    <div className="flex h-full items-center justify-center p-6 text-sm text-ink-soft">
-                      Invalid node JSON
-                    </div>
+                  <Edit3 className="size-4" />
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={designerView === "runs"}
+                  className={cn(
+                    "flex h-9 items-center gap-2 border-l border-paper-rule px-3 text-sm",
+                    designerView === "runs"
+                      ? "bg-paper text-signal-blue"
+                      : "text-ink-faint hover:text-ink",
                   )}
-                </section>
-
-                <WorkflowNodePalette
-                  mcpTools={mcpTools}
-                  agents={agents}
-                  firstMcpTool={firstMcpTool}
-                  firstAvailableAgent={firstAvailableAgent}
-                  onAdd={appendNodeFromPalette}
-                />
-
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <SectionEyebrow>Cards</SectionEyebrow>
-                    <Badge
-                      variant={
-                        parsedNodes.ok && nodeReferences.ok
-                          ? "healthy"
-                          : "destructive"
-                      }
-                    >
-                      {parsedNodes.ok && nodeReferences.ok
-                        ? `${parsedNodes.value.length} nodes`
-                        : parsedNodes.ok
-                          ? "invalid refs"
-                          : "invalid json"}
-                    </Badge>
-                  </div>
-                  {parsedNodes.ok && !nodeReferences.ok && (
-                    <div className="flex items-start gap-2 border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-                      <AlertCircle className="mt-0.5 size-3 shrink-0" />
-                      <span>{nodeReferences.message}</span>
-                    </div>
-                  )}
-                  <div
-                    role="group"
-                    aria-label="Workflow Node Cards"
-                    className="grid gap-2"
-                  >
-                    {parsedNodes.ok
-                      ? parsedNodes.value.map((node, index) => (
-                          <NodeCard
-                            key={`${node.id}-${index}`}
-                            {...nodeCardProps(
-                              node,
-                              index,
-                              parsedNodes.value.length,
-                            )}
-                          />
-                        ))
-                      : null}
-                  </div>
-                </div>
-
-                <label className="grid gap-1">
-                  <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                    Nodes JSON
-                  </span>
-                  <Textarea
-                    value={nodesDraft}
-                    onChange={(event) => setNodesDraft(event.target.value)}
-                    spellCheck={false}
-                    className="min-h-72 resize-y font-mono text-xs leading-relaxed"
-                  />
-                </label>
-
-                <label className="grid gap-1">
-                  <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                    Run input
-                  </span>
-                  <Textarea
-                    value={inputDraft}
-                    onChange={(event) => setInputDraft(event.target.value)}
-                    spellCheck={false}
-                    className="min-h-36 resize-y font-mono text-xs leading-relaxed"
-                  />
-                </label>
+                  onClick={() => setDesignerView("runs")}
+                >
+                  <Clock3 className="size-4" />
+                  Run History
+                </button>
               </div>
+              <div className="flex items-center gap-2">
+                {!nodeReferences.ok && (
+                  <Badge variant="destructive">reference issue</Badge>
+                )}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Workflow settings"
+                  onClick={() => {
+                    setSelectedCanvasNodeId(null);
+                    setSelectedCanvasEdgeId(null);
+                    setDesignerView("edit");
+                  }}
+                >
+                  <Settings className="size-4" />
+                </Button>
+              </div>
+            </div>
+
+            {selected ? (
+              <section
+                aria-label="Workflow Canvas"
+                className="workflow-designer-grid relative min-h-0 flex-1 overflow-hidden bg-paper-sunk"
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={handlePaletteDrop}
+              >
+                {parsedNodes.ok ? (
+                  <WorkflowCanvas
+                    projection={workflowGraphProjection}
+                    selectedNodeId={selectedCanvasNodeId}
+                    selectedEdgeId={selectedCanvasEdgeId}
+                    onSelectNode={selectCanvasNode}
+                    onSelectEdge={(edge) =>
+                      setSelectedCanvasEdgeId(edge?.id ?? null)
+                    }
+                    onConnectReference={connectCanvasReferenceEdge}
+                    onRemoveSelectedEdge={removeSelectedCanvasReferenceEdge}
+                    onMoveSelectedUp={() => moveSelectedCanvasNode(-1)}
+                    onMoveSelectedDown={() => moveSelectedCanvasNode(1)}
+                    onCloneNode={cloneSelectedCanvasNode}
+                    onDeleteNode={deleteWorkflowNode}
+                    onNodePositionChange={updateCanvasNodePosition}
+                    onAddStep={openAddStepDialog}
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center p-6 text-sm text-ink-soft">
+                    Invalid node JSON
+                  </div>
+                )}
+              </section>
             ) : (
               <div className="flex h-full items-center justify-center p-8">
                 <Button type="button" onClick={createWorkflow}>
@@ -2272,44 +2228,212 @@ function WorkflowsPage() {
           </section>
 
           <section className="flex min-h-0 flex-col bg-paper">
-            <WorkflowInspector
-              workflow={selected}
-              projection={workflowGraphProjection}
-              selectedNodeId={selectedCanvasNodeId}
-              nodeReferences={nodeReferences}
-              nodes={parsedNodes.ok ? parsedNodes.value : []}
-              nodeCardProps={nodeCardProps}
-            />
-            <RunConsole
-              workflowName={selected?.name ?? null}
-              detail={detail}
-              runs={runs}
-              selectedStep={selectedStep}
-              busy={busy}
-              hasMoreRuns={hasMoreRuns}
-              loadingMoreRuns={loadingMoreRuns}
-              filters={{
-                mode,
-                status,
-                triggerId,
-                createdFrom,
-                createdTo,
-              }}
-              onFiltersChange={updateRunFilters}
-              onSelectRun={(runId) => void loadRunDetail(runId)}
-              onLoadMoreRuns={() => void loadMoreRuns()}
-              onRefresh={() => {
-                if (!detail) return;
-                void loadRunDetail(detail.run.id, selected?.id);
-              }}
-              onSelectStep={selectRunConsoleStep}
-              onRerun={() => void rerun()}
-              onCancel={() => void cancelRun()}
-            />
+            {designerView === "edit" ? (
+              <WorkflowInspector
+                workflow={selected}
+                projection={workflowGraphProjection}
+                selectedNodeId={selectedCanvasNodeId}
+                nodeReferences={nodeReferences}
+                nodes={parsedNodes.ok ? parsedNodes.value : []}
+                nodeCardProps={nodeCardProps}
+                nameDraft={nameDraft}
+                descriptionDraft={descriptionDraft}
+                inputSchemaDraft={inputSchemaDraft}
+                inputDraft={inputDraft}
+                triggers={triggers}
+                onNameChange={setNameDraft}
+                onDescriptionChange={setDescriptionDraft}
+                onInputSchemaChange={setInputSchemaDraft}
+                onInputDraftChange={setInputDraft}
+                onRunTest={() => void runWorkflow("test")}
+                onRunTrigger={(trigger) => void runTrigger(trigger)}
+                triggerBusy={busy}
+                selectedStatus={selected?.status ?? null}
+                updateTriggerEnabled={updateTriggerEnabled}
+                updateTriggerInputSchema={updateTriggerInputSchema}
+                updateScheduledTrigger={updateScheduledTrigger}
+                updateScheduledTriggerInput={updateScheduledTriggerInput}
+                updateWebhookTriggerPath={updateWebhookTriggerPath}
+                updateWebhookTriggerSecretSha256={
+                  updateWebhookTriggerSecretSha256
+                }
+                updateTaskTriggerFilter={updateTaskTriggerFilter}
+              />
+            ) : (
+              <>
+                <div className="flex shrink-0 items-center justify-end border-b border-paper-rule px-4 py-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setDesignerView("edit")}
+                  >
+                    <XCircle className="size-4" />
+                    Exit Run History
+                  </Button>
+                </div>
+                <RunConsole
+                  workflowName={selected?.name ?? null}
+                  detail={detail}
+                  runs={runs}
+                  selectedStep={selectedStep}
+                  pendingRunId={pendingRunId}
+                  busy={busy}
+                  hasMoreRuns={hasMoreRuns}
+                  loadingMoreRuns={loadingMoreRuns}
+                  filters={{
+                    mode,
+                    status,
+                    triggerId,
+                    createdFrom,
+                    createdTo,
+                  }}
+                  onFiltersChange={updateRunFilters}
+                  onSelectRun={selectRunFromHistory}
+                  onLoadMoreRuns={() => void loadMoreRuns()}
+                  onRefresh={() => {
+                    if (!detail) return;
+                    void loadRunDetail(detail.run.id, selected?.id);
+                  }}
+                  onSelectStep={selectRunConsoleStep}
+                  onRerun={() => void rerun()}
+                  onCancel={() => void cancelRun()}
+                />
+              </>
+            )}
           </section>
         </div>
+        <AddStepDialog
+          open={addStepTargetNodeId !== undefined}
+          targetNodeId={addStepTargetNodeId ?? null}
+          triggerOnly={
+            addStepTargetNodeId === null &&
+            parsedNodes.ok &&
+            parsedNodes.value.length === 0 &&
+            triggers.length === 0
+          }
+          mcpTools={mcpTools}
+          agents={agents}
+          triggers={triggers}
+          onOpenChange={(open) => {
+            if (!open) closeAddStepDialog();
+          }}
+          onAdd={insertNodeFromPalette}
+        />
       </main>
     </div>
+  );
+}
+
+function WorkflowList({
+  workflows,
+  selectedId,
+  onCreate,
+  onSelect,
+  onDelete,
+  busy,
+}: {
+  workflows: WorkflowDefinition[];
+  selectedId: string | null;
+  onCreate: () => void;
+  onSelect: (workflow: WorkflowDefinition) => void;
+  onDelete: (workflow: WorkflowDefinition) => void;
+  busy: string | null;
+}) {
+  return (
+    <aside
+      aria-label="Workflow List"
+      className="hidden min-h-0 flex-col overflow-hidden border-r border-paper-rule bg-paper lg:flex"
+    >
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-paper-rule px-3 py-2">
+        <div className="flex items-center gap-2">
+          <Workflow className="size-4 text-ink-faint" />
+          <SectionEyebrow>Workflows</SectionEyebrow>
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Create workflow"
+          onClick={onCreate}
+        >
+          <Plus className="size-3" />
+        </Button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-2">
+        {workflows.length > 0 ? (
+          <div className="space-y-1">
+            {workflows.map((workflow) => {
+              const active = workflow.id === selectedId;
+              return (
+                <div
+                  key={workflow.id}
+                  className={cn(
+                    "group flex items-start gap-1 border transition",
+                    active
+                      ? "border-signal-blue bg-signal-blue/10"
+                      : "border-transparent hover:border-paper-rule hover:bg-paper-sunk",
+                  )}
+                >
+                  <button
+                    type="button"
+                    className={cn(
+                      "min-w-0 flex-1 px-2.5 py-2 text-left transition",
+                      active
+                        ? "text-ink"
+                        : "text-ink-soft group-hover:text-ink",
+                    )}
+                    onClick={() => onSelect(workflow)}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="min-w-0 truncate text-sm font-medium">
+                        {workflow.name}
+                      </span>
+                      <Badge
+                        variant={
+                          workflow.status === "published"
+                            ? "healthy"
+                            : "outline"
+                        }
+                      >
+                        {workflow.status}
+                      </Badge>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-ink-faint">
+                      <span>v{workflow.version}</span>
+                      <span>{shortDate(workflow.updatedAt)}</span>
+                    </div>
+                  </button>
+                  <Button
+                    type="button"
+                    variant="ghost-destructive"
+                    size="icon-xs"
+                    aria-label={`Delete workflow ${workflow.name}`}
+                    title="Delete workflow"
+                    className="mt-2 mr-2 opacity-70 group-hover:opacity-100"
+                    disabled={busy !== null}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onDelete(workflow);
+                    }}
+                  >
+                    {busy === `delete:${workflow.id}` ? (
+                      <Loader2 className="size-3 animate-spin" />
+                    ) : (
+                      <Trash2 className="size-3" />
+                    )}
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="flex h-full items-center justify-center p-4 text-center text-sm text-ink-soft">
+            No workflows yet.
+          </div>
+        )}
+      </div>
+    </aside>
   );
 }
 
@@ -2320,6 +2444,26 @@ function WorkflowInspector({
   nodeReferences,
   nodes,
   nodeCardProps,
+  nameDraft,
+  descriptionDraft,
+  inputSchemaDraft,
+  inputDraft,
+  triggers,
+  onNameChange,
+  onDescriptionChange,
+  onInputSchemaChange,
+  onInputDraftChange,
+  onRunTest,
+  onRunTrigger,
+  triggerBusy,
+  selectedStatus,
+  updateTriggerEnabled,
+  updateTriggerInputSchema,
+  updateScheduledTrigger,
+  updateScheduledTriggerInput,
+  updateWebhookTriggerPath,
+  updateWebhookTriggerSecretSha256,
+  updateTaskTriggerFilter,
 }: {
   workflow: WorkflowDefinition | null;
   projection: WorkflowGraphProjection;
@@ -2331,6 +2475,30 @@ function WorkflowInspector({
     index: number,
     nodeCount: number,
   ) => NodeCardProps;
+  nameDraft: string;
+  descriptionDraft: string;
+  inputSchemaDraft: string;
+  inputDraft: string;
+  triggers: WorkflowTriggerSummary[];
+  onNameChange: (value: string) => void;
+  onDescriptionChange: (value: string) => void;
+  onInputSchemaChange: (value: string) => void;
+  onInputDraftChange: (value: string) => void;
+  onRunTest: () => void;
+  onRunTrigger: (trigger: WorkflowTriggerSummary) => void;
+  triggerBusy: string | null;
+  selectedStatus: WorkflowDefinition["status"] | null;
+  updateTriggerEnabled: (triggerId: string, enabled: boolean) => void;
+  updateTriggerInputSchema: (triggerId: string, value: string) => void;
+  updateScheduledTrigger: (
+    triggerId: string,
+    field: "expr" | "tz",
+    value: string,
+  ) => void;
+  updateScheduledTriggerInput: (triggerId: string, value: string) => void;
+  updateWebhookTriggerPath: (triggerId: string, value: string) => void;
+  updateWebhookTriggerSecretSha256: (triggerId: string, value: string) => void;
+  updateTaskTriggerFilter: (triggerId: string, value: string) => void;
 }) {
   const selectedNode = selectedNodeId
     ? (projection.nodes.find((node) => node.id === selectedNodeId) ?? null)
@@ -2340,11 +2508,14 @@ function WorkflowInspector({
     data?.kind === "step" ? nodes.findIndex((node) => node.id === data.id) : -1;
   const inspectedNode =
     inspectedNodeIndex >= 0 ? (nodes[inspectedNodeIndex] ?? null) : null;
+  const [workflowInspectorTab, setWorkflowInspectorTab] = useState<
+    "workflow" | "test"
+  >("test");
 
   return (
     <aside
       aria-label="Workflow Inspector"
-      className="max-h-[58dvh] min-h-[260px] shrink-0 overflow-y-auto border-b border-paper-rule bg-paper-sunk px-4 py-3"
+      className="min-h-0 flex-1 overflow-y-auto bg-paper px-4 py-4"
     >
       <div className="flex items-center justify-between gap-2">
         <SectionEyebrow>Inspector</SectionEyebrow>
@@ -2406,7 +2577,7 @@ function WorkflowInspector({
           )}
         </div>
       ) : (
-        <div className="mt-3 space-y-2">
+        <div className="mt-4 space-y-4">
           <div className="text-sm font-semibold">
             {workflow?.name ?? "No workflow selected"}
           </div>
@@ -2424,6 +2595,334 @@ function WorkflowInspector({
               <Badge variant="outline">{projection.edges.length} edges</Badge>
             </div>
           )}
+          {workflow && (
+            <>
+              <div
+                role="tablist"
+                aria-label="Workflow configuration views"
+                className="flex gap-5 border-b border-paper-rule"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={workflowInspectorTab === "workflow"}
+                  className={cn(
+                    "border-b-2 px-0 pb-2 text-sm font-medium",
+                    workflowInspectorTab === "workflow"
+                      ? "border-signal-blue text-signal-blue"
+                      : "border-transparent text-ink-soft hover:text-ink",
+                  )}
+                  onClick={() => setWorkflowInspectorTab("workflow")}
+                >
+                  Workflow Configuration
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={workflowInspectorTab === "test"}
+                  className={cn(
+                    "border-b-2 px-0 pb-2 text-sm font-medium",
+                    workflowInspectorTab === "test"
+                      ? "border-signal-blue text-signal-blue"
+                      : "border-transparent text-ink-soft hover:text-ink",
+                  )}
+                  onClick={() => setWorkflowInspectorTab("test")}
+                >
+                  Test Configuration
+                </button>
+              </div>
+
+              {workflowInspectorTab === "workflow" ? (
+                <div className="grid gap-3">
+                  <InspectorSection title="Workflow Basics" defaultOpen>
+                    <label className="grid gap-1">
+                      <span className="text-sm font-medium text-ink-soft">
+                        Name
+                      </span>
+                      <Input
+                        aria-label="Workflow name"
+                        value={nameDraft}
+                        onChange={(event) => onNameChange(event.target.value)}
+                      />
+                    </label>
+                    <label className="grid gap-1">
+                      <span className="text-sm font-medium text-ink-soft">
+                        Description
+                      </span>
+                      <Input
+                        aria-label="Workflow description"
+                        value={descriptionDraft}
+                        onChange={(event) =>
+                          onDescriptionChange(event.target.value)
+                        }
+                      />
+                    </label>
+                  </InspectorSection>
+                  <InspectorSection title="Input Contract">
+                    <label className="grid gap-1">
+                      <span className="text-sm font-medium text-ink-soft">
+                        Input Schema JSON
+                      </span>
+                      <Textarea
+                        aria-label="Input Schema JSON"
+                        value={inputSchemaDraft}
+                        rows={9}
+                        spellCheck={false}
+                        onChange={(event) =>
+                          onInputSchemaChange(event.target.value)
+                        }
+                        className="min-h-48 font-mono text-xs leading-relaxed"
+                      />
+                    </label>
+                  </InspectorSection>
+                  <InspectorSection
+                    title="Triggers"
+                    badge={`${triggers.length}`}
+                    defaultOpen
+                  >
+                    <div className="text-xs text-ink-faint">
+                      Manual now; scheduled/webhook/task ready for later.
+                    </div>
+                    <div className="grid gap-2">
+                      {triggers.map((trigger) => {
+                        const busyKey = `trigger:${trigger.id}`;
+                        const canRun =
+                          trigger.runnable &&
+                          selectedStatus === "published" &&
+                          triggerBusy === null;
+                        return (
+                          <div
+                            key={trigger.id}
+                            role="group"
+                            aria-label={`Trigger ${trigger.id}`}
+                            className="grid gap-2 border border-paper-rule bg-paper-sunk px-3 py-2"
+                          >
+                            <div className="flex min-w-0 items-center gap-2">
+                              <label className="flex shrink-0 items-center gap-1 text-xs text-ink-soft">
+                                <input
+                                  aria-label={`${trigger.id} trigger enabled`}
+                                  type="checkbox"
+                                  checked={triggerEnabledChecked(trigger)}
+                                  disabled={!triggerEnabledEditable(trigger)}
+                                  onChange={(event) =>
+                                    updateTriggerEnabled(
+                                      trigger.id,
+                                      event.target.checked,
+                                    )
+                                  }
+                                />
+                                On
+                              </label>
+                              <Badge
+                                variant={
+                                  trigger.runnable ? "healthy" : "outline"
+                                }
+                              >
+                                {trigger.kind}
+                              </Badge>
+                              <span className="min-w-0 flex-1 truncate font-mono text-xs text-ink-soft">
+                                {trigger.id}
+                              </span>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="xs"
+                                onClick={() => onRunTrigger(trigger)}
+                                disabled={!canRun}
+                                title={
+                                  selectedStatus === "published"
+                                    ? undefined
+                                    : "Publish before running a trigger"
+                                }
+                              >
+                                {triggerBusy === busyKey ? (
+                                  <Loader2 className="size-3 animate-spin" />
+                                ) : (
+                                  <Play className="size-3" />
+                                )}
+                                Run
+                              </Button>
+                            </div>
+                            {(trigger.kind === "manual" ||
+                              trigger.kind === "webhook") && (
+                              <label className="grid gap-1 text-xs text-ink-soft">
+                                Input Schema JSON
+                                <Textarea
+                                  aria-label={`${trigger.id} trigger input schema`}
+                                  value={formatOptionalJson(
+                                    trigger.inputSchema,
+                                  )}
+                                  onChange={(event) =>
+                                    updateTriggerInputSchema(
+                                      trigger.id,
+                                      event.target.value,
+                                    )
+                                  }
+                                  className="min-h-32 font-mono text-xs leading-relaxed"
+                                />
+                              </label>
+                            )}
+                            {trigger.kind === "scheduled" && (
+                              <div className="grid gap-2">
+                                <div className="grid gap-2 sm:grid-cols-2">
+                                  <label className="grid gap-1 text-xs text-ink-soft">
+                                    Cron
+                                    <Input
+                                      aria-label={`${trigger.id} scheduled cron`}
+                                      value={scheduledTriggerExpr(trigger)}
+                                      onChange={(event) =>
+                                        updateScheduledTrigger(
+                                          trigger.id,
+                                          "expr",
+                                          event.target.value,
+                                        )
+                                      }
+                                      className="font-mono text-xs"
+                                    />
+                                  </label>
+                                  <label className="grid gap-1 text-xs text-ink-soft">
+                                    TZ
+                                    <Input
+                                      aria-label={`${trigger.id} scheduled timezone`}
+                                      value={scheduledTriggerTz(trigger)}
+                                      onChange={(event) =>
+                                        updateScheduledTrigger(
+                                          trigger.id,
+                                          "tz",
+                                          event.target.value,
+                                        )
+                                      }
+                                      className="font-mono text-xs"
+                                    />
+                                  </label>
+                                </div>
+                                <label className="grid gap-1 text-xs text-ink-soft">
+                                  Input JSON
+                                  <Textarea
+                                    aria-label={`${trigger.id} scheduled input`}
+                                  value={formatOptionalJson(trigger.input)}
+                                  onChange={(event) =>
+                                    updateScheduledTriggerInput(
+                                      trigger.id,
+                                      event.target.value,
+                                    )
+                                  }
+                                    className="min-h-32 font-mono text-xs leading-relaxed"
+                                  />
+                                </label>
+                              </div>
+                            )}
+                            {trigger.kind === "webhook" && (
+                              <div className="grid gap-2">
+                                <label className="grid gap-1 text-xs text-ink-soft">
+                                  Path
+                                  <Input
+                                    aria-label={`${trigger.id} webhook path`}
+                                    value={
+                                      typeof trigger.path === "string"
+                                        ? trigger.path
+                                        : ""
+                                    }
+                                    onChange={(event) =>
+                                      updateWebhookTriggerPath(
+                                        trigger.id,
+                                        event.target.value,
+                                      )
+                                    }
+                                    className="font-mono text-xs"
+                                  />
+                                </label>
+                                <label className="grid gap-1 text-xs text-ink-soft">
+                                  Secret SHA-256
+                                  <Input
+                                    aria-label={`${trigger.id} webhook secret sha-256`}
+                                    value={
+                                      typeof trigger.secretSha256 === "string"
+                                        ? trigger.secretSha256
+                                        : ""
+                                    }
+                                    onChange={(event) =>
+                                      updateWebhookTriggerSecretSha256(
+                                        trigger.id,
+                                        event.target.value,
+                                      )
+                                    }
+                                    className="font-mono text-xs"
+                                  />
+                                </label>
+                              </div>
+                            )}
+                            {trigger.kind === "task" && (
+                              <label className="grid gap-1 text-xs text-ink-soft">
+                                Filter JSON
+                                <Textarea
+                                  aria-label={`${trigger.id} task filter`}
+                                  value={
+                                    trigger.filter === undefined
+                                      ? "null"
+                                      : formatJson(trigger.filter)
+                                  }
+                                  onChange={(event) =>
+                                    updateTaskTriggerFilter(
+                                      trigger.id,
+                                      event.target.value,
+                                    )
+                                  }
+                                  className="min-h-32 font-mono text-xs leading-relaxed"
+                                />
+                              </label>
+                            )}
+                          </div>
+                        );
+                      })}
+                      {triggers.length === 0 && (
+                        <div className="text-sm text-ink-soft">No triggers</div>
+                      )}
+                    </div>
+                  </InspectorSection>
+                </div>
+              ) : (
+                <section className="grid gap-3">
+                  <InspectorSection title="Test Input" defaultOpen>
+                    <div className="text-sm text-ink-faint">
+                      Set the payload used by the next test run.
+                    </div>
+                    <label className="grid gap-1">
+                      <span className="text-sm font-medium text-ink-soft">
+                        Test Input JSON
+                      </span>
+                      <Textarea
+                        aria-label="Run input"
+                        value={inputDraft}
+                        rows={18}
+                        spellCheck={false}
+                        onChange={(event) =>
+                          onInputDraftChange(event.target.value)
+                        }
+                        className="min-h-[26rem] font-mono text-xs leading-relaxed"
+                      />
+                    </label>
+                  </InspectorSection>
+                  <Button
+                    type="button"
+                    variant="signal"
+                    size="sm"
+                    className="w-fit"
+                    aria-label="Run workflow test with configured input"
+                    onClick={onRunTest}
+                    disabled={triggerBusy !== null}
+                  >
+                    {triggerBusy === "test" ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Play className="size-4" />
+                    )}
+                    Test
+                  </Button>
+                </section>
+              )}
+            </>
+          )}
         </div>
       )}
 
@@ -2437,158 +2936,450 @@ function WorkflowInspector({
   );
 }
 
-function WorkflowNodePalette({
+type AddStepCategory = "Trigger" | "Built-in" | "Logic" | "AI" | "Tools";
+
+interface AddStepCatalogItem {
+  id: string;
+  label: string;
+  ariaLabel?: string;
+  category: AddStepCategory;
+  description: string;
+  payload: WorkflowAddPayload;
+  disabled?: boolean;
+  title?: string;
+  inputs: string[];
+  outputs: string[];
+}
+
+function AddStepDialog({
+  open,
+  targetNodeId,
+  triggerOnly,
   mcpTools,
   agents,
-  firstMcpTool,
-  firstAvailableAgent,
+  triggers,
+  onOpenChange,
   onAdd,
 }: {
+  open: boolean;
+  targetNodeId: string | null;
+  triggerOnly: boolean;
   mcpTools: McpToolSummary[];
   agents: AgentSummary[];
-  firstMcpTool: McpToolSummary | undefined;
-  firstAvailableAgent: AgentSummary | undefined;
-  onAdd: (payload: WorkflowPalettePayload) => void;
+  triggers: WorkflowTriggerSummary[];
+  onOpenChange: (open: boolean) => void;
+  onAdd: (payload: WorkflowAddPayload) => void;
 }) {
-  const baseItems: Array<{ label: string; payload: WorkflowPalettePayload }> = [
-    { label: "Set", payload: { kind: "set" } },
-    { label: "Transform", payload: { kind: "transform" } },
-    { label: "If", payload: { kind: "if" } },
-    { label: "If Else", payload: { kind: "if_else" } },
-    { label: "Foreach", payload: { kind: "foreach" } },
-    { label: "Python", payload: { kind: "python" } },
-    { label: "Log", payload: { kind: "log" } },
-    { label: "Exit", payload: { kind: "exit" } },
-  ];
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState<AddStepCategory>("Trigger");
+  const [previewItemId, setPreviewItemId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    setCategory(triggerOnly || triggers.length === 0 ? "Trigger" : "Built-in");
+    setQuery("");
+    setPreviewItemId(null);
+  }, [open, triggerOnly, triggers.length]);
+  const catalog = useMemo(
+    () => {
+      const items = workflowStepCatalog({
+        hasTrigger: triggers.length > 0,
+        mcpTools,
+        agents,
+      });
+      return triggerOnly
+        ? items.filter((item) => item.category === "Trigger")
+        : items;
+    },
+    [agents, mcpTools, triggerOnly, triggers.length],
+  );
+  const categories = useMemo(
+    () =>
+      (["Trigger", "Built-in", "Logic", "AI", "Tools"] as const).filter(
+        (item) => catalog.some((step) => step.category === item),
+      ),
+    [catalog],
+  );
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredCatalog = catalog.filter((item) => {
+    const matchesCategory = item.category === category;
+    if (!matchesCategory) return false;
+    if (!normalizedQuery) return true;
+    return [item.label, item.description, item.category]
+      .join(" ")
+      .toLowerCase()
+      .includes(normalizedQuery);
+  });
+  const selectedItem =
+    filteredCatalog.find((item) => item.id === previewItemId) ??
+    filteredCatalog[0] ??
+    catalog[0];
+  const catalogCount = triggerOnly ? 0 : mcpTools.length + agents.length;
 
   return (
-    <section
-      aria-label="Workflow Node Palette"
-      className="space-y-3 border border-paper-rule bg-paper-sunk p-3"
-    >
-      <div className="flex items-center justify-between gap-2">
-        <SectionEyebrow>Node Palette</SectionEyebrow>
-        <Badge variant="outline">drag or click</Badge>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {baseItems.map((item) => (
-          <PaletteButton
-            key={item.label}
-            label={item.label}
-            payload={item.payload}
-            onAdd={onAdd}
-          />
-        ))}
-        <PaletteButton
-          label="MCP Tool"
-          payload={
-            firstMcpTool
-              ? {
-                  kind: "mcp",
-                  server: firstMcpTool.server,
-                  tool: firstMcpTool.tool,
-                }
-              : { kind: "mcp" }
-          }
-          disabled={!firstMcpTool}
-          title={
-            firstMcpTool
-              ? undefined
-              : "No MCP tools are available for workflows"
-          }
-          onAdd={onAdd}
-        />
-        <PaletteButton
-          label="Agent Call"
-          payload={
-            firstAvailableAgent
-              ? { kind: "agent", agentId: firstAvailableAgent.id }
-              : { kind: "agent" }
-          }
-          disabled={!firstAvailableAgent}
-          title={
-            firstAvailableAgent
-              ? undefined
-              : "No enabled agents are available for workflows"
-          }
-          onAdd={onAdd}
-        />
-      </div>
-      {mcpTools.length > 0 && (
-        <div className="grid gap-2">
-          <SectionEyebrow>MCP Tools</SectionEyebrow>
-          <div className="flex flex-wrap gap-2">
-            {mcpTools.map((tool) => (
-              <PaletteButton
-                key={`${tool.server}:${tool.tool}`}
-                label={`${tool.server}/${tool.tool}`}
-                payload={{
-                  kind: "mcp",
-                  server: tool.server,
-                  tool: tool.tool,
-                }}
-                title={tool.description}
-                onAdd={onAdd}
-              />
-            ))}
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[calc(100dvh-3rem)] sm:max-w-[980px]">
+        <DialogHeader>
+          <div className="flex items-start justify-between gap-3 pr-8">
+            <div>
+              <DialogTitle>
+                {triggerOnly ? "Select Trigger" : "Add Step"}
+              </DialogTitle>
+              <DialogDescription>
+                {triggerOnly
+                  ? "Choose how this workflow starts."
+                  : targetNodeId
+                    ? `Insert after ${targetNodeId}.`
+                    : "Select a step to add to the workflow."}
+              </DialogDescription>
+            </div>
+            {catalogCount > 0 && (
+              <Badge variant="outline">{catalogCount} catalog items</Badge>
+            )}
           </div>
-        </div>
-      )}
-      {agents.length > 0 && (
-        <div className="grid gap-2">
-          <SectionEyebrow>Agents</SectionEyebrow>
-          <div className="flex flex-wrap gap-2">
-            {agents.map((agent) => (
-              <PaletteButton
-                key={agent.id}
-                label={agent.name || agent.id}
-                payload={{ kind: "agent", agentId: agent.id }}
-                title={agent.role}
-                disabled={agent.instantMessagesEnabled === false}
-                onAdd={onAdd}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-    </section>
+        </DialogHeader>
+        <DialogBody className="p-0">
+          <section
+            aria-label="Workflow Node Palette"
+            className="grid min-h-[520px] grid-cols-[240px_minmax(260px,1fr)_minmax(280px,1fr)] overflow-hidden"
+          >
+            {!triggerOnly && (
+              <div className="border-r border-paper-rule p-4">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-faint" />
+                  <Input
+                    aria-label="Search workflow steps"
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="Search..."
+                    className="pl-9"
+                  />
+                </div>
+                <div className="mt-4 space-y-1">
+                  {categories.map((item) => (
+                    <button
+                      key={item}
+                      type="button"
+                      className={cn(
+                        "flex h-9 w-full items-center gap-2 px-2 text-left text-sm",
+                        category === item
+                          ? "bg-signal-blue/10 text-signal-blue"
+                          : "text-ink-soft hover:bg-paper-sunk hover:text-ink",
+                      )}
+                      onClick={() => setCategory(item)}
+                      onMouseEnter={() => setPreviewItemId(null)}
+                      onFocus={() => setPreviewItemId(null)}
+                    >
+                      <StepCategoryIcon category={item} />
+                      <span>{item}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div
+              className={cn(
+                "min-h-0 overflow-y-auto border-r border-paper-rule p-4",
+                triggerOnly && "col-span-2",
+              )}
+            >
+              <SectionEyebrow>{category}</SectionEyebrow>
+              <div className="mt-3 space-y-1">
+                {filteredCatalog.map((item) => (
+                  <PaletteButton
+                    key={item.id}
+                    item={item}
+                    selected={selectedItem?.id === item.id}
+                    onPreview={() => setPreviewItemId(item.id)}
+                    onAdd={onAdd}
+                  />
+                ))}
+                {filteredCatalog.length === 0 && (
+                  <div className="border border-paper-rule bg-paper-sunk px-3 py-4 text-sm text-ink-soft">
+                    No steps match this search.
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="min-h-0 overflow-y-auto p-5">
+              {selectedItem ? (
+                <StepPreview item={selectedItem} />
+              ) : (
+                <div className="text-sm text-ink-soft">No step selected.</div>
+              )}
+            </div>
+          </section>
+        </DialogBody>
+      </DialogContent>
+    </Dialog>
   );
 }
 
 function PaletteButton({
-  label,
-  payload,
-  disabled = false,
-  title,
+  item,
+  selected,
+  onPreview,
   onAdd,
 }: {
-  label: string;
-  payload: WorkflowPalettePayload;
-  disabled?: boolean;
-  title?: string;
-  onAdd: (payload: WorkflowPalettePayload) => void;
+  item: AddStepCatalogItem;
+  selected: boolean;
+  onPreview: () => void;
+  onAdd: (payload: WorkflowAddPayload) => void;
 }) {
+  const draggable = !item.disabled && isWorkflowPaletteKind(item.payload.kind);
   return (
-    <Button
+    <button
       type="button"
-      variant="ghost"
-      size="xs"
-      draggable={!disabled}
-      disabled={disabled}
-      title={title}
-      onClick={() => onAdd(payload)}
+      aria-label={item.ariaLabel ?? item.label}
+      draggable={draggable}
+      disabled={item.disabled}
+      title={item.title ?? item.description}
+      className={cn(
+        "flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition-colors",
+        item.disabled
+          ? "cursor-not-allowed text-ink-faint opacity-60"
+          : "text-ink-soft hover:bg-paper-sunk hover:text-ink",
+        selected && "bg-paper-sunk text-ink",
+      )}
+      onMouseEnter={onPreview}
+      onFocus={onPreview}
+      onClick={() => onAdd(item.payload)}
       onDragStart={(event) => {
+        if (!isWorkflowPaletteKind(item.payload.kind)) return;
         event.dataTransfer.effectAllowed = "copy";
         event.dataTransfer.setData(
           WORKFLOW_PALETTE_MIME,
-          JSON.stringify(payload),
+          JSON.stringify(item.payload),
         );
       }}
     >
-      <Plus className="size-3" />
-      {label}
-    </Button>
+      <span className="flex size-7 shrink-0 items-center justify-center border border-paper-rule bg-paper">
+        <StepKindIcon kind={item.payload.kind} />
+      </span>
+      <span className="min-w-0 truncate font-medium text-ink">
+        {item.label}
+      </span>
+    </button>
   );
+}
+
+function StepPreview({ item }: { item: AddStepCatalogItem }) {
+  return (
+    <section aria-label="Selected workflow step preview">
+      <div className="flex items-start gap-3">
+        <span className="flex size-10 shrink-0 items-center justify-center border border-paper-rule bg-paper-sunk text-signal-blue">
+          <StepKindIcon kind={item.payload.kind} />
+        </span>
+        <div className="min-w-0">
+          <h3 className="text-base font-semibold text-ink">{item.label}</h3>
+          <p className="mt-1 text-sm text-ink-soft">{item.description}</p>
+        </div>
+      </div>
+      <div className="mt-6 grid grid-cols-2 gap-3">
+        <StepFieldList title="Input" fields={item.inputs} />
+        <StepFieldList title="Output" fields={item.outputs} />
+      </div>
+    </section>
+  );
+}
+
+function StepFieldList({ title, fields }: { title: string; fields: string[] }) {
+  return (
+    <div>
+      <SectionEyebrow>{title}</SectionEyebrow>
+      <div className="mt-2 min-h-32 border border-paper-rule bg-paper-sunk p-3">
+        {fields.length > 0 ? (
+          <ul className="space-y-2 text-sm text-ink-soft">
+            {fields.map((field) => (
+              <li key={field} className="font-mono text-xs">
+                {field}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="text-sm text-ink-faint">None</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StepCategoryIcon({ category }: { category: AddStepCategory }) {
+  if (category === "Trigger") return <Play className="size-4" />;
+  if (category === "Built-in") return <Braces className="size-4" />;
+  if (category === "AI") return <Bot className="size-4" />;
+  if (category === "Tools") return <Workflow className="size-4" />;
+  return <GitBranch className="size-4" />;
+}
+
+function StepKindIcon({ kind }: { kind: WorkflowAddPayload["kind"] }) {
+  if (kind === "manual_trigger") return <Play className="size-4" />;
+  if (kind === "agent") return <Bot className="size-4" />;
+  if (kind === "python") return <Code2 className="size-4" />;
+  if (kind === "mcp") return <Workflow className="size-4" />;
+  if (kind === "set" || kind === "transform")
+    return <Braces className="size-4" />;
+  if (kind === "log") return <ScrollText className="size-4" />;
+  if (kind === "exit") return <Square className="size-4" />;
+  return <GitBranch className="size-4" />;
+}
+
+function workflowStepCatalog({
+  hasTrigger,
+  mcpTools,
+  agents,
+}: {
+  hasTrigger: boolean;
+  mcpTools: McpToolSummary[];
+  agents: AgentSummary[];
+}): AddStepCatalogItem[] {
+  const builtInItems: AddStepCatalogItem[] = [
+    {
+      id: "manual_trigger",
+      label: "Manual Trigger",
+      category: "Trigger",
+      description: "Start this workflow from the Test or manual run action.",
+      payload: { kind: "manual_trigger" },
+      disabled: hasTrigger,
+      title: hasTrigger ? "Workflow already has a trigger" : undefined,
+      inputs: ["input"],
+      outputs: ["trigger.manual"],
+    },
+    {
+      id: "set",
+      label: "Set",
+      category: "Built-in",
+      description: "Save a value from input, context, or a previous step.",
+      payload: { kind: "set" },
+      inputs: ["assign.<variable>"],
+      outputs: ["context.<variable>"],
+    },
+    {
+      id: "transform",
+      label: "Transform",
+      category: "Built-in",
+      description: "Transform input and optionally write it back to context.",
+      payload: { kind: "transform" },
+      inputs: ["input", "transform", "assign"],
+      outputs: ["steps.<id>.output", "context.<variable>"],
+    },
+    {
+      id: "python",
+      label: "Python",
+      category: "Built-in",
+      description: "Execute a constrained Python step for data shaping.",
+      payload: { kind: "python" },
+      inputs: ["input", "code", "timeoutMs"],
+      outputs: ["steps.<id>.output"],
+    },
+    {
+      id: "log",
+      label: "Log",
+      category: "Built-in",
+      description: "Write info, debug, or error events into the run log.",
+      payload: { kind: "log" },
+      inputs: ["level", "message", "payload"],
+      outputs: ["run.events"],
+    },
+    {
+      id: "exit",
+      label: "Exit",
+      category: "Built-in",
+      description: "Stop the workflow with a final status and output.",
+      payload: { kind: "exit" },
+      inputs: ["status", "output"],
+      outputs: ["run.status", "run.output"],
+    },
+  ];
+  const flowControlItems: AddStepCatalogItem[] = [
+    {
+      id: "if",
+      label: "If",
+      category: "Logic",
+      description: "Split the flow into true and false routes.",
+      payload: { kind: "if" },
+      inputs: ["condition"],
+      outputs: ["true", "false"],
+    },
+    {
+      id: "foreach",
+      label: "Foreach",
+      category: "Logic",
+      description: "Iterate over a list with a body flow.",
+      payload: { kind: "foreach" },
+      inputs: ["items", "itemVar", "concurrency"],
+      outputs: ["body"],
+    },
+  ];
+  const agentItems: AddStepCatalogItem[] =
+    agents.length > 0
+      ? agents.map((agent) => {
+          const enabled = agent.instantMessagesEnabled !== false;
+          const label = agent.name || agent.id;
+          return {
+            id: `agent:${agent.id}`,
+            label,
+            ariaLabel: `Agent ${label} (${agent.id})`,
+            category: "AI",
+            description: agent.role
+              ? `${agent.role} (${agent.id})`
+              : `Call OpenAcme agent ${agent.id}.`,
+            payload: { kind: "agent", agentId: agent.id },
+            disabled: !enabled,
+            title: enabled
+              ? undefined
+              : "This agent is not enabled for workflow calls",
+            inputs: ["agentId", "prompt", "input"],
+            outputs: ["steps.<id>.output"],
+          } satisfies AddStepCatalogItem;
+        })
+      : [
+          {
+            id: "agent",
+            label: "Agent Call",
+            category: "AI",
+            description: "Call an enabled OpenAcme agent.",
+            payload: { kind: "agent" },
+            disabled: true,
+            title: "No enabled agents are available for workflows",
+            inputs: ["agentId", "prompt", "input"],
+            outputs: ["steps.<id>.output"],
+          },
+        ];
+  const mcpItems: AddStepCatalogItem[] =
+    mcpTools.length > 0
+      ? mcpTools.map((tool) => ({
+          id: `mcp:${tool.server}:${tool.tool}`,
+          label: `${tool.server}/${tool.tool}`,
+          ariaLabel: `MCP tool ${tool.server}/${tool.tool}`,
+          category: "Tools",
+          description: tool.description || `Call ${tool.server}.${tool.tool}.`,
+          payload: {
+            kind: "mcp",
+            server: tool.server,
+            tool: tool.tool,
+          },
+          inputs: ["server", "tool", "input"],
+          outputs: ["steps.<id>.output"],
+        }))
+      : [
+          {
+            id: "mcp",
+            label: "MCP Tool",
+            category: "Tools",
+            description: "Call a discovered MCP tool.",
+            payload: { kind: "mcp" },
+            disabled: true,
+            title: "No MCP tools are available for workflows",
+            inputs: ["server", "tool", "input"],
+            outputs: ["steps.<id>.output"],
+          },
+        ];
+  return [
+    ...builtInItems,
+    ...flowControlItems,
+    ...agentItems,
+    ...mcpItems,
+  ];
 }
 
 function parseWorkflowPalettePayload(
@@ -2620,7 +3411,6 @@ function isWorkflowPaletteKind(value: unknown): value is WorkflowPaletteKind {
     value === "set" ||
     value === "transform" ||
     value === "if" ||
-    value === "if_else" ||
     value === "log" ||
     value === "exit" ||
     value === "foreach" ||
@@ -2636,6 +3426,10 @@ function referenceEdgeKind(value: unknown): WorkflowReferenceEdgeKind | null {
     : null;
 }
 
+function isTriggerCanvasNodeId(value: string | null): boolean {
+  return typeof value === "string" && value.startsWith("trigger:");
+}
+
 function referenceMutationMessage(reason: string): string {
   if (reason === "source_node_not_found") return "Source node not found";
   if (reason === "target_node_not_found") return "Target node not found";
@@ -2646,77 +3440,6 @@ function referenceMutationMessage(reason: string): string {
     return "This edge cannot be represented by workflow JSON";
   }
   return "Workflow edge could not be updated";
-}
-
-function WorkflowList({
-  workflows,
-  selectedId,
-  runs,
-  onCreate,
-  onSelect,
-}: {
-  workflows: WorkflowDefinition[];
-  selectedId: string | null;
-  runs: WorkflowRun[];
-  onCreate: () => void;
-  onSelect: (workflow: WorkflowDefinition) => void;
-}) {
-  return (
-    <aside className="min-h-0 overflow-y-auto border-r border-paper-rule bg-paper-sunk/50">
-      <div className="flex items-center justify-between border-b border-paper-rule px-3 py-2">
-        <SectionEyebrow>Definitions</SectionEyebrow>
-        <Button type="button" variant="ghost" size="icon-xs" onClick={onCreate}>
-          <Plus className="size-3" />
-        </Button>
-      </div>
-      <div className="divide-y divide-paper-rule">
-        {workflows.map((workflow) => {
-          const selected = workflow.id === selectedId;
-          const count = runs.filter(
-            (run) => run.workflowId === workflow.id,
-          ).length;
-          return (
-            <button
-              key={workflow.id}
-              type="button"
-              onClick={() => onSelect(workflow)}
-              className={cn(
-                "grid w-full gap-2 px-3 py-3 text-left hover:bg-paper",
-                selected && "bg-paper",
-              )}
-            >
-              <div className="flex min-w-0 items-center gap-2">
-                <Workflow className="size-4 shrink-0 text-plot-red" />
-                <span className="truncate text-sm font-medium">
-                  {workflow.name}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Badge
-                  variant={
-                    workflow.status === "published" ? "healthy" : "outline"
-                  }
-                >
-                  {workflow.status}
-                </Badge>
-                <span className="font-mono text-[11px] text-ink-faint">
-                  v{workflow.version}
-                </span>
-                {count > 0 && (
-                  <span className="ml-auto font-mono text-[11px] text-ink-faint">
-                    {count} runs
-                  </span>
-                )}
-              </div>
-            </button>
-          );
-        })}
-        {workflows.length === 0 && (
-          <div className="p-3 text-sm text-ink-soft">No workflows</div>
-        )}
-      </div>
-    </aside>
-  );
 }
 
 type NodeCardProps = {
@@ -2766,6 +3489,51 @@ type NodeCardProps = {
   ) => void;
 };
 
+function InspectorSection({
+  title,
+  badge,
+  defaultOpen = false,
+  children,
+}: {
+  title: string;
+  badge?: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section className="border border-paper-rule bg-paper-sunk">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-label={`${open ? "Collapse" : "Expand"} ${title}`}
+        className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm font-medium text-ink hover:bg-paper"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="truncate">{title}</span>
+        </span>
+        <span className="flex shrink-0 items-center gap-2">
+          {badge && <Badge variant="outline">{badge}</Badge>}
+          {open ? (
+            <ArrowUp className="size-3.5 text-ink-faint" aria-hidden="true" />
+          ) : (
+            <ArrowDown
+              className="size-3.5 text-ink-faint"
+              aria-hidden="true"
+            />
+          )}
+        </span>
+      </button>
+      {open && (
+        <div className="grid gap-3 border-t border-paper-rule px-3 py-3">
+          {children}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function NodeCard({
   node,
   index,
@@ -2812,8 +3580,9 @@ function NodeCard({
   const mcpSchemaFields = mcpSchemaInputFields(selectedMcpTool?.inputSchema);
   const label = node.label ?? node.id;
   return (
-    <section className="border border-paper-rule bg-paper">
-      <div className="flex min-w-0 items-start gap-3 px-3 py-3">
+    <section className="grid gap-3">
+      <div className="border border-paper-rule bg-paper px-3 py-3">
+        <div className="flex min-w-0 items-start gap-3">
         <div className="flex size-8 shrink-0 items-center justify-center border border-paper-rule bg-paper-sunk">
           <Icon className="size-4 text-ink-soft" />
         </div>
@@ -2830,16 +3599,6 @@ function NodeCard({
             {isRecord(node.assign) && <Badge variant="outline">assign</Badge>}
             {node.type.includes("log") && <Badge variant="outline">log</Badge>}
           </div>
-          <label className="mt-2 grid max-w-sm gap-1">
-            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-              Label
-            </span>
-            <Input
-              aria-label={`${node.id} card label`}
-              value={typeof node.label === "string" ? node.label : ""}
-              onChange={(event) => onLabelChange(event.target.value)}
-            />
-          </label>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <Button
@@ -2872,11 +3631,27 @@ function NodeCard({
             <Trash2 className="size-3" />
           </Button>
         </div>
+        </div>
+        <InspectorSection title="Basics" defaultOpen>
+          <label className="grid gap-1">
+            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+              Label
+            </span>
+            <Input
+              aria-label={`${node.id} card label`}
+              value={typeof node.label === "string" ? node.label : ""}
+              onChange={(event) => onLabelChange(event.target.value)}
+            />
+          </label>
+        </InspectorSection>
       </div>
       {assignments.length > 0 && (
-        <div className="border-t border-paper-rule bg-paper-sunk px-3 py-2">
-          <SectionEyebrow>Assignments</SectionEyebrow>
-          <div className="mt-1 grid gap-1">
+        <InspectorSection
+          title="Assignments"
+          badge={`${assignments.length}`}
+          defaultOpen
+        >
+          <div className="grid gap-1">
             {assignments.map((item) => (
               <div
                 key={item.target}
@@ -2894,7 +3669,7 @@ function NodeCard({
             ))}
           </div>
           {primaryAssignment && (
-            <div className="mt-3 grid gap-2 md:grid-cols-[1fr_1.5fr_120px]">
+            <div className="grid gap-3">
               <label className="grid gap-1">
                 <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                   Target
@@ -2950,12 +3725,11 @@ function NodeCard({
               </label>
             </div>
           )}
-        </div>
+        </InspectorSection>
       )}
       {transform && (
-        <div className="border-t border-paper-rule bg-paper-sunk px-3 py-2">
-          <SectionEyebrow>Transform</SectionEyebrow>
-          <div className="mt-2 grid gap-2 md:grid-cols-2">
+        <InspectorSection title="Transform" defaultOpen>
+          <div className="grid gap-3">
             <label className="grid gap-1">
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Input JSON
@@ -2963,10 +3737,11 @@ function NodeCard({
               <Textarea
                 aria-label={`${label} transform input JSON`}
                 value={transform.input}
-                rows={5}
+                rows={7}
                 onChange={(event) =>
                   onTransformConfigChange("input", event.target.value)
                 }
+                className="min-h-36 font-mono text-xs leading-relaxed"
               />
             </label>
             <label className="grid gap-1">
@@ -2976,19 +3751,19 @@ function NodeCard({
               <Textarea
                 aria-label={`${label} transform JSON`}
                 value={transform.transform}
-                rows={5}
+                rows={7}
                 onChange={(event) =>
                   onTransformConfigChange("transform", event.target.value)
                 }
+                className="min-h-36 font-mono text-xs leading-relaxed"
               />
             </label>
           </div>
-        </div>
+        </InspectorSection>
       )}
       {branch && (
-        <div className="border-t border-paper-rule bg-paper-sunk px-3 py-2">
-          <SectionEyebrow>Branch</SectionEyebrow>
-          <div className="mt-2 grid gap-2 md:grid-cols-[1.5fr_1fr_1fr]">
+        <InspectorSection title="Branch" defaultOpen>
+          <div className="grid gap-3">
             <label className="grid gap-1">
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Condition
@@ -3001,9 +3776,10 @@ function NodeCard({
                 }
               />
             </label>
+            <div className="grid gap-3 sm:grid-cols-2">
             <label className="grid gap-1">
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                Then
+                True
               </span>
               <Input
                 aria-label={`${label} then nodes`}
@@ -3013,27 +3789,25 @@ function NodeCard({
                 }
               />
             </label>
-            {branch.kind === "if_else" && (
-              <label className="grid gap-1">
-                <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                  Else
-                </span>
-                <Input
-                  aria-label={`${label} else nodes`}
-                  value={branch.else}
-                  onChange={(event) =>
-                    onBranchConfigChange("else", event.target.value)
-                  }
-                />
-              </label>
-            )}
+            <label className="grid gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                False
+              </span>
+              <Input
+                aria-label={`${label} else nodes`}
+                value={branch.else}
+                onChange={(event) =>
+                  onBranchConfigChange("else", event.target.value)
+                }
+              />
+            </label>
+            </div>
           </div>
-        </div>
+        </InspectorSection>
       )}
       {log && (
-        <div className="border-t border-paper-rule bg-paper-sunk px-3 py-2">
-          <SectionEyebrow>Log</SectionEyebrow>
-          <div className="mt-2 grid gap-2 md:grid-cols-[120px_1.5fr_1.5fr]">
+        <InspectorSection title="Log" defaultOpen>
+          <div className="grid gap-3">
             <label className="grid gap-1">
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Level
@@ -3079,12 +3853,11 @@ function NodeCard({
               />
             </label>
           </div>
-        </div>
+        </InspectorSection>
       )}
       {exit && (
-        <div className="border-t border-paper-rule bg-paper-sunk px-3 py-2">
-          <SectionEyebrow>Exit</SectionEyebrow>
-          <div className="mt-2 grid gap-2 md:grid-cols-[140px_1fr]">
+        <InspectorSection title="Exit" defaultOpen>
+          <div className="grid gap-3">
             <label className="grid gap-1">
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Status
@@ -3118,12 +3891,11 @@ function NodeCard({
               />
             </label>
           </div>
-        </div>
+        </InspectorSection>
       )}
       {foreach && (
-        <div className="border-t border-paper-rule bg-paper-sunk px-3 py-2">
-          <SectionEyebrow>Foreach</SectionEyebrow>
-          <div className="mt-2 grid gap-2 md:grid-cols-[1.5fr_1fr_1.5fr_120px]">
+        <InspectorSection title="Foreach" defaultOpen>
+          <div className="grid gap-3">
             <label className="grid gap-1">
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Items
@@ -3136,6 +3908,7 @@ function NodeCard({
                 }
               />
             </label>
+            <div className="grid gap-3 sm:grid-cols-2">
             <label className="grid gap-1">
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Item Var
@@ -3160,6 +3933,7 @@ function NodeCard({
                 }
               />
             </label>
+            </div>
             <label className="grid gap-1">
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Concurrency
@@ -3174,24 +3948,26 @@ function NodeCard({
               />
             </label>
           </div>
-        </div>
+        </InspectorSection>
       )}
       {python && (
-        <div className="border-t border-paper-rule bg-paper-sunk px-3 py-2">
-          <SectionEyebrow>Python</SectionEyebrow>
-          <div className="mt-2 grid gap-2 md:grid-cols-[1.4fr_120px_120px]">
+        <InspectorSection title="Python" defaultOpen>
+          <div className="grid gap-3">
             <label className="grid gap-1">
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Input
               </span>
-              <Input
+              <Textarea
                 aria-label={`${label} python input`}
                 value={python.input}
+                rows={4}
                 onChange={(event) =>
                   onPythonConfigChange("input", event.target.value)
                 }
+                className="min-h-24 font-mono text-xs leading-relaxed"
               />
             </label>
+            <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
             <label className="grid gap-1">
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Timeout
@@ -3216,63 +3992,27 @@ function NodeCard({
               />
               Reset
             </label>
+            </div>
           </div>
-          <label className="mt-2 grid gap-1">
+          <label className="grid gap-1">
             <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
               Code
             </span>
             <Textarea
               aria-label={`${label} python code`}
               value={python.code}
-              rows={5}
+              rows={10}
               onChange={(event) =>
                 onPythonConfigChange("code", event.target.value)
               }
+              className="min-h-52 font-mono text-xs leading-relaxed"
             />
           </label>
-        </div>
+        </InspectorSection>
       )}
       {mcpTool && (
-        <div className="border-t border-paper-rule bg-paper-sunk px-3 py-2">
-          <SectionEyebrow>MCP Tool</SectionEyebrow>
-          <div className="mt-2 grid gap-2 md:grid-cols-[1fr_1fr_0.8fr_1.5fr]">
-            <label className="grid gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                Server
-              </span>
-              <Input
-                aria-label={`${label} MCP server`}
-                value={mcpTool.server}
-                onChange={(event) =>
-                  onMcpToolConfigChange("server", event.target.value)
-                }
-              />
-            </label>
-            <label className="grid gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                Tool
-              </span>
-              <Input
-                aria-label={`${label} MCP tool`}
-                value={mcpTool.tool}
-                onChange={(event) =>
-                  onMcpToolConfigChange("tool", event.target.value)
-                }
-              />
-            </label>
-            <label className="grid gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                Timeout ms
-              </span>
-              <Input
-                aria-label={`${label} MCP timeout`}
-                inputMode="numeric"
-                value={mcpTool.timeoutMs}
-                onChange={(event) =>
-                  onMcpToolConfigChange("timeoutMs", event.target.value)
-                }
-              />
-            </label>
+        <InspectorSection title="MCP Tool" defaultOpen>
+          <div className="grid gap-3">
             {mcpTools.length > 0 && (
               <label className="grid gap-1">
                 <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
@@ -3304,14 +4044,53 @@ function NodeCard({
                 </Select>
               </label>
             )}
+            <div className="grid gap-3 sm:grid-cols-2">
+            <label className="grid gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                Server
+              </span>
+              <Input
+                aria-label={`${label} MCP server`}
+                value={mcpTool.server}
+                onChange={(event) =>
+                  onMcpToolConfigChange("server", event.target.value)
+                }
+              />
+            </label>
+            <label className="grid gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                Tool
+              </span>
+              <Input
+                aria-label={`${label} MCP tool`}
+                value={mcpTool.tool}
+                onChange={(event) =>
+                  onMcpToolConfigChange("tool", event.target.value)
+                }
+              />
+            </label>
+            </div>
+            <label className="grid gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                Timeout ms
+              </span>
+              <Input
+                aria-label={`${label} MCP timeout`}
+                inputMode="numeric"
+                value={mcpTool.timeoutMs}
+                onChange={(event) =>
+                  onMcpToolConfigChange("timeoutMs", event.target.value)
+                }
+              />
+            </label>
           </div>
           {mcpSchemaFields.length > 0 && (
-            <div className="mt-3 grid gap-2">
+            <div className="grid gap-2">
               <div className="flex items-center justify-between gap-2">
                 <SectionEyebrow>Schema Input</SectionEyebrow>
                 <Badge variant="outline">{mcpSchemaFields.length} fields</Badge>
               </div>
-              <div className="grid gap-2 md:grid-cols-2">
+              <div className="grid gap-2">
                 {mcpSchemaFields.map((field) => (
                   <label key={field.name} className="grid gap-1">
                     <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
@@ -3335,25 +4114,56 @@ function NodeCard({
               </div>
             </div>
           )}
-          <label className="mt-2 grid gap-1">
+          <label className="grid gap-1">
             <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
               Input JSON
             </span>
             <Textarea
               aria-label={`${label} MCP input JSON`}
               value={mcpTool.input}
-              rows={4}
+              rows={8}
               onChange={(event) =>
                 onMcpToolConfigChange("input", event.target.value)
               }
+              className="min-h-40 font-mono text-xs leading-relaxed"
             />
           </label>
-        </div>
+        </InspectorSection>
       )}
       {agentCall && (
-        <div className="border-t border-paper-rule bg-paper-sunk px-3 py-2">
-          <SectionEyebrow>Agent Call</SectionEyebrow>
-          <div className="mt-2 grid gap-2 md:grid-cols-[1fr_1.5fr_0.8fr_1.5fr]">
+        <InspectorSection title="Agent Call" defaultOpen>
+          <div className="grid gap-3">
+            {agents.length > 0 && (
+              <label className="grid gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                  Available
+                </span>
+                <Select
+                  value={agentCall.agentId}
+                  onValueChange={(value) =>
+                    onAgentConfigChange("agentId", value)
+                  }
+                >
+                  <SelectTrigger size="sm" aria-label={`${label} agent picker`}>
+                    <SelectValue placeholder="Select agent" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {agents.map((agent) => (
+                      <SelectItem
+                        key={agent.id}
+                        value={agent.id}
+                        disabled={agent.instantMessagesEnabled === false}
+                      >
+                        {agent.name || agent.id}
+                        {agent.instantMessagesEnabled === false && (
+                          <Badge variant="outline">disabled</Badge>
+                        )}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+            )}
             <label className="grid gap-1">
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Agent
@@ -3391,52 +4201,22 @@ function NodeCard({
                 }
               />
             </label>
-            {agents.length > 0 && (
-              <label className="grid gap-1">
-                <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                  Available
-                </span>
-                <Select
-                  value={agentCall.agentId}
-                  onValueChange={(value) =>
-                    onAgentConfigChange("agentId", value)
-                  }
-                >
-                  <SelectTrigger size="sm" aria-label={`${label} agent picker`}>
-                    <SelectValue placeholder="Select agent" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {agents.map((agent) => (
-                      <SelectItem
-                        key={agent.id}
-                        value={agent.id}
-                        disabled={agent.instantMessagesEnabled === false}
-                      >
-                        {agent.name || agent.id}
-                        {agent.instantMessagesEnabled === false && (
-                          <Badge variant="outline">disabled</Badge>
-                        )}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </label>
-            )}
           </div>
-          <label className="mt-2 grid gap-1">
+          <label className="grid gap-1">
             <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
               Input JSON
             </span>
             <Textarea
               aria-label={`${label} agent input JSON`}
               value={agentCall.input}
-              rows={4}
+              rows={8}
               onChange={(event) =>
                 onAgentConfigChange("input", event.target.value)
               }
+              className="min-h-40 font-mono text-xs leading-relaxed"
             />
           </label>
-        </div>
+        </InspectorSection>
       )}
     </section>
   );
@@ -3447,6 +4227,7 @@ function RunConsole({
   detail,
   runs,
   selectedStep,
+  pendingRunId,
   busy,
   hasMoreRuns,
   loadingMoreRuns,
@@ -3463,6 +4244,7 @@ function RunConsole({
   detail: RunDetail | null;
   runs: WorkflowRun[];
   selectedStep: WorkflowStepAttempt | null;
+  pendingRunId: string | null;
   busy: string | null;
   hasMoreRuns: boolean;
   loadingMoreRuns: boolean;
@@ -3485,6 +4267,7 @@ function RunConsole({
     detail?.events.filter(
       (event) => eventLevel === "all" || event.level === eventLevel,
     ) ?? [];
+  const selectedRunId = pendingRunId ?? detail?.run.id ?? null;
   return (
     <aside
       aria-label="Run Console"
@@ -3495,13 +4278,19 @@ function RunConsole({
           <div>
             <SectionEyebrow>Run Console</SectionEyebrow>
             <div className="mt-1 flex items-center gap-2">
-              {detail ? (
+              {pendingRunId ? (
+                <Loader2 className="size-4 animate-spin text-ink-faint" />
+              ) : detail ? (
                 statusIcon(detail.run.status)
               ) : (
                 <ScrollText className="size-4" />
               )}
               <span className="text-sm font-medium">
-                {detail ? detail.run.status : "No run selected"}
+                {pendingRunId
+                  ? "Loading selected run"
+                  : detail
+                    ? `Selected run ${detail.run.id.slice(0, 8)} · ${detail.run.status}`
+                    : "No run selected"}
               </span>
             </div>
           </div>
@@ -3544,16 +4333,413 @@ function RunConsole({
         </div>
       </div>
 
-      <div className="space-y-4 p-4">
+      <div className="grid gap-5 p-4">
         {detail && (
-          <section
-            aria-label="Run detail header"
-            className="grid gap-2 border border-paper-rule bg-paper-sunk p-3"
+          <RunOverview workflowName={workflowName} run={detail.run} />
+        )}
+        <RunHistoryPanel
+          detail={detail}
+          runs={runs}
+          selectedRunId={selectedRunId}
+          pendingRunId={pendingRunId}
+          hasMoreRuns={hasMoreRuns}
+          loadingMoreRuns={loadingMoreRuns}
+          filters={filters}
+          onFiltersChange={onFiltersChange}
+          onSelectRun={onSelectRun}
+          onLoadMoreRuns={onLoadMoreRuns}
+        />
+        {detail && (
+          <>
+            <RunPaneSection
+              title="Steps"
+              badge={`${detail.steps.length}`}
+              description="Select a step to inspect the data it received and produced."
+            >
+              <StepList
+                detail={detail}
+                selectedStep={selectedStep}
+                onSelectStep={onSelectStep}
+              />
+            </RunPaneSection>
+            <RunPaneSection
+              title="Step Detail"
+              badge={selectedStep?.status}
+              description="Focused view for the selected step."
+            >
+              {selectedStep ? (
+                <StepDetailPanel
+                  detail={detail}
+                  step={selectedStep}
+                  runId={detail.run.id}
+                />
+              ) : (
+                <div className="border border-paper-rule p-3 text-sm text-ink-soft">
+                  Select a step to inspect input, output, logs, error, and context.
+                </div>
+              )}
+            </RunPaneSection>
+            <InspectorSection
+              title="Advanced"
+              badge={`${filteredEvents.length} events`}
+            >
+              <AdvancedRunDetails
+                detail={detail}
+                workflowName={workflowName}
+                eventLevel={eventLevel}
+                filteredEvents={filteredEvents}
+                onEventLevelChange={setEventLevel}
+              />
+            </InspectorSection>
+          </>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+function RunPaneSection({
+  title,
+  badge,
+  description,
+  children,
+}: {
+  title: string;
+  badge?: string;
+  description?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="grid gap-2">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold text-ink">{title}</h2>
+          {description && (
+            <p className="mt-0.5 text-xs text-ink-faint">{description}</p>
+          )}
+        </div>
+        {badge && <Badge variant="outline">{badge}</Badge>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function RunOverview({
+  workflowName,
+  run,
+}: {
+  workflowName: string | null;
+  run: WorkflowRun;
+}) {
+  return (
+    <section
+      aria-label="Selected run overview"
+      className="border border-paper-rule bg-paper-sunk p-3"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            {statusIcon(run.status)}
+            <Badge variant={statusBadge(run.status)}>{run.status}</Badge>
+            <Badge variant={run.mode === "live" ? "signal" : "outline"}>
+              {run.mode}
+            </Badge>
+            <span className="font-mono text-[10px] text-ink-faint">
+              v{run.workflowVersion}
+            </span>
+          </div>
+          <h2 className="mt-2 truncate text-base font-semibold text-ink">
+            {workflowName ?? run.workflowId}
+          </h2>
+          <div className="mt-1 break-all font-mono text-[11px] text-ink-faint">
+            {run.id}
+          </div>
+        </div>
+        <div className="grid shrink-0 gap-1 text-right font-mono text-[10px] text-ink-faint">
+          <span>{formatDuration(runDurationMs(run))}</span>
+          <span>{shortDate(run.createdAt)}</span>
+        </div>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 border-t border-paper-rule pt-3 font-mono text-[10px] text-ink-faint">
+        <span>trigger {runTriggerLabel(run)}</span>
+        <span>source {run.definitionSource}</span>
+        <span>started {formatDateTime(run.startedAt)}</span>
+        <span>ended {formatDateTime(run.endedAt)}</span>
+      </div>
+    </section>
+  );
+}
+
+function RunHistoryPanel({
+  detail,
+  runs,
+  selectedRunId,
+  pendingRunId,
+  hasMoreRuns,
+  loadingMoreRuns,
+  filters,
+  onFiltersChange,
+  onSelectRun,
+  onLoadMoreRuns,
+}: {
+  detail: RunDetail | null;
+  runs: WorkflowRun[];
+  selectedRunId: string | null;
+  pendingRunId: string | null;
+  hasMoreRuns: boolean;
+  loadingMoreRuns: boolean;
+  filters: Omit<ScopedRunFilters, "workflowId">;
+  onFiltersChange: (
+    patch: Partial<Omit<ScopedRunFilters, "workflowId">>,
+  ) => void;
+  onSelectRun: (runId: string) => void;
+  onLoadMoreRuns: () => void;
+}) {
+  return (
+    <RunPaneSection
+      title="Recent Runs"
+      badge={hasMoreRuns ? `${runs.length}+` : `${runs.length}`}
+    >
+      <details className="border border-paper-rule bg-paper">
+        <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-ink-soft hover:bg-paper-sunk">
+          Filters
+        </summary>
+        <div className="grid grid-cols-2 gap-2 border-t border-paper-rule p-3">
+          <label className="grid gap-1">
+            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+              Mode
+            </span>
+            <Select
+              value={filters.mode}
+              onValueChange={(value) =>
+                onFiltersChange({ mode: value as "all" | RunMode })
+              }
+            >
+              <SelectTrigger size="sm" aria-label="Mode">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All modes</SelectItem>
+                <SelectItem value="test">Test</SelectItem>
+                <SelectItem value="live">Live</SelectItem>
+              </SelectContent>
+            </Select>
+          </label>
+          <label className="grid gap-1">
+            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+              Status
+            </span>
+            <Select
+              value={filters.status}
+              onValueChange={(value) =>
+                onFiltersChange({ status: value as "all" | RunStatus })
+              }
+            >
+              <SelectTrigger size="sm" aria-label="Status">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All statuses</SelectItem>
+                {RUN_STATUSES.map((item) => (
+                  <SelectItem key={item} value={item}>
+                    {item}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
+          <label className="grid gap-1">
+            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+              Trigger
+            </span>
+            <Input
+              aria-label="Trigger"
+              value={filters.triggerId}
+              onChange={(event) =>
+                onFiltersChange({ triggerId: event.target.value })
+              }
+              placeholder="manual"
+              className="h-8 font-mono text-xs"
+            />
+          </label>
+          <label className="grid gap-1">
+            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+              Created from
+            </span>
+            <Input
+              aria-label="Created from"
+              type="date"
+              value={filters.createdFrom}
+              onChange={(event) =>
+                onFiltersChange({ createdFrom: event.target.value })
+              }
+              className="h-8 font-mono text-xs"
+            />
+          </label>
+          <label className="grid gap-1">
+            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+              Created to
+            </span>
+            <Input
+              aria-label="Created to"
+              type="date"
+              value={filters.createdTo}
+              onChange={(event) =>
+                onFiltersChange({ createdTo: event.target.value })
+              }
+              className="h-8 font-mono text-xs"
+            />
+          </label>
+        </div>
+      </details>
+      <div className="max-h-36 space-y-1 overflow-y-auto border border-paper-rule p-1">
+        {runs.map((run) => {
+          const isPending = pendingRunId === run.id && detail?.run.id !== run.id;
+          const isSelected = selectedRunId === run.id;
+          return (
+            <button
+              type="button"
+              key={run.id}
+              aria-current={isSelected ? "true" : undefined}
+              onClick={() => onSelectRun(run.id)}
+              className={cn(
+                "grid w-full grid-cols-[auto_1fr_auto] items-center gap-2 border border-transparent px-3 py-2 text-left hover:bg-paper-sunk",
+                isSelected &&
+                  "border-paper-rule bg-paper-sunk ring-1 ring-ink/25",
+              )}
+            >
+              {isPending ? (
+                <Loader2 className="size-4 animate-spin text-ink-faint" />
+              ) : (
+                statusIcon(run.status)
+              )}
+              <span className="min-w-0">
+                <span className="block truncate font-mono text-[11px] text-ink-soft">
+                  {run.id}
+                </span>
+                <span className="block truncate font-mono text-[10px] text-ink-faint">
+                  {run.mode} · {runTriggerLabel(run)} · v{run.workflowVersion}
+                </span>
+              </span>
+              <span className="flex items-center gap-2">
+                {isSelected && <Badge variant="healthy">selected</Badge>}
+                <span className="font-mono text-[10px] text-ink-faint">
+                  {shortDate(run.createdAt)}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+        {runs.length === 0 && (
+          <div className="px-3 py-2 text-sm text-ink-soft">No runs</div>
+        )}
+        {hasMoreRuns && (
+          <div className="px-2 py-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-full"
+              onClick={onLoadMoreRuns}
+              disabled={loadingMoreRuns}
+            >
+              {loadingMoreRuns ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <ScrollText className="size-4" />
+              )}
+              Load more
+            </Button>
+          </div>
+        )}
+      </div>
+    </RunPaneSection>
+  );
+}
+
+function StepList({
+  detail,
+  selectedStep,
+  onSelectStep,
+}: {
+  detail: RunDetail;
+  selectedStep: WorkflowStepAttempt | null;
+  onSelectStep: (stepId: string) => void;
+}) {
+  return (
+    <div className="space-y-1 border border-paper-rule p-1">
+      {detail.steps.map((step, index) => {
+        const branchState = stepBranchState(detail, step);
+        const selected = selectedStep?.id === step.id;
+        return (
+          <button
+            type="button"
+            key={step.id}
+            aria-current={selected ? "step" : undefined}
+            onClick={() => onSelectStep(step.id)}
+            className={cn(
+              "grid w-full grid-cols-[auto_1fr_auto] items-center gap-2 border border-transparent px-3 py-2 text-left hover:bg-paper-sunk",
+              selected && "border-paper-rule bg-paper-sunk ring-1 ring-ink/25",
+            )}
           >
+            <span className="flex items-center gap-2">
+              <span className="w-6 text-right font-mono text-[10px] text-ink-faint">
+                {String(index + 1).padStart(2, "0")}
+              </span>
+              {statusIcon(step.status)}
+            </span>
+            <span className="grid min-w-0 gap-0.5">
+              <span className="truncate text-sm font-medium">
+                {stepNodeLabel(detail, step) ?? step.nodeId}
+              </span>
+              <span className="truncate font-mono text-[10px] text-ink-faint">
+                {step.nodeId} · {stepNodeType(detail, step)}
+                {branchState ? ` · branch ${branchState.status}` : ""}
+              </span>
+            </span>
+            <span className="flex items-center gap-2">
+              {selected && <Badge variant="healthy">selected</Badge>}
+              <span className="font-mono text-[10px] text-ink-faint">
+                {formatDuration(stepDurationMs(step))}
+              </span>
+              <Badge variant={statusBadge(step.status)}>{step.status}</Badge>
+            </span>
+          </button>
+        );
+      })}
+      {detail.steps.length === 0 && (
+        <div className="px-3 py-2 text-sm text-ink-soft">No step attempts</div>
+      )}
+    </div>
+  );
+}
+
+function AdvancedRunDetails({
+  detail,
+  workflowName,
+  eventLevel,
+  filteredEvents,
+  onEventLevelChange,
+}: {
+  detail: RunDetail;
+  workflowName: string | null;
+  eventLevel: EventLevelFilter;
+  filteredEvents: WorkflowRunEvent[];
+  onEventLevelChange: (value: EventLevelFilter) => void;
+}) {
+  return (
+    <Tabs defaultValue="run">
+      <TabsList className="overflow-x-auto">
+        <TabsTrigger value="run">Run</TabsTrigger>
+        <TabsTrigger value="timeline">Timeline</TabsTrigger>
+        <TabsTrigger value="payloads">Payloads</TabsTrigger>
+      </TabsList>
+      <TabsContent value="run" className="pt-3">
+        <section aria-label="Selected run detail" className="grid gap-3">
+          <div className="grid gap-1">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge
-                variant={detail.run.mode === "live" ? "signal" : "outline"}
-              >
+              <Badge variant={detail.run.mode === "live" ? "signal" : "outline"}>
                 {detail.run.mode}
               </Badge>
               <Badge variant={statusBadge(detail.run.status)}>
@@ -3563,362 +4749,183 @@ function RunConsole({
                 v{detail.run.workflowVersion}
               </span>
             </div>
-            <div className="break-all font-mono text-[11px] text-ink-soft">
-              {detail.run.id}
-            </div>
             <div className="font-mono text-[11px] text-ink-soft">
               {workflowName ?? detail.run.workflowId}
             </div>
-            <div className="grid grid-cols-2 gap-2 font-mono text-[10px] text-ink-faint">
-              <span>duration {formatDuration(runDurationMs(detail.run))}</span>
-              <span>trigger {runTriggerLabel(detail.run)}</span>
-              <span>started {formatDateTime(detail.run.startedAt)}</span>
-              <span>ended {formatDateTime(detail.run.endedAt)}</span>
-              <span>source {detail.run.definitionSource}</span>
-              <span>current {detail.run.currentNodeId ?? "none"}</span>
-              <span>waiting {detail.run.waitingReason ?? "none"}</span>
+            <div className="break-all font-mono text-[11px] text-ink">
+              {detail.run.id}
             </div>
-          </section>
-        )}
-
-        <section className="space-y-2">
-          <div className="flex items-center justify-between">
-            <SectionEyebrow>History</SectionEyebrow>
-            <span className="font-mono text-[11px] text-ink-faint">
-              {hasMoreRuns ? `${runs.length}+` : runs.length}
-            </span>
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            <label className="grid gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                Mode
-              </span>
-              <Select
-                value={filters.mode}
-                onValueChange={(value) =>
-                  onFiltersChange({ mode: value as "all" | RunMode })
-                }
-              >
-                <SelectTrigger size="sm" aria-label="Mode">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All modes</SelectItem>
-                  <SelectItem value="test">Test</SelectItem>
-                  <SelectItem value="live">Live</SelectItem>
-                </SelectContent>
-              </Select>
-            </label>
-            <label className="grid gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                Status
-              </span>
-              <Select
-                value={filters.status}
-                onValueChange={(value) =>
-                  onFiltersChange({ status: value as "all" | RunStatus })
-                }
-              >
-                <SelectTrigger size="sm" aria-label="Status">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All statuses</SelectItem>
-                  {RUN_STATUSES.map((item) => (
-                    <SelectItem key={item} value={item}>
-                      {item}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </label>
-            <label className="grid gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                Trigger
-              </span>
-              <Input
-                aria-label="Trigger"
-                value={filters.triggerId}
-                onChange={(event) =>
-                  onFiltersChange({ triggerId: event.target.value })
-                }
-                placeholder="manual"
-                className="h-8 font-mono text-xs"
-              />
-            </label>
-            <label className="grid gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                Created from
-              </span>
-              <Input
-                aria-label="Created from"
-                type="date"
-                value={filters.createdFrom}
-                onChange={(event) =>
-                  onFiltersChange({ createdFrom: event.target.value })
-                }
-                className="h-8 font-mono text-xs"
-              />
-            </label>
-            <label className="grid gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                Created to
-              </span>
-              <Input
-                aria-label="Created to"
-                type="date"
-                value={filters.createdTo}
-                onChange={(event) =>
-                  onFiltersChange({ createdTo: event.target.value })
-                }
-                className="h-8 font-mono text-xs"
-              />
-            </label>
-          </div>
-          <div className="max-h-52 divide-y divide-paper-rule overflow-y-auto border border-paper-rule">
-            {runs.map((run) => (
-              <button
-                type="button"
-                key={run.id}
-                onClick={() => onSelectRun(run.id)}
-                className={cn(
-                  "grid w-full gap-1 px-3 py-2 text-left hover:bg-paper-sunk",
-                  detail?.run.id === run.id && "bg-paper-sunk",
-                )}
-              >
-                <div className="flex items-center gap-2">
-                  {statusIcon(run.status)}
-                  <Badge variant={run.mode === "live" ? "signal" : "outline"}>
-                    {run.mode}
-                  </Badge>
-                  <Badge variant={statusBadge(run.status)}>{run.status}</Badge>
-                  <span className="ml-auto font-mono text-[10px] text-ink-faint">
-                    {shortDate(run.createdAt)}
-                  </span>
-                </div>
-                <span className="truncate font-mono text-[11px] text-ink-soft">
-                  {run.id}
-                </span>
-                <div className="flex flex-wrap gap-x-2 gap-y-1 font-mono text-[10px] text-ink-faint">
-                  <span>trigger {runTriggerLabel(run)}</span>
-                  <span>v{run.workflowVersion}</span>
-                  <span>{run.definitionSource}</span>
-                </div>
-              </button>
-            ))}
-            {runs.length === 0 && (
-              <div className="px-3 py-2 text-sm text-ink-soft">No runs</div>
-            )}
-            {hasMoreRuns && (
-              <div className="px-3 py-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="w-full"
-                  onClick={onLoadMoreRuns}
-                  disabled={loadingMoreRuns}
-                >
-                  {loadingMoreRuns ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <ScrollText className="size-4" />
-                  )}
-                  Load more
-                </Button>
-              </div>
-            )}
+          <div className="grid grid-cols-2 gap-2 font-mono text-[10px] text-ink-faint">
+            <span>created {formatDateTime(detail.run.createdAt)}</span>
+            <span>duration {formatDuration(runDurationMs(detail.run))}</span>
+            <span>trigger {runTriggerLabel(detail.run)}</span>
+            <span>source {detail.run.definitionSource}</span>
+            <span>started {formatDateTime(detail.run.startedAt)}</span>
+            <span>ended {formatDateTime(detail.run.endedAt)}</span>
+            <span>current {detail.run.currentNodeId ?? "none"}</span>
+            <span>waiting {detail.run.waitingReason ?? "none"}</span>
           </div>
         </section>
-
-        {detail && (
-          <>
-            <section className="space-y-2">
-              <SectionEyebrow>Steps</SectionEyebrow>
-              <div className="divide-y divide-paper-rule border border-paper-rule">
-                {detail.steps.map((step) => {
-                  const branchState = stepBranchState(detail, step);
-                  return (
-                    <button
-                      type="button"
-                      key={step.id}
-                      onClick={() => onSelectStep(step.id)}
-                      className={cn(
-                        "flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-paper-sunk",
-                        selectedStep?.id === step.id && "bg-paper-sunk",
-                      )}
-                    >
-                      {statusIcon(step.status)}
-                      <span className="min-w-0 flex-1 truncate text-sm">
-                        {step.nodeId}
-                      </span>
-                      {branchState && (
-                        <span
-                          aria-label={`${step.nodeId} branch state`}
-                          className="font-mono text-[10px] text-ink-faint"
-                        >
-                          branch {branchState.status}
-                        </span>
-                      )}
-                      <span className="font-mono text-[10px] text-ink-faint">
-                        retry {stepRetryCount(step)} ·{" "}
-                        {formatDuration(stepDurationMs(step))}
-                      </span>
-                      <Badge variant={statusBadge(step.status)}>
-                        {step.status}
-                      </Badge>
-                    </button>
-                  );
-                })}
-                {detail.steps.length === 0 && (
-                  <div className="px-3 py-2 text-sm text-ink-soft">
-                    No step attempts
-                  </div>
-                )}
-              </div>
-            </section>
-
-            <section className="space-y-2">
-              <SectionEyebrow>Selected Step</SectionEyebrow>
-              {selectedStep ? (
-                <>
-                  <StepMetadata
-                    step={selectedStep}
-                    nodeType={stepNodeType(detail, selectedStep)}
-                    nodeLabel={stepNodeLabel(detail, selectedStep)}
-                    branchState={stepBranchState(detail, selectedStep)}
-                  />
-                  <JsonBlock
-                    label="Input"
-                    value={selectedStep.input}
-                    runId={detail.run.id}
-                  />
-                  <JsonBlock
-                    label="Output"
-                    value={selectedStep.output}
-                    runId={detail.run.id}
-                  />
-                  <JsonBlock
-                    label="Error"
-                    value={selectedStep.error}
-                    runId={detail.run.id}
-                  />
-                  <JsonBlock
-                    label="Logs"
-                    value={selectedStep.logsSummary}
-                    runId={detail.run.id}
-                  />
-                  <JsonBlock
-                    label="Context diff"
-                    value={selectedStep.contextDiff}
-                    runId={detail.run.id}
-                  />
-                </>
-              ) : (
-                <div className="border border-paper-rule p-3 text-sm text-ink-soft">
-                  No selected step
-                </div>
-              )}
-            </section>
-
-            <section className="space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <SectionEyebrow>Timeline</SectionEyebrow>
-                <Select
-                  value={eventLevel}
-                  onValueChange={(value) =>
-                    setEventLevel(value as EventLevelFilter)
-                  }
-                >
-                  <SelectTrigger
-                    size="sm"
-                    className="w-32"
-                    aria-label="Timeline level"
+      </TabsContent>
+      <TabsContent value="timeline" className="grid gap-3 pt-3">
+        <div className="flex items-center justify-between gap-2">
+          <SectionEyebrow>Timeline</SectionEyebrow>
+          <Select
+            value={eventLevel}
+            onValueChange={(value) =>
+              onEventLevelChange(value as EventLevelFilter)
+            }
+          >
+            <SelectTrigger size="sm" className="w-32" aria-label="Timeline level">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {EVENT_LEVELS.map((level) => (
+                <SelectItem key={level} value={level}>
+                  {level}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="divide-y divide-paper-rule border border-paper-rule">
+          {filteredEvents.map((event) => {
+            const stepNodeId = eventStepNodeId(detail, event);
+            return (
+              <div key={event.id} className="grid gap-1 px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <Badge
+                    variant={
+                      event.level === "error" ? "destructive" : "secondary"
+                    }
                   >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {EVENT_LEVELS.map((level) => (
-                      <SelectItem key={level} value={level}>
-                        {level}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="divide-y divide-paper-rule border border-paper-rule">
-                {filteredEvents.map((event) => {
-                  const stepNodeId = eventStepNodeId(detail, event);
-                  return (
-                    <div key={event.id} className="grid gap-1 px-3 py-2">
-                      <div className="flex items-center gap-2">
-                        <Badge
-                          variant={
-                            event.level === "error"
-                              ? "destructive"
-                              : "secondary"
-                          }
-                        >
-                          {event.level}
-                        </Badge>
-                        <span className="text-sm">{event.kind}</span>
-                        {stepNodeId && (
-                          <span
-                            aria-label={`Event #${event.sequence} step`}
-                            className="font-mono text-[10px] text-ink-faint"
-                          >
-                            step {stepNodeId}
-                          </span>
-                        )}
-                        <span
-                          aria-label={`Event #${event.sequence} timestamp`}
-                          className="ml-auto font-mono text-[10px] text-ink-faint"
-                        >
-                          #{event.sequence} · {formatDateTime(event.createdAt)}
-                        </span>
-                      </div>
-                      {event.message && (
-                        <div className="text-xs text-ink-soft">
-                          {event.message}
-                        </div>
-                      )}
-                      {event.payload !== undefined && (
-                        <JsonBlock
-                          label={`Event #${event.sequence} payload`}
-                          value={event.payload}
-                          runId={detail.run.id}
-                        />
-                      )}
-                    </div>
-                  );
-                })}
-                {filteredEvents.length === 0 && (
-                  <div className="px-3 py-2 text-sm text-ink-soft">
-                    {timelineEmptyMessage(eventLevel)}
-                  </div>
+                    {event.level}
+                  </Badge>
+                  <span className="text-sm">{event.kind}</span>
+                  {stepNodeId && (
+                    <span
+                      aria-label={`Event #${event.sequence} step`}
+                      className="font-mono text-[10px] text-ink-faint"
+                    >
+                      step {stepNodeId}
+                    </span>
+                  )}
+                  <span
+                    aria-label={`Event #${event.sequence} timestamp`}
+                    className="ml-auto font-mono text-[10px] text-ink-faint"
+                  >
+                    #{event.sequence} · {formatDateTime(event.createdAt)}
+                  </span>
+                </div>
+                {event.message && (
+                  <div className="text-xs text-ink-soft">{event.message}</div>
+                )}
+                {event.payload !== undefined && (
+                  <JsonBlock
+                    label={`Event #${event.sequence} payload`}
+                    value={event.payload}
+                    runId={detail.run.id}
+                  />
                 )}
               </div>
-            </section>
+            );
+          })}
+          {filteredEvents.length === 0 && (
+            <div className="px-3 py-2 text-sm text-ink-soft">
+              {timelineEmptyMessage(eventLevel)}
+            </div>
+          )}
+        </div>
+      </TabsContent>
+      <TabsContent value="payloads" className="grid gap-3 pt-3">
+        <JsonBlock label="Trigger" value={detail.run.trigger} runId={detail.run.id} />
+        <JsonBlock label="Run input" value={detail.run.input} runId={detail.run.id} />
+        <JsonBlock
+          label="Final context"
+          value={detail.run.context}
+          runId={detail.run.id}
+        />
+      </TabsContent>
+    </Tabs>
+  );
+}
 
-            <JsonBlock
-              label="Trigger"
-              value={detail.run.trigger}
-              runId={detail.run.id}
-            />
-            <JsonBlock
-              label="Run input"
-              value={detail.run.input}
-              runId={detail.run.id}
-            />
-            <JsonBlock
-              label="Final context"
-              value={detail.run.context}
-              runId={detail.run.id}
-            />
-          </>
-        )}
+function StepDetailPanel({
+  detail,
+  step,
+  runId,
+}: {
+  detail: RunDetail;
+  step: WorkflowStepAttempt;
+  runId: string;
+}) {
+  const nodeType = stepNodeType(detail, step);
+  const nodeLabel = stepNodeLabel(detail, step);
+  const branchState = stepBranchState(detail, step);
+  const stepIndex = detail.steps.findIndex((item) => item.id === step.id);
+  return (
+    <div className="grid gap-3">
+      <div className="grid gap-3 border border-paper-rule bg-paper p-3">
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                Step {stepIndex >= 0 ? stepIndex + 1 : "?"}
+              </span>
+              <Badge variant={statusBadge(step.status)}>{step.status}</Badge>
+              {branchState && (
+                <Badge variant="outline">branch {branchState.status}</Badge>
+              )}
+            </div>
+            <h3 className="mt-1 truncate text-base font-semibold text-ink">
+              {nodeLabel ?? step.nodeId}
+            </h3>
+            <div className="mt-1 truncate font-mono text-[11px] text-ink-faint">
+              {step.nodeId} · {nodeType}
+            </div>
+          </div>
+          <div className="grid shrink-0 gap-1 text-right font-mono text-[10px] text-ink-faint">
+            <span>{formatDuration(stepDurationMs(step))}</span>
+            <span>attempt {step.attempt}</span>
+          </div>
+        </div>
+        <StepMetadata
+          step={step}
+          nodeType={nodeType}
+          nodeLabel={nodeLabel}
+          branchState={branchState}
+        />
       </div>
-    </aside>
+      <Tabs defaultValue="output" className="border border-paper-rule bg-paper">
+        <TabsList className="overflow-x-auto">
+          <TabsTrigger value="input">Input</TabsTrigger>
+          <TabsTrigger value="output">Output</TabsTrigger>
+          <TabsTrigger value="logs">Logs</TabsTrigger>
+          <TabsTrigger value="error">Error</TabsTrigger>
+          <TabsTrigger value="context">Context</TabsTrigger>
+        </TabsList>
+        <TabsContent value="input" className="p-3 pt-3">
+          <JsonBlock label="Step input" value={step.input} runId={runId} />
+        </TabsContent>
+        <TabsContent value="output" className="p-3 pt-3">
+          <JsonBlock label="Step output" value={step.output} runId={runId} />
+        </TabsContent>
+        <TabsContent value="logs" className="p-3 pt-3">
+          <JsonBlock label="Step logs" value={step.logsSummary} runId={runId} />
+        </TabsContent>
+        <TabsContent value="error" className="p-3 pt-3">
+          <JsonBlock label="Step error" value={step.error} runId={runId} />
+        </TabsContent>
+        <TabsContent value="context" className="p-3 pt-3">
+          <JsonBlock
+            label="Context diff"
+            value={step.contextDiff}
+            runId={runId}
+          />
+        </TabsContent>
+      </Tabs>
+    </div>
   );
 }
 
@@ -3937,18 +4944,19 @@ function StepMetadata({
     <div
       role="group"
       aria-label="Selected step metadata"
-      className="grid grid-cols-2 gap-2 border border-paper-rule bg-paper-sunk p-3 font-mono text-[10px] text-ink-faint md:grid-cols-4"
+      className="grid grid-cols-2 gap-2 border border-paper-rule bg-paper-sunk p-3 font-mono text-[10px] text-ink-faint md:grid-cols-3"
     >
-      <span>node {step.nodeId}</span>
-      {nodeLabel && <span>label {nodeLabel}</span>}
+      <span>status {step.status}</span>
       <span>type {nodeType}</span>
       <span>attempt {step.attempt}</span>
-      <span>status {step.status}</span>
-      {branchState && <span>branch {branchState.status}</span>}
-      {branchState?.condition && <span>condition {branchState.condition}</span>}
       <span>duration {formatDuration(stepDurationMs(step))}</span>
       <span>started {formatDateTime(step.startedAt)}</span>
       <span>ended {formatDateTime(step.endedAt)}</span>
+      {nodeLabel && <span className="truncate">label {nodeLabel}</span>}
+      {branchState && <span>branch {branchState.status}</span>}
+      {branchState?.condition && (
+        <span className="truncate">condition {branchState.condition}</span>
+      )}
     </div>
   );
 }
@@ -3962,6 +4970,7 @@ function JsonBlock({
   value: unknown;
   runId?: string;
 }) {
+  const [open, setOpen] = useState(true);
   const artifact = artifactReference(value);
   const [artifactContent, setArtifactContent] = useState<JsonValue | undefined>(
     undefined,
@@ -4016,7 +5025,20 @@ function JsonBlock({
       className="border border-paper-rule"
     >
       <div className="flex items-center justify-between gap-2 border-b border-paper-rule bg-paper-sunk px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-        <span>{label}</span>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-label={`${open ? "Collapse" : "Expand"} ${label} JSON`}
+          className="flex min-w-0 items-center gap-1.5 text-left hover:text-ink"
+          onClick={() => setOpen((current) => !current)}
+        >
+          {open ? (
+            <ArrowUp className="size-3 shrink-0" aria-hidden="true" />
+          ) : (
+            <ArrowDown className="size-3 shrink-0" aria-hidden="true" />
+          )}
+          <span className="truncate">{label}</span>
+        </button>
         <span className="flex items-center gap-2">
           {artifact && (
             <>
@@ -4055,12 +5077,14 @@ function JsonBlock({
           )}
         </span>
       </div>
-      <pre className="max-h-56 overflow-auto p-3 font-mono text-[11px] leading-relaxed text-ink-soft">
-        {displayValue === undefined
-          ? "undefined"
-          : JSON.stringify(displayValue, null, 2)}
-      </pre>
-      {artifactError && (
+      {open && (
+        <pre className="max-h-56 overflow-auto p-3 font-mono text-[11px] leading-relaxed text-ink-soft">
+          {displayValue === undefined
+            ? "undefined"
+            : JSON.stringify(displayValue, null, 2)}
+        </pre>
+      )}
+      {open && artifactError && (
         <div className="border-t border-paper-rule px-3 py-1.5 text-xs text-plot-red">
           {artifactError}
         </div>
@@ -4174,6 +5198,19 @@ function getRunTriggerId(run: WorkflowRun): string | null {
 
 function runTriggerLabel(run: WorkflowRun): string {
   return getRunTriggerId(run) ?? "unknown";
+}
+
+function runTriggerCanvasFallback(run: WorkflowRun): WorkflowGraphTrigger[] {
+  if (!isRecord(run.trigger)) return [];
+  const triggerId = run.trigger["triggerId"];
+  const kind = run.trigger["kind"];
+  return [
+    {
+      id: typeof triggerId === "string" && triggerId ? triggerId : "manual",
+      kind: typeof kind === "string" && kind ? kind : "manual",
+      enabled: true,
+    },
+  ];
 }
 
 function isTerminalRunStatus(status: WorkflowRun["status"]): boolean {
@@ -4295,6 +5332,7 @@ function validateNodeReferences(
   for (const node of nodes) {
     if (node.type === "builtin.if") {
       collectMissingNodeReferences(errors, node, "then", nodeIds);
+      collectMissingNodeReferences(errors, node, "else", nodeIds);
     } else if (node.type === "builtin.if_else") {
       collectMissingNodeReferences(errors, node, "then", nodeIds);
       collectMissingNodeReferences(errors, node, "else", nodeIds);
@@ -4472,9 +5510,7 @@ function validateImportedNodeShape(
         errors.push(`Imported workflow node ${displayId} needs a condition`);
       }
       validateNodeIdArray(errors, node, displayId, "then");
-      if (type === "builtin.if_else") {
-        validateNodeIdArray(errors, node, displayId, "else");
-      }
+      validateNodeIdArray(errors, node, displayId, "else");
       continue;
     }
     if (type === "builtin.foreach") {
@@ -5177,10 +6213,6 @@ function stepDurationMs(step: WorkflowStepAttempt): number | null {
   if (step.durationMs !== null) return step.durationMs;
   if (!step.startedAt || !step.endedAt) return null;
   return new Date(step.endedAt).getTime() - new Date(step.startedAt).getTime();
-}
-
-function stepRetryCount(step: WorkflowStepAttempt): number {
-  return Math.max(step.attempt - 1, 0);
 }
 
 function formatDuration(value: number | null): string {

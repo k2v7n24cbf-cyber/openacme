@@ -196,6 +196,7 @@ export class WorkflowRunner {
 
     try {
       const output = await this.executeBuiltin(state, node, attemptId);
+      const endedAt = this.now();
       const contextDiff = diffAssignedContext(beforeContext, state.context);
       const logsSummary = buildStepLogsSummary(
         node,
@@ -210,7 +211,8 @@ export class WorkflowRunner {
         attempt,
         status: completedStepStatus(node),
         startedAt,
-        endedAt: this.now(),
+        endedAt,
+        durationMs: stepDurationMs(startedAt, endedAt),
         input: resolvedNodeInput(state, node),
         output,
         logsSummary,
@@ -249,6 +251,7 @@ export class WorkflowRunner {
       }
       state.status = "failed";
       state.stopped = true;
+      const endedAt = this.now();
       const error = errorToJson(err);
       const logsSummary = buildStepLogsSummary(
         node,
@@ -263,7 +266,8 @@ export class WorkflowRunner {
         attempt,
         status: "failed",
         startedAt,
-        endedAt: this.now(),
+        endedAt,
+        durationMs: stepDurationMs(startedAt, endedAt),
         input: safeResolvedNodeInput(state, node),
         error,
         logsSummary,
@@ -307,10 +311,9 @@ export class WorkflowRunner {
       }
 
       case "builtin.if": {
-        const selected = evaluateCondition(state, node.condition)
-          ? node.then
-          : [];
-        const skipped = selected.length === 0 ? node.then : [];
+        const matches = evaluateCondition(state, node.condition);
+        const selected = matches ? node.then : node.else;
+        const skipped = matches ? node.else : node.then;
         await this.appendBranchEvent(state, node.condition, selected, skipped);
         return { selected, skipped };
       }
@@ -623,6 +626,7 @@ export class WorkflowRunner {
     nodeId: string,
     attempt: number,
   ): void {
+    const skippedAt = this.now();
     state.stepAttempts.push(
       WorkflowStepAttemptSchema.parse({
         id: `${state.runId}:${nodeId}:${attempt}`,
@@ -630,8 +634,9 @@ export class WorkflowRunner {
         nodeId,
         attempt,
         status: "skipped",
-        startedAt: this.now(),
-        endedAt: this.now(),
+        startedAt: skippedAt,
+        endedAt: skippedAt,
+        durationMs: 0,
       }),
     );
   }
@@ -664,6 +669,7 @@ function collectBranchNodeIds(nodes: WorkflowNode[]): Set<string> {
   for (const node of nodes) {
     if (node.type === "builtin.if") {
       node.then.forEach((nodeId) => branchNodeIds.add(nodeId));
+      node.else.forEach((nodeId) => branchNodeIds.add(nodeId));
     }
     if (node.type === "builtin.if_else") {
       node.then.forEach((nodeId) => branchNodeIds.add(nodeId));
@@ -1239,6 +1245,13 @@ function errorDetails(err: Error): JsonValue | undefined {
 function completedStepStatus(node: WorkflowNode): WorkflowStepStatus {
   if (node.type === "builtin.exit") return node.status;
   return "succeeded";
+}
+
+function stepDurationMs(startedAt: string, endedAt: string): number {
+  const started = Date.parse(startedAt);
+  const ended = Date.parse(endedAt);
+  if (!Number.isFinite(started) || !Number.isFinite(ended)) return 0;
+  return Math.max(0, ended - started);
 }
 
 function terminalExitEvent(

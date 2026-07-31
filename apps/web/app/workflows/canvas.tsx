@@ -8,7 +8,15 @@ import {
   type MouseEvent,
   type PointerEvent,
 } from "react";
-import { ArrowDown, ArrowUp, Maximize, Minus, Plus } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Copy,
+  Maximize,
+  Minus,
+  Plus,
+  Trash2,
+} from "lucide-react";
 import {
   Handle,
   Panel,
@@ -63,6 +71,9 @@ interface WorkflowCanvasConnectionContextValue {
   pending: WorkflowCanvasPendingConnection | null;
   beginConnection: (connection: WorkflowCanvasPendingConnection) => void;
   completeConnection: (targetId: string) => void;
+  openAddStepAfterNode: (nodeId: string | null, sourceHandle?: string) => void;
+  cloneNode: (nodeId: string) => void;
+  deleteNode: (nodeId: string) => void;
   moveNodePosition: (
     nodeId: string,
     position: { x: number; y: number },
@@ -104,6 +115,12 @@ function WorkflowCanvasNodeCard({
   const isMissing = data.kind === "missing";
   const sourceHandles = data.sourceHandles;
   const connection = useContext(WorkflowCanvasConnectionContext);
+  const canAddAfter =
+    !isMissing &&
+    (data.kind === "trigger" ||
+      (data.kind === "step" && sourceHandles.length === 0));
+  const canAddBranchStep = data.kind === "step" && !isMissing;
+  const canEditNode = data.kind === "step" && !isMissing;
   const { getZoom } = useReactFlow();
   const dragRef = useRef<WorkflowCanvasPointerDrag | null>(null);
   return (
@@ -113,7 +130,7 @@ function WorkflowCanvasNodeCard({
       data-workflow-canvas-node-id={data.id}
       data-workflow-run-status={data.runStatus}
       className={cn(
-        "w-[220px] cursor-grab border bg-paper px-3 py-2.5 text-left shadow-sm transition-colors active:cursor-grabbing",
+        "relative w-[220px] cursor-grab overflow-visible border bg-paper px-3 pb-4 pt-2.5 text-left shadow-sm transition-colors active:cursor-grabbing",
         selected ? "border-ink" : "border-paper-rule hover:border-ink-faint",
         data.runCurrent && "ring-1 ring-signal-blue",
         isTrigger && "w-[190px] cursor-default bg-paper-sunk",
@@ -206,11 +223,21 @@ function WorkflowCanvasNodeCard({
         if (dragRef.current?.pointerId === -1) dragRef.current = null;
       }}
     >
+      {!isMissing && (
+        <Handle
+          id="source"
+          type="source"
+          position={Position.Bottom}
+          isConnectable={false}
+          aria-hidden
+          style={WORKFLOW_SEQUENCE_SOURCE_HANDLE_STYLE}
+        />
+      )}
       {!isTrigger && (
         <Handle
           id="target"
           type="target"
-          position={Position.Left}
+          position={Position.Top}
           isConnectable={!isMissing}
           aria-label={`${data.id} target handle`}
           data-workflow-target-handle={data.id}
@@ -235,6 +262,40 @@ function WorkflowCanvasNodeCard({
         >
           {data.label}
         </span>
+        {selected && canEditNode && (
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label={`Clone workflow step ${data.id}`}
+              className="size-7 text-ink-faint hover:text-ink"
+              onPointerDown={(event) => event.stopPropagation()}
+              onMouseDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                connection?.cloneNode(data.id);
+              }}
+            >
+              <Copy className="size-4" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label={`Delete workflow step ${data.id}`}
+              className="size-7 text-ink-faint hover:text-destructive"
+              onPointerDown={(event) => event.stopPropagation()}
+              onMouseDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                connection?.deleteNode(data.id);
+              }}
+            >
+              <Trash2 className="size-4" />
+            </Button>
+          </div>
+        )}
       </div>
       <div className="mt-2 flex flex-wrap gap-1.5">
         {data.runStatus && (
@@ -251,32 +312,81 @@ function WorkflowCanvasNodeCard({
       <div className="mt-2 truncate font-mono text-[10px] text-ink-faint">
         {data.id}
       </div>
-      {sourceHandles.map((handle, index) => (
-        <Handle
-          key={handle.id}
-          id={handle.id}
-          type="source"
-          position={Position.Right}
-          isConnectable
-          aria-label={`${data.id} ${handle.label} source handle`}
-          data-workflow-source-handle={`${data.id}:${handle.id}`}
-          style={{
-            ...WORKFLOW_SOURCE_HANDLE_STYLE,
-            ...(connection?.pending?.sourceId === data.id &&
-            connection.pending.sourceHandle === handle.id
-              ? WORKFLOW_PENDING_SOURCE_HANDLE_STYLE
-              : {}),
-            top: `${sourceHandleTop(index, sourceHandles.length)}%`,
-          }}
-          onClick={(event: MouseEvent) => {
+      {sourceHandles.map((handle, index) => {
+        const left = sourceHandleLeft(index, sourceHandles.length);
+        const routeLabel = workflowRouteLabel(handle.id, handle.label);
+        return (
+          <div key={handle.id}>
+            <Handle
+              id={handle.id}
+              type="source"
+              position={Position.Bottom}
+              isConnectable
+              aria-label={`${data.id} ${routeLabel} source handle`}
+              data-workflow-source-handle={`${data.id}:${handle.id}`}
+              style={{
+                ...WORKFLOW_SOURCE_HANDLE_STYLE,
+                ...(connection?.pending?.sourceId === data.id &&
+                connection.pending.sourceHandle === handle.id
+                  ? WORKFLOW_PENDING_SOURCE_HANDLE_STYLE
+                  : {}),
+                left: `${left}%`,
+              }}
+              onClick={(event: MouseEvent) => {
+                event.stopPropagation();
+                connection?.beginConnection({
+                  sourceId: data.id,
+                  sourceHandle: handle.id,
+                });
+              }}
+            />
+            {canAddBranchStep && (
+              <div
+                className="absolute bottom-[-58px] z-20 flex -translate-x-1/2 flex-col items-center gap-1"
+                style={{ left: `${left}%` }}
+              >
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label={`Add workflow step to ${data.id} ${routeLabel} route`}
+                  data-workflow-add-branch={`${data.id}:${handle.id}`}
+                  className="size-7 rounded-full bg-paper p-0 shadow-sm"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    connection?.openAddStepAfterNode(data.id, handle.id);
+                  }}
+                >
+                  <Plus className="size-3.5" />
+                </Button>
+                <span className="rounded-full border border-paper-rule bg-paper px-2 py-0.5 font-mono text-[10px] leading-none text-ink-muted shadow-sm">
+                  {routeLabel}
+                </span>
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {canAddAfter && (
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-sm"
+          aria-label={`Add workflow step after ${data.id}`}
+          data-workflow-add-after={data.id}
+          className="absolute bottom-[-36px] left-1/2 z-20 size-7 -translate-x-1/2 rounded-full bg-paper p-0 shadow-sm"
+          onPointerDown={(event) => event.stopPropagation()}
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
             event.stopPropagation();
-            connection?.beginConnection({
-              sourceId: data.id,
-              sourceHandle: handle.id,
-            });
+            connection?.openAddStepAfterNode(data.id);
           }}
-        />
-      ))}
+        >
+          <Plus className="size-3.5" />
+        </Button>
+      )}
     </div>
   );
 }
@@ -288,23 +398,30 @@ const NODE_TYPES = {
 };
 
 const WORKFLOW_TARGET_HANDLE_STYLE = {
-  width: 14,
-  height: 14,
-  left: -7,
-  borderColor: "var(--ink-faint)",
-  background: "var(--paper)",
+  width: 7,
+  height: 7,
+  top: -3.5,
+  border: "none",
+  borderRadius: 9999,
+  background: "var(--ink-faint)",
 };
 
 const WORKFLOW_SOURCE_HANDLE_STYLE = {
-  width: 14,
-  height: 14,
-  right: -7,
-  borderColor: "var(--ink-faint)",
-  background: "var(--paper)",
+  width: 7,
+  height: 7,
+  bottom: -3.5,
+  border: "none",
+  borderRadius: 9999,
+  background: "var(--ink-faint)",
+};
+
+const WORKFLOW_SEQUENCE_SOURCE_HANDLE_STYLE = {
+  ...WORKFLOW_SOURCE_HANDLE_STYLE,
+  left: "50%",
+  pointerEvents: "none" as const,
 };
 
 const WORKFLOW_PENDING_SOURCE_HANDLE_STYLE = {
-  borderColor: "var(--signal-blue)",
   background: "var(--signal-blue)",
 };
 
@@ -342,6 +459,27 @@ function CanvasControls() {
         <Maximize className="size-4" />
       </Button>
     </div>
+  );
+}
+
+function CanvasAddControls({
+  selectedNodeId,
+  onAddStep,
+}: {
+  selectedNodeId: string | null;
+  onAddStep?: (afterNodeId: string | null, sourceHandle?: string) => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="icon-sm"
+      aria-label="Add workflow step"
+      className="rounded-full bg-paper shadow-sm"
+      onClick={() => onAddStep?.(selectedNodeId)}
+    >
+      <Plus className="size-4" />
+    </Button>
   );
 }
 
@@ -435,7 +573,10 @@ function WorkflowCanvasInner({
   onRemoveSelectedEdge,
   onMoveSelectedUp,
   onMoveSelectedDown,
+  onCloneNode,
+  onDeleteNode,
   onNodePositionChange,
+  onAddStep,
 }: {
   projection: WorkflowGraphProjection;
   selectedNodeId: string | null;
@@ -446,10 +587,13 @@ function WorkflowCanvasInner({
   onRemoveSelectedEdge?: (edge: WorkflowCanvasEdgeSelection) => void;
   onMoveSelectedUp?: () => void;
   onMoveSelectedDown?: () => void;
+  onCloneNode?: (nodeId: string) => void;
+  onDeleteNode?: (nodeId: string) => void;
   onNodePositionChange?: (
     nodeId: string,
     position: { x: number; y: number },
   ) => void;
+  onAddStep?: (afterNodeId: string | null, sourceHandle?: string) => void;
 }) {
   const [pendingConnection, setPendingConnection] =
     useState<WorkflowCanvasPendingConnection | null>(null);
@@ -493,10 +637,21 @@ function WorkflowCanvasInner({
         });
         setPendingConnection(null);
       },
+      openAddStepAfterNode: (nodeId, sourceHandle) =>
+        onAddStep?.(nodeId, sourceHandle),
+      cloneNode: (nodeId) => onCloneNode?.(nodeId),
+      deleteNode: (nodeId) => onDeleteNode?.(nodeId),
       moveNodePosition: (nodeId, position) =>
         onNodePositionChange?.(nodeId, position),
     }),
-    [onConnectReference, onNodePositionChange, pendingConnection],
+    [
+      onAddStep,
+      onCloneNode,
+      onConnectReference,
+      onDeleteNode,
+      onNodePositionChange,
+      pendingConnection,
+    ],
   );
 
   return (
@@ -547,6 +702,7 @@ function WorkflowCanvasInner({
             <SectionEyebrow>Workflow Canvas</SectionEyebrow>
             <div className="mt-1 flex gap-1.5">
               <Badge variant="outline">{projection.nodes.length} nodes</Badge>
+              <Badge variant="outline">{projection.edges.length} edges</Badge>
               {projection.warnings.length > 0 && (
                 <Badge variant="destructive">
                   {projection.warnings.length} warnings
@@ -570,6 +726,12 @@ function WorkflowCanvasInner({
             />
           </div>
         </Panel>
+        <Panel position="bottom-left">
+          <CanvasAddControls
+            selectedNodeId={selectedNodeId}
+            onAddStep={onAddStep}
+          />
+        </Panel>
       </ReactFlow>
     </WorkflowCanvasConnectionContext.Provider>
   );
@@ -585,10 +747,13 @@ export function WorkflowCanvas(props: {
   onRemoveSelectedEdge?: (edge: WorkflowCanvasEdgeSelection) => void;
   onMoveSelectedUp?: () => void;
   onMoveSelectedDown?: () => void;
+  onCloneNode?: (nodeId: string) => void;
+  onDeleteNode?: (nodeId: string) => void;
   onNodePositionChange?: (
     nodeId: string,
     position: { x: number; y: number },
   ) => void;
+  onAddStep?: (afterNodeId: string | null, sourceHandle?: string) => void;
 }) {
   return (
     <ReactFlowProvider>
@@ -597,9 +762,15 @@ export function WorkflowCanvas(props: {
   );
 }
 
-function sourceHandleTop(index: number, total: number): number {
+function sourceHandleLeft(index: number, total: number): number {
   if (total <= 1) return 50;
   return 35 + index * 30;
+}
+
+function workflowRouteLabel(handleId: string, fallback: string): string {
+  if (handleId === "then") return "true";
+  if (handleId === "else") return "false";
+  return fallback;
 }
 
 function connectionFromReactFlow(

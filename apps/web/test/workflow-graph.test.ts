@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildWorkflowGraphProjection } from "@/app/workflows/graph";
 
 describe("buildWorkflowGraphProjection", () => {
-  it("creates trigger and sequential edges for a linear workflow", () => {
+  it("creates trigger and sequential edges for visible workflow cards", () => {
     const graph = buildWorkflowGraphProjection({
       triggers: [{ id: "manual_review", kind: "manual", enabled: true }],
       nodes: [
@@ -17,12 +17,10 @@ describe("buildWorkflowGraphProjection", () => {
       "trigger:manual_review",
       "set_customer",
       "normalize",
-      "exit",
     ]);
     expect(graph.edges.map((edge) => edge.id)).toEqual([
       "edge:trigger:manual_review:set_customer",
       "edge:sequence:set_customer:normalize",
-      "edge:sequence:normalize:exit",
     ]);
   });
 
@@ -45,9 +43,7 @@ describe("buildWorkflowGraphProjection", () => {
         position: { x: 120, y: 80 },
       }),
     );
-    expect(
-      graph.nodes.find((node) => node.id === "exit")?.position,
-    ).not.toEqual({ x: 120, y: 80 });
+    expect(graph.nodes.find((node) => node.id === "exit")).toBeUndefined();
   });
 
   it("creates branch edges for if nodes", () => {
@@ -59,9 +55,10 @@ describe("buildWorkflowGraphProjection", () => {
           type: "builtin.if",
           condition: "$.input.enabled",
           then: ["notify"],
+          else: ["skip"],
         },
         { id: "notify", type: "builtin.log.info" },
-        { id: "exit", type: "builtin.exit" },
+        { id: "skip", type: "builtin.log.info" },
       ],
     });
 
@@ -72,7 +69,13 @@ describe("buildWorkflowGraphProjection", () => {
           id: "edge:then:branch:notify",
           source: "branch",
           target: "notify",
-          label: "then",
+          label: "true",
+        }),
+        expect.objectContaining({
+          id: "edge:else:branch:skip",
+          source: "branch",
+          target: "skip",
+          label: "false",
         }),
       ]),
     );
@@ -98,13 +101,33 @@ describe("buildWorkflowGraphProjection", () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: "edge:then:branch:manual_review",
-          label: "then",
+          label: "true",
         }),
         expect.objectContaining({
           id: "edge:else:branch:auto_approve",
-          label: "else",
+          label: "false",
         }),
       ]),
+    );
+  });
+
+  it("does not create default sequence edges from explicit branch handles", () => {
+    const graph = buildWorkflowGraphProjection({
+      triggers: [],
+      nodes: [
+        {
+          id: "branch",
+          type: "builtin.if",
+          condition: "$.input.risky",
+          then: [],
+          else: [],
+        },
+        { id: "normalize", type: "builtin.transform" },
+      ],
+    });
+
+    expect(graph.edges.map((edge) => edge.id)).not.toContain(
+      "edge:sequence:branch:normalize",
     );
   });
 

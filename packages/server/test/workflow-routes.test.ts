@@ -321,6 +321,23 @@ describe("workflow routes", () => {
       version: 2,
     });
 
+    res = await req("/api/workflows/wf_customer", { method: "DELETE" });
+    expect(res.status).toBe(200);
+    expect((await res.json()).workflow).toMatchObject({
+      id: "wf_customer",
+      status: "archived",
+    });
+
+    res = await req("/api/workflows");
+    expect(res.status).toBe(200);
+    expect((await res.json()).workflows).toEqual([]);
+
+    res = await req("/api/workflows?status=archived");
+    expect(res.status).toBe(200);
+    expect(
+      (await res.json()).workflows.map((wf: { id: string }) => wf.id),
+    ).toEqual(["wf_customer"]);
+
     res = await jsonReq("/api/workflows", {
       id: "bad/id",
       name: "Bad workflow id",
@@ -619,7 +636,11 @@ describe("workflow routes", () => {
     expect(res.status).toBe(201);
     const testRun = (await res.json()) as {
       run: { id: string; status: string; mode: string; context: unknown };
-      steps: Array<{ nodeId: string; status: string }>;
+      steps: Array<{
+        nodeId: string;
+        status: string;
+        durationMs: number | null;
+      }>;
       events: Array<{ kind: string }>;
     };
     expect(testRun.run).toMatchObject({
@@ -631,6 +652,11 @@ describe("workflow routes", () => {
       ["set_customer", "succeeded"],
       ["normalize", "succeeded"],
       ["exit", "succeeded"],
+    ]);
+    expect(testRun.steps.map((step) => step.durationMs)).toEqual([
+      expect.any(Number),
+      expect.any(Number),
+      expect.any(Number),
     ]);
     expect(testRun.events.map((event) => event.kind)).toContain(
       "run_completed",

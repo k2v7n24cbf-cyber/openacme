@@ -2,7 +2,6 @@ export type WorkflowPaletteKind =
   | "set"
   | "transform"
   | "if"
-  | "if_else"
   | "log"
   | "exit"
   | "foreach"
@@ -31,7 +30,28 @@ export function appendWorkflowNode(
   kind: WorkflowPaletteKind,
   tool?: WorkflowAuthoringMcpTool | WorkflowAuthoringAgent,
 ): WorkflowAuthoringNode[] {
-  return [...nodes, createWorkflowNodeTemplate(kind, nodes.length + 1, tool)];
+  return insertWorkflowNodeAfter(nodes, null, kind, tool);
+}
+
+export function insertWorkflowNodeAfter(
+  nodes: WorkflowAuthoringNode[],
+  afterNodeId: string | null,
+  kind: WorkflowPaletteKind,
+  tool?: WorkflowAuthoringMcpTool | WorkflowAuthoringAgent,
+): WorkflowAuthoringNode[] {
+  const nextNode = createNextWorkflowNodeTemplate(nodes, kind, tool);
+  if (!afterNodeId) return [...nodes, nextNode];
+  const index = nodes.findIndex((node) => node.id === afterNodeId);
+  if (index < 0) return [...nodes, nextNode];
+  return [...nodes.slice(0, index + 1), nextNode, ...nodes.slice(index + 1)];
+}
+
+export function insertWorkflowNodeFirst(
+  nodes: WorkflowAuthoringNode[],
+  kind: WorkflowPaletteKind,
+  tool?: WorkflowAuthoringMcpTool | WorkflowAuthoringAgent,
+): WorkflowAuthoringNode[] {
+  return [createNextWorkflowNodeTemplate(nodes, kind, tool), ...nodes];
 }
 
 export function moveWorkflowNode(
@@ -46,6 +66,34 @@ export function moveWorkflowNode(
   if (!node) return nodes;
   next.splice(target, 0, node);
   return next;
+}
+
+export function cloneWorkflowNodeAfter(
+  nodes: WorkflowAuthoringNode[],
+  nodeId: string,
+): { nodes: WorkflowAuthoringNode[]; clonedId: string } | null {
+  const index = nodes.findIndex((node) => node.id === nodeId);
+  const source = nodes[index];
+  if (!source) return null;
+  const clonedId = uniqueCloneNodeId(nodes, nodeId);
+  const cloned = replaceStringReferences(cloneWorkflowNode(source), {
+    from: nodeId,
+    to: clonedId,
+  });
+  cloned.id = clonedId;
+  return {
+    nodes: [...nodes.slice(0, index + 1), cloned, ...nodes.slice(index + 1)],
+    clonedId,
+  };
+}
+
+export function removeWorkflowNode(
+  nodes: WorkflowAuthoringNode[],
+  nodeId: string,
+): WorkflowAuthoringNode[] {
+  return nodes
+    .filter((node) => node.id !== nodeId)
+    .map((node) => pruneNodeReferences(node, nodeId));
 }
 
 export function createWorkflowNodeTemplate(
@@ -76,14 +124,6 @@ export function createWorkflowNodeTemplate(
     return {
       id: `if_${suffix}`,
       type: "builtin.if",
-      condition: "$.input.enabled == true",
-      then: [],
-    };
-  }
-  if (kind === "if_else") {
-    return {
-      id: `if_else_${suffix}`,
-      type: "builtin.if_else",
       condition: "$.input.enabled == true",
       then: [],
       else: [],
@@ -186,6 +226,85 @@ export function isAgentSummary(
 function safeIdSegment(value: string): string {
   const segment = value.replace(/[^A-Za-z0-9_]+/g, "_").replace(/^_+/, "");
   return segment || "tool";
+}
+
+function createNextWorkflowNodeTemplate(
+  nodes: WorkflowAuthoringNode[],
+  kind: WorkflowPaletteKind,
+  tool?: WorkflowAuthoringMcpTool | WorkflowAuthoringAgent,
+): WorkflowAuthoringNode {
+  const existingIds = new Set(nodes.map((node) => node.id));
+  let index = nodes.length + 1;
+  for (let attempt = 0; attempt < 1000; attempt += 1) {
+    const node = createWorkflowNodeTemplate(kind, index, tool);
+    if (!existingIds.has(node.id)) return node;
+    index += 1;
+  }
+  return createWorkflowNodeTemplate(kind, Date.now(), tool);
+}
+
+function uniqueCloneNodeId(
+  nodes: WorkflowAuthoringNode[],
+  nodeId: string,
+): string {
+  const existingIds = new Set(nodes.map((node) => node.id));
+  const base = `${nodeId}_copy`;
+  if (!existingIds.has(base)) return base;
+  for (let index = 2; index < 1000; index += 1) {
+    const candidate = `${base}_${index}`;
+    if (!existingIds.has(candidate)) return candidate;
+  }
+  return `${base}_${Date.now()}`;
+}
+
+function pruneNodeReferences(
+  node: WorkflowAuthoringNode,
+  deletedNodeId: string,
+): WorkflowAuthoringNode {
+  const next = { ...node };
+  for (const key of ["then", "else", "body"]) {
+    const value = next[key];
+    if (!Array.isArray(value)) continue;
+    next[key] = value.filter((item) => item !== deletedNodeId);
+  }
+  return next;
+}
+
+function replaceStringReferences<T>(
+  value: T,
+  ids: { from: string; to: string },
+): T {
+  if (typeof value === "string") {
+    return value.split(ids.from).join(ids.to) as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => replaceStringReferences(item, ids)) as T;
+  }
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        replaceStringReferences(item, ids),
+      ]),
+    ) as T;
+  }
+  return value;
+}
+
+function cloneWorkflowNode(node: WorkflowAuthoringNode): WorkflowAuthoringNode {
+  return cloneJsonish(node);
+}
+
+function cloneJsonish<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneJsonish(item)) as T;
+  }
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, cloneJsonish(item)]),
+    ) as T;
+  }
+  return value;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

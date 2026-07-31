@@ -261,6 +261,7 @@ export const BuiltinIfNodeSchema = z
     type: z.literal("builtin.if"),
     condition: z.string().min(1),
     then: z.array(NodeIdSchema).default([]),
+    else: z.array(NodeIdSchema).default([]),
   })
   .strict();
 

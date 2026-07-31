@@ -206,6 +206,16 @@ export function registerWorkflowRoutes(
     }
   });
 
+  app.delete("/api/workflows/:id", (c) => {
+    const id = c.req.param("id");
+    if (!SAFE_ID.test(id)) return c.json({ error: "invalid id" }, 400);
+    try {
+      return c.json({ workflow: store.archiveDefinition(id) });
+    } catch (err) {
+      return routeError(c, err);
+    }
+  });
+
   app.post("/api/workflows/:id/publish", (c) => {
     const id = c.req.param("id");
     if (!SAFE_ID.test(id)) return c.json({ error: "invalid id" }, 400);

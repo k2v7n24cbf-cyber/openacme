@@ -219,6 +219,8 @@ export function createWorkflowStore(
       if (filter.status) {
         clauses.push("status = @status");
         params.status = filter.status;
+      } else {
+        clauses.push("status != 'archived'");
       }
       const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
       const limit = Math.min(Math.max(filter.limit ?? 100, 1), 500);
@@ -287,6 +289,30 @@ export function createWorkflowStore(
         >(`SELECT * FROM workflow_definitions WHERE id = ?`)
         .get(id);
       return row ? definitionFromRow(row) : null;
+    },
+
+    archiveDefinition(
+      id: string,
+      now = new Date().toISOString(),
+    ): WorkflowDefinition {
+      const current = this.getDefinition(id);
+      if (!current) throw new Error(`Workflow not found: ${id}`);
+      const archived = WorkflowDefinitionSchema.parse({
+        ...current,
+        status: "archived",
+        updatedAt: now,
+      });
+      db.prepare(
+        `UPDATE workflow_definitions
+         SET status = @status,
+             updated_at = @updatedAt
+         WHERE id = @id`,
+      ).run({
+        id,
+        status: archived.status,
+        updatedAt: archived.updatedAt,
+      });
+      return archived;
     },
 
     publish(id: string, now = new Date().toISOString()): WorkflowDefinition {

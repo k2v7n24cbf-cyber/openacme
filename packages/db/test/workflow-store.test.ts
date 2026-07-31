@@ -138,6 +138,37 @@ describe("WorkflowStore definitions", () => {
     expect(store.getDefinition("wf_publish")?.name).toBe("Draft after publish");
     expect(store.getVersion("wf_publish", 2)?.name).toBe("Publish me");
   });
+
+  it("archives workflow definitions without deleting run audit history", () => {
+    store.createDraft({
+      id: "wf_archive",
+      name: "Archive me",
+      nodes: [{ id: "exit", type: "builtin.exit", status: "succeeded" }],
+      now,
+    });
+    store.createRun({
+      id: "run_archive",
+      workflowId: "wf_archive",
+      workflowVersion: 1,
+      mode: "test",
+      input: {},
+      context: {},
+      createdAt: now,
+    });
+
+    const archived = store.archiveDefinition("wf_archive", later);
+
+    expect(archived.status).toBe("archived");
+    expect(archived.updatedAt).toBe(later);
+    expect(store.listDefinitions().map((workflow) => workflow.id)).toEqual([]);
+    expect(
+      store
+        .listDefinitions({ status: "archived" })
+        .map((workflow) => workflow.id),
+    ).toEqual(["wf_archive"]);
+    expect(store.listRuns({ workflowId: "wf_archive" }).map((run) => run.id))
+      .toEqual(["run_archive"]);
+  });
 });
 
 describe("WorkflowStore run audit", () => {

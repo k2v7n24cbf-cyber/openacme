@@ -85,6 +85,8 @@ agents.
   `triggers`, `nodes`, and optional `ui` metadata into the draft definition.
 - **Test** creates a draft-mode run from current editor input.
 - **Publish** creates an immutable published version from the draft.
+- **Delete** archives the workflow definition so it leaves the default list
+  while prior run history remains inspectable.
 - **Trigger-card Run** runs a published runnable trigger.
 - **Export** writes an `openacme.workflow.definition.v1` JSON definition.
 - **Import** creates a new draft workflow from an export; it should not mutate
@@ -100,6 +102,9 @@ Optional UI metadata is for visual layout only:
 - `ui` does not affect execution order, branch/foreach behavior, triggers,
   assignments, MCP calls, agent calls, or Python execution.
 - `PATCH /api/workflows/:id` accepts `ui: null` to clear visual metadata.
+- `DELETE /api/workflows/:id` archives the definition. Use
+  `GET /api/workflows?status=archived` only when explicitly inspecting archived
+  workflows; default `GET /api/workflows` hides them.
 - Export/import preserves `ui` when present, but agent-authored workflows remain
   valid without it.
 

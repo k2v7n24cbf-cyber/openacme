@@ -54,6 +54,7 @@ export function validateWorkflowNodeReferences(
     switch (node.type) {
       case "builtin.if":
         collectMissingTargets(issues, node.id, "then", node.then, nodeIds);
+        collectMissingTargets(issues, node.id, "else", node.else, nodeIds);
         break;
       case "builtin.if_else":
         collectMissingTargets(issues, node.id, "then", node.then, nodeIds);

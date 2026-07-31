@@ -11,7 +11,7 @@ describe("workflow reference edge mutations", () => {
       [
         {
           id: "branch",
-          type: "builtin.if_else",
+          type: "builtin.if",
           condition: "$.input.risky",
           then: [],
           else: [],
@@ -35,7 +35,7 @@ describe("workflow reference edge mutations", () => {
       [
         {
           id: "branch",
-          type: "builtin.if_else",
+          type: "builtin.if",
           condition: "$.input.risky",
           then: [],
           else: [],
@@ -93,7 +93,7 @@ describe("workflow reference edge mutations", () => {
       [
         {
           id: "branch",
-          type: "builtin.if_else",
+          type: "builtin.if",
           condition: "$.input.risky",
           then: ["review", "notify"],
           else: ["exit"],
@@ -164,7 +164,7 @@ describe("workflow reference edge mutations", () => {
           { id: "branch", type: "builtin.if", then: [] },
           { id: "exit", type: "builtin.exit" },
         ],
-        { sourceId: "branch", targetId: "exit", kind: "else" },
+        { sourceId: "branch", targetId: "exit", kind: "body" },
       ),
     ).toEqual({ ok: false, reason: "edge_kind_not_supported" });
   });

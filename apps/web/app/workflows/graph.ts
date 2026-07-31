@@ -1,5 +1,5 @@
 import dagre from "@dagrejs/dagre";
-import { MarkerType, type Edge, type Node } from "@xyflow/react";
+import { MarkerType, Position, type Edge, type Node } from "@xyflow/react";
 
 export interface WorkflowGraphNode {
   id: string;
@@ -83,16 +83,22 @@ export function buildWorkflowGraphProjection({
 }): WorkflowGraphProjection {
   const graph = new dagre.graphlib.Graph();
   graph.setGraph({
-    rankdir: "LR",
-    ranksep: 72,
-    nodesep: 36,
+    rankdir: "TB",
+    ranksep: 74,
+    nodesep: 48,
     marginx: 24,
     marginy: 24,
   });
   graph.setDefaultEdgeLabel(() => ({}));
 
   const warnings: string[] = [];
-  const nodeIds = new Set(nodes.map((node) => node.id));
+  const visibleWorkflowNodes = nodes.filter(isCanvasVisibleWorkflowNode);
+  const visibleNodeIds = new Set(visibleWorkflowNodes.map((node) => node.id));
+  const hiddenNodeIds = new Set(
+    nodes
+      .filter((node) => !isCanvasVisibleWorkflowNode(node))
+      .map((node) => node.id),
+  );
   const projectionNodes: WorkflowCanvasNode[] = [];
   const projectionEdges: WorkflowCanvasEdge[] = [];
   const missingNodeIds = new Set<string>();
@@ -104,6 +110,7 @@ export function buildWorkflowGraphProjection({
       id: triggerId,
       type: "workflowTrigger",
       position: { x: 0, y: 0 },
+      sourcePosition: Position.Bottom,
       data: {
         id: triggerId,
         label: triggerLabel(trigger),
@@ -116,7 +123,7 @@ export function buildWorkflowGraphProjection({
       selectable: true,
       draggable: false,
     });
-    const firstStep = nodes[0];
+    const firstStep = visibleWorkflowNodes[0];
     if (firstStep) {
       addEdge(projectionEdges, {
         id: `edge:${triggerId}:${firstStep.id}`,
@@ -129,12 +136,14 @@ export function buildWorkflowGraphProjection({
     }
   }
 
-  nodes.forEach((workflowNode, index) => {
+  visibleWorkflowNodes.forEach((workflowNode, index) => {
     graph.setNode(workflowNode.id, { width: STEP_W, height: STEP_H });
     projectionNodes.push({
       id: workflowNode.id,
       type: "workflowStep",
       position: { x: 0, y: 0 },
+      sourcePosition: Position.Bottom,
+      targetPosition: Position.Top,
       data: {
         id: workflowNode.id,
         label: workflowNode.label ?? workflowNode.id,
@@ -149,10 +158,11 @@ export function buildWorkflowGraphProjection({
     });
   });
 
-  for (let index = 0; index < nodes.length - 1; index += 1) {
-    const source = nodes[index];
-    const target = nodes[index + 1];
+  for (let index = 0; index < visibleWorkflowNodes.length - 1; index += 1) {
+    const source = visibleWorkflowNodes[index];
+    const target = visibleWorkflowNodes[index + 1];
     if (!source || !target) continue;
+    if (nodeSourceHandles(source).length > 0) continue;
     addEdge(projectionEdges, {
       id: `edge:sequence:${source.id}:${target.id}`,
       source: source.id,
@@ -171,10 +181,23 @@ export function buildWorkflowGraphProjection({
         projectionEdges,
         missingNodeIds,
         warnings,
-        nodeIds,
+        visibleNodeIds,
+        hiddenNodeIds,
         sourceNode: node,
         field: "then",
-        label: "then",
+        label: "true",
+      });
+      addReferenceEdges({
+        graph,
+        projectionNodes,
+        projectionEdges,
+        missingNodeIds,
+        warnings,
+        visibleNodeIds,
+        hiddenNodeIds,
+        sourceNode: node,
+        field: "else",
+        label: "false",
       });
     } else if (node.type === "builtin.if_else") {
       addReferenceEdges({
@@ -183,10 +206,11 @@ export function buildWorkflowGraphProjection({
         projectionEdges,
         missingNodeIds,
         warnings,
-        nodeIds,
+        visibleNodeIds,
+        hiddenNodeIds,
         sourceNode: node,
         field: "then",
-        label: "then",
+        label: "true",
       });
       addReferenceEdges({
         graph,
@@ -194,10 +218,11 @@ export function buildWorkflowGraphProjection({
         projectionEdges,
         missingNodeIds,
         warnings,
-        nodeIds,
+        visibleNodeIds,
+        hiddenNodeIds,
         sourceNode: node,
         field: "else",
-        label: "else",
+        label: "false",
       });
     } else if (node.type === "builtin.foreach") {
       addReferenceEdges({
@@ -206,7 +231,8 @@ export function buildWorkflowGraphProjection({
         projectionEdges,
         missingNodeIds,
         warnings,
-        nodeIds,
+        visibleNodeIds,
+        hiddenNodeIds,
         sourceNode: node,
         field: "body",
         label: "body",
@@ -248,7 +274,8 @@ function addReferenceEdges({
   projectionEdges,
   missingNodeIds,
   warnings,
-  nodeIds,
+  visibleNodeIds,
+  hiddenNodeIds,
   sourceNode,
   field,
   label,
@@ -258,7 +285,8 @@ function addReferenceEdges({
   projectionEdges: WorkflowCanvasEdge[];
   missingNodeIds: Set<string>;
   warnings: string[];
-  nodeIds: Set<string>;
+  visibleNodeIds: Set<string>;
+  hiddenNodeIds: Set<string>;
   sourceNode: WorkflowGraphNode;
   field: "then" | "else" | "body";
   label: string;
@@ -267,7 +295,8 @@ function addReferenceEdges({
   if (!Array.isArray(targets)) return;
   for (const target of targets) {
     if (typeof target !== "string") continue;
-    if (nodeIds.has(target)) {
+    if (hiddenNodeIds.has(target)) continue;
+    if (visibleNodeIds.has(target)) {
       addEdge(projectionEdges, {
         id: `edge:${field}:${sourceNode.id}:${target}`,
         source: sourceNode.id,
@@ -289,6 +318,7 @@ function addReferenceEdges({
         id: missingId,
         type: "workflowMissing",
         position: { x: 0, y: 0 },
+        targetPosition: Position.Top,
         data: {
           id: missingId,
           label: target,
@@ -335,10 +365,13 @@ function addEdge(
     sourceHandle:
       input.kind === "then" || input.kind === "else" || input.kind === "body"
         ? input.kind
-        : undefined,
+        : "source",
     targetHandle: "target",
     type: "smoothstep",
-    label: input.label,
+    label:
+      input.kind === "sequence" || input.kind === "trigger"
+        ? undefined
+        : input.label,
     data: {
       kind: input.kind,
       targetRef: input.targetRef ?? input.target,
@@ -346,13 +379,13 @@ function addEdge(
     },
     markerEnd: {
       type: MarkerType.ArrowClosed,
-      color: input.invalid ? "var(--destructive)" : "var(--ink-faint)",
+      color: input.invalid ? "var(--destructive)" : edgeStroke(input.kind),
       width: 14,
       height: 14,
     },
     style: {
       stroke: input.invalid ? "var(--destructive)" : edgeStroke(input.kind),
-      strokeWidth: input.kind === "sequence" ? 1 : 1.35,
+      strokeWidth: input.kind === "sequence" ? 1.6 : 1.8,
       strokeDasharray: input.kind === "sequence" ? undefined : "4 3",
     },
     labelStyle: {
@@ -414,8 +447,7 @@ function nodeBadges(node: WorkflowGraphNode): string[] {
 function nodeSourceHandles(
   node: WorkflowGraphNode,
 ): WorkflowCanvasSourceHandle[] {
-  if (node.type === "builtin.if") return [{ id: "then", label: "then" }];
-  if (node.type === "builtin.if_else") {
+  if (node.type === "builtin.if" || node.type === "builtin.if_else") {
     return [
       { id: "then", label: "then" },
       { id: "else", label: "else" },
@@ -423,6 +455,10 @@ function nodeSourceHandles(
   }
   if (node.type === "builtin.foreach") return [{ id: "body", label: "body" }];
   return [];
+}
+
+function isCanvasVisibleWorkflowNode(node: WorkflowGraphNode): boolean {
+  return node.type !== "builtin.exit";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

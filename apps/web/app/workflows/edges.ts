@@ -42,6 +42,31 @@ export function connectWorkflowReferenceEdge(
   );
 }
 
+export function insertWorkflowReferenceEdgeTarget(
+  nodes: WorkflowReferenceNode[],
+  input: WorkflowReferenceEdgeInput,
+): WorkflowReferenceMutationResult {
+  return mutateReferenceList(nodes, input, (current) =>
+    current.includes(input.targetId) ? current : [input.targetId, ...current],
+  );
+}
+
+export function overwriteWorkflowReferenceEdge(
+  nodes: WorkflowReferenceNode[],
+  input: WorkflowReferenceEdgeInput,
+): WorkflowReferenceMutationResult {
+  return mutateReferenceList(nodes, input, () => [input.targetId]);
+}
+
+export function firstWorkflowReferenceTarget(
+  nodes: WorkflowReferenceNode[],
+  input: Omit<WorkflowReferenceEdgeInput, "targetId">,
+): string | null {
+  const source = nodes.find((node) => node.id === input.sourceId);
+  if (!source || !canUseReferenceKind(source, input.kind)) return null;
+  return referenceTargets(source, input.kind)?.[0] ?? null;
+}
+
 export function reconnectWorkflowReferenceEdge(
   nodes: WorkflowReferenceNode[],
   input: WorkflowReferenceEdgeInput & { previousTargetId: string },
@@ -77,6 +102,18 @@ export function connectWorkflowRouteContinuationEdge(
       ...current.slice(sourceIndex + 1),
     ];
   });
+}
+
+export function overwriteWorkflowRouteContinuationEdge(
+  nodes: WorkflowReferenceNode[],
+  input: WorkflowRouteContinuationEdgeInput,
+): WorkflowReferenceMutationResult {
+  return mutateRouteContinuation(nodes, input, (current, sourceIndex) => [
+    ...current
+      .slice(0, sourceIndex + 1)
+      .filter((target) => target !== input.targetId),
+    input.targetId,
+  ]);
 }
 
 export function removeWorkflowRouteContinuationEdge(

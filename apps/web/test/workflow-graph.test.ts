@@ -632,6 +632,38 @@ describe("buildWorkflowGraphProjection", () => {
     );
   });
 
+  it("keeps dragged parallel branch cards on left-side targets", () => {
+    const graph = buildWorkflowGraphProjection({
+      triggers: [],
+      nodes: [
+        {
+          id: "parallel_enrichment",
+          type: "builtin.parallel",
+          branches: [
+            { id: "asset", label: "Asset", nodes: ["copy_asset"] },
+            { id: "uri", label: "URI", nodes: ["parse_uri"] },
+          ],
+        },
+        { id: "copy_asset", type: "builtin.transform" },
+        { id: "parse_uri", type: "builtin.transform" },
+      ],
+      layout: {
+        nodes: {
+          copy_asset: { position: { x: 640, y: 180 } },
+        },
+      },
+    });
+
+    expect(graph.nodes.find((node) => node.id === "copy_asset")).toEqual(
+      expect.objectContaining({
+        sourcePosition: Position.Right,
+        targetPosition: Position.Left,
+        position: { x: 640, y: 180 },
+        data: expect.objectContaining({ flowDirection: "horizontal" }),
+      }),
+    );
+  });
+
   it("keeps parallel cards compact as branch handles are added", () => {
     const graph = buildWorkflowGraphProjection({
       triggers: [],
@@ -686,17 +718,10 @@ describe("buildWorkflowGraphProjection", () => {
         "edge:sequence:parse_uri:notify",
       ]),
     );
-    expect(graph.edges.map((edge) => edge.id)).toContain(
+    expect(graph.edges.map((edge) => edge.id)).not.toContain(
       "edge:sequence:parallel_enrichment:notify",
     );
-    const parent = graph.nodes.find(
-      (node) => node.id === "parallel_enrichment",
-    );
-    const notify = graph.nodes.find((node) => node.id === "notify");
-    expect(parent).toBeDefined();
-    expect(notify).toBeDefined();
-    expect(Math.abs(notify!.position.x - parent!.position.x)).toBeLessThan(2);
-    expect(notify!.position.y).toBeGreaterThan(parent!.position.y);
+    expect(graph.edges.map((edge) => edge.target)).not.toContain("notify");
   });
 
   it("draws explicit route continuation edges when a branch list includes a merge card", () => {
@@ -726,6 +751,84 @@ describe("buildWorkflowGraphProjection", () => {
           label: undefined,
         }),
       ]),
+    );
+  });
+
+  it("draws parallel completion only for the immediate next top-level card", () => {
+    const graph = buildWorkflowGraphProjection({
+      triggers: [],
+      nodes: [
+        {
+          id: "parallel_enrichment",
+          type: "builtin.parallel",
+          branches: [
+            { id: "asset", label: "Asset", nodes: ["copy_asset"] },
+            { id: "uri", label: "URI", nodes: ["parse_uri"] },
+          ],
+        },
+        { id: "notify", type: "builtin.log.info" },
+        { id: "copy_asset", type: "builtin.transform" },
+        { id: "parse_uri", type: "builtin.transform" },
+      ],
+    });
+
+    expect(graph.edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "edge:sequence:parallel_enrichment:notify",
+          source: "parallel_enrichment",
+          target: "notify",
+        }),
+      ]),
+    );
+  });
+
+  it("does not treat another route's card as a parallel continuation", () => {
+    const graph = buildWorkflowGraphProjection({
+      triggers: [],
+      nodes: [
+        {
+          id: "route_by_kind",
+          type: "builtin.switch",
+          value: "$.input.kind",
+          cases: [
+            {
+              id: "asset",
+              label: "Asset",
+              value: "asset",
+              nodes: ["parallel_enrichment"],
+            },
+          ],
+          default: ["fallback_log"],
+        },
+        {
+          id: "parallel_enrichment",
+          type: "builtin.parallel",
+          branches: [
+            { id: "branch_a", label: "Branch A", nodes: [] },
+            { id: "branch_b", label: "Branch B", nodes: [] },
+          ],
+        },
+        { id: "fallback_log", type: "builtin.log.info" },
+      ],
+    });
+
+    expect(graph.edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "edge:case:asset:route_by_kind:parallel_enrichment",
+          source: "route_by_kind",
+          target: "parallel_enrichment",
+        }),
+        expect.objectContaining({
+          id: "edge:default:route_by_kind:fallback_log",
+          source: "route_by_kind",
+          target: "fallback_log",
+        }),
+      ]),
+    );
+    expect(graph.edges.map((edge) => edge.id)).not.toContain(
+      "edge:sequence:parallel_enrichment:fallback_log",
     );
   });
 

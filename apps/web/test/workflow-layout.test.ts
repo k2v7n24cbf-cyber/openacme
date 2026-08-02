@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  beautifyWorkflowCanvasPositions,
   normalizeWorkflowDefinitionUi,
   parseWorkflowDefinitionUi,
   updateWorkflowCanvasNodePosition,
@@ -47,6 +48,44 @@ describe("workflow canvas layout metadata", () => {
       canvas: {
         nodes: {
           keep: { position: { x: 120, y: 80 } },
+        },
+      },
+    });
+  });
+
+  it("beautifies canvas positions from projected step nodes only", () => {
+    expect(
+      beautifyWorkflowCanvasPositions(
+        {
+          canvas: {
+            nodes: {
+              stale: { position: { x: 1, y: 2 } },
+              step_a: { position: { x: 10, y: 20 } },
+            },
+          },
+        },
+        [
+          {
+            id: "trigger:manual",
+            position: { x: 0, y: 0 },
+            data: { kind: "trigger" },
+          },
+          {
+            id: "step_a",
+            position: { x: 120.4, y: 80.6 },
+            data: { kind: "step" },
+          },
+          {
+            id: "group:loop:body",
+            position: { x: 200, y: 80 },
+            data: { kind: "group" },
+          },
+        ],
+      ),
+    ).toEqual({
+      canvas: {
+        nodes: {
+          step_a: { position: { x: 120, y: 81 } },
         },
       },
     });

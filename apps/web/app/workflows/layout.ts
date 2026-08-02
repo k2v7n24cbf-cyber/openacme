@@ -19,6 +19,14 @@ export interface WorkflowLayoutNode {
   id: string;
 }
 
+export interface WorkflowCanvasLayoutProjectionNode {
+  id: string;
+  position: WorkflowCanvasPosition;
+  data?: {
+    kind?: unknown;
+  };
+}
+
 export function updateWorkflowCanvasNodePosition(
   ui: WorkflowDefinitionUi | null,
   nodeId: string,
@@ -35,6 +43,32 @@ export function updateWorkflowCanvasNodePosition(
           position,
         },
       },
+    },
+  };
+}
+
+export function beautifyWorkflowCanvasPositions(
+  ui: WorkflowDefinitionUi | null,
+  nodes: WorkflowCanvasLayoutProjectionNode[],
+): WorkflowDefinitionUi {
+  const nextNodes: Record<string, WorkflowCanvasNodeUi> = {};
+  for (const node of nodes) {
+    if (node.data?.kind !== "step" || !isFinitePosition(node.position)) {
+      continue;
+    }
+    nextNodes[node.id] = {
+      ...ui?.canvas?.nodes?.[node.id],
+      position: {
+        x: Math.round(node.position.x),
+        y: Math.round(node.position.y),
+      },
+    };
+  }
+  return {
+    ...ui,
+    canvas: {
+      ...ui?.canvas,
+      nodes: nextNodes,
     },
   };
 }

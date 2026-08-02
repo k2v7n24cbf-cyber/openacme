@@ -15,17 +15,22 @@ import {
   Plus,
   RefreshCw,
   Trash2,
+  X,
 } from "lucide-react";
 import {
+  BaseEdge,
+  EdgeLabelRenderer,
   Handle,
   Panel,
   Position,
   ReactFlow,
   ReactFlowProvider,
   applyNodeChanges,
+  getSmoothStepPath,
   useReactFlow,
   type Connection,
   type Edge,
+  type EdgeProps,
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/base.css";
@@ -74,10 +79,96 @@ interface WorkflowCanvasConnectionContextValue {
   ) => void;
   cloneNode: (nodeId: string) => void;
   deleteNode: (nodeId: string) => void;
+  removeEdge?: (edge: WorkflowCanvasEdgeSelection) => void;
 }
 
 const WorkflowCanvasConnectionContext =
   createContext<WorkflowCanvasConnectionContextValue | null>(null);
+
+const EDGE_TYPES = {
+  workflowCanvasEdge: WorkflowCanvasEdge,
+};
+
+function WorkflowCanvasEdge({
+  id,
+  source,
+  target,
+  sourceHandleId,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  markerEnd,
+  style,
+  label,
+  selected,
+  data,
+}: EdgeProps) {
+  const connection = useContext(WorkflowCanvasConnectionContext);
+  const [edgePath, labelX, labelY] = getSmoothStepPath({
+    sourceX,
+    sourceY,
+    sourcePosition,
+    targetX,
+    targetY,
+    targetPosition,
+  });
+  const edgeSelection: WorkflowCanvasEdgeSelection = {
+    id,
+    sourceId: source,
+    targetId: target,
+    sourceHandle: sourceHandleId ?? null,
+    targetRef: edgeTargetRef(data),
+    kind: edgeKind(data),
+  };
+  const removable =
+    selected &&
+    !!connection?.removeEdge &&
+    isRemovableCanvasEdge(edgeSelection);
+
+  return (
+    <>
+      <BaseEdge path={edgePath} markerEnd={markerEnd} style={style} />
+      {(label || removable) && (
+        <EdgeLabelRenderer>
+          <div
+            className="nodrag nopan absolute flex -translate-x-1/2 -translate-y-1/2 items-center gap-1"
+            style={{
+              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+              pointerEvents: "all",
+            }}
+          >
+            {label && (
+              <span className="rounded border border-paper-rule bg-paper px-1.5 py-0.5 font-mono text-[9px] uppercase leading-none text-ink-faint shadow-sm">
+                {label}
+              </span>
+            )}
+            {removable && (
+              <Button
+                type="button"
+                variant="outline"
+                size="icon-xs"
+                aria-label="Remove selected workflow edge"
+                title="Remove connection"
+                className="size-6 cursor-pointer rounded-full bg-paper p-0 text-destructive shadow-sm hover:border-destructive hover:bg-destructive/10"
+                onPointerDown={(event) => event.stopPropagation()}
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  connection.removeEdge?.(edgeSelection);
+                }}
+              >
+                <X className="size-3.5" />
+              </Button>
+            )}
+          </div>
+        </EdgeLabelRenderer>
+      )}
+    </>
+  );
+}
 
 function WorkflowStepNode({
   data,
@@ -172,7 +263,8 @@ function WorkflowCanvasNodeCard({
   const canAddAfter =
     !isMissing &&
     (data.kind === "trigger" ||
-      (data.kind === "step" && (sourceHandles.length === 0 || isForeach)));
+      (data.kind === "step" &&
+        (sourceHandles.length === 0 || isParallel || isForeach)));
   const canAddBranchStep = data.kind === "step" && !isMissing;
   const canEditNode = data.kind === "step" && !isMissing;
   const parallelRail = parallelRailMetrics(sourceHandles);
@@ -372,21 +464,18 @@ function WorkflowCanvasNodeCard({
                 <div
                   className="absolute z-20 flex -translate-y-1/2 items-center gap-1"
                   style={{
-                    left: `calc(100% + ${PARALLEL_RAIL_OFFSET - 14}px)`,
+                    left: `calc(100% + ${PARALLEL_RAIL_OFFSET + 16}px)`,
                     top,
                   }}
                 >
                   <Button
                     type="button"
-                    variant="ghost"
-                    size="icon-xs"
+                    variant="outline"
+                    size="icon-sm"
                     aria-label={`Add workflow step to ${data.id} ${routeLabel} route`}
                     data-workflow-add-branch={`${data.id}:${handle.id}`}
                     title={`Add step to ${routeLabel} route`}
-                    className="nodrag size-5 cursor-cell rounded-full border border-transparent bg-transparent p-0 shadow-none transition hover:bg-paper-sunk/70"
-                    style={{
-                      color: routeColor,
-                    }}
+                    className="nodrag size-7 cursor-cell rounded-full bg-paper p-0 text-ink-muted shadow-sm transition hover:border-signal-blue hover:bg-signal-blue/10 hover:text-signal-blue"
                     onPointerDown={(event) => event.stopPropagation()}
                     onMouseDown={(event) => event.stopPropagation()}
                     onClick={(event) => {
@@ -396,7 +485,12 @@ function WorkflowCanvasNodeCard({
                   >
                     <Plus className="size-3.5" />
                   </Button>
-                  <span className="rounded-full border border-paper-rule bg-paper px-2 py-0.5 font-mono text-[10px] leading-none text-ink-muted shadow-sm">
+                  <span
+                    className="whitespace-nowrap rounded-full border bg-paper px-2 py-0.5 font-mono text-[10px] leading-none text-ink-muted shadow-sm"
+                    style={{
+                      borderColor: `color-mix(in oklch, ${routeColor} 45%, var(--paper-rule))`,
+                    }}
+                  >
                     {routeLabel}
                   </span>
                 </div>
@@ -704,6 +798,29 @@ function CanvasControls() {
   );
 }
 
+function CanvasLayoutControls({
+  disabled,
+  onBeautifyLayout,
+}: {
+  disabled?: boolean;
+  onBeautifyLayout?: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="icon-sm"
+      aria-label="Beautify workflow layout"
+      title="Beautify workflow layout"
+      disabled={disabled || !onBeautifyLayout}
+      className="rounded-full bg-paper text-ink-muted shadow-sm transition hover:border-signal-blue hover:bg-signal-blue/10 hover:text-signal-blue"
+      onClick={onBeautifyLayout}
+    >
+      <RefreshCw className="size-4" />
+    </Button>
+  );
+}
+
 function CanvasAddControls({
   nodes,
   onAddStep,
@@ -793,13 +910,7 @@ function CanvasEdgeControls({
 }) {
   if (!selectedEdge) return null;
   const removable =
-    (selectedEdge.kind === "then" ||
-      selectedEdge.kind === "else" ||
-      selectedEdge.kind === "body" ||
-      selectedEdge.kind === "default" ||
-      selectedEdge.kind?.startsWith("case:") ||
-      selectedEdge.kind?.startsWith("branch:")) &&
-    !!onRemoveSelectedEdge;
+    isRemovableCanvasEdge(selectedEdge) && !!onRemoveSelectedEdge;
 
   return (
     <div className="border border-paper-rule bg-paper px-2.5 py-2">
@@ -837,6 +948,7 @@ function WorkflowCanvasInner({
   onCloneNode,
   onDeleteNode,
   onNodePositionChange,
+  onBeautifyLayout,
   onAddStep,
 }: {
   projection: WorkflowGraphProjection;
@@ -854,6 +966,7 @@ function WorkflowCanvasInner({
     nodeId: string,
     position: { x: number; y: number },
   ) => void;
+  onBeautifyLayout?: () => void;
   onAddStep?: (
     afterNodeId: string | null,
     sourceHandle?: string,
@@ -882,13 +995,14 @@ function WorkflowCanvasInner({
     edge.id === selectedEdgeId
       ? {
           ...edge,
+          type: "workflowCanvasEdge",
           selected: true,
           style: {
             ...edge.style,
             strokeWidth: 2.4,
           },
         }
-      : edge,
+      : { ...edge, type: "workflowCanvasEdge" },
   );
   const selectedEdge = selectedEdgeId
     ? edgeSelectionFromEdge(
@@ -918,15 +1032,22 @@ function WorkflowCanvasInner({
         setPendingConnection(null);
       },
       openAddStepAfterNode: (nodeId, sourceHandle, placement) =>
-        onAddStep?.(nodeId, sourceHandle, placement),
+        onAddStep?.(
+          nodeId,
+          sourceHandle,
+          placement ?? workflowNodeAddPlacement(nodes, nodeId, sourceHandle),
+        ),
       cloneNode: (nodeId) => onCloneNode?.(nodeId),
       deleteNode: (nodeId) => onDeleteNode?.(nodeId),
+      removeEdge: onRemoveSelectedEdge,
     }),
     [
+      nodes,
       onAddStep,
       onCloneNode,
       onConnectReference,
       onDeleteNode,
+      onRemoveSelectedEdge,
       pendingConnection,
     ],
   );
@@ -937,6 +1058,7 @@ function WorkflowCanvasInner({
         nodes={nodes}
         edges={edges}
         nodeTypes={NODE_TYPES}
+        edgeTypes={EDGE_TYPES}
         nodesDraggable
         nodesConnectable
         elementsSelectable
@@ -991,6 +1113,10 @@ function WorkflowCanvasInner({
         </Panel>
         <Panel position="top-right">
           <div className="flex flex-col gap-2">
+            <CanvasLayoutControls
+              disabled={stepNodes.length === 0}
+              onBeautifyLayout={onBeautifyLayout}
+            />
             <CanvasControls />
             <CanvasOrderControls
               selectedIndex={selectedStepIndex >= 0 ? selectedStepIndex : null}
@@ -1028,6 +1154,7 @@ export function WorkflowCanvas(props: {
     nodeId: string,
     position: { x: number; y: number },
   ) => void;
+  onBeautifyLayout?: () => void;
   onAddStep?: (
     afterNodeId: string | null,
     sourceHandle?: string,
@@ -1100,6 +1227,18 @@ function edgeSelectionFromEdge(
   };
 }
 
+function isRemovableCanvasEdge(edge: WorkflowCanvasEdgeSelection): boolean {
+  return (
+    edge.kind === "then" ||
+    edge.kind === "else" ||
+    edge.kind === "body" ||
+    edge.kind === "default" ||
+    edge.kind?.startsWith("case:") === true ||
+    edge.kind?.startsWith("branch:") === true ||
+    edge.kind?.startsWith("route:") === true
+  );
+}
+
 function edgeKind(data: unknown): string | null {
   return isRecord(data) && typeof data["kind"] === "string"
     ? data["kind"]
@@ -1118,8 +1257,63 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 const WORKFLOW_NODE_WIDTH = 220;
 const WORKFLOW_NODE_HEIGHT = 132;
+const WORKFLOW_NODE_ADD_X_GAP = 120;
+const WORKFLOW_PARALLEL_BRANCH_ADD_X_GAP = 150;
 const WORKFLOW_VIEWPORT_PADDING = 44;
 const WORKFLOW_VIEWPORT_ADD_Y_GAP = 84;
+
+function workflowNodeAddPlacement(
+  nodes: WorkflowCanvasNode[],
+  nodeId: string | null,
+  sourceHandle?: string,
+): WorkflowCanvasAddPlacement | undefined {
+  if (!nodeId) return undefined;
+  const source = nodes.find((node) => node.id === nodeId);
+  if (!source) return undefined;
+
+  if (source.data.type === "builtin.parallel" && sourceHandle) {
+    const handle = source.data.sourceHandles.find(
+      (item) => item.id === sourceHandle,
+    );
+    if (typeof handle?.offsetPx === "number") {
+      return workflowRowAddPlacement(nodes, {
+        x:
+          source.position.x +
+          workflowCanvasNodeWidth(source) +
+          WORKFLOW_PARALLEL_BRANCH_ADD_X_GAP,
+        y:
+          source.position.y +
+          handle.offsetPx -
+          workflowCanvasNodeHeight(source) / 2,
+      });
+    }
+  }
+
+  if (source.data.flowDirection === "horizontal") {
+    return workflowRowAddPlacement(nodes, {
+      x:
+        source.position.x +
+        workflowCanvasNodeWidth(source) +
+        WORKFLOW_NODE_ADD_X_GAP,
+      y: source.position.y,
+    });
+  }
+
+  return undefined;
+}
+
+function workflowRowAddPlacement(
+  nodes: WorkflowCanvasNode[],
+  start: { x: number; y: number },
+): WorkflowCanvasAddPlacement {
+  let x = start.x;
+  const y = start.y;
+  for (let attempt = 0; attempt < 18; attempt += 1) {
+    if (!overlapsAnyNode(x, y, nodes)) return { position: { x, y } };
+    x += WORKFLOW_NODE_WIDTH + WORKFLOW_NODE_ADD_X_GAP;
+  }
+  return { position: { x, y } };
+}
 
 function workflowViewportAddPlacement(
   control: HTMLElement,
@@ -1195,6 +1389,18 @@ function overlapsAnyNode(
       WORKFLOW_NODE_HEIGHT,
     ),
   );
+}
+
+function workflowCanvasNodeWidth(node: WorkflowCanvasNode): number {
+  return typeof node.data.canvasWidth === "number"
+    ? node.data.canvasWidth
+    : WORKFLOW_NODE_WIDTH;
+}
+
+function workflowCanvasNodeHeight(node: WorkflowCanvasNode): number {
+  return typeof node.data.canvasHeight === "number"
+    ? node.data.canvasHeight
+    : WORKFLOW_NODE_HEIGHT;
 }
 
 function boxesOverlap(

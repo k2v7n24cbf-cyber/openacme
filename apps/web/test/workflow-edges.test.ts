@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   connectWorkflowReferenceEdge,
   connectWorkflowRouteContinuationEdge,
+  firstWorkflowReferenceTarget,
+  insertWorkflowReferenceEdgeTarget,
+  overwriteWorkflowReferenceEdge,
+  overwriteWorkflowRouteContinuationEdge,
   reconnectWorkflowReferenceEdge,
   removeWorkflowReferenceEdge,
   removeWorkflowRouteContinuationEdge,
@@ -186,6 +190,84 @@ describe("workflow reference edge mutations", () => {
     });
   });
 
+  it("inserts a new reference target before existing route cards", () => {
+    const nodes = [
+      {
+        id: "parallel_enrichment",
+        type: "builtin.parallel",
+        branches: [
+          { id: "asset", label: "Asset", nodes: ["copy_asset"] },
+          { id: "uri", label: "URI", nodes: [] },
+        ],
+      },
+      { id: "copy_asset", type: "builtin.transform" },
+      { id: "normalize_asset", type: "builtin.transform" },
+    ];
+
+    expect(
+      firstWorkflowReferenceTarget(nodes, {
+        sourceId: "parallel_enrichment",
+        kind: "branch:asset",
+      }),
+    ).toBe("copy_asset");
+
+    expect(
+      insertWorkflowReferenceEdgeTarget(nodes, {
+        sourceId: "parallel_enrichment",
+        targetId: "normalize_asset",
+        kind: "branch:asset",
+      }),
+    ).toEqual({
+      ok: true,
+      nodes: [
+        expect.objectContaining({
+          branches: [
+            {
+              id: "asset",
+              label: "Asset",
+              nodes: ["normalize_asset", "copy_asset"],
+            },
+            { id: "uri", label: "URI", nodes: [] },
+          ],
+        }),
+        { id: "copy_asset", type: "builtin.transform" },
+        { id: "normalize_asset", type: "builtin.transform" },
+      ],
+    });
+  });
+
+  it("overwrites reference targets for manually drawn handle flows", () => {
+    const result = overwriteWorkflowReferenceEdge(
+      [
+        {
+          id: "branch",
+          type: "builtin.if",
+          condition: "$.input.risky",
+          then: ["old_review", "old_notify"],
+          else: [],
+        },
+        { id: "old_review", type: "agent.call" },
+        { id: "old_notify", type: "builtin.log.info" },
+        { id: "new_review", type: "agent.call" },
+      ],
+      { sourceId: "branch", targetId: "new_review", kind: "then" },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      nodes: [
+        expect.objectContaining({
+          id: "branch",
+          then: ["new_review"],
+          else: [],
+        }),
+        { id: "old_review", type: "agent.call" },
+        { id: "old_notify", type: "builtin.log.info" },
+        { id: "new_review", type: "agent.call" },
+      ],
+    });
+  });
+
   it("reconnects and removes parallel branch references", () => {
     const reconnected = reconnectWorkflowReferenceEdge(
       [
@@ -361,6 +443,42 @@ describe("workflow reference edge mutations", () => {
         { id: "warn_operator", type: "builtin.log.info" },
         { id: "throw_controlled", type: "builtin.throw_error" },
         { id: "wait_for_index", type: "builtin.sleep" },
+      ],
+    });
+  });
+
+  it("overwrites downstream route history for manually drawn continuation flows", () => {
+    const result = overwriteWorkflowRouteContinuationEdge(
+      [
+        {
+          id: "branch",
+          type: "builtin.if",
+          condition: "$.input.risky",
+          then: ["warn_operator", "wait_for_index", "notify_old"],
+          else: ["throw_controlled"],
+        },
+        { id: "warn_operator", type: "builtin.log.info" },
+        { id: "wait_for_index", type: "builtin.sleep" },
+        { id: "notify_old", type: "builtin.log.info" },
+        { id: "notify_new", type: "builtin.log.info" },
+        { id: "throw_controlled", type: "builtin.throw_error" },
+      ],
+      { sourceId: "warn_operator", targetId: "notify_new" },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      nodes: [
+        expect.objectContaining({
+          id: "branch",
+          then: ["warn_operator", "notify_new"],
+          else: ["throw_controlled"],
+        }),
+        { id: "warn_operator", type: "builtin.log.info" },
+        { id: "wait_for_index", type: "builtin.sleep" },
+        { id: "notify_old", type: "builtin.log.info" },
+        { id: "notify_new", type: "builtin.log.info" },
+        { id: "throw_controlled", type: "builtin.throw_error" },
       ],
     });
   });

@@ -91,6 +91,10 @@ import {
 import {
   connectWorkflowReferenceEdge,
   connectWorkflowRouteContinuationEdge,
+  firstWorkflowReferenceTarget,
+  insertWorkflowReferenceEdgeTarget,
+  overwriteWorkflowReferenceEdge,
+  overwriteWorkflowRouteContinuationEdge,
   removeWorkflowReferenceEdge,
   removeWorkflowRouteContinuationEdge,
   type WorkflowReferenceEdgeKind,
@@ -102,6 +106,7 @@ import {
   type WorkflowGraphTrigger,
 } from "@/app/workflows/graph";
 import {
+  beautifyWorkflowCanvasPositions,
   normalizeWorkflowDefinitionUi,
   parseWorkflowDefinitionUi,
   updateWorkflowCanvasNodePosition,
@@ -518,6 +523,15 @@ function WorkflowsPage() {
         workflowRunOverlay,
       ),
     [parsedNodes, effectiveTriggersForCanvas, uiDraft, workflowRunOverlay],
+  );
+  const workflowBeautifiedGraphProjection = useMemo(
+    () =>
+      buildWorkflowGraphProjection({
+        nodes: parsedNodes.ok ? parsedNodes.value : [],
+        triggers: effectiveTriggersForCanvas,
+        layout: null,
+      }),
+    [parsedNodes, effectiveTriggersForCanvas],
   );
   const nodeReferences = useMemo(
     () =>
@@ -1228,9 +1242,18 @@ function WorkflowsPage() {
       return;
     }
     const existingIds = new Set(parsed.value.map((node) => node.id));
+    const hasReferenceTarget =
+      afterNodeId && !isTriggerCanvasNodeId(afterNodeId) && sourceHandle
+        ? firstWorkflowReferenceTarget(parsed.value, {
+            sourceId: afterNodeId,
+            kind: sourceHandle,
+          }) !== null
+        : false;
+    const insertionAnchor =
+      sourceHandle && !hasReferenceTarget ? null : afterNodeId;
     const inserted = isTriggerCanvasNodeId(afterNodeId)
       ? insertWorkflowNodeFirst(parsed.value, kind, tool)
-      : insertWorkflowNodeAfter(parsed.value, afterNodeId, kind, tool);
+      : insertWorkflowNodeAfter(parsed.value, insertionAnchor, kind, tool);
     const addedNode = inserted.find((node) => !existingIds.has(node.id));
     let next = inserted;
     if (
@@ -1239,7 +1262,7 @@ function WorkflowsPage() {
       sourceHandle &&
       addedNode
     ) {
-      const connected = connectWorkflowReferenceEdge(inserted, {
+      const connected = insertWorkflowReferenceEdgeTarget(inserted, {
         sourceId: afterNodeId,
         targetId: addedNode.id,
         kind: sourceHandle,
@@ -1416,12 +1439,12 @@ function WorkflowsPage() {
       return;
     }
     const result = kind
-      ? connectWorkflowReferenceEdge(parsed.value, {
+      ? overwriteWorkflowReferenceEdge(parsed.value, {
           sourceId: connection.sourceId,
           targetId: connection.targetId,
           kind,
         })
-      : connectWorkflowRouteContinuationEdge(parsed.value, {
+      : overwriteWorkflowRouteContinuationEdge(parsed.value, {
           sourceId: connection.sourceId,
           targetId: connection.targetId,
         });
@@ -1491,6 +1514,20 @@ function WorkflowsPage() {
     setUiDraft((current) =>
       updateWorkflowCanvasNodePosition(current, nodeId, position),
     );
+  }
+
+  function beautifyCanvasLayout() {
+    if (!parsedNodes.ok) {
+      toast.error(parsedNodes.error);
+      return;
+    }
+    setUiDraft((current) =>
+      beautifyWorkflowCanvasPositions(
+        current,
+        workflowBeautifiedGraphProjection.nodes,
+      ),
+    );
+    toast.success("Canvas layout refreshed");
   }
 
   function selectRunConsoleStep(stepId: string) {
@@ -2461,6 +2498,7 @@ function WorkflowsPage() {
                     onCloneNode={cloneSelectedCanvasNode}
                     onDeleteNode={deleteWorkflowNode}
                     onNodePositionChange={updateCanvasNodePosition}
+                    onBeautifyLayout={beautifyCanvasLayout}
                     onAddStep={openAddStepDialog}
                   />
                 ) : (

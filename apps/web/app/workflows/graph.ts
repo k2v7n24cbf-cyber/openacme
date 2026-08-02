@@ -766,9 +766,21 @@ function applyParallelTrackPositions({
       const laneCenterY =
         node.position.y + parallelBranchHandleTop(branchIndex);
       group.nodeIds.forEach((nodeId, routeIndex) => {
-        if (persistedNodeIds.has(nodeId)) return;
         const current = nextById.get(nodeId);
         if (!current) return;
+        const horizontalNode = {
+          ...current,
+          sourcePosition: Position.Right,
+          targetPosition: Position.Left,
+          data: {
+            ...current.data,
+            flowDirection: "horizontal" as const,
+          },
+        };
+        if (persistedNodeIds.has(nodeId)) {
+          nextById.set(nodeId, horizontalNode);
+          return;
+        }
         const width = workflowCanvasNodeWidth(current);
         const height = workflowCanvasNodeHeight(current);
         const position = {
@@ -776,14 +788,11 @@ function applyParallelTrackPositions({
           y: laneCenterY - height / 2,
         };
         nextById.set(nodeId, {
-          ...current,
-          sourcePosition: Position.Right,
-          targetPosition: Position.Left,
+          ...horizontalNode,
           position,
           data: {
-            ...current.data,
+            ...horizontalNode.data,
             canvasPosition: position,
-            flowDirection: "horizontal",
           },
         });
       });
@@ -969,6 +978,9 @@ function parallelContinuationTarget({
   referenceGroups: WorkflowReferenceGroup[];
 }): Pick<WorkflowGraphNode, "id" | "type"> | undefined {
   if (sourceIndex < 0) return undefined;
+  const candidate = visibleWorkflowNodes[sourceIndex + 1];
+  if (!candidate) return undefined;
+  if (isReferenceGroupNode(candidate.id, referenceGroups)) return undefined;
   const branchNodeIds = new Set(
     referenceGroups
       .filter(
@@ -977,9 +989,7 @@ function parallelContinuationTarget({
       )
       .flatMap((group) => group.nodeIds),
   );
-  return visibleWorkflowNodes
-    .slice(sourceIndex + 1)
-    .find((candidate) => !branchNodeIds.has(candidate.id));
+  return branchNodeIds.has(candidate.id) ? undefined : candidate;
 }
 
 function foreachContinuationTarget({

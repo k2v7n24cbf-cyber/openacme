@@ -31,7 +31,7 @@ function freshDb() {
 
 function makeAgent(configOverrides: Partial<AgentConfig> = {}): Agent {
   const tmpRoot = fs.mkdtempSync(
-    path.join(os.tmpdir(), "openacme-fire-extractor-")
+    path.join(os.tmpdir(), "openacme-fire-extractor-"),
   );
   const db = freshDb();
   const sessionStore = createSessionStore(db);
@@ -76,7 +76,7 @@ function asst(id: string, text: string): UIMessage {
  */
 async function fireAndSettle(
   agent: Agent,
-  args: Parameters<Agent["fireExtractor"]>[0]
+  args: Parameters<Agent["fireExtractor"]>[0],
 ): Promise<void> {
   agent.fireExtractor(args);
   // Yield enough microtasks for the promise chain to settle. The
@@ -243,7 +243,10 @@ describe("Agent.fireExtractor", () => {
     vi.spyOn(extractorModule, "runExtractor").mockResolvedValue({
       status: "completed",
     });
-    const initialMessages = [user("u1", "hi"), asst("a1-old", "before compaction")];
+    const initialMessages = [
+      user("u1", "hi"),
+      asst("a1-old", "before compaction"),
+    ];
     await fireAndSettle(agent, {
       sessionId: "s1",
       sessionMessages: initialMessages,

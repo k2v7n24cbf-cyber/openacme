@@ -641,12 +641,13 @@ describe("workflow routes", () => {
         status: string;
         durationMs: number | null;
       }>;
-      events: Array<{ kind: string }>;
+      events: Array<{ kind: string; message?: string; payload?: unknown }>;
     };
     expect(testRun.run).toMatchObject({
       status: "succeeded",
       mode: "test",
       context: { customer: { id: "cust_1", name: "Ada" } },
+      durationMs: expect.any(Number),
     });
     expect(testRun.steps.map((step) => [step.nodeId, step.status])).toEqual([
       ["set_customer", "succeeded"],
@@ -889,6 +890,113 @@ describe("workflow routes", () => {
       failedRun.run.id,
       triggerRun.run.id,
     ]);
+  });
+
+  it("executes multiple workflow test runs concurrently without sharing run state", async () => {
+    for (const workflow of [
+      { id: "wf_concurrent_alpha", message: "alpha complete" },
+      { id: "wf_concurrent_beta", message: "beta complete" },
+    ]) {
+      const res = await jsonReq("/api/workflows", {
+        id: workflow.id,
+        name: workflow.id,
+        triggers: [{ id: "manual", kind: "manual", enabled: true }],
+        nodes: [
+          { id: "wait", type: "builtin.sleep", delayMs: 250 },
+          {
+            id: "log_done",
+            type: "builtin.log.info",
+            message: workflow.message,
+          },
+        ],
+      });
+      expect(res.status).toBe(201);
+    }
+
+    const [alphaRes, betaRes] = await Promise.all([
+      jsonReq("/api/workflows/wf_concurrent_alpha/runs/test", {
+        input: { marker: "alpha" },
+      }),
+      jsonReq("/api/workflows/wf_concurrent_beta/runs/test", {
+        input: { marker: "beta" },
+      }),
+    ]);
+
+    expect(alphaRes.status).toBe(201);
+    expect(betaRes.status).toBe(201);
+    const [alpha, beta] = (await Promise.all([
+      alphaRes.json(),
+      betaRes.json(),
+    ])) as Array<{
+      run: {
+        id: string;
+        workflowId: string;
+        status: string;
+        input: unknown;
+        startedAt: string;
+        endedAt: string;
+      };
+      steps: Array<{ nodeId: string; status: string }>;
+      events: Array<{ kind: string; message?: string }>;
+    }>;
+
+    expect(alpha.run).toMatchObject({
+      workflowId: "wf_concurrent_alpha",
+      status: "succeeded",
+      input: { marker: "alpha" },
+    });
+    expect(beta.run).toMatchObject({
+      workflowId: "wf_concurrent_beta",
+      status: "succeeded",
+      input: { marker: "beta" },
+    });
+    expect(alpha.run.id).not.toBe(beta.run.id);
+    expect(alpha.steps.map((step) => [step.nodeId, step.status])).toEqual([
+      ["wait", "succeeded"],
+      ["log_done", "succeeded"],
+    ]);
+    expect(beta.steps.map((step) => [step.nodeId, step.status])).toEqual([
+      ["wait", "succeeded"],
+      ["log_done", "succeeded"],
+    ]);
+    expect(alpha.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "log",
+          message: "alpha complete",
+        }),
+      ]),
+    );
+    expect(beta.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "log",
+          message: "beta complete",
+        }),
+      ]),
+    );
+
+    const alphaStarted = new Date(alpha.run.startedAt).getTime();
+    const alphaEnded = new Date(alpha.run.endedAt).getTime();
+    const betaStarted = new Date(beta.run.startedAt).getTime();
+    const betaEnded = new Date(beta.run.endedAt).getTime();
+    expect(alphaStarted).toBeLessThan(betaEnded);
+    expect(betaStarted).toBeLessThan(alphaEnded);
+
+    expect(runtime.workflowStore.listRuns()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: alpha.run.id,
+          workflowId: "wf_concurrent_alpha",
+          status: "succeeded",
+        }),
+        expect.objectContaining({
+          id: beta.run.id,
+          workflowId: "wf_concurrent_beta",
+          status: "succeeded",
+        }),
+      ]),
+    );
   });
 
   it("runs MCP workflow steps through HTTP with persisted trace", async () => {
@@ -2190,7 +2298,12 @@ describe("workflow routes", () => {
     });
     expect(res.status).toBe(201);
     const detail = (await res.json()) as {
-      run: { id: string; status: string; context: unknown };
+      run: {
+        id: string;
+        status: string;
+        context: unknown;
+        durationMs: number | null;
+      };
       steps: Array<{ nodeId: string; status: string; output?: unknown }>;
       events: Array<{ kind: string }>;
     };
@@ -2413,19 +2526,43 @@ describe("workflow routes", () => {
       detail.steps.find((step) => step.nodeId === "each_value")?.output,
     ).toMatchObject({
       count: 2,
+      succeededCount: 2,
+      failedCount: 0,
       items: [
         {
           index: 0,
           status: "succeeded",
+          startedAt: expect.any(String),
+          endedAt: expect.any(String),
+          durationMs: expect.any(Number),
           steps: { double_value: { value: 4 } },
         },
         {
           index: 1,
           status: "succeeded",
+          startedAt: expect.any(String),
+          endedAt: expect.any(String),
+          durationMs: expect.any(Number),
           steps: { double_value: { value: 10 } },
         },
       ],
     });
+    expect(
+      detail.events
+        .filter((event) => event.message?.includes("Foreach item"))
+        .map((event) => [
+          event.message,
+          (event.payload as { index?: number; status?: string } | undefined)
+            ?.index,
+          (event.payload as { index?: number; status?: string } | undefined)
+            ?.status,
+        ]),
+    ).toEqual([
+      ["Foreach item 1 started", 0, undefined],
+      ["Foreach item 1 completed", 0, "succeeded"],
+      ["Foreach item 2 started", 1, undefined],
+      ["Foreach item 2 completed", 1, "succeeded"],
+    ]);
     expect(detail.events.map((event) => event.kind)).toContain("step_output");
   });
 
@@ -3492,6 +3629,859 @@ describe("workflow routes", () => {
       "run_failed",
       "step_failed",
     ]);
+  });
+
+  it("persists warn logs, sleep output, and controlled throw_error evidence", async () => {
+    let res = await jsonReq("/api/workflows", {
+      id: "wf_m11_runtime_evidence",
+      name: "M11 Runtime Evidence",
+      nodes: [
+        {
+          id: "warn_operator",
+          type: "builtin.log.warn",
+          message: "Asset owner missing",
+          payload: { severity: "medium" },
+        },
+        {
+          id: "wait_for_index",
+          type: "builtin.sleep",
+          delayMs: 1,
+          reason: "Wait for external index consistency",
+        },
+        {
+          id: "fail_missing_owner",
+          type: "builtin.throw_error",
+          message: "Asset owner is missing",
+          code: "asset_owner_missing",
+          details: { assetId: "$.input.asset.id" },
+        },
+      ],
+    });
+    expect(res.status).toBe(201);
+
+    res = await jsonReq("/api/workflows/wf_m11_runtime_evidence/runs/test", {
+      input: { asset: { id: "asset_http_1" } },
+    });
+    expect(res.status).toBe(201);
+    const detail = (await res.json()) as {
+      run: { id: string; status: string };
+      steps: Array<{
+        nodeId: string;
+        status: string;
+        output?: unknown;
+        error?: unknown;
+        durationMs: number | null;
+        logsSummary?: unknown;
+      }>;
+      events: Array<{
+        level: string;
+        kind: string;
+        message?: string;
+        payload?: unknown;
+      }>;
+    };
+
+    expect(detail.run.status).toBe("failed");
+    expect(detail.steps).toEqual([
+      expect.objectContaining({
+        nodeId: "warn_operator",
+        status: "succeeded",
+        output: {
+          message: "Asset owner missing",
+          payload: { severity: "medium" },
+        },
+        logsSummary: {
+          logs: [
+            {
+              level: "warn",
+              message: "Asset owner missing",
+              payload: { severity: "medium" },
+            },
+          ],
+        },
+      }),
+      expect.objectContaining({
+        nodeId: "wait_for_index",
+        status: "succeeded",
+        output: {
+          delayMs: 1,
+          reason: "Wait for external index consistency",
+        },
+        durationMs: expect.any(Number),
+      }),
+      expect.objectContaining({
+        nodeId: "fail_missing_owner",
+        status: "failed",
+        error: {
+          name: "WorkflowNodeExecutionError",
+          message: "Asset owner is missing",
+          details: {
+            code: "asset_owner_missing",
+            details: { assetId: "asset_http_1" },
+          },
+        },
+        durationMs: expect.any(Number),
+      }),
+    ]);
+    expect(detail.events.map((event) => [event.level, event.kind])).toEqual([
+      ["system", "run_started"],
+      ["system", "step_started"],
+      ["warn", "log"],
+      ["system", "step_completed"],
+      ["system", "step_started"],
+      ["system", "step_completed"],
+      ["system", "step_started"],
+      ["error", "step_failed"],
+      ["system", "run_failed"],
+    ]);
+
+    res = await req(`/api/workflow-runs/${detail.run.id}`);
+    expect(res.status).toBe(200);
+    const persisted = (await res.json()) as typeof detail;
+    expect(persisted.run.status).toBe("failed");
+    expect(persisted.steps[0]?.logsSummary).toEqual({
+      logs: [
+        {
+          level: "warn",
+          message: "Asset owner missing",
+          payload: { severity: "medium" },
+        },
+      ],
+    });
+    expect(persisted.steps[2]?.error).toEqual({
+      name: "WorkflowNodeExecutionError",
+      message: "Asset owner is missing",
+      details: {
+        code: "asset_owner_missing",
+        details: { assetId: "asset_http_1" },
+      },
+    });
+  });
+
+  it("persists assignment rollback and node-specific assignment error details", async () => {
+    let res = await jsonReq("/api/workflows", {
+      id: "wf_m11_assignment_evidence",
+      name: "M11 Assignment Evidence",
+      nodes: [
+        {
+          id: "set_initial",
+          type: "builtin.set",
+          assign: {
+            asset: "$.input.asset",
+            notes: "$.input.notes",
+          },
+        },
+        {
+          id: "partial_failure",
+          type: "builtin.set",
+          assign: {
+            notes: {
+              from: "$.input.newNote",
+              mode: "append",
+            },
+            asset: {
+              from: "$.input.invalidMergeValue",
+              mode: "merge",
+            },
+          },
+        },
+      ],
+    });
+    expect(res.status).toBe(201);
+
+    res = await jsonReq("/api/workflows/wf_m11_assignment_evidence/runs/test", {
+      input: {
+        asset: { id: "asset_http_assign_1" },
+        notes: ["original"],
+        newNote: "should rollback",
+        invalidMergeValue: "not an object",
+      },
+    });
+    expect(res.status).toBe(201);
+    const detail = (await res.json()) as {
+      run: { id: string; status: string };
+      steps: Array<{
+        nodeId: string;
+        status: string;
+        contextDiff?: unknown;
+        error?: unknown;
+      }>;
+    };
+
+    expect(detail.run.status).toBe("failed");
+    expect(detail.steps).toEqual([
+      expect.objectContaining({
+        nodeId: "set_initial",
+        status: "succeeded",
+        contextDiff: {
+          asset: {
+            before: null,
+            after: { id: "asset_http_assign_1" },
+          },
+          notes: {
+            before: null,
+            after: ["original"],
+          },
+        },
+      }),
+      expect.objectContaining({
+        nodeId: "partial_failure",
+        status: "failed",
+        error: {
+          name: "WorkflowNodeExecutionError",
+          message:
+            "merge assignment for asset requires an object target and object value",
+          details: {
+            assignmentPath: "asset",
+            assignmentMode: "merge",
+            targetType: "object",
+            valueType: "string",
+          },
+        },
+      }),
+    ]);
+    expect(detail.steps[1]?.contextDiff).toBeUndefined();
+
+    res = await req(`/api/workflow-runs/${detail.run.id}`);
+    expect(res.status).toBe(200);
+    const persisted = (await res.json()) as typeof detail;
+    expect(persisted.run.status).toBe("failed");
+    expect(persisted.steps[1]?.error).toEqual({
+      name: "WorkflowNodeExecutionError",
+      message:
+        "merge assignment for asset requires an object target and object value",
+      details: {
+        assignmentPath: "asset",
+        assignmentMode: "merge",
+        targetType: "object",
+        valueType: "string",
+      },
+    });
+    expect(persisted.steps[1]?.contextDiff).toBeUndefined();
+  });
+
+  it("persists structured transform operation errors through run detail", async () => {
+    let res = await jsonReq("/api/workflows", {
+      id: "wf_m11_transform_evidence",
+      name: "M11 Transform Evidence",
+      nodes: [
+        {
+          id: "invalid_transform",
+          type: "builtin.transform",
+          input: {
+            customer: "$.input.customer",
+          },
+          transform: {
+            kind: "object_pick",
+            source: "customer",
+            fields: "id",
+          },
+        },
+      ],
+    });
+    expect(res.status).toBe(201);
+
+    res = await jsonReq("/api/workflows/wf_m11_transform_evidence/runs/test", {
+      input: { customer: { id: "cust_http_transform_1", name: "Ada" } },
+    });
+    expect(res.status).toBe(201);
+    const detail = (await res.json()) as {
+      run: { id: string; status: string };
+      steps: Array<{ nodeId: string; status: string; error?: unknown }>;
+    };
+
+    expect(detail.run.status).toBe("failed");
+    expect(detail.steps).toEqual([
+      expect.objectContaining({
+        nodeId: "invalid_transform",
+        status: "failed",
+        error: {
+          name: "WorkflowNodeExecutionError",
+          message:
+            "Transform operation object_pick has invalid field fields: expected string[]",
+          details: {
+            operationKind: "object_pick",
+            field: "fields",
+            expected: "string[]",
+            actualType: "string",
+          },
+        },
+      }),
+    ]);
+
+    res = await req(`/api/workflow-runs/${detail.run.id}`);
+    expect(res.status).toBe(200);
+    const persisted = (await res.json()) as typeof detail;
+    expect(persisted.run.status).toBe("failed");
+    expect(persisted.steps[0]?.error).toEqual({
+      name: "WorkflowNodeExecutionError",
+      message:
+        "Transform operation object_pick has invalid field fields: expected string[]",
+      details: {
+        operationKind: "object_pick",
+        field: "fields",
+        expected: "string[]",
+        actualType: "string",
+      },
+    });
+  });
+
+  it("persists string JSON and CSV transform operation outputs", async () => {
+    let res = await jsonReq("/api/workflows", {
+      id: "wf_m11_transform_operations_evidence",
+      name: "M11 Transform Operations Evidence",
+      nodes: [
+        {
+          id: "replace_text",
+          type: "builtin.transform",
+          transform: {
+            kind: "string.replace",
+            value: "$.input.text",
+            search: "risk",
+            replacement: "issue",
+            all: true,
+          },
+          assign: {
+            normalizedText: "$.steps.replace_text.output",
+          },
+        },
+        {
+          id: "parse_json",
+          type: "builtin.transform",
+          transform: {
+            kind: "json.parse",
+            value: "$.input.json",
+          },
+          assign: {
+            parsed: "$.steps.parse_json.output",
+          },
+        },
+        {
+          id: "parse_csv",
+          type: "builtin.transform",
+          transform: {
+            kind: "csv.parse",
+            value: "$.input.csv",
+            headers: true,
+            maxRows: 10,
+          },
+          assign: {
+            rows: "$.steps.parse_csv.output",
+          },
+        },
+        {
+          id: "stringify_csv",
+          type: "builtin.transform",
+          transform: {
+            kind: "csv.stringify",
+            value: "$.context.rows",
+            headers: ["id", "name"],
+          },
+          assign: {
+            csv: "$.steps.stringify_csv.output",
+          },
+        },
+      ],
+    });
+    expect(res.status).toBe(201);
+
+    res = await jsonReq(
+      "/api/workflows/wf_m11_transform_operations_evidence/runs/test",
+      {
+        input: {
+          text: "risk accepted, risk tracked",
+          json: '{"asset":"asset_http_transform_ops_1"}',
+          csv: "id,name\n1,Ada\n2,Lin",
+        },
+      },
+    );
+    expect(res.status).toBe(201);
+    const detail = (await res.json()) as {
+      run: { id: string; status: string; context: unknown };
+      steps: Array<{ nodeId: string; status: string; output?: unknown }>;
+    };
+
+    expect(detail.run.status).toBe("succeeded");
+    expect(detail.run.context).toEqual({
+      normalizedText: "issue accepted, issue tracked",
+      parsed: { asset: "asset_http_transform_ops_1" },
+      rows: [
+        { id: "1", name: "Ada" },
+        { id: "2", name: "Lin" },
+      ],
+      csv: "id,name\n1,Ada\n2,Lin",
+    });
+    expect(
+      detail.steps.map((step) => [step.nodeId, step.status, step.output]),
+    ).toEqual([
+      ["replace_text", "succeeded", "issue accepted, issue tracked"],
+      ["parse_json", "succeeded", { asset: "asset_http_transform_ops_1" }],
+      [
+        "parse_csv",
+        "succeeded",
+        [
+          { id: "1", name: "Ada" },
+          { id: "2", name: "Lin" },
+        ],
+      ],
+      ["stringify_csv", "succeeded", "id,name\n1,Ada\n2,Lin"],
+    ]);
+
+    res = await req(`/api/workflow-runs/${detail.run.id}`);
+    expect(res.status).toBe(200);
+    const persisted = (await res.json()) as typeof detail;
+    expect(persisted.run.context).toEqual(detail.run.context);
+    expect(persisted.steps.map((step) => step.output)).toEqual(
+      detail.steps.map((step) => step.output),
+    );
+  });
+
+  it("persists IP transform operation outputs and branch routing evidence", async () => {
+    let res = await jsonReq("/api/workflows", {
+      id: "wf_m11_ip_transform_evidence",
+      name: "M11 IP Transform Evidence",
+      nodes: [
+        {
+          id: "parse_ip",
+          type: "builtin.transform",
+          transform: { kind: "ip.parse", value: "$.input.ip" },
+          assign: { parsedIp: "$.steps.parse_ip.output" },
+        },
+        {
+          id: "check_internal",
+          type: "builtin.transform",
+          transform: {
+            kind: "ip.in_subnet",
+            value: "$.input.ip",
+            cidr: "10.0.0.0/8",
+          },
+          assign: { isInternal: "$.steps.check_internal.output" },
+        },
+        {
+          id: "network",
+          type: "builtin.transform",
+          transform: { kind: "ip.network", cidr: "$.input.cidr" },
+          assign: { network: "$.steps.network.output" },
+        },
+        {
+          id: "route_ip",
+          type: "builtin.if",
+          condition: "$.context.isInternal == true",
+          then: ["log_internal"],
+          else: ["log_external"],
+        },
+        {
+          id: "log_internal",
+          type: "builtin.log.info",
+          message: "internal ip",
+          payload: "$.context",
+        },
+        {
+          id: "log_external",
+          type: "builtin.log.info",
+          message: "external ip",
+          payload: "$.context",
+        },
+      ],
+    });
+    expect(res.status).toBe(201);
+
+    res = await jsonReq(
+      "/api/workflows/wf_m11_ip_transform_evidence/runs/test",
+      {
+        input: { ip: "10.20.30.40", cidr: "10.20.30.40/24" },
+      },
+    );
+    expect(res.status).toBe(201);
+    const detail = (await res.json()) as {
+      run: { id: string; status: string; context: unknown };
+      steps: Array<{ nodeId: string; status: string; output?: unknown }>;
+      events: Array<{ level: string; kind: string; message?: string }>;
+    };
+
+    expect(detail.run.status).toBe("succeeded");
+    expect(detail.run.context).toEqual({
+      parsedIp: {
+        version: 4,
+        address: "10.20.30.40",
+        normalized: "10.20.30.40",
+        integer: "169090600",
+        octets: [10, 20, 30, 40],
+      },
+      isInternal: true,
+      network: {
+        version: 4,
+        address: "10.20.30.0",
+        prefix: 24,
+        cidr: "10.20.30.0/24",
+      },
+    });
+    expect(
+      detail.steps.map((step) => [step.nodeId, step.status, step.output]),
+    ).toEqual([
+      [
+        "parse_ip",
+        "succeeded",
+        {
+          version: 4,
+          address: "10.20.30.40",
+          normalized: "10.20.30.40",
+          integer: "169090600",
+          octets: [10, 20, 30, 40],
+        },
+      ],
+      ["check_internal", "succeeded", true],
+      [
+        "network",
+        "succeeded",
+        {
+          version: 4,
+          address: "10.20.30.0",
+          prefix: 24,
+          cidr: "10.20.30.0/24",
+        },
+      ],
+      [
+        "route_ip",
+        "succeeded",
+        { selected: ["log_internal"], skipped: ["log_external"] },
+      ],
+      [
+        "log_internal",
+        "succeeded",
+        {
+          message: "internal ip",
+          payload: detail.run.context,
+        },
+      ],
+      ["log_external", "skipped", undefined],
+    ]);
+    expect(
+      detail.events.map((event) => [event.level, event.kind, event.message]),
+    ).toContainEqual(["info", "log", "internal ip"]);
+
+    res = await req(`/api/workflow-runs/${detail.run.id}`);
+    expect(res.status).toBe(200);
+    const persisted = (await res.json()) as typeof detail;
+    expect(persisted.run.context).toEqual(detail.run.context);
+    expect(persisted.steps.map((step) => step.output)).toEqual(
+      detail.steps.map((step) => step.output),
+    );
+  });
+
+  it("persists URI parse operation outputs and log evidence", async () => {
+    let res = await jsonReq("/api/workflows", {
+      id: "wf_m11_uri_transform_evidence",
+      name: "M11 URI Transform Evidence",
+      nodes: [
+        {
+          id: "parse_uri",
+          type: "builtin.transform",
+          transform: {
+            kind: "uri.parse",
+            value: "$.input.url",
+          },
+          assign: {
+            uri: "$.steps.parse_uri.output",
+          },
+        },
+        {
+          id: "log_uri",
+          type: "builtin.log.info",
+          message: "uri parsed",
+          payload: {
+            host: "$.context.uri.host",
+            path: "$.context.uri.pathname",
+            query: "$.context.uri.query",
+          },
+        },
+      ],
+    });
+    expect(res.status).toBe(201);
+
+    res = await jsonReq(
+      "/api/workflows/wf_m11_uri_transform_evidence/runs/test",
+      {
+        input: {
+          url: "https://user:secret@api.example.com:8443/v1/assets?id=123&tag=cloud&tag=prod#section",
+        },
+      },
+    );
+    expect(res.status).toBe(201);
+    const detail = (await res.json()) as {
+      run: { id: string; status: string; context: unknown };
+      steps: Array<{ nodeId: string; status: string; output?: unknown }>;
+      events: Array<{
+        level: string;
+        kind: string;
+        message?: string;
+        payload?: unknown;
+      }>;
+    };
+
+    const parsedUri = {
+      href: "https://api.example.com:8443/v1/assets?id=123&tag=cloud&tag=prod#section",
+      protocol: "https:",
+      scheme: "https",
+      origin: "https://api.example.com:8443",
+      host: "api.example.com:8443",
+      hostname: "api.example.com",
+      port: "8443",
+      pathname: "/v1/assets",
+      path: "/v1/assets?id=123&tag=cloud&tag=prod",
+      search: "?id=123&tag=cloud&tag=prod",
+      query: { id: "123", tag: ["cloud", "prod"] },
+      queryList: [
+        { key: "id", value: "123" },
+        { key: "tag", value: "cloud" },
+        { key: "tag", value: "prod" },
+      ],
+      hash: "#section",
+      fragment: "section",
+      username: null,
+      password: "[redacted]",
+      hasCredentials: true,
+    };
+    expect(detail.run.status).toBe("succeeded");
+    expect(JSON.stringify(detail.run.context)).not.toContain("secret");
+    expect(
+      JSON.stringify(detail.steps.map((step) => step.output)),
+    ).not.toContain("secret");
+    expect(detail.run.context).toEqual({ uri: parsedUri });
+    expect(
+      detail.steps.map((step) => [step.nodeId, step.status, step.output]),
+    ).toEqual([
+      ["parse_uri", "succeeded", parsedUri],
+      [
+        "log_uri",
+        "succeeded",
+        {
+          message: "uri parsed",
+          payload: {
+            host: "api.example.com:8443",
+            path: "/v1/assets",
+            query: { id: "123", tag: ["cloud", "prod"] },
+          },
+        },
+      ],
+    ]);
+    expect(
+      detail.events.map((event) => [event.level, event.kind, event.message]),
+    ).toContainEqual(["info", "log", "uri parsed"]);
+
+    res = await req(`/api/workflow-runs/${detail.run.id}`);
+    expect(res.status).toBe(200);
+    const persisted = (await res.json()) as typeof detail;
+    expect(persisted.run.context).toEqual(detail.run.context);
+    expect(persisted.steps.map((step) => step.output)).toEqual(
+      detail.steps.map((step) => step.output),
+    );
+  });
+
+  it("persists parallel branch aggregate outputs and events", async () => {
+    let res = await jsonReq("/api/workflows", {
+      id: "wf_m11_parallel_runtime_evidence",
+      name: "M11 Parallel Runtime Evidence",
+      nodes: [
+        {
+          id: "parallel_checks",
+          type: "builtin.parallel",
+          failFast: false,
+          concurrency: 3,
+          branches: [
+            { id: "asset", label: "Asset", nodes: ["parse_asset"] },
+            { id: "uri", label: "URI", nodes: ["parse_uri"] },
+            { id: "policy", label: "Policy", nodes: ["fail_policy"] },
+          ],
+          assign: {
+            parallelSummary: "$.steps.parallel_checks.output",
+          },
+        },
+        {
+          id: "parse_asset",
+          type: "builtin.transform",
+          transform: "$.input.asset",
+          assign: {
+            branchValue: "$.steps.parse_asset.output",
+          },
+        },
+        {
+          id: "parse_uri",
+          type: "builtin.transform",
+          transform: {
+            kind: "uri.parse",
+            value: "$.input.asset.url",
+          },
+          assign: {
+            branchValue: "$.steps.parse_uri.output.hostname",
+          },
+        },
+        {
+          id: "fail_policy",
+          type: "builtin.throw_error",
+          message: "policy rejected asset",
+          code: "policy_rejected",
+        },
+        {
+          id: "log_parallel_summary",
+          type: "builtin.log.info",
+          message: "parallel summary",
+          payload: {
+            succeeded: "$.context.parallelSummary.succeededCount",
+            failed: "$.context.parallelSummary.failedCount",
+          },
+        },
+      ],
+    });
+    expect(res.status).toBe(201);
+
+    res = await jsonReq(
+      "/api/workflows/wf_m11_parallel_runtime_evidence/runs/test",
+      {
+        input: {
+          asset: {
+            id: "asset_parallel_http_1",
+            url: "https://assets.example.com/v1/assets/asset_parallel_http_1",
+          },
+        },
+      },
+    );
+    expect(res.status).toBe(201);
+    const detail = (await res.json()) as {
+      run: { id: string; status: string; context: unknown };
+      steps: Array<{
+        nodeId: string;
+        status: string;
+        durationMs?: number;
+        output?: unknown;
+        error?: unknown;
+      }>;
+      events: Array<{
+        level: string;
+        kind: string;
+        message?: string;
+        payload?: unknown;
+      }>;
+    };
+
+    const parallelOutput = detail.steps.find(
+      (step) => step.nodeId === "parallel_checks",
+    )?.output as
+      | {
+          count: number;
+          succeededCount: number;
+          failedCount: number;
+          canceledCount: number;
+          branchOrder: string[];
+          branches: Record<
+            string,
+            {
+              status: string;
+              durationMs: number;
+              steps: Record<string, unknown>;
+              context: Record<string, unknown>;
+              error?: unknown;
+            }
+          >;
+        }
+      | undefined;
+
+    expect(detail.run.status).toBe("succeeded");
+    expect(detail.run.durationMs).toEqual(expect.any(Number));
+    expect(parallelOutput).toMatchObject({
+      count: 3,
+      succeededCount: 2,
+      failedCount: 1,
+      canceledCount: 0,
+      branchOrder: ["asset", "uri", "policy"],
+      branches: {
+        asset: {
+          status: "succeeded",
+          durationMs: expect.any(Number),
+          steps: {
+            parse_asset: {
+              id: "asset_parallel_http_1",
+              url: "https://assets.example.com/v1/assets/asset_parallel_http_1",
+            },
+          },
+          context: {
+            branchValue: {
+              id: "asset_parallel_http_1",
+              url: "https://assets.example.com/v1/assets/asset_parallel_http_1",
+            },
+          },
+        },
+        uri: {
+          status: "succeeded",
+          durationMs: expect.any(Number),
+          steps: {
+            parse_uri: expect.objectContaining({
+              hostname: "assets.example.com",
+              pathname: "/v1/assets/asset_parallel_http_1",
+            }),
+          },
+          context: {
+            branchValue: "assets.example.com",
+          },
+        },
+        policy: {
+          status: "failed",
+          durationMs: expect.any(Number),
+          error: {
+            message: "policy rejected asset",
+            details: { code: "policy_rejected" },
+          },
+        },
+      },
+    });
+    expect(JSON.stringify(detail.run.context)).toContain("parallelSummary");
+    expect(detail.run.context).not.toHaveProperty("branchValue");
+    expect(
+      detail.steps.find((step) => step.nodeId === "parallel_checks"),
+    ).toMatchObject({
+      status: "succeeded",
+      durationMs: expect.any(Number),
+    });
+    expect(detail.steps.map((step) => [step.nodeId, step.status])).toEqual(
+      expect.arrayContaining([
+        ["parse_asset", "succeeded"],
+        ["parse_uri", "succeeded"],
+        ["fail_policy", "failed"],
+        ["parallel_checks", "succeeded"],
+        ["log_parallel_summary", "succeeded"],
+      ]),
+    );
+    expect(
+      detail.events.map((event) => [event.level, event.kind, event.message]),
+    ).toEqual(
+      expect.arrayContaining([
+        ["system", "parallel_started", "Parallel parallel_checks started"],
+        ["system", "parallel_branch_started", "Parallel branch asset started"],
+        [
+          "system",
+          "parallel_branch_completed",
+          "Parallel branch asset completed",
+        ],
+        ["error", "parallel_branch_failed", "Parallel branch policy failed"],
+        ["warn", "parallel_completed", "Parallel parallel_checks completed"],
+        ["info", "log", "parallel summary"],
+      ]),
+    );
+    expect(
+      detail.events.find((event) => event.message === "parallel summary")
+        ?.payload,
+    ).toEqual({ succeeded: 2, failed: 1 });
+
+    res = await req(`/api/workflow-runs/${detail.run.id}`);
+    expect(res.status).toBe(200);
+    const persisted = (await res.json()) as typeof detail;
+    expect(persisted.run.context).toEqual(detail.run.context);
+    expect(persisted.steps.map((step) => step.output)).toEqual(
+      detail.steps.map((step) => step.output),
+    );
+    expect(persisted.events.map((event) => event.kind)).toEqual(
+      detail.events.map((event) => event.kind),
+    );
   });
 
   it("cancels non-terminal runs and records an audit event", async () => {

@@ -78,16 +78,21 @@ import {
   isMcpToolSummary,
   moveWorkflowNode,
   removeWorkflowNode,
+  workflowTransformPresetById,
+  WORKFLOW_TRANSFORM_PRESETS,
   type WorkflowPaletteKind,
 } from "@/app/workflows/authoring";
 import {
   WorkflowCanvas,
+  type WorkflowCanvasAddPlacement,
   type WorkflowCanvasConnection,
   type WorkflowCanvasEdgeSelection,
 } from "@/app/workflows/canvas";
 import {
   connectWorkflowReferenceEdge,
+  connectWorkflowRouteContinuationEdge,
   removeWorkflowReferenceEdge,
+  removeWorkflowRouteContinuationEdge,
   type WorkflowReferenceEdgeKind,
 } from "@/app/workflows/edges";
 import {
@@ -291,9 +296,16 @@ interface ScopedRunFilters {
   createdTo: string;
 }
 
-const EVENT_LEVELS = ["all", "debug", "info", "error", "system"] as const;
+const EVENT_LEVELS = [
+  "all",
+  "debug",
+  "info",
+  "warn",
+  "error",
+  "system",
+] as const;
 type EventLevelFilter = (typeof EVENT_LEVELS)[number];
-const LOG_LEVELS = ["debug", "info", "error"] as const;
+const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 type LogLevel = (typeof LOG_LEVELS)[number];
 const EXIT_STATUSES = ["succeeded", "failed", "canceled"] as const;
 type ExitStatus = (typeof EXIT_STATUSES)[number];
@@ -382,6 +394,8 @@ function WorkflowsPage() {
   >(undefined);
   const [addStepTargetSourceHandle, setAddStepTargetSourceHandle] =
     useState<WorkflowReferenceEdgeKind | null>(null);
+  const [addStepPlacement, setAddStepPlacement] =
+    useState<WorkflowCanvasAddPlacement | null>(null);
   const [nameDraft, setNameDraft] = useState("");
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const [inputSchemaDraft, setInputSchemaDraft] = useState("null");
@@ -1198,6 +1212,7 @@ function WorkflowsPage() {
     afterNodeId: string | null,
     sourceHandle?: WorkflowReferenceEdgeKind | null,
     tool?: McpToolSummary | AgentSummary,
+    placement?: WorkflowCanvasAddPlacement | null,
   ) {
     const parsed = parseNodesDraft(nodesDraft);
     if (!parsed.ok) {
@@ -1234,22 +1249,54 @@ function WorkflowsPage() {
       } else {
         toast.error(referenceMutationMessage(connected.reason));
       }
+    } else if (
+      afterNodeId &&
+      !isTriggerCanvasNodeId(afterNodeId) &&
+      addedNode
+    ) {
+      const connected = connectWorkflowRouteContinuationEdge(inserted, {
+        sourceId: afterNodeId,
+        targetId: addedNode.id,
+      });
+      if (connected.ok) {
+        next = connected.nodes as WorkflowNode[];
+      } else if (
+        connected.reason !== "route_source_not_found" &&
+        connected.reason !== "ambiguous_route_source"
+      ) {
+        toast.error(referenceMutationMessage(connected.reason));
+      }
     }
     setNodesDraft(formatJson(next));
+    if (addedNode && placement?.position) {
+      setUiDraft((current) =>
+        updateWorkflowCanvasNodePosition(
+          current,
+          addedNode.id,
+          placement.position,
+        ),
+      );
+    }
     setSelectedCanvasNodeId(addedNode?.id ?? next.at(-1)?.id ?? null);
   }
 
-  function openAddStepDialog(afterNodeId: string | null, sourceHandle?: string) {
+  function openAddStepDialog(
+    afterNodeId: string | null,
+    sourceHandle?: string,
+    placement?: WorkflowCanvasAddPlacement,
+  ) {
     setDesignerView("edit");
     void loadMcpTools();
     void loadAgents();
     setAddStepTargetNodeId(afterNodeId);
     setAddStepTargetSourceHandle(referenceEdgeKind(sourceHandle));
+    setAddStepPlacement(placement ?? null);
   }
 
   function closeAddStepDialog() {
     setAddStepTargetNodeId(undefined);
     setAddStepTargetSourceHandle(null);
+    setAddStepPlacement(null);
   }
 
   function addManualTriggerFromPalette() {
@@ -1283,6 +1330,7 @@ function WorkflowsPage() {
       targetNodeId,
       addStepTargetSourceHandle,
       toolForPalettePayload(payload),
+      addStepPlacement,
     );
     closeAddStepDialog();
   }
@@ -1362,20 +1410,21 @@ function WorkflowsPage() {
 
   function connectCanvasReferenceEdge(connection: WorkflowCanvasConnection) {
     const kind = referenceEdgeKind(connection.sourceHandle);
-    if (!kind) {
-      toast.error("Only branch and foreach edges can be edited on the canvas");
-      return;
-    }
     const parsed = parseNodesDraft(nodesDraft);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;
     }
-    const result = connectWorkflowReferenceEdge(parsed.value, {
-      sourceId: connection.sourceId,
-      targetId: connection.targetId,
-      kind,
-    });
+    const result = kind
+      ? connectWorkflowReferenceEdge(parsed.value, {
+          sourceId: connection.sourceId,
+          targetId: connection.targetId,
+          kind,
+        })
+      : connectWorkflowRouteContinuationEdge(parsed.value, {
+          sourceId: connection.sourceId,
+          targetId: connection.targetId,
+        });
     if (!result.ok) {
       toast.error(referenceMutationMessage(result.reason));
       return;
@@ -1383,7 +1432,9 @@ function WorkflowsPage() {
     setNodesDraft(formatJson(result.nodes));
     setSelectedCanvasNodeId(connection.sourceId);
     setSelectedCanvasEdgeId(
-      `edge:${kind}:${connection.sourceId}:${connection.targetId}`,
+      kind
+        ? `edge:${kind}:${connection.sourceId}:${connection.targetId}`
+        : null,
     );
   }
 
@@ -1392,13 +1443,23 @@ function WorkflowsPage() {
   ) {
     const kind = referenceEdgeKind(edge.kind);
     const targetId = edge.targetRef ?? edge.targetId;
-    if (!kind) {
-      toast.error("Only branch and foreach edges can be removed on the canvas");
-      return;
-    }
     const parsed = parseNodesDraft(nodesDraft);
     if (!parsed.ok) {
       toast.error(parsed.error);
+      return;
+    }
+    if (!kind) {
+      const result = removeWorkflowRouteContinuationEdge(parsed.value, {
+        sourceId: edge.sourceId,
+        targetId,
+      });
+      if (!result.ok) {
+        toast.error(referenceMutationMessage(result.reason));
+        return;
+      }
+      setNodesDraft(formatJson(result.nodes));
+      setSelectedCanvasEdgeId(null);
+      setSelectedCanvasNodeId(edge.sourceId);
       return;
     }
     const result = removeWorkflowReferenceEdge(parsed.value, {
@@ -1624,6 +1685,73 @@ function WorkflowsPage() {
     });
   }
 
+  function updateSwitchConfig(
+    index: number,
+    field:
+      | "value"
+      | "caseId"
+      | "caseLabel"
+      | "caseValue"
+      | "caseNodes"
+      | "defaultNodes"
+      | "addCase"
+      | "removeCase",
+    value: string,
+    caseIndex?: number,
+  ) {
+    updateNode(index, (node) => {
+      if (node.type !== "builtin.switch") return node;
+      const cases = normalizeSwitchCaseDrafts(node.cases);
+      if (field === "value") {
+        const parsed = parseJsonDraft(value);
+        return parsed.ok ? { ...node, value: parsed.value } : node;
+      }
+      if (field === "defaultNodes") {
+        return { ...node, default: parseNodeIdList(value) };
+      }
+      if (field === "addCase") {
+        const nextIndex = cases.length + 1;
+        return {
+          ...node,
+          cases: [
+            ...cases,
+            {
+              id: uniqueSwitchCaseId(cases, `case_${nextIndex}`),
+              label: `Case ${nextIndex}`,
+              value: `case_${nextIndex}`,
+              nodes: [],
+            },
+          ],
+        };
+      }
+      if (field === "removeCase") {
+        if (typeof caseIndex !== "number" || cases.length <= 1) return node;
+        return {
+          ...node,
+          cases: cases.filter((_, index) => index !== caseIndex),
+        };
+      }
+      if (typeof caseIndex !== "number" || !cases[caseIndex]) return node;
+      const nextCases = cases.map((item, index) => {
+        if (index !== caseIndex) return item;
+        if (field === "caseId") {
+          const id = safeRouteId(value);
+          return id ? { ...item, id } : item;
+        }
+        if (field === "caseLabel") {
+          const label = value.trim();
+          return label ? { ...item, label } : { ...item, label: undefined };
+        }
+        if (field === "caseValue") {
+          const parsed = parseJsonDraft(value);
+          return parsed.ok ? { ...item, value: parsed.value } : item;
+        }
+        return { ...item, nodes: parseNodeIdList(value) };
+      });
+      return { ...node, cases: nextCases };
+    });
+  }
+
   function updateLogConfig(
     index: number,
     field: "level" | "message" | "payload",
@@ -1637,6 +1765,47 @@ function WorkflowsPage() {
       }
       if (field === "message" && !value) return node;
       return { ...node, [field]: value };
+    });
+  }
+
+  function updateThrowErrorConfig(
+    index: number,
+    field: "message" | "code" | "details",
+    value: string,
+  ) {
+    updateNode(index, (node) => {
+      if (node.type !== "builtin.throw_error") return node;
+      if (field === "message") {
+        if (!value) return node;
+        return { ...node, message: value };
+      }
+      if (field === "code") {
+        const code = value.trim();
+        if (!code) return omitNodeKey(node, "code");
+        if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(code)) return node;
+        return { ...node, code };
+      }
+      const details = value.trim();
+      return details ? { ...node, details } : omitNodeKey(node, "details");
+    });
+  }
+
+  function updateSleepConfig(
+    index: number,
+    field: "delayMs" | "reason",
+    value: string,
+  ) {
+    updateNode(index, (node) => {
+      if (node.type !== "builtin.sleep") return node;
+      if (field === "delayMs") {
+        const delayMs = Number.parseInt(value, 10);
+        if (!Number.isFinite(delayMs) || delayMs < 1 || delayMs > 300_000) {
+          return node;
+        }
+        return { ...node, delayMs };
+      }
+      const reason = value.trim();
+      return reason ? { ...node, reason } : omitNodeKey(node, "reason");
     });
   }
 
@@ -1678,6 +1847,81 @@ function WorkflowsPage() {
       }
       if ((field === "items" || field === "itemVar") && !value) return node;
       return { ...node, [field]: value };
+    });
+  }
+
+  function updateParallelConfig(
+    index: number,
+    field:
+      | "concurrency"
+      | "failFast"
+      | "branchId"
+      | "branchLabel"
+      | "branchNodes"
+      | "addBranch"
+      | "removeBranch",
+    value: string | boolean,
+    branchIndex?: number,
+  ) {
+    updateNode(index, (node) => {
+      if (node.type !== "builtin.parallel") return node;
+      const branches = normalizeParallelBranchDrafts(node.branches);
+      if (field === "concurrency") {
+        const concurrency = Number.parseInt(String(value), 10);
+        if (
+          !Number.isFinite(concurrency) ||
+          concurrency < 1 ||
+          concurrency > 16
+        ) {
+          const nextNode = { ...node };
+          delete nextNode.concurrency;
+          return nextNode;
+        }
+        return { ...node, concurrency };
+      }
+      if (field === "failFast") {
+        return { ...node, failFast: value === true };
+      }
+      if (field === "addBranch") {
+        const nextIndex = branches.length + 1;
+        return {
+          ...node,
+          branches: [
+            ...branches,
+            {
+              id: uniqueParallelBranchId(branches, `branch_${nextIndex}`),
+              label: `Branch ${nextIndex}`,
+              nodes: [],
+            },
+          ],
+        };
+      }
+      if (field === "removeBranch") {
+        if (typeof branchIndex !== "number" || branches.length <= 1) {
+          return node;
+        }
+        return {
+          ...node,
+          branches: branches.filter((_, index) => index !== branchIndex),
+        };
+      }
+      if (typeof branchIndex !== "number" || !branches[branchIndex]) {
+        return node;
+      }
+      const nextBranches = branches.map((branch, index) => {
+        if (index !== branchIndex) return branch;
+        if (field === "branchId") {
+          const id = safeParallelBranchId(String(value));
+          if (!id) return branch;
+          return { ...branch, id };
+        }
+        if (field === "branchLabel") {
+          const label = String(value).trim();
+          return label ? { ...branch, label } : { ...branch, label: undefined };
+        }
+        return { ...branch, nodes: parseNodeIdList(String(value)) };
+      });
+      return { ...node, branches: nextBranches };
     });
   }
 
@@ -1928,11 +2172,19 @@ function WorkflowsPage() {
         updateTransformConfig(index, field, value),
       onBranchConfigChange: (field, value) =>
         updateBranchConfig(index, field, value),
+      onSwitchConfigChange: (field, value, caseIndex) =>
+        updateSwitchConfig(index, field, value, caseIndex),
       onLogConfigChange: (field, value) => updateLogConfig(index, field, value),
+      onThrowErrorConfigChange: (field, value) =>
+        updateThrowErrorConfig(index, field, value),
+      onSleepConfigChange: (field, value) =>
+        updateSleepConfig(index, field, value),
       onExitConfigChange: (field, value) =>
         updateExitConfig(index, field, value),
       onForeachConfigChange: (field, value) =>
         updateForeachConfig(index, field, value),
+      onParallelConfigChange: (field, value, branchIndex) =>
+        updateParallelConfig(index, field, value, branchIndex),
       onPythonConfigChange: (field, value) =>
         updatePythonConfig(index, field, value),
       mcpTools,
@@ -2511,6 +2763,10 @@ function WorkflowInspector({
   const [workflowInspectorTab, setWorkflowInspectorTab] = useState<
     "workflow" | "test"
   >("test");
+  const visibleCanvasNodeCount = projection.nodes.filter((node) => {
+    const nodeData = node.data as WorkflowCanvasNodeData | undefined;
+    return nodeData?.kind !== "group";
+  }).length;
 
   return (
     <aside
@@ -2591,7 +2847,7 @@ function WorkflowInspector({
                 {workflow.status}
               </Badge>
               <Badge variant="outline">v{workflow.version}</Badge>
-              <Badge variant="outline">{projection.nodes.length} nodes</Badge>
+              <Badge variant="outline">{visibleCanvasNodeCount} nodes</Badge>
               <Badge variant="outline">{projection.edges.length} edges</Badge>
             </div>
           )}
@@ -2800,13 +3056,13 @@ function WorkflowInspector({
                                   Input JSON
                                   <Textarea
                                     aria-label={`${trigger.id} scheduled input`}
-                                  value={formatOptionalJson(trigger.input)}
-                                  onChange={(event) =>
-                                    updateScheduledTriggerInput(
-                                      trigger.id,
-                                      event.target.value,
-                                    )
-                                  }
+                                    value={formatOptionalJson(trigger.input)}
+                                    onChange={(event) =>
+                                      updateScheduledTriggerInput(
+                                        trigger.id,
+                                        event.target.value,
+                                      )
+                                    }
                                     className="min-h-32 font-mono text-xs leading-relaxed"
                                   />
                                 </label>
@@ -2979,19 +3235,16 @@ function AddStepDialog({
     setQuery("");
     setPreviewItemId(null);
   }, [open, triggerOnly, triggers.length]);
-  const catalog = useMemo(
-    () => {
-      const items = workflowStepCatalog({
-        hasTrigger: triggers.length > 0,
-        mcpTools,
-        agents,
-      });
-      return triggerOnly
-        ? items.filter((item) => item.category === "Trigger")
-        : items;
-    },
-    [agents, mcpTools, triggerOnly, triggers.length],
-  );
+  const catalog = useMemo(() => {
+    const items = workflowStepCatalog({
+      hasTrigger: triggers.length > 0,
+      mcpTools,
+      agents,
+    });
+    return triggerOnly
+      ? items.filter((item) => item.category === "Trigger")
+      : items;
+  }, [agents, mcpTools, triggerOnly, triggers.length]);
   const categories = useMemo(
     () =>
       (["Trigger", "Built-in", "Logic", "AI", "Tools"] as const).filter(
@@ -3275,10 +3528,28 @@ function workflowStepCatalog({
       id: "log",
       label: "Log",
       category: "Built-in",
-      description: "Write info, debug, or error events into the run log.",
+      description: "Write info, debug, warn, or error events into the run log.",
       payload: { kind: "log" },
       inputs: ["level", "message", "payload"],
       outputs: ["run.events"],
+    },
+    {
+      id: "sleep",
+      label: "Sleep",
+      category: "Built-in",
+      description: "Pause the workflow briefly before continuing.",
+      payload: { kind: "sleep" },
+      inputs: ["delayMs", "reason"],
+      outputs: ["steps.<id>.output"],
+    },
+    {
+      id: "throw_error",
+      label: "Throw Error",
+      category: "Built-in",
+      description: "Fail the current route with a controlled error.",
+      payload: { kind: "throw_error" },
+      inputs: ["message", "code", "details"],
+      outputs: ["run.status", "step.error"],
     },
     {
       id: "exit",
@@ -3308,6 +3579,24 @@ function workflowStepCatalog({
       payload: { kind: "foreach" },
       inputs: ["items", "itemVar", "concurrency"],
       outputs: ["body"],
+    },
+    {
+      id: "switch",
+      label: "Switch Case",
+      category: "Logic",
+      description: "Route the flow by matching a value against cases.",
+      payload: { kind: "switch" },
+      inputs: ["value", "cases", "default"],
+      outputs: ["cases", "default"],
+    },
+    {
+      id: "parallel",
+      label: "Parallel",
+      category: "Logic",
+      description: "Run independent branches with isolated context.",
+      payload: { kind: "parallel" },
+      inputs: ["branches", "concurrency", "failFast"],
+      outputs: ["branches", "succeededCount", "failedCount"],
     },
   ];
   const agentItems: AddStepCatalogItem[] =
@@ -3374,12 +3663,7 @@ function workflowStepCatalog({
             outputs: ["steps.<id>.output"],
           },
         ];
-  return [
-    ...builtInItems,
-    ...flowControlItems,
-    ...agentItems,
-    ...mcpItems,
-  ];
+  return [...builtInItems, ...flowControlItems, ...agentItems, ...mcpItems];
 }
 
 function parseWorkflowPalettePayload(
@@ -3412,8 +3696,12 @@ function isWorkflowPaletteKind(value: unknown): value is WorkflowPaletteKind {
     value === "transform" ||
     value === "if" ||
     value === "log" ||
+    value === "throw_error" ||
+    value === "sleep" ||
     value === "exit" ||
     value === "foreach" ||
+    value === "switch" ||
+    value === "parallel" ||
     value === "python" ||
     value === "mcp" ||
     value === "agent"
@@ -3421,9 +3709,29 @@ function isWorkflowPaletteKind(value: unknown): value is WorkflowPaletteKind {
 }
 
 function referenceEdgeKind(value: unknown): WorkflowReferenceEdgeKind | null {
-  return value === "then" || value === "else" || value === "body"
-    ? value
-    : null;
+  if (
+    value === "then" ||
+    value === "else" ||
+    value === "body" ||
+    value === "default"
+  ) {
+    return value;
+  }
+  if (
+    typeof value === "string" &&
+    value.startsWith("case:") &&
+    value.length > "case:".length
+  ) {
+    return value as `case:${string}`;
+  }
+  if (
+    typeof value === "string" &&
+    value.startsWith("branch:") &&
+    value.length > "branch:".length
+  ) {
+    return value as `branch:${string}`;
+  }
+  return null;
 }
 
 function isTriggerCanvasNodeId(value: string | null): boolean {
@@ -3438,6 +3746,12 @@ function referenceMutationMessage(reason: string): string {
   }
   if (reason === "edge_kind_not_supported") {
     return "This edge cannot be represented by workflow JSON";
+  }
+  if (reason === "route_source_not_found") {
+    return "This card is not inside an explicit route";
+  }
+  if (reason === "ambiguous_route_source") {
+    return "This card belongs to multiple routes; connect from a branch output instead";
   }
   return "Workflow edge could not be updated";
 }
@@ -3462,14 +3776,44 @@ type NodeCardProps = {
     field: "condition" | "then" | "else",
     value: string,
   ) => void;
+  onSwitchConfigChange: (
+    field:
+      | "value"
+      | "caseId"
+      | "caseLabel"
+      | "caseValue"
+      | "caseNodes"
+      | "defaultNodes"
+      | "addCase"
+      | "removeCase",
+    value: string,
+    caseIndex?: number,
+  ) => void;
   onLogConfigChange: (
     field: "level" | "message" | "payload",
     value: string,
   ) => void;
+  onThrowErrorConfigChange: (
+    field: "message" | "code" | "details",
+    value: string,
+  ) => void;
+  onSleepConfigChange: (field: "delayMs" | "reason", value: string) => void;
   onExitConfigChange: (field: "status" | "output", value: string) => void;
   onForeachConfigChange: (
     field: "items" | "itemVar" | "body" | "concurrency",
     value: string,
+  ) => void;
+  onParallelConfigChange: (
+    field:
+      | "concurrency"
+      | "failFast"
+      | "branchId"
+      | "branchLabel"
+      | "branchNodes"
+      | "addBranch"
+      | "removeBranch",
+    value: string | boolean,
+    branchIndex?: number,
   ) => void;
   onPythonConfigChange: (
     field: "input" | "code" | "timeoutMs" | "reset",
@@ -3518,10 +3862,7 @@ function InspectorSection({
           {open ? (
             <ArrowUp className="size-3.5 text-ink-faint" aria-hidden="true" />
           ) : (
-            <ArrowDown
-              className="size-3.5 text-ink-faint"
-              aria-hidden="true"
-            />
+            <ArrowDown className="size-3.5 text-ink-faint" aria-hidden="true" />
           )}
         </span>
       </button>
@@ -3548,9 +3889,13 @@ function NodeCard({
   onAssignmentModeChange,
   onTransformConfigChange,
   onBranchConfigChange,
+  onSwitchConfigChange,
   onLogConfigChange,
+  onThrowErrorConfigChange,
+  onSleepConfigChange,
   onExitConfigChange,
   onForeachConfigChange,
+  onParallelConfigChange,
   onPythonConfigChange,
   mcpTools,
   agents,
@@ -3564,9 +3909,13 @@ function NodeCard({
   const primaryAssignment = primaryAssignmentControl(node.assign);
   const transform = transformControl(node);
   const branch = branchControl(node);
+  const switchCase = switchControl(node);
   const log = logControl(node);
+  const throwError = throwErrorControl(node);
+  const sleep = sleepControl(node);
   const exit = exitControl(node);
   const foreach = foreachControl(node);
+  const parallel = parallelControl(node);
   const python = pythonControl(node);
   const mcpTool = mcpToolControl(node);
   const agentCall = agentCallControl(node);
@@ -3583,54 +3932,56 @@ function NodeCard({
     <section className="grid gap-3">
       <div className="border border-paper-rule bg-paper px-3 py-3">
         <div className="flex min-w-0 items-start gap-3">
-        <div className="flex size-8 shrink-0 items-center justify-center border border-paper-rule bg-paper-sunk">
-          <Icon className="size-4 text-ink-soft" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="font-mono text-[11px] text-ink-faint">
-              {String(index + 1).padStart(2, "0")}
-            </span>
-            <span className="truncate text-sm font-medium">{label}</span>
+          <div className="flex size-8 shrink-0 items-center justify-center border border-paper-rule bg-paper-sunk">
+            <Icon className="size-4 text-ink-soft" />
           </div>
-          <div className="mt-1 flex flex-wrap gap-1.5">
-            {node.label && <Badge variant="outline">{node.id}</Badge>}
-            <Badge variant="secondary">{node.type}</Badge>
-            {isRecord(node.assign) && <Badge variant="outline">assign</Badge>}
-            {node.type.includes("log") && <Badge variant="outline">log</Badge>}
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="font-mono text-[11px] text-ink-faint">
+                {String(index + 1).padStart(2, "0")}
+              </span>
+              <span className="truncate text-sm font-medium">{label}</span>
+            </div>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {node.label && <Badge variant="outline">{node.id}</Badge>}
+              <Badge variant="secondary">{node.type}</Badge>
+              {isRecord(node.assign) && <Badge variant="outline">assign</Badge>}
+              {node.type.includes("log") && (
+                <Badge variant="outline">log</Badge>
+              )}
+            </div>
           </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label={`Move ${label} up`}
-            disabled={!canMoveUp}
-            onClick={onMoveUp}
-          >
-            <ArrowUp className="size-3" />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label={`Move ${label} down`}
-            disabled={!canMoveDown}
-            onClick={onMoveDown}
-          >
-            <ArrowDown className="size-3" />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label={`Delete ${label}`}
-            onClick={onDelete}
-          >
-            <Trash2 className="size-3" />
-          </Button>
-        </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label={`Move ${label} up`}
+              disabled={!canMoveUp}
+              onClick={onMoveUp}
+            >
+              <ArrowUp className="size-3" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label={`Move ${label} down`}
+              disabled={!canMoveDown}
+              onClick={onMoveDown}
+            >
+              <ArrowDown className="size-3" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label={`Delete ${label}`}
+              onClick={onDelete}
+            >
+              <Trash2 className="size-3" />
+            </Button>
+          </div>
         </div>
         <InspectorSection title="Basics" defaultOpen>
           <label className="grid gap-1">
@@ -3732,6 +4083,35 @@ function NodeCard({
           <div className="grid gap-3">
             <label className="grid gap-1">
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                Preset
+              </span>
+              <Select
+                onValueChange={(presetId) => {
+                  const preset = workflowTransformPresetById(presetId);
+                  if (!preset) return;
+                  onTransformConfigChange(
+                    "transform",
+                    formatJson(preset.transform),
+                  );
+                }}
+              >
+                <SelectTrigger
+                  size="sm"
+                  aria-label={`${label} transform preset`}
+                >
+                  <SelectValue placeholder="Select transform" />
+                </SelectTrigger>
+                <SelectContent>
+                  {WORKFLOW_TRANSFORM_PRESETS.map((preset) => (
+                    <SelectItem key={preset.id} value={preset.id}>
+                      {preset.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </label>
+            <label className="grid gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Input JSON
               </span>
               <Textarea
@@ -3777,31 +4157,166 @@ function NodeCard({
               />
             </label>
             <div className="grid gap-3 sm:grid-cols-2">
-            <label className="grid gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                True
-              </span>
-              <Input
-                aria-label={`${label} then nodes`}
-                value={branch.then}
-                onChange={(event) =>
-                  onBranchConfigChange("then", event.target.value)
-                }
-              />
-            </label>
-            <label className="grid gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                False
-              </span>
-              <Input
-                aria-label={`${label} else nodes`}
-                value={branch.else}
-                onChange={(event) =>
-                  onBranchConfigChange("else", event.target.value)
-                }
-              />
-            </label>
+              <label className="grid gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                  True
+                </span>
+                <Input
+                  aria-label={`${label} then nodes`}
+                  value={branch.then}
+                  onChange={(event) =>
+                    onBranchConfigChange("then", event.target.value)
+                  }
+                />
+              </label>
+              <label className="grid gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                  False
+                </span>
+                <Input
+                  aria-label={`${label} else nodes`}
+                  value={branch.else}
+                  onChange={(event) =>
+                    onBranchConfigChange("else", event.target.value)
+                  }
+                />
+              </label>
             </div>
+          </div>
+        </InspectorSection>
+      )}
+      {switchCase && (
+        <InspectorSection
+          title="Switch"
+          badge={`${switchCase.cases.length}`}
+          defaultOpen
+        >
+          <div className="grid gap-3">
+            <label className="grid gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                Value
+              </span>
+              <Input
+                aria-label={`${label} switch value`}
+                value={switchCase.value}
+                onChange={(event) =>
+                  onSwitchConfigChange("value", event.target.value)
+                }
+              />
+            </label>
+            <div className="grid gap-2">
+              {switchCase.cases.map((item, caseIndex) => (
+                <div
+                  key={`${item.id}:${caseIndex}`}
+                  className="grid gap-2 border border-paper-rule bg-paper p-3"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0 truncate text-xs font-medium text-ink-soft">
+                      {item.label || item.id}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={`Remove switch case ${item.id}`}
+                      disabled={switchCase.cases.length <= 1}
+                      onClick={() =>
+                        onSwitchConfigChange("removeCase", "", caseIndex)
+                      }
+                    >
+                      <Trash2 className="size-3" />
+                    </Button>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <label className="grid gap-1">
+                      <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                        Case ID
+                      </span>
+                      <Input
+                        aria-label={`${label} switch case ${caseIndex + 1} id`}
+                        value={item.id}
+                        onChange={(event) =>
+                          onSwitchConfigChange(
+                            "caseId",
+                            event.target.value,
+                            caseIndex,
+                          )
+                        }
+                      />
+                    </label>
+                    <label className="grid gap-1">
+                      <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                        Label
+                      </span>
+                      <Input
+                        aria-label={`${label} switch case ${caseIndex + 1} label`}
+                        value={item.label}
+                        onChange={(event) =>
+                          onSwitchConfigChange(
+                            "caseLabel",
+                            event.target.value,
+                            caseIndex,
+                          )
+                        }
+                      />
+                    </label>
+                  </div>
+                  <label className="grid gap-1">
+                    <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                      Match Value
+                    </span>
+                    <Input
+                      aria-label={`${label} switch case ${caseIndex + 1} value`}
+                      value={item.value}
+                      onChange={(event) =>
+                        onSwitchConfigChange(
+                          "caseValue",
+                          event.target.value,
+                          caseIndex,
+                        )
+                      }
+                    />
+                  </label>
+                  <label className="grid gap-1">
+                    <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                      Nodes
+                    </span>
+                    <Input
+                      aria-label={`${label} switch case ${caseIndex + 1} nodes`}
+                      value={item.nodes}
+                      onChange={(event) =>
+                        onSwitchConfigChange(
+                          "caseNodes",
+                          event.target.value,
+                          caseIndex,
+                        )
+                      }
+                    />
+                  </label>
+                </div>
+              ))}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => onSwitchConfigChange("addCase", "")}
+              >
+                <Plus className="mr-2 size-3.5" />
+                Add Case
+              </Button>
+            </div>
+            <label className="grid gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                Default Nodes
+              </span>
+              <Input
+                aria-label={`${label} switch default nodes`}
+                value={switchCase.defaultNodes}
+                onChange={(event) =>
+                  onSwitchConfigChange("defaultNodes", event.target.value)
+                }
+              />
+            </label>
           </div>
         </InspectorSection>
       )}
@@ -3825,6 +4340,7 @@ function NodeCard({
                   <SelectItem value="info">info</SelectItem>
                   <SelectItem value="debug">debug</SelectItem>
                   <SelectItem value="error">error</SelectItem>
+                  <SelectItem value="warn">warn</SelectItem>
                 </SelectContent>
               </Select>
             </label>
@@ -3849,6 +4365,79 @@ function NodeCard({
                 value={log.payload}
                 onChange={(event) =>
                   onLogConfigChange("payload", event.target.value)
+                }
+              />
+            </label>
+          </div>
+        </InspectorSection>
+      )}
+      {throwError && (
+        <InspectorSection title="Throw Error" defaultOpen>
+          <div className="grid gap-3">
+            <label className="grid gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                Message
+              </span>
+              <Input
+                aria-label={`${label} throw error message`}
+                value={throwError.message}
+                onChange={(event) =>
+                  onThrowErrorConfigChange("message", event.target.value)
+                }
+              />
+            </label>
+            <label className="grid gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                Code
+              </span>
+              <Input
+                aria-label={`${label} throw error code`}
+                value={throwError.code}
+                onChange={(event) =>
+                  onThrowErrorConfigChange("code", event.target.value)
+                }
+              />
+            </label>
+            <label className="grid gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                Details
+              </span>
+              <Input
+                aria-label={`${label} throw error details`}
+                value={throwError.details}
+                onChange={(event) =>
+                  onThrowErrorConfigChange("details", event.target.value)
+                }
+              />
+            </label>
+          </div>
+        </InspectorSection>
+      )}
+      {sleep && (
+        <InspectorSection title="Sleep" defaultOpen>
+          <div className="grid gap-3">
+            <label className="grid gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                Delay ms
+              </span>
+              <Input
+                aria-label={`${label} sleep delay`}
+                inputMode="numeric"
+                value={sleep.delayMs}
+                onChange={(event) =>
+                  onSleepConfigChange("delayMs", event.target.value)
+                }
+              />
+            </label>
+            <label className="grid gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                Reason
+              </span>
+              <Input
+                aria-label={`${label} sleep reason`}
+                value={sleep.reason}
+                onChange={(event) =>
+                  onSleepConfigChange("reason", event.target.value)
                 }
               />
             </label>
@@ -3909,30 +4498,30 @@ function NodeCard({
               />
             </label>
             <div className="grid gap-3 sm:grid-cols-2">
-            <label className="grid gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                Item Var
-              </span>
-              <Input
-                aria-label={`${label} foreach item variable`}
-                value={foreach.itemVar}
-                onChange={(event) =>
-                  onForeachConfigChange("itemVar", event.target.value)
-                }
-              />
-            </label>
-            <label className="grid gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                Body
-              </span>
-              <Input
-                aria-label={`${label} foreach body nodes`}
-                value={foreach.body}
-                onChange={(event) =>
-                  onForeachConfigChange("body", event.target.value)
-                }
-              />
-            </label>
+              <label className="grid gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                  Item Var
+                </span>
+                <Input
+                  aria-label={`${label} foreach item variable`}
+                  value={foreach.itemVar}
+                  onChange={(event) =>
+                    onForeachConfigChange("itemVar", event.target.value)
+                  }
+                />
+              </label>
+              <label className="grid gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                  Body
+                </span>
+                <Input
+                  aria-label={`${label} foreach body nodes`}
+                  value={foreach.body}
+                  onChange={(event) =>
+                    onForeachConfigChange("body", event.target.value)
+                  }
+                />
+              </label>
             </div>
             <label className="grid gap-1">
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
@@ -3947,6 +4536,147 @@ function NodeCard({
                 }
               />
             </label>
+            <div className="grid gap-2 border border-paper-rule bg-paper-sunk p-3">
+              <div className="text-xs font-medium text-ink-soft">
+                Save all item results to variable
+              </div>
+              <code className="break-all text-[11px] text-ink-faint">
+                assign.foreachSummary = $.steps.{label}.output
+              </code>
+              <div className="text-xs text-ink-faint">
+                Append each item result to variable is not available while
+                foreach runs with aggregate-only assignment.
+              </div>
+            </div>
+          </div>
+        </InspectorSection>
+      )}
+      {parallel && (
+        <InspectorSection
+          title="Parallel"
+          badge={`${parallel.branches.length}`}
+          defaultOpen
+        >
+          <div className="grid gap-3">
+            <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+              <label className="grid gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                  Concurrency
+                </span>
+                <Input
+                  aria-label={`${label} parallel concurrency`}
+                  inputMode="numeric"
+                  value={parallel.concurrency}
+                  onChange={(event) =>
+                    onParallelConfigChange("concurrency", event.target.value)
+                  }
+                />
+              </label>
+              <label className="flex items-end gap-2 pb-2 text-sm text-ink-soft">
+                <input
+                  aria-label={`${label} parallel fail fast`}
+                  type="checkbox"
+                  checked={parallel.failFast}
+                  onChange={(event) =>
+                    onParallelConfigChange("failFast", event.target.checked)
+                  }
+                />
+                Fail fast
+              </label>
+            </div>
+            <div className="grid gap-2">
+              {parallel.branches.map((branch, branchIndex) => (
+                <div
+                  key={`${branch.id}:${branchIndex}`}
+                  className="grid gap-2 border border-paper-rule bg-paper p-3"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0 truncate text-xs font-medium text-ink-soft">
+                      {branch.label || branch.id}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={`Remove parallel branch ${branch.id}`}
+                      disabled={parallel.branches.length <= 1}
+                      onClick={() =>
+                        onParallelConfigChange("removeBranch", "", branchIndex)
+                      }
+                    >
+                      <Trash2 className="size-3" />
+                    </Button>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <label className="grid gap-1">
+                      <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                        Branch ID
+                      </span>
+                      <Input
+                        aria-label={`${label} parallel branch ${branchIndex + 1} id`}
+                        value={branch.id}
+                        onChange={(event) =>
+                          onParallelConfigChange(
+                            "branchId",
+                            event.target.value,
+                            branchIndex,
+                          )
+                        }
+                      />
+                    </label>
+                    <label className="grid gap-1">
+                      <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                        Label
+                      </span>
+                      <Input
+                        aria-label={`${label} parallel branch ${branchIndex + 1} label`}
+                        value={branch.label}
+                        onChange={(event) =>
+                          onParallelConfigChange(
+                            "branchLabel",
+                            event.target.value,
+                            branchIndex,
+                          )
+                        }
+                      />
+                    </label>
+                  </div>
+                  <label className="grid gap-1">
+                    <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                      Nodes
+                    </span>
+                    <Input
+                      aria-label={`${label} parallel branch ${branchIndex + 1} nodes`}
+                      value={branch.nodes}
+                      onChange={(event) =>
+                        onParallelConfigChange(
+                          "branchNodes",
+                          event.target.value,
+                          branchIndex,
+                        )
+                      }
+                    />
+                  </label>
+                </div>
+              ))}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => onParallelConfigChange("addBranch", "")}
+              >
+                <Plus className="mr-2 size-3.5" />
+                Add Branch
+              </Button>
+            </div>
+            <div className="grid gap-2 border border-paper-rule bg-paper-sunk p-3">
+              <div className="text-xs font-medium text-ink-soft">
+                Save branch aggregate to variable
+              </div>
+              <code className="break-all text-[11px] text-ink-faint">
+                assign.parallelSummary = $.steps.{label}.output
+              </code>
+            </div>
           </div>
         </InspectorSection>
       )}
@@ -3968,30 +4698,30 @@ function NodeCard({
               />
             </label>
             <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-            <label className="grid gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                Timeout
-              </span>
-              <Input
-                aria-label={`${label} python timeout`}
-                inputMode="numeric"
-                value={python.timeoutMs}
-                onChange={(event) =>
-                  onPythonConfigChange("timeoutMs", event.target.value)
-                }
-              />
-            </label>
-            <label className="flex items-end gap-2 pb-2 text-sm text-ink-soft">
-              <input
-                aria-label={`${label} python reset`}
-                type="checkbox"
-                checked={python.reset}
-                onChange={(event) =>
-                  onPythonConfigChange("reset", event.target.checked)
-                }
-              />
-              Reset
-            </label>
+              <label className="grid gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                  Timeout
+                </span>
+                <Input
+                  aria-label={`${label} python timeout`}
+                  inputMode="numeric"
+                  value={python.timeoutMs}
+                  onChange={(event) =>
+                    onPythonConfigChange("timeoutMs", event.target.value)
+                  }
+                />
+              </label>
+              <label className="flex items-end gap-2 pb-2 text-sm text-ink-soft">
+                <input
+                  aria-label={`${label} python reset`}
+                  type="checkbox"
+                  checked={python.reset}
+                  onChange={(event) =>
+                    onPythonConfigChange("reset", event.target.checked)
+                  }
+                />
+                Reset
+              </label>
             </div>
           </div>
           <label className="grid gap-1">
@@ -4045,30 +4775,30 @@ function NodeCard({
               </label>
             )}
             <div className="grid gap-3 sm:grid-cols-2">
-            <label className="grid gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                Server
-              </span>
-              <Input
-                aria-label={`${label} MCP server`}
-                value={mcpTool.server}
-                onChange={(event) =>
-                  onMcpToolConfigChange("server", event.target.value)
-                }
-              />
-            </label>
-            <label className="grid gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                Tool
-              </span>
-              <Input
-                aria-label={`${label} MCP tool`}
-                value={mcpTool.tool}
-                onChange={(event) =>
-                  onMcpToolConfigChange("tool", event.target.value)
-                }
-              />
-            </label>
+              <label className="grid gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                  Server
+                </span>
+                <Input
+                  aria-label={`${label} MCP server`}
+                  value={mcpTool.server}
+                  onChange={(event) =>
+                    onMcpToolConfigChange("server", event.target.value)
+                  }
+                />
+              </label>
+              <label className="grid gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                  Tool
+                </span>
+                <Input
+                  aria-label={`${label} MCP tool`}
+                  value={mcpTool.tool}
+                  onChange={(event) =>
+                    onMcpToolConfigChange("tool", event.target.value)
+                  }
+                />
+              </label>
             </div>
             <label className="grid gap-1">
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
@@ -4334,9 +5064,7 @@ function RunConsole({
       </div>
 
       <div className="grid gap-5 p-4">
-        {detail && (
-          <RunOverview workflowName={workflowName} run={detail.run} />
-        )}
+        {detail && <RunOverview workflowName={workflowName} run={detail.run} />}
         <RunHistoryPanel
           detail={detail}
           runs={runs}
@@ -4375,7 +5103,8 @@ function RunConsole({
                 />
               ) : (
                 <div className="border border-paper-rule p-3 text-sm text-ink-soft">
-                  Select a step to inspect input, output, logs, error, and context.
+                  Select a step to inspect input, output, logs, error, and
+                  context.
                 </div>
               )}
             </RunPaneSection>
@@ -4595,7 +5324,8 @@ function RunHistoryPanel({
       </details>
       <div className="max-h-36 space-y-1 overflow-y-auto border border-paper-rule p-1">
         {runs.map((run) => {
-          const isPending = pendingRunId === run.id && detail?.run.id !== run.id;
+          const isPending =
+            pendingRunId === run.id && detail?.run.id !== run.id;
           const isSelected = selectedRunId === run.id;
           return (
             <button
@@ -4739,7 +5469,9 @@ function AdvancedRunDetails({
         <section aria-label="Selected run detail" className="grid gap-3">
           <div className="grid gap-1">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant={detail.run.mode === "live" ? "signal" : "outline"}>
+              <Badge
+                variant={detail.run.mode === "live" ? "signal" : "outline"}
+              >
                 {detail.run.mode}
               </Badge>
               <Badge variant={statusBadge(detail.run.status)}>
@@ -4777,7 +5509,11 @@ function AdvancedRunDetails({
               onEventLevelChange(value as EventLevelFilter)
             }
           >
-            <SelectTrigger size="sm" className="w-32" aria-label="Timeline level">
+            <SelectTrigger
+              size="sm"
+              className="w-32"
+              aria-label="Timeline level"
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -4839,8 +5575,16 @@ function AdvancedRunDetails({
         </div>
       </TabsContent>
       <TabsContent value="payloads" className="grid gap-3 pt-3">
-        <JsonBlock label="Trigger" value={detail.run.trigger} runId={detail.run.id} />
-        <JsonBlock label="Run input" value={detail.run.input} runId={detail.run.id} />
+        <JsonBlock
+          label="Trigger"
+          value={detail.run.trigger}
+          runId={detail.run.id}
+        />
+        <JsonBlock
+          label="Run input"
+          value={detail.run.input}
+          runId={detail.run.id}
+        />
         <JsonBlock
           label="Final context"
           value={detail.run.context}
@@ -5984,6 +6728,25 @@ function branchControl(node: WorkflowNode): {
   };
 }
 
+function switchControl(node: WorkflowNode): {
+  value: string;
+  cases: Array<{ id: string; label: string; value: string; nodes: string }>;
+  defaultNodes: string;
+} | null {
+  if (node.type !== "builtin.switch") return null;
+  const cases = normalizeSwitchCaseDrafts(node.cases);
+  return {
+    value: formatJson(node.value ?? "$.input.kind"),
+    cases: cases.map((item) => ({
+      id: item.id,
+      label: item.label ?? "",
+      value: formatJson(item.value),
+      nodes: formatNodeIdList(item.nodes),
+    })),
+    defaultNodes: formatNodeIdList(node.default),
+  };
+}
+
 function logControl(node: WorkflowNode): {
   level: LogLevel;
   message: string;
@@ -6000,6 +6763,35 @@ function logControl(node: WorkflowNode): {
         : typeof node.payload === "string"
           ? node.payload
           : formatJson(node.payload),
+  };
+}
+
+function throwErrorControl(node: WorkflowNode): {
+  message: string;
+  code: string;
+  details: string;
+} | null {
+  if (node.type !== "builtin.throw_error") return null;
+  return {
+    message: typeof node.message === "string" ? node.message : "",
+    code: typeof node.code === "string" ? node.code : "",
+    details:
+      node.details === undefined
+        ? ""
+        : typeof node.details === "string"
+          ? node.details
+          : formatJson(node.details),
+  };
+}
+
+function sleepControl(node: WorkflowNode): {
+  delayMs: string;
+  reason: string;
+} | null {
+  if (node.type !== "builtin.sleep") return null;
+  return {
+    delayMs: typeof node.delayMs === "number" ? String(node.delayMs) : "",
+    reason: typeof node.reason === "string" ? node.reason : "",
   };
 }
 
@@ -6034,6 +6826,127 @@ function foreachControl(node: WorkflowNode): {
     concurrency:
       typeof node.concurrency === "number" ? String(node.concurrency) : "1",
   };
+}
+
+function parallelControl(node: WorkflowNode): {
+  branches: Array<{ id: string; label: string; nodes: string }>;
+  concurrency: string;
+  failFast: boolean;
+} | null {
+  if (node.type !== "builtin.parallel") return null;
+  const branches = normalizeParallelBranchDrafts(node.branches);
+  return {
+    branches: branches.map((branch) => ({
+      id: branch.id,
+      label: branch.label ?? "",
+      nodes: formatNodeIdList(branch.nodes),
+    })),
+    concurrency:
+      typeof node.concurrency === "number"
+        ? String(node.concurrency)
+        : String(Math.max(1, branches.length)),
+    failFast: node.failFast !== false,
+  };
+}
+
+function normalizeParallelBranchDrafts(
+  branches: unknown,
+): Array<{ id: string; label?: string; nodes: string[] }> {
+  if (!Array.isArray(branches) || branches.length === 0) {
+    return [
+      { id: "branch_a", label: "Branch A", nodes: [] },
+      { id: "branch_b", label: "Branch B", nodes: [] },
+    ];
+  }
+  return branches
+    .map((branch, index) => {
+      if (!isRecord(branch)) {
+        return { id: `branch_${index + 1}`, nodes: [] };
+      }
+      const id =
+        typeof branch["id"] === "string" && branch["id"]
+          ? branch["id"]
+          : `branch_${index + 1}`;
+      return {
+        id,
+        label:
+          typeof branch["label"] === "string" ? branch["label"] : undefined,
+        nodes: parseNodeIdList(formatNodeIdList(branch["nodes"])),
+      };
+    })
+    .filter((branch) => branch.id);
+}
+
+function normalizeSwitchCaseDrafts(
+  cases: unknown,
+): Array<{ id: string; label?: string; value: JsonValue; nodes: string[] }> {
+  if (!Array.isArray(cases) || cases.length === 0) {
+    return [
+      { id: "case_a", label: "Case A", value: "a", nodes: [] },
+      { id: "case_b", label: "Case B", value: "b", nodes: [] },
+    ];
+  }
+  return cases
+    .map((item, index) => {
+      if (!isRecord(item)) {
+        return {
+          id: `case_${index + 1}`,
+          value: `case_${index + 1}`,
+          nodes: [],
+        };
+      }
+      const id =
+        typeof item["id"] === "string" && item["id"]
+          ? item["id"]
+          : `case_${index + 1}`;
+      return {
+        id,
+        label: typeof item["label"] === "string" ? item["label"] : undefined,
+        value: isJsonValue(item["value"]) ? item["value"] : id,
+        nodes: parseNodeIdList(formatNodeIdList(item["nodes"])),
+      };
+    })
+    .filter((item) => item.id);
+}
+
+function uniqueSwitchCaseId(
+  cases: Array<{ id: string }>,
+  base: string,
+): string {
+  const existing = new Set(cases.map((item) => item.id));
+  let candidate = safeRouteId(base) || "case";
+  if (!existing.has(candidate)) return candidate;
+  for (let index = 2; index < 1000; index += 1) {
+    candidate = `${safeRouteId(base) || "case"}_${index}`;
+    if (!existing.has(candidate)) return candidate;
+  }
+  return `${safeRouteId(base) || "case"}_${Date.now()}`;
+}
+
+function uniqueParallelBranchId(
+  branches: Array<{ id: string }>,
+  base: string,
+): string {
+  const existing = new Set(branches.map((branch) => branch.id));
+  let candidate = safeParallelBranchId(base) || "branch";
+  if (!existing.has(candidate)) return candidate;
+  for (let index = 2; index < 1000; index += 1) {
+    candidate = `${safeParallelBranchId(base) || "branch"}_${index}`;
+    if (!existing.has(candidate)) return candidate;
+  }
+  return `${safeParallelBranchId(base) || "branch"}_${Date.now()}`;
+}
+
+function safeParallelBranchId(value: string): string {
+  return safeRouteId(value);
+}
+
+function safeRouteId(value: string): string {
+  return value
+    .trim()
+    .replace(/[^A-Za-z0-9_-]+/g, "_")
+    .replace(/^_+/, "")
+    .slice(0, 64);
 }
 
 function pythonControl(node: WorkflowNode): {
@@ -6147,6 +7060,7 @@ function isLogNodeType(type: string): boolean {
   return (
     type === "builtin.log.info" ||
     type === "builtin.log.debug" ||
+    type === "builtin.log.warn" ||
     type === "builtin.log.error"
   );
 }
@@ -6253,6 +7167,20 @@ function formatJsonObjectInput(value: JsonValue | undefined): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return typeof value !== "number" || Number.isFinite(value);
+  }
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  if (!isRecord(value)) return false;
+  return Object.values(value).every(isJsonValue);
 }
 
 function stringArray(value: unknown): string[] {

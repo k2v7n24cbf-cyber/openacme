@@ -59,6 +59,7 @@ export type WorkflowStepStatus = z.infer<typeof WorkflowStepStatusSchema>;
 export const WorkflowRunEventLevelSchema = z.enum([
   "debug",
   "info",
+  "warn",
   "error",
   "system",
 ]);
@@ -71,6 +72,12 @@ export const WorkflowRunEventKindSchema = z.enum([
   "step_failed",
   "step_completed",
   "branch_selected",
+  "parallel_started",
+  "parallel_branch_started",
+  "parallel_branch_completed",
+  "parallel_branch_failed",
+  "parallel_completed",
+  "parallel_failed",
   "log",
   "run_completed",
   "run_failed",
@@ -276,6 +283,27 @@ export const BuiltinIfElseNodeSchema = z
   })
   .strict();
 
+export const BuiltinSwitchCaseSchema = z
+  .object({
+    id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/),
+    label: z.string().min(1).optional(),
+    value: JsonValueSchema,
+    nodes: z.array(NodeIdSchema).default([]),
+  })
+  .strict();
+export type BuiltinSwitchCase = z.infer<typeof BuiltinSwitchCaseSchema>;
+
+export const BuiltinSwitchNodeSchema = z
+  .object({
+    id: NodeIdSchema,
+    label: z.string().min(1).optional(),
+    type: z.literal("builtin.switch"),
+    value: JsonValueSchema,
+    cases: z.array(BuiltinSwitchCaseSchema).min(1),
+    default: z.array(NodeIdSchema).default([]),
+  })
+  .strict();
+
 export const BuiltinForeachNodeSchema = z
   .object({
     ...AssignableNodeBase,
@@ -297,16 +325,60 @@ export const BuiltinExitNodeSchema = z
   })
   .strict();
 
+export const BuiltinThrowErrorNodeSchema = z
+  .object({
+    id: NodeIdSchema,
+    label: z.string().min(1).optional(),
+    type: z.literal("builtin.throw_error"),
+    message: z.string().min(1),
+    code: z
+      .string()
+      .regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/)
+      .optional(),
+    details: JsonValueSchema.optional(),
+  })
+  .strict();
+
+export const BuiltinSleepNodeSchema = z
+  .object({
+    id: NodeIdSchema,
+    label: z.string().min(1).optional(),
+    type: z.literal("builtin.sleep"),
+    delayMs: z.number().int().min(1).max(300_000),
+    reason: z.string().min(1).optional(),
+  })
+  .strict();
+
 export const BuiltinLogNodeSchema = z
   .object({
     ...AssignableNodeBase,
     type: z.enum([
       "builtin.log.info",
       "builtin.log.debug",
+      "builtin.log.warn",
       "builtin.log.error",
     ]),
     message: z.string().min(1),
     payload: JsonValueSchema.optional(),
+  })
+  .strict();
+
+export const BuiltinParallelBranchSchema = z
+  .object({
+    id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/),
+    label: z.string().min(1).optional(),
+    nodes: z.array(NodeIdSchema).min(1),
+  })
+  .strict();
+export type BuiltinParallelBranch = z.infer<typeof BuiltinParallelBranchSchema>;
+
+export const BuiltinParallelNodeSchema = z
+  .object({
+    ...AssignableNodeBase,
+    type: z.literal("builtin.parallel"),
+    branches: z.array(BuiltinParallelBranchSchema).min(1),
+    concurrency: z.number().int().positive().max(16).optional(),
+    failFast: z.boolean().default(true),
   })
   .strict();
 
@@ -345,9 +417,13 @@ export const WorkflowNodeSchema = z.discriminatedUnion("type", [
   BuiltinTransformNodeSchema,
   BuiltinIfNodeSchema,
   BuiltinIfElseNodeSchema,
+  BuiltinSwitchNodeSchema,
   BuiltinForeachNodeSchema,
   BuiltinExitNodeSchema,
+  BuiltinThrowErrorNodeSchema,
+  BuiltinSleepNodeSchema,
   BuiltinLogNodeSchema,
+  BuiltinParallelNodeSchema,
   BuiltinPythonNodeSchema,
   McpToolNodeSchema,
   AgentCallNodeSchema,
@@ -389,6 +465,7 @@ export const WorkflowRunSchema = z
     createdAt: z.string().datetime({ offset: true }),
     startedAt: z.string().datetime({ offset: true }).nullable().default(null),
     endedAt: z.string().datetime({ offset: true }).nullable().default(null),
+    durationMs: z.number().int().nonnegative().nullable().default(null),
   })
   .strict();
 export type WorkflowRun = z.infer<typeof WorkflowRunSchema>;

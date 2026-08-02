@@ -206,6 +206,107 @@ describe("workflow schemas", () => {
     ).toBe(false);
   });
 
+  it("accepts new M11.1 flow-control node schemas", () => {
+    expect(
+      WorkflowNodeSchema.safeParse({
+        id: "warn_operator",
+        type: "builtin.log.warn",
+        message: "Asset owner missing",
+        payload: { severity: "medium" },
+      }).success,
+    ).toBe(true);
+
+    expect(
+      WorkflowNodeSchema.safeParse({
+        id: "fail_missing_owner",
+        type: "builtin.throw_error",
+        message: "Asset owner is missing",
+        code: "asset_owner_missing",
+        details: { assetId: "$.context.asset.id" },
+      }).success,
+    ).toBe(true);
+
+    expect(
+      WorkflowNodeSchema.safeParse({
+        id: "wait_for_index",
+        type: "builtin.sleep",
+        delayMs: 2500,
+        reason: "Wait for external index consistency",
+      }).success,
+    ).toBe(true);
+
+    expect(
+      WorkflowNodeSchema.safeParse({
+        id: "parallel_enrichment",
+        type: "builtin.parallel",
+        branches: [
+          { id: "qualys", label: "Qualys", nodes: ["get_qualys_asset"] },
+          { id: "cmdb", nodes: ["get_cmdb_record"] },
+        ],
+        concurrency: 2,
+        failFast: false,
+        assign: {
+          enrichment: "$.steps.parallel_enrichment.output.branches",
+        },
+      }).success,
+    ).toBe(true);
+
+    expect(
+      WorkflowNodeSchema.safeParse({
+        id: "route_by_kind",
+        type: "builtin.switch",
+        value: "$.input.kind",
+        cases: [
+          { id: "asset", label: "Asset", value: "asset", nodes: ["handle_asset"] },
+          { id: "owner", value: "owner", nodes: ["handle_owner"] },
+        ],
+        default: ["handle_unknown"],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects invalid M11.1 flow-control node schemas", () => {
+    expect(
+      WorkflowNodeSchema.safeParse({
+        id: "fail_missing_owner",
+        type: "builtin.throw_error",
+      }).success,
+    ).toBe(false);
+
+    expect(
+      WorkflowNodeSchema.safeParse({
+        id: "wait_too_little",
+        type: "builtin.sleep",
+        delayMs: 0,
+      }).success,
+    ).toBe(false);
+
+    expect(
+      WorkflowNodeSchema.safeParse({
+        id: "wait_too_long",
+        type: "builtin.sleep",
+        delayMs: 300_001,
+      }).success,
+    ).toBe(false);
+
+    expect(
+      WorkflowNodeSchema.safeParse({
+        id: "parallel_empty",
+        type: "builtin.parallel",
+        branches: [],
+      }).success,
+    ).toBe(false);
+
+    expect(
+      WorkflowNodeSchema.safeParse({
+        id: "switch_empty",
+        type: "builtin.switch",
+        value: "$.input.kind",
+        cases: [],
+      }).success,
+    ).toBe(false);
+  });
+
   it("validates cross-node branch and foreach references", () => {
     const parsed = WorkflowDefinitionSchema.parse({
       id: "reference-check",
@@ -248,6 +349,196 @@ describe("workflow schemas", () => {
           nodeId: "each_customer",
           field: "body",
           targetId: "missing_child",
+        },
+      ],
+    });
+  });
+
+  it("validates cross-node parallel branch references", () => {
+    const parsed = WorkflowDefinitionSchema.parse({
+      id: "parallel-reference-check",
+      version: 1,
+      status: "draft",
+      name: "Parallel reference check",
+      nodes: [
+        {
+          id: "parallel_enrichment",
+          type: "builtin.parallel",
+          branches: [
+            { id: "qualys", nodes: ["get_qualys_asset"] },
+            { id: "cmdb", nodes: ["missing_cmdb_record"] },
+          ],
+        },
+        {
+          id: "get_qualys_asset",
+          type: "builtin.log.info",
+          message: "qualys",
+        },
+      ],
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    expect(validateWorkflowNodeReferences(parsed.nodes)).toMatchObject({
+      ok: false,
+      issues: [
+        {
+          nodeId: "parallel_enrichment",
+          field: "branches",
+          targetId: "missing_cmdb_record",
+        },
+      ],
+    });
+  });
+
+  it("validates cross-node switch case references", () => {
+    const parsed = WorkflowDefinitionSchema.parse({
+      id: "switch-reference-check",
+      version: 1,
+      status: "draft",
+      name: "Switch reference check",
+      nodes: [
+        {
+          id: "route_by_kind",
+          type: "builtin.switch",
+          value: "$.input.kind",
+          cases: [
+            { id: "asset", value: "asset", nodes: ["handle_asset"] },
+            { id: "owner", value: "owner", nodes: ["missing_owner"] },
+          ],
+          default: ["missing_default"],
+        },
+        {
+          id: "handle_asset",
+          type: "builtin.log.info",
+          message: "asset",
+        },
+      ],
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    expect(validateWorkflowNodeReferences(parsed.nodes)).toMatchObject({
+      ok: false,
+      issues: [
+        {
+          nodeId: "route_by_kind",
+          field: "cases",
+          targetId: "missing_owner",
+        },
+        {
+          nodeId: "route_by_kind",
+          field: "default",
+          targetId: "missing_default",
+        },
+      ],
+    });
+  });
+
+  it("rejects duplicate and self-referential switch cases", () => {
+    const duplicateCases = [
+      {
+        id: "route_by_kind",
+        type: "builtin.switch",
+        value: "$.input.kind",
+        cases: [
+          { id: "asset", value: "asset", nodes: ["handle_asset"] },
+          { id: "asset", value: "asset_2", nodes: ["handle_owner"] },
+        ],
+      },
+      {
+        id: "handle_asset",
+        type: "builtin.log.info",
+        message: "asset",
+      },
+      {
+        id: "handle_owner",
+        type: "builtin.log.info",
+        message: "owner",
+      },
+    ].map((node) => WorkflowNodeSchema.parse(node));
+
+    expect(validateWorkflowNodeReferences(duplicateCases)).toMatchObject({
+      ok: false,
+      issues: [
+        {
+          nodeId: "route_by_kind",
+          field: "cases",
+          message: "Node route_by_kind has duplicate switch case id: asset",
+        },
+      ],
+    });
+
+    const selfReference = [
+      {
+        id: "route_by_kind",
+        type: "builtin.switch",
+        value: "$.input.kind",
+        cases: [{ id: "loop", value: "loop", nodes: ["route_by_kind"] }],
+      },
+    ].map((node) => WorkflowNodeSchema.parse(node));
+
+    expect(validateWorkflowNodeReferences(selfReference)).toMatchObject({
+      ok: false,
+      issues: [
+        {
+          nodeId: "route_by_kind",
+          field: "cases",
+          targetId: "route_by_kind",
+        },
+      ],
+    });
+  });
+
+  it("rejects duplicate and self-referential parallel branches", () => {
+    const duplicateBranches = [
+      {
+        id: "parallel_enrichment",
+        type: "builtin.parallel",
+        branches: [
+          { id: "qualys", nodes: ["get_qualys_asset"] },
+          { id: "qualys", nodes: ["get_cmdb_record"] },
+        ],
+      },
+      {
+        id: "get_qualys_asset",
+        type: "builtin.log.info",
+        message: "qualys",
+      },
+      {
+        id: "get_cmdb_record",
+        type: "builtin.log.info",
+        message: "cmdb",
+      },
+    ].map((node) => WorkflowNodeSchema.parse(node));
+
+    expect(validateWorkflowNodeReferences(duplicateBranches)).toMatchObject({
+      ok: false,
+      issues: [
+        {
+          nodeId: "parallel_enrichment",
+          field: "branches",
+          message:
+            "Node parallel_enrichment has duplicate parallel branch id: qualys",
+        },
+      ],
+    });
+
+    const selfReference = [
+      {
+        id: "parallel_enrichment",
+        type: "builtin.parallel",
+        branches: [{ id: "loop", nodes: ["parallel_enrichment"] }],
+      },
+    ].map((node) => WorkflowNodeSchema.parse(node));
+
+    expect(validateWorkflowNodeReferences(selfReference)).toMatchObject({
+      ok: false,
+      issues: [
+        {
+          nodeId: "parallel_enrichment",
+          field: "branches",
+          targetId: "parallel_enrichment",
         },
       ],
     });

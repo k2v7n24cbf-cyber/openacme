@@ -7,6 +7,8 @@ import {
   insertWorkflowNodeFirst,
   moveWorkflowNode,
   removeWorkflowNode,
+  workflowTransformPresetById,
+  WORKFLOW_TRANSFORM_PRESETS,
 } from "@/app/workflows/authoring";
 
 describe("workflow authoring helpers", () => {
@@ -31,21 +33,44 @@ describe("workflow authoring helpers", () => {
       body: [],
       concurrency: 1,
     });
+    expect(createWorkflowNodeTemplate("sleep", 4)).toEqual({
+      id: "sleep_04",
+      type: "builtin.sleep",
+      delayMs: 1000,
+      reason: "Wait before continuing",
+    });
+    expect(createWorkflowNodeTemplate("throw_error", 5)).toEqual({
+      id: "throw_error_05",
+      type: "builtin.throw_error",
+      message: "Controlled workflow failure",
+      code: "workflow_error",
+      details: "$.context",
+    });
+    expect(createWorkflowNodeTemplate("parallel", 6)).toEqual({
+      id: "parallel_06",
+      type: "builtin.parallel",
+      branches: [
+        { id: "branch_a", label: "Branch A", nodes: [] },
+        { id: "branch_b", label: "Branch B", nodes: [] },
+      ],
+      concurrency: 2,
+      failFast: true,
+    });
     expect(
-      createWorkflowNodeTemplate("mcp", 4, {
+      createWorkflowNodeTemplate("mcp", 7, {
         server: "crm/demo",
         tool: "echo-message",
       }),
     ).toMatchObject({
-      id: "mcp_crm_demo_echo_message_04",
+      id: "mcp_crm_demo_echo_message_07",
       type: "mcp.tool",
       server: "crm/demo",
       tool: "echo-message",
     });
     expect(
-      createWorkflowNodeTemplate("agent", 5, { id: "risk-review" }),
+      createWorkflowNodeTemplate("agent", 8, { id: "risk-review" }),
     ).toMatchObject({
-      id: "agent_risk_review_05",
+      id: "agent_risk_review_08",
       type: "agent.call",
       agentId: "risk-review",
     });
@@ -174,6 +199,14 @@ describe("workflow authoring helpers", () => {
           type: "builtin.foreach",
           body: ["review"],
         },
+        {
+          id: "parallel",
+          type: "builtin.parallel",
+          branches: [
+            { id: "left", nodes: ["review", "notify"] },
+            { id: "right", nodes: ["review"] },
+          ],
+        },
         { id: "review", type: "agent.call" },
       ],
       "review",
@@ -190,6 +223,14 @@ describe("workflow authoring helpers", () => {
         id: "loop",
         type: "builtin.foreach",
         body: [],
+      },
+      {
+        id: "parallel",
+        type: "builtin.parallel",
+        branches: [
+          { id: "left", nodes: ["notify"] },
+          { id: "right", nodes: [] },
+        ],
       },
     ]);
   });
@@ -221,5 +262,47 @@ describe("workflow authoring helpers", () => {
     const nodes = [{ id: "only", type: "builtin.exit" }];
     expect(moveWorkflowNode(nodes, 0, -1)).toBe(nodes);
     expect(moveWorkflowNode(nodes, 0, 1)).toBe(nodes);
+  });
+
+  it("exposes transform operation presets with runnable default payloads", () => {
+    expect(WORKFLOW_TRANSFORM_PRESETS.map((preset) => preset.id)).toEqual([
+      "string.replace",
+      "string.regex_replace",
+      "string.regex_match",
+      "json.parse",
+      "json.stringify",
+      "csv.parse",
+      "csv.stringify",
+      "ip.parse",
+      "ip.is_ipv4",
+      "ip.is_ipv6",
+      "ip.in_subnet",
+      "ip.netmask",
+      "ip.network",
+      "uri.parse",
+    ]);
+    expect(workflowTransformPresetById("string.replace")?.transform).toEqual({
+      kind: "string.replace",
+      value: "$.input.value",
+      search: "old",
+      replacement: "new",
+      all: true,
+    });
+    expect(workflowTransformPresetById("csv.parse")?.transform).toEqual({
+      kind: "csv.parse",
+      value: "$.input.csv",
+      headers: true,
+      maxRows: 10000,
+    });
+    expect(workflowTransformPresetById("ip.in_subnet")?.transform).toEqual({
+      kind: "ip.in_subnet",
+      value: "$.input.ip",
+      cidr: "10.0.0.0/8",
+    });
+    expect(workflowTransformPresetById("uri.parse")?.transform).toEqual({
+      kind: "uri.parse",
+      value: "$.input.url",
+    });
+    expect(workflowTransformPresetById("missing")).toBeUndefined();
   });
 });

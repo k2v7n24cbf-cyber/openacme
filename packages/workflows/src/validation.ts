@@ -4,7 +4,7 @@ const WORKFLOW_SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 
 export interface WorkflowNodeReferenceIssue {
   nodeId: string;
-  field: "id" | "then" | "else" | "body";
+  field: "id" | "then" | "else" | "body" | "branches" | "cases" | "default";
   targetId?: string;
   message: string;
 }
@@ -60,8 +60,14 @@ export function validateWorkflowNodeReferences(
         collectMissingTargets(issues, node.id, "then", node.then, nodeIds);
         collectMissingTargets(issues, node.id, "else", node.else, nodeIds);
         break;
+      case "builtin.switch":
+        collectSwitchIssues(issues, node, nodeIds);
+        break;
       case "builtin.foreach":
         collectMissingTargets(issues, node.id, "body", node.body, nodeIds);
+        break;
+      case "builtin.parallel":
+        collectParallelIssues(issues, node, nodeIds);
         break;
     }
   }
@@ -125,7 +131,7 @@ export function validateWorkflowTriggers(
 function collectMissingTargets(
   issues: WorkflowNodeReferenceIssue[],
   nodeId: string,
-  field: "then" | "else" | "body",
+  field: "then" | "else" | "body" | "branches" | "cases" | "default",
   targets: string[],
   nodeIds: Set<string>,
 ) {
@@ -137,6 +143,88 @@ function collectMissingTargets(
       targetId,
       message: `Node ${nodeId} ${field} references missing node ${targetId}`,
     });
+  }
+}
+
+function collectSwitchIssues(
+  issues: WorkflowNodeReferenceIssue[],
+  node: Extract<WorkflowNode, { type: "builtin.switch" }>,
+  nodeIds: Set<string>,
+) {
+  const caseIds = new Set<string>();
+  for (const item of node.cases) {
+    if (caseIds.has(item.id)) {
+      issues.push({
+        nodeId: node.id,
+        field: "cases",
+        message: `Node ${node.id} has duplicate switch case id: ${item.id}`,
+      });
+    } else {
+      caseIds.add(item.id);
+    }
+
+    for (const targetId of item.nodes) {
+      if (targetId === node.id) {
+        issues.push({
+          nodeId: node.id,
+          field: "cases",
+          targetId,
+          message: `Node ${node.id} switch case ${item.id} cannot reference itself`,
+        });
+        continue;
+      }
+      collectMissingTargets(issues, node.id, "cases", [targetId], nodeIds);
+    }
+  }
+  for (const targetId of node.default) {
+    if (targetId === node.id) {
+      issues.push({
+        nodeId: node.id,
+        field: "default",
+        targetId,
+        message: `Node ${node.id} switch default cannot reference itself`,
+      });
+      continue;
+    }
+    collectMissingTargets(issues, node.id, "default", [targetId], nodeIds);
+  }
+}
+
+function collectParallelIssues(
+  issues: WorkflowNodeReferenceIssue[],
+  node: Extract<WorkflowNode, { type: "builtin.parallel" }>,
+  nodeIds: Set<string>,
+) {
+  const branchIds = new Set<string>();
+  for (const branch of node.branches) {
+    if (branchIds.has(branch.id)) {
+      issues.push({
+        nodeId: node.id,
+        field: "branches",
+        message: `Node ${node.id} has duplicate parallel branch id: ${branch.id}`,
+      });
+    } else {
+      branchIds.add(branch.id);
+    }
+
+    for (const targetId of branch.nodes) {
+      if (targetId === node.id) {
+        issues.push({
+          nodeId: node.id,
+          field: "branches",
+          targetId,
+          message: `Node ${node.id} parallel branch ${branch.id} cannot reference itself`,
+        });
+        continue;
+      }
+      collectMissingTargets(
+        issues,
+        node.id,
+        "branches",
+        [targetId],
+        nodeIds,
+      );
+    }
   }
 }
 

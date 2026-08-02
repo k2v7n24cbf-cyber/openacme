@@ -2,9 +2,13 @@ export type WorkflowPaletteKind =
   | "set"
   | "transform"
   | "if"
+  | "switch"
   | "log"
+  | "throw_error"
+  | "sleep"
   | "exit"
   | "foreach"
+  | "parallel"
   | "python"
   | "mcp"
   | "agent";
@@ -23,6 +27,164 @@ export interface WorkflowAuthoringMcpTool {
 
 export interface WorkflowAuthoringAgent {
   id: string;
+}
+
+export interface WorkflowTransformPreset {
+  id: string;
+  label: string;
+  description: string;
+  transform: unknown;
+}
+
+export const WORKFLOW_TRANSFORM_PRESETS: WorkflowTransformPreset[] = [
+  {
+    id: "string.replace",
+    label: "String Replace",
+    description: "Replace text once or everywhere.",
+    transform: {
+      kind: "string.replace",
+      value: "$.input.value",
+      search: "old",
+      replacement: "new",
+      all: true,
+    },
+  },
+  {
+    id: "string.regex_replace",
+    label: "Regex Replace",
+    description: "Replace text with a regular expression.",
+    transform: {
+      kind: "string.regex_replace",
+      value: "$.input.value",
+      pattern: "old-(\\d+)",
+      replacement: "new-$1",
+      flags: "g",
+    },
+  },
+  {
+    id: "string.regex_match",
+    label: "Regex Match",
+    description: "Extract match, capture groups, and named groups.",
+    transform: {
+      kind: "string.regex_match",
+      value: "$.input.value",
+      pattern: "(?<id>[A-Za-z]+-\\d+)",
+      flags: "",
+    },
+  },
+  {
+    id: "json.parse",
+    label: "JSON Parse",
+    description: "Parse a JSON string into an object or array.",
+    transform: {
+      kind: "json.parse",
+      value: "$.input.json",
+    },
+  },
+  {
+    id: "json.stringify",
+    label: "JSON Stringify",
+    description: "Serialize a JSON value to text.",
+    transform: {
+      kind: "json.stringify",
+      value: "$.context.value",
+      pretty: true,
+    },
+  },
+  {
+    id: "csv.parse",
+    label: "CSV Parse",
+    description: "Parse CSV text into rows.",
+    transform: {
+      kind: "csv.parse",
+      value: "$.input.csv",
+      headers: true,
+      maxRows: 10000,
+    },
+  },
+  {
+    id: "csv.stringify",
+    label: "CSV Stringify",
+    description: "Serialize rows to CSV text.",
+    transform: {
+      kind: "csv.stringify",
+      value: "$.context.rows",
+      headers: ["id", "name"],
+      includeHeaders: true,
+      maxRows: 10000,
+    },
+  },
+  {
+    id: "ip.parse",
+    label: "IP Parse",
+    description: "Parse an IPv4 or IPv6 address into stable metadata.",
+    transform: {
+      kind: "ip.parse",
+      value: "$.input.ip",
+    },
+  },
+  {
+    id: "ip.is_ipv4",
+    label: "Is IPv4",
+    description: "Return true when the value is an IPv4 address.",
+    transform: {
+      kind: "ip.is_ipv4",
+      value: "$.input.ip",
+    },
+  },
+  {
+    id: "ip.is_ipv6",
+    label: "Is IPv6",
+    description: "Return true when the value is an IPv6 address.",
+    transform: {
+      kind: "ip.is_ipv6",
+      value: "$.input.ip",
+    },
+  },
+  {
+    id: "ip.in_subnet",
+    label: "In Subnet",
+    description: "Return true when the IP belongs to a CIDR subnet.",
+    transform: {
+      kind: "ip.in_subnet",
+      value: "$.input.ip",
+      cidr: "10.0.0.0/8",
+    },
+  },
+  {
+    id: "ip.netmask",
+    label: "IP Netmask",
+    description: "Calculate an IPv4 or IPv6 netmask from a prefix length.",
+    transform: {
+      kind: "ip.netmask",
+      prefix: 24,
+      version: 4,
+    },
+  },
+  {
+    id: "ip.network",
+    label: "IP Network",
+    description: "Calculate the network address for a CIDR.",
+    transform: {
+      kind: "ip.network",
+      cidr: "10.1.2.3/24",
+    },
+  },
+  {
+    id: "uri.parse",
+    label: "URI Parse",
+    description: "Parse a URL into host, path, query, and fragment fields.",
+    transform: {
+      kind: "uri.parse",
+      value: "$.input.url",
+    },
+  },
+];
+
+export function workflowTransformPresetById(
+  id: string,
+): WorkflowTransformPreset | undefined {
+  return WORKFLOW_TRANSFORM_PRESETS.find((preset) => preset.id === id);
 }
 
 export function appendWorkflowNode(
@@ -129,12 +291,41 @@ export function createWorkflowNodeTemplate(
       else: [],
     };
   }
+  if (kind === "switch") {
+    return {
+      id: `switch_${suffix}`,
+      type: "builtin.switch",
+      value: "$.input.kind",
+      cases: [
+        { id: "case_a", label: "Case A", value: "a", nodes: [] },
+        { id: "case_b", label: "Case B", value: "b", nodes: [] },
+      ],
+      default: [],
+    };
+  }
   if (kind === "log") {
     return {
       id: `log_${suffix}`,
       type: "builtin.log.info",
       message: "Workflow log",
       payload: "$.context",
+    };
+  }
+  if (kind === "throw_error") {
+    return {
+      id: `throw_error_${suffix}`,
+      type: "builtin.throw_error",
+      message: "Controlled workflow failure",
+      code: "workflow_error",
+      details: "$.context",
+    };
+  }
+  if (kind === "sleep") {
+    return {
+      id: `sleep_${suffix}`,
+      type: "builtin.sleep",
+      delayMs: 1000,
+      reason: "Wait before continuing",
     };
   }
   if (kind === "foreach") {
@@ -145,6 +336,18 @@ export function createWorkflowNodeTemplate(
       itemVar: "item",
       body: [],
       concurrency: 1,
+    };
+  }
+  if (kind === "parallel") {
+    return {
+      id: `parallel_${suffix}`,
+      type: "builtin.parallel",
+      branches: [
+        { id: "branch_a", label: "Branch A", nodes: [] },
+        { id: "branch_b", label: "Branch B", nodes: [] },
+      ],
+      concurrency: 2,
+      failFast: true,
     };
   }
   if (kind === "python") {
@@ -266,6 +469,30 @@ function pruneNodeReferences(
     const value = next[key];
     if (!Array.isArray(value)) continue;
     next[key] = value.filter((item) => item !== deletedNodeId);
+  }
+  const branches = next["branches"];
+  if (Array.isArray(branches)) {
+    next["branches"] = branches.map((branch) => {
+      if (!isRecord(branch) || !Array.isArray(branch["nodes"])) return branch;
+      return {
+        ...branch,
+        nodes: branch["nodes"].filter((item) => item !== deletedNodeId),
+      };
+    });
+  }
+  const cases = next["cases"];
+  if (Array.isArray(cases)) {
+    next["cases"] = cases.map((item) => {
+      if (!isRecord(item) || !Array.isArray(item["nodes"])) return item;
+      return {
+        ...item,
+        nodes: item["nodes"].filter((nodeId) => nodeId !== deletedNodeId),
+      };
+    });
+  }
+  const defaultRoute = next["default"];
+  if (Array.isArray(defaultRoute)) {
+    next["default"] = defaultRoute.filter((nodeId) => nodeId !== deletedNodeId);
   }
   return next;
 }

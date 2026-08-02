@@ -1141,6 +1141,7 @@ describe("WorkflowStore run audit", () => {
       status: result.status,
       context: result.context,
       endedAt: later,
+      durationMs: 1500,
     });
 
     const persisted = store.getRun(run.id);
@@ -1149,6 +1150,11 @@ describe("WorkflowStore run audit", () => {
       status: "succeeded",
       context: { customerId: "cust_1" },
       endedAt: later,
+      durationMs: 1500,
+    });
+    expect(store.listRuns({ workflowId: definition.id })[0]).toMatchObject({
+      id: run.id,
+      durationMs: 1500,
     });
     expect(store.listStepAttempts(run.id).map((step) => step.nodeId)).toEqual([
       "set_customer",

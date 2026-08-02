@@ -127,6 +127,7 @@ describe("database clean bootstrap", () => {
           "status",
           "input_json",
           "context_json",
+          "duration_ms",
         ]),
       );
 

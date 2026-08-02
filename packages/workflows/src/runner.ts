@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isIP } from "node:net";
 import type {
   JsonValue,
   WorkflowAssignmentMap,
@@ -62,6 +63,26 @@ interface RunnerState {
 
 type JsonObject = { [key: string]: JsonValue };
 type AssignmentMode = "replace" | "merge" | "append";
+const MAX_TRANSFORM_OUTPUT_BYTES = 1_048_576;
+const MAX_CSV_INPUT_BYTES = 1_048_576;
+const DEFAULT_MAX_CSV_ROWS = 10_000;
+const TRANSFORM_OPERATION_KINDS = new Set([
+  "object_pick",
+  "string.replace",
+  "string.regex_replace",
+  "string.regex_match",
+  "json.parse",
+  "json.stringify",
+  "csv.parse",
+  "csv.stringify",
+  "ip.parse",
+  "ip.is_ipv4",
+  "ip.is_ipv6",
+  "ip.in_subnet",
+  "ip.netmask",
+  "ip.network",
+  "uri.parse",
+]);
 type BranchSelection = JsonObject & {
   selected: string[];
   skipped: string[];
@@ -87,7 +108,28 @@ type ForeachItemOutput = JsonObject & {
   index: number;
   item: JsonValue;
   status: "succeeded" | "failed";
+  startedAt: string;
+  endedAt: string;
+  durationMs: number;
   steps: JsonObject;
+  error?: JsonValue;
+};
+type ParallelBranchStatus = "succeeded" | "failed" | "canceled";
+type ParallelBranchOutput = JsonObject & {
+  id: string;
+  label?: string;
+  status: ParallelBranchStatus;
+  startedAt: string;
+  endedAt: string;
+  durationMs: number;
+  steps: JsonObject;
+  context: JsonObject;
+  error?: JsonValue;
+};
+type ParallelBranchRunResult = {
+  output: ParallelBranchOutput;
+  stepAttempts: WorkflowStepAttempt[];
+  events: WorkflowRunEvent[];
 };
 
 class WorkflowNodeExecutionError extends Error {
@@ -96,6 +138,7 @@ class WorkflowNodeExecutionError extends Error {
     readonly opts: {
       preserveContext?: boolean;
       runFailedAlready?: boolean;
+      status?: Extract<WorkflowRunStatus, "failed" | "canceled">;
       details?: JsonValue;
     } = {},
   ) {
@@ -222,6 +265,7 @@ export class WorkflowRunner {
       if (
         (node.type === "builtin.transform" ||
           node.type === "builtin.foreach" ||
+          node.type === "builtin.parallel" ||
           node.type === "builtin.python" ||
           node.type === "mcp.tool" ||
           node.type === "agent.call") &&
@@ -236,7 +280,11 @@ export class WorkflowRunner {
         });
       }
       await this.appendCompletedStepEvent(state, step, output);
-      if (node.type === "builtin.if" || node.type === "builtin.if_else") {
+      if (
+        node.type === "builtin.if" ||
+        node.type === "builtin.if_else" ||
+        node.type === "builtin.switch"
+      ) {
         const branch = output as BranchSelection;
         this.recordSkippedSteps(state, branch.skipped, attempt);
         await this.executeSelectedBranch(state, nodesById, branch.selected, {
@@ -249,7 +297,8 @@ export class WorkflowRunner {
       if (!workflowErr?.opts.preserveContext) {
         state.context = beforeContext;
       }
-      state.status = "failed";
+      const terminalStatus = workflowErr?.opts.status ?? "failed";
+      state.status = terminalStatus;
       state.stopped = true;
       const endedAt = this.now();
       const error = errorToJson(err);
@@ -264,7 +313,7 @@ export class WorkflowRunner {
         runId: state.runId,
         nodeId: node.id,
         attempt,
-        status: "failed",
+        status: terminalStatus === "canceled" ? "canceled" : "failed",
         startedAt,
         endedAt,
         durationMs: stepDurationMs(startedAt, endedAt),
@@ -281,10 +330,22 @@ export class WorkflowRunner {
         payload: error,
       });
       if (!workflowErr?.opts.runFailedAlready) {
+        const terminalEvent =
+          terminalStatus === "canceled"
+            ? {
+                level: "system" as const,
+                kind: "run_canceled" as const,
+                message: "Workflow run canceled",
+              }
+            : {
+                level: "system" as const,
+                kind: "run_failed" as const,
+                message: "Workflow run failed",
+              };
         await this.appendEvent(state, {
-          level: "system",
-          kind: "run_failed",
-          message: "Workflow run failed",
+          level: terminalEvent.level,
+          kind: terminalEvent.kind,
+          message: terminalEvent.message,
           payload: { nodeId: node.id, error },
         });
       }
@@ -326,12 +387,31 @@ export class WorkflowRunner {
         return { selected, skipped };
       }
 
+      case "builtin.switch": {
+        const value = resolveJsonValue(state, node.value);
+        const matched = node.cases.find((item) => jsonEquals(item.value, value));
+        const selected = matched ? matched.nodes : node.default;
+        const skipped = uniqueNodeIds([
+          ...node.cases.flatMap((item) => item.nodes),
+          ...node.default,
+        ]).filter((nodeId) => !selected.includes(nodeId));
+        await this.appendBranchEvent(state, `switch ${JSON.stringify(value)}`, selected, skipped);
+        return {
+          value,
+          selected,
+          skipped,
+          ...(matched ? { case: matched.id } : { case: "default" }),
+        };
+      }
+
       case "builtin.log.info":
       case "builtin.log.debug":
+      case "builtin.log.warn":
       case "builtin.log.error": {
         const level = node.type.replace("builtin.log.", "") as
           | "info"
           | "debug"
+          | "warn"
           | "error";
         const payload =
           node.payload === undefined
@@ -374,6 +454,25 @@ export class WorkflowRunner {
         return state.output;
       }
 
+      case "builtin.throw_error": {
+        const details: JsonObject = {};
+        if (node.code !== undefined) details.code = node.code;
+        if (node.details !== undefined) {
+          details.details = resolveJsonValue(state, node.details);
+        }
+        throw new WorkflowNodeExecutionError(node.message, {
+          details: Object.keys(details).length > 0 ? details : undefined,
+        });
+      }
+
+      case "builtin.sleep": {
+        await sleep(node.delayMs, state.signal);
+        const output: JsonObject = { delayMs: node.delayMs };
+        if (node.reason !== undefined) output.reason = node.reason;
+        state.steps[node.id] = { output };
+        return output;
+      }
+
       case "mcp.tool":
         return this.executeMcpTool(state, node);
 
@@ -382,6 +481,9 @@ export class WorkflowRunner {
 
       case "builtin.foreach":
         return this.executeForeach(state, node, attemptId);
+
+      case "builtin.parallel":
+        return this.executeParallel(state, node, attemptId);
 
       case "builtin.python":
         return this.executePython(state, node);
@@ -409,6 +511,8 @@ export class WorkflowRunner {
       ]),
     );
     const outputs: ForeachItemOutput[] = [];
+    let succeededCount = 0;
+    let failedCount = 0;
 
     await this.appendEvent(state, {
       stepRunId: attemptId,
@@ -420,6 +524,7 @@ export class WorkflowRunner {
 
     for (let index = 0; index < items.length; index++) {
       const item = cloneJson(items[index]!);
+      const itemStartedAt = this.now();
       const beforeStepOutputs = snapshotStepOutputs(state);
       state.foreachStack.push({
         name: node.itemVar,
@@ -447,24 +552,41 @@ export class WorkflowRunner {
           });
         }
         if (state.status !== "running") {
-          outputs.push({
+          const itemEndedAt = this.now();
+          const itemOutput: ForeachItemOutput = {
             index,
             item,
             status: "failed",
+            startedAt: itemStartedAt,
+            endedAt: itemEndedAt,
+            durationMs: stepDurationMs(itemStartedAt, itemEndedAt),
             steps: itemStepOutputs(state, beforeStepOutputs),
-          });
+          };
+          const itemError = latestFailedStepError(state);
+          if (itemError !== undefined) itemOutput.error = itemError;
+          outputs.push(itemOutput);
+          failedCount += 1;
           throw new WorkflowNodeExecutionError(
             `Foreach item ${index + 1} failed`,
-            { preserveContext: true, runFailedAlready: true },
+            {
+              preserveContext: true,
+              runFailedAlready: true,
+              details: itemOutput,
+            },
           );
         }
+        const itemEndedAt = this.now();
         const itemOutput: ForeachItemOutput = {
           index,
           item,
           status: "succeeded",
+          startedAt: itemStartedAt,
+          endedAt: itemEndedAt,
+          durationMs: stepDurationMs(itemStartedAt, itemEndedAt),
           steps: itemStepOutputs(state, beforeStepOutputs),
         };
         outputs.push(itemOutput);
+        succeededCount += 1;
         await this.appendEvent(state, {
           stepRunId: attemptId,
           level: "system",
@@ -479,11 +601,250 @@ export class WorkflowRunner {
 
     const output: JsonObject = {
       count: items.length,
+      succeededCount,
+      failedCount,
       items: outputs,
     };
     state.steps[node.id] = { output };
     if (node.assign) applyAssignments(state, node.assign);
     return output;
+  }
+
+  private async executeParallel(
+    state: RunnerState,
+    node: Extract<WorkflowNode, { type: "builtin.parallel" }>,
+    attemptId: string,
+  ): Promise<JsonValue> {
+    const concurrency = node.concurrency ?? node.branches.length;
+    const nodesById = new Map(
+      state.definition.nodes.map((workflowNode) => [
+        workflowNode.id,
+        workflowNode,
+      ]),
+    );
+    const parentContext = cloneJson(state.context);
+    const parentSteps = cloneStepState(state.steps);
+    const branchResults = new Map<string, ParallelBranchRunResult>();
+    const branchControllers = new Map<string, AbortController>();
+    let firstFailure: ParallelBranchRunResult | undefined;
+
+    const abortBranches = () => {
+      for (const controller of branchControllers.values()) {
+        controller.abort();
+      }
+    };
+    if (state.signal?.aborted) abortBranches();
+    state.signal?.addEventListener("abort", abortBranches, { once: true });
+
+    await this.appendEvent(state, {
+      stepRunId: attemptId,
+      level: "system",
+      kind: "parallel_started",
+      message: `Parallel ${node.id} started`,
+      payload: {
+        count: node.branches.length,
+        concurrency,
+        failFast: node.failFast,
+      },
+    });
+
+    try {
+      await runLimited(
+        node.branches,
+        concurrency,
+        async (branch, branchIndex) => {
+          if (node.failFast && firstFailure) return;
+          const controller = new AbortController();
+          branchControllers.set(branch.id, controller);
+          if (state.signal?.aborted) controller.abort();
+          await this.appendEvent(state, {
+            stepRunId: attemptId,
+            level: "system",
+            kind: "parallel_branch_started",
+            message: `Parallel branch ${branch.id} started`,
+            payload: {
+              branchId: branch.id,
+              ...(branch.label ? { label: branch.label } : {}),
+            },
+          });
+          const result = await this.executeParallelBranch(
+            state,
+            node,
+            branch,
+            branchIndex,
+            nodesById,
+            parentContext,
+            parentSteps,
+            controller.signal,
+          );
+          branchResults.set(branch.id, result);
+          state.stepAttempts.push(...result.stepAttempts);
+          await this.appendBranchEvents(state, result.events);
+          const eventKind =
+            result.output.status === "succeeded"
+              ? "parallel_branch_completed"
+              : "parallel_branch_failed";
+          await this.appendEvent(state, {
+            stepRunId: attemptId,
+            level: result.output.status === "succeeded" ? "system" : "error",
+            kind: eventKind,
+            message:
+              result.output.status === "succeeded"
+                ? `Parallel branch ${branch.id} completed`
+                : `Parallel branch ${branch.id} failed`,
+            payload: result.output,
+          });
+          if (result.output.status !== "succeeded" && !firstFailure) {
+            firstFailure = result;
+            if (node.failFast) abortBranches();
+          }
+        },
+      );
+    } finally {
+      state.signal?.removeEventListener("abort", abortBranches);
+    }
+
+    const branches = parallelBranchesObject(node, branchResults);
+    const branchValues = Object.values(branches) as ParallelBranchOutput[];
+    const succeededCount = branchValues.filter(
+      (branch) => branch.status === "succeeded",
+    ).length;
+    const failedCount = branchValues.filter(
+      (branch) => branch.status === "failed",
+    ).length;
+    const canceledCount = branchValues.filter(
+      (branch) => branch.status === "canceled",
+    ).length;
+    const output: JsonObject = {
+      count: node.branches.length,
+      succeededCount,
+      failedCount,
+      canceledCount,
+      failFast: node.failFast,
+      branches,
+      branchOrder: node.branches.map((branch) => branch.id),
+    };
+    state.steps[node.id] = { output };
+
+    if (firstFailure && node.failFast) {
+      await this.appendEvent(state, {
+        stepRunId: attemptId,
+        level: "error",
+        kind: "parallel_failed",
+        message: `Parallel ${node.id} failed`,
+        payload: output,
+      });
+      throw new WorkflowNodeExecutionError(
+        `Parallel ${node.id} failed in branch ${firstFailure.output.id}`,
+        {
+          preserveContext: true,
+          details: output,
+        },
+      );
+    }
+
+    if (node.assign) applyAssignments(state, node.assign);
+    await this.appendEvent(state, {
+      stepRunId: attemptId,
+      level: failedCount > 0 || canceledCount > 0 ? "warn" : "system",
+      kind: "parallel_completed",
+      message: `Parallel ${node.id} completed`,
+      payload: output,
+    });
+    return output;
+  }
+
+  private async executeParallelBranch(
+    parentState: RunnerState,
+    parallelNode: Extract<WorkflowNode, { type: "builtin.parallel" }>,
+    branch: Extract<
+      WorkflowNode,
+      { type: "builtin.parallel" }
+    >["branches"][number],
+    branchIndex: number,
+    nodesById: Map<string, WorkflowNode>,
+    parentContext: JsonObject,
+    parentSteps: Record<string, StepState>,
+    signal: AbortSignal,
+  ): Promise<ParallelBranchRunResult> {
+    const startedAt = this.now();
+    const branchState: RunnerState = {
+      ...parentState,
+      context: cloneJson(parentContext),
+      steps: cloneStepState(parentSteps),
+      foreachStack: parentState.foreachStack.map((frame) => ({
+        ...frame,
+        value: cloneJson(frame.value),
+      })),
+      stepAttempts: [],
+      events: [],
+      nextSequence: 1,
+      status: "running",
+      output: undefined,
+      stopped: false,
+      signal,
+    };
+    try {
+      for (const nodeId of branch.nodes) {
+        if (branchState.stopped) break;
+        const bodyNode = nodesById.get(nodeId);
+        if (!bodyNode) {
+          throw new Error(
+            `Parallel branch ${branch.id} references unknown node: ${nodeId}`,
+          );
+        }
+        await this.executeNode(branchState, bodyNode, nodesById, {
+          attempt: branchIndex + 1,
+        });
+      }
+    } catch (err) {
+      if (branchState.status === "running") {
+        branchState.status =
+          err instanceof WorkflowNodeExecutionError &&
+          err.opts.status === "canceled"
+            ? "canceled"
+            : "failed";
+        const step = WorkflowStepAttemptSchema.parse({
+          id: `${parentState.runId}:${parallelNode.id}.${branch.id}:${branchIndex + 1}`,
+          runId: parentState.runId,
+          nodeId: `${parallelNode.id}.${branch.id}`,
+          attempt: branchIndex + 1,
+          status: branchState.status === "canceled" ? "canceled" : "failed",
+          startedAt,
+          endedAt: this.now(),
+          durationMs: 0,
+          error: errorToJson(err),
+        });
+        branchState.stepAttempts.push(step);
+      }
+    }
+    const endedAt = this.now();
+    const status: ParallelBranchStatus =
+      branchState.status === "canceled"
+        ? "canceled"
+        : branchState.status === "failed"
+          ? "failed"
+          : "succeeded";
+    const error = latestFailedStepError(branchState);
+    const output: ParallelBranchOutput = {
+      id: branch.id,
+      ...(branch.label ? { label: branch.label } : {}),
+      status,
+      startedAt,
+      endedAt,
+      durationMs: stepDurationMs(startedAt, endedAt),
+      steps: itemStepOutputs(
+        branchState,
+        stepOutputsFromStepState(parentSteps),
+      ),
+      context: cloneJson(branchState.context),
+    };
+    if (error !== undefined) output.error = error;
+    return {
+      output,
+      stepAttempts: branchState.stepAttempts,
+      events: branchState.events,
+    };
   }
 
   private async executeMcpTool(
@@ -662,6 +1023,21 @@ export class WorkflowRunner {
       payload: parsed.payload,
     });
   }
+
+  private async appendBranchEvents(
+    state: RunnerState,
+    events: WorkflowRunEvent[],
+  ): Promise<void> {
+    for (const event of events) {
+      await this.appendEvent(state, {
+        stepRunId: event.stepRunId,
+        level: event.level,
+        kind: event.kind,
+        message: event.message,
+        payload: event.payload,
+      });
+    }
+  }
 }
 
 function collectBranchNodeIds(nodes: WorkflowNode[]): Set<string> {
@@ -675,8 +1051,19 @@ function collectBranchNodeIds(nodes: WorkflowNode[]): Set<string> {
       node.then.forEach((nodeId) => branchNodeIds.add(nodeId));
       node.else.forEach((nodeId) => branchNodeIds.add(nodeId));
     }
+    if (node.type === "builtin.switch") {
+      for (const item of node.cases) {
+        item.nodes.forEach((nodeId) => branchNodeIds.add(nodeId));
+      }
+      node.default.forEach((nodeId) => branchNodeIds.add(nodeId));
+    }
     if (node.type === "builtin.foreach") {
       node.body.forEach((nodeId) => branchNodeIds.add(nodeId));
+    }
+    if (node.type === "builtin.parallel") {
+      for (const branch of node.branches) {
+        branch.nodes.forEach((nodeId) => branchNodeIds.add(nodeId));
+      }
     }
   }
   return branchNodeIds;
@@ -722,30 +1109,1099 @@ function applyTransform(
   input: JsonValue | undefined,
   transform: JsonValue,
 ): JsonValue {
+  const output = applyTransformValue(state, input, transform);
+  assertTransformOutputSize(output);
+  return output;
+}
+
+function applyTransformValue(
+  state: RunnerState,
+  input: JsonValue | undefined,
+  transform: JsonValue,
+): JsonValue {
   if (typeof transform === "string") {
     return resolveJsonValue(state, transform);
   }
   if (!isJsonObject(transform)) return cloneJson(transform);
-  if (transform.kind === "object_pick") {
-    const fields = transform.fields;
-    if (
-      !Array.isArray(fields) ||
-      !fields.every((field) => typeof field === "string")
-    ) {
-      throw new Error("object_pick transform requires string fields");
-    }
-    const sourceName =
-      typeof transform.source === "string" ? transform.source : undefined;
-    const source = pickTransformSource(input, sourceName);
-    const out: JsonObject = {};
-    for (const field of fields) {
-      if (Object.prototype.hasOwnProperty.call(source, field)) {
-        out[field] = cloneJson(source[field]!);
-      }
-    }
-    return out;
+  const operationKind = transformOperationKind(transform);
+  if (operationKind === undefined) return resolveJsonValue(state, transform);
+  switch (operationKind) {
+    case "object_pick":
+      return applyObjectPickTransform(input, transform);
+    case "string.replace":
+      return applyStringReplaceTransform(state, transform);
+    case "string.regex_replace":
+      return applyRegexReplaceTransform(state, transform);
+    case "string.regex_match":
+      return applyRegexMatchTransform(state, transform);
+    case "json.parse":
+      return applyJsonParseTransform(state, transform);
+    case "json.stringify":
+      return applyJsonStringifyTransform(state, transform);
+    case "csv.parse":
+      return applyCsvParseTransform(state, transform);
+    case "csv.stringify":
+      return applyCsvStringifyTransform(state, transform);
+    case "ip.parse":
+      return applyIpParseTransform(state, transform);
+    case "ip.is_ipv4":
+      return applyIpVersionCheckTransform(state, transform, 4);
+    case "ip.is_ipv6":
+      return applyIpVersionCheckTransform(state, transform, 6);
+    case "ip.in_subnet":
+      return applyIpInSubnetTransform(state, transform);
+    case "ip.netmask":
+      return applyIpNetmaskTransform(state, transform);
+    case "ip.network":
+      return applyIpNetworkTransform(state, transform);
+    case "uri.parse":
+      return applyUriParseTransform(state, transform);
+    default:
+      throw unsupportedTransformOperationError(operationKind);
   }
-  return resolveJsonValue(state, transform);
+}
+
+function transformOperationKind(transform: JsonObject): string | undefined {
+  const kind = transform.kind;
+  if (typeof kind !== "string") return undefined;
+  if (TRANSFORM_OPERATION_KINDS.has(kind) || kind.includes(".")) return kind;
+  return undefined;
+}
+
+function applyObjectPickTransform(
+  input: JsonValue | undefined,
+  transform: JsonObject,
+): JsonValue {
+  const fields = transform.fields;
+  if (
+    !Array.isArray(fields) ||
+    !fields.every((field) => typeof field === "string")
+  ) {
+    throw transformFieldError("object_pick", "fields", "string[]", fields);
+  }
+  const rawSource = transform.source;
+  if (rawSource !== undefined && typeof rawSource !== "string") {
+    throw transformFieldError("object_pick", "source", "string", rawSource);
+  }
+  const source = pickTransformSource(input, rawSource);
+  const out: JsonObject = {};
+  for (const field of fields) {
+    if (Object.prototype.hasOwnProperty.call(source, field)) {
+      out[field] = cloneJson(source[field]!);
+    }
+  }
+  return out;
+}
+
+function applyStringReplaceTransform(
+  state: RunnerState,
+  transform: JsonObject,
+): JsonValue {
+  const operationKind = "string.replace";
+  const value = requiredStringTransformField(
+    state,
+    transform,
+    operationKind,
+    "value",
+  );
+  const search = requiredStringTransformField(
+    state,
+    transform,
+    operationKind,
+    "search",
+  );
+  const replacement = requiredStringTransformField(
+    state,
+    transform,
+    operationKind,
+    "replacement",
+  );
+  const all = optionalBooleanTransformField(transform, operationKind, "all");
+  return all
+    ? value.split(search).join(replacement)
+    : value.replace(search, replacement);
+}
+
+function applyRegexReplaceTransform(
+  state: RunnerState,
+  transform: JsonObject,
+): JsonValue {
+  const operationKind = "string.regex_replace";
+  const value = requiredStringTransformField(
+    state,
+    transform,
+    operationKind,
+    "value",
+  );
+  const pattern = requiredStringTransformField(
+    state,
+    transform,
+    operationKind,
+    "pattern",
+  );
+  const replacement = requiredStringTransformField(
+    state,
+    transform,
+    operationKind,
+    "replacement",
+  );
+  const flags =
+    optionalStringTransformField(state, transform, operationKind, "flags") ??
+    "";
+  return value.replace(safeRegExp(operationKind, pattern, flags), replacement);
+}
+
+function applyRegexMatchTransform(
+  state: RunnerState,
+  transform: JsonObject,
+): JsonValue {
+  const operationKind = "string.regex_match";
+  const value = requiredStringTransformField(
+    state,
+    transform,
+    operationKind,
+    "value",
+  );
+  const pattern = requiredStringTransformField(
+    state,
+    transform,
+    operationKind,
+    "pattern",
+  );
+  const flags =
+    optionalStringTransformField(state, transform, operationKind, "flags") ??
+    "";
+  const regex = safeRegExp(operationKind, pattern, flags);
+  const match = regex.exec(value);
+  if (!match) {
+    return { matched: false, groups: [], namedGroups: {} };
+  }
+  const groups = match.slice(1).map((item) => item ?? "");
+  const namedGroups: JsonObject = {};
+  for (const [key, item] of Object.entries(match.groups ?? {})) {
+    namedGroups[key] = item ?? "";
+  }
+  return {
+    matched: true,
+    match: match[0],
+    index: match.index,
+    groups,
+    namedGroups,
+  };
+}
+
+function applyJsonParseTransform(
+  state: RunnerState,
+  transform: JsonObject,
+): JsonValue {
+  const operationKind = "json.parse";
+  const value = requiredStringTransformField(
+    state,
+    transform,
+    operationKind,
+    "value",
+  );
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!isJsonValue(parsed)) {
+      throw new Error("parsed value is not JSON-compatible");
+    }
+    return parsed;
+  } catch (err) {
+    throw new WorkflowNodeExecutionError(
+      `Transform operation ${operationKind} could not parse JSON`,
+      {
+        details: {
+          operationKind,
+          message: err instanceof Error ? err.message : String(err),
+        },
+      },
+    );
+  }
+}
+
+function applyJsonStringifyTransform(
+  state: RunnerState,
+  transform: JsonObject,
+): JsonValue {
+  const operationKind = "json.stringify";
+  const value = requiredTransformField(
+    state,
+    transform,
+    operationKind,
+    "value",
+  );
+  const pretty = optionalBooleanTransformField(
+    transform,
+    operationKind,
+    "pretty",
+  );
+  return JSON.stringify(value, null, pretty ? 2 : 0);
+}
+
+function applyCsvParseTransform(
+  state: RunnerState,
+  transform: JsonObject,
+): JsonValue {
+  const operationKind = "csv.parse";
+  const value = requiredStringTransformField(
+    state,
+    transform,
+    operationKind,
+    "value",
+  );
+  assertCsvInputSize(value, operationKind);
+  const delimiter =
+    optionalStringTransformField(
+      state,
+      transform,
+      operationKind,
+      "delimiter",
+    ) ?? ",";
+  if (delimiter.length !== 1) {
+    throw transformFieldError(
+      operationKind,
+      "delimiter",
+      "single character",
+      delimiter,
+    );
+  }
+  const maxRows =
+    optionalPositiveIntegerTransformField(
+      transform,
+      operationKind,
+      "maxRows",
+    ) ?? DEFAULT_MAX_CSV_ROWS;
+  const rows = parseCsvRows(operationKind, value, delimiter);
+  const hasHeaders =
+    optionalBooleanTransformField(transform, operationKind, "headers") ?? true;
+  if (!hasHeaders) {
+    assertCsvRowCount(operationKind, rows.length, maxRows);
+    return rows;
+  }
+  if (rows.length === 0) return [];
+  const headers = rows[0]!;
+  const dataRows = rows.slice(1);
+  assertCsvRowCount(operationKind, dataRows.length, maxRows);
+  return dataRows.map((row) => {
+    const out: JsonObject = {};
+    headers.forEach((header, index) => {
+      out[header] = row[index] ?? "";
+    });
+    return out;
+  });
+}
+
+function applyCsvStringifyTransform(
+  state: RunnerState,
+  transform: JsonObject,
+): JsonValue {
+  const operationKind = "csv.stringify";
+  const value = requiredTransformField(
+    state,
+    transform,
+    operationKind,
+    "value",
+  );
+  if (!Array.isArray(value)) {
+    throw transformFieldError(operationKind, "value", "array", value);
+  }
+  const delimiter =
+    optionalStringTransformField(
+      state,
+      transform,
+      operationKind,
+      "delimiter",
+    ) ?? ",";
+  if (delimiter.length !== 1) {
+    throw transformFieldError(
+      operationKind,
+      "delimiter",
+      "single character",
+      delimiter,
+    );
+  }
+  const headers = optionalStringArrayTransformField(
+    transform,
+    operationKind,
+    "headers",
+  );
+  const includeHeaders =
+    optionalBooleanTransformField(transform, operationKind, "includeHeaders") ??
+    true;
+  const maxRows =
+    optionalPositiveIntegerTransformField(
+      transform,
+      operationKind,
+      "maxRows",
+    ) ?? DEFAULT_MAX_CSV_ROWS;
+  assertCsvRowCount(operationKind, value.length, maxRows);
+  return stringifyCsvRows(value, delimiter, headers, includeHeaders);
+}
+
+function requiredTransformField(
+  state: RunnerState,
+  transform: JsonObject,
+  operationKind: string,
+  field: string,
+): JsonValue {
+  if (!Object.prototype.hasOwnProperty.call(transform, field)) {
+    throw transformFieldError(operationKind, field, "value", undefined);
+  }
+  return resolveJsonValue(state, transform[field]!);
+}
+
+function requiredStringTransformField(
+  state: RunnerState,
+  transform: JsonObject,
+  operationKind: string,
+  field: string,
+): string {
+  const value = requiredTransformField(state, transform, operationKind, field);
+  if (typeof value !== "string") {
+    throw transformFieldError(operationKind, field, "string", value);
+  }
+  return value;
+}
+
+function optionalStringTransformField(
+  state: RunnerState,
+  transform: JsonObject,
+  operationKind: string,
+  field: string,
+): string | undefined {
+  if (!Object.prototype.hasOwnProperty.call(transform, field)) return undefined;
+  const value = resolveJsonValue(state, transform[field]!);
+  if (typeof value !== "string") {
+    throw transformFieldError(operationKind, field, "string", value);
+  }
+  return value;
+}
+
+function optionalBooleanTransformField(
+  transform: JsonObject,
+  operationKind: string,
+  field: string,
+): boolean | undefined {
+  if (!Object.prototype.hasOwnProperty.call(transform, field)) return undefined;
+  const value = transform[field];
+  if (typeof value !== "boolean") {
+    throw transformFieldError(operationKind, field, "boolean", value);
+  }
+  return value;
+}
+
+function optionalPositiveIntegerTransformField(
+  transform: JsonObject,
+  operationKind: string,
+  field: string,
+): number | undefined {
+  if (!Object.prototype.hasOwnProperty.call(transform, field)) return undefined;
+  const value = transform[field];
+  if (!Number.isInteger(value) || typeof value !== "number" || value < 1) {
+    throw transformFieldError(operationKind, field, "positive integer", value);
+  }
+  return value;
+}
+
+function optionalStringArrayTransformField(
+  transform: JsonObject,
+  operationKind: string,
+  field: string,
+): string[] | undefined {
+  if (!Object.prototype.hasOwnProperty.call(transform, field)) return undefined;
+  const value = transform[field];
+  if (
+    !Array.isArray(value) ||
+    !value.every((item) => typeof item === "string")
+  ) {
+    throw transformFieldError(operationKind, field, "string[]", value);
+  }
+  return value;
+}
+
+function safeRegExp(
+  operationKind: string,
+  pattern: string,
+  flags: string,
+): RegExp {
+  try {
+    return new RegExp(pattern, flags);
+  } catch (err) {
+    throw new WorkflowNodeExecutionError(
+      `Transform operation ${operationKind} has invalid regex: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      {
+        details: {
+          operationKind,
+          field: "pattern",
+          pattern,
+          flags,
+        },
+      },
+    );
+  }
+}
+
+function assertCsvInputSize(value: string, operationKind: string): void {
+  const actualBytes = Buffer.byteLength(value, "utf8");
+  if (actualBytes <= MAX_CSV_INPUT_BYTES) return;
+  throw new WorkflowNodeExecutionError(
+    `Transform operation ${operationKind} input exceeds ${MAX_CSV_INPUT_BYTES} bytes`,
+    {
+      details: {
+        operationKind,
+        maxBytes: MAX_CSV_INPUT_BYTES,
+        actualBytes,
+      },
+    },
+  );
+}
+
+function assertCsvRowCount(
+  operationKind: string,
+  actualRows: number,
+  maxRows: number,
+): void {
+  if (actualRows <= maxRows) return;
+  throw new WorkflowNodeExecutionError(
+    `Transform operation ${operationKind} exceeded row limit ${maxRows}`,
+    {
+      details: {
+        operationKind,
+        maxRows,
+        actualRows,
+      },
+    },
+  );
+}
+
+function parseCsvRows(
+  operationKind: string,
+  value: string,
+  delimiter: string,
+): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+  let justEndedRow = false;
+  for (let index = 0; index < value.length; index++) {
+    const char = value[index]!;
+    if (inQuotes) {
+      if (char === '"') {
+        if (value[index + 1] === '"') {
+          field += '"';
+          index += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += char;
+      }
+      justEndedRow = false;
+      continue;
+    }
+    if (char === '"') {
+      inQuotes = true;
+      justEndedRow = false;
+      continue;
+    }
+    if (char === delimiter) {
+      row.push(field);
+      field = "";
+      justEndedRow = false;
+      continue;
+    }
+    if (char === "\n" || char === "\r") {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+      justEndedRow = true;
+      if (char === "\r" && value[index + 1] === "\n") index += 1;
+      continue;
+    }
+    field += char;
+    justEndedRow = false;
+  }
+  if (inQuotes) {
+    throw new WorkflowNodeExecutionError(
+      `Transform operation ${operationKind} has invalid CSV: unterminated quoted field`,
+      { details: { operationKind, field: "value" } },
+    );
+  }
+  if (field !== "" || row.length > 0 || (value.length > 0 && !justEndedRow)) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows;
+}
+
+function stringifyCsvRows(
+  value: JsonValue[],
+  delimiter: string,
+  requestedHeaders: string[] | undefined,
+  includeHeaders: boolean,
+): string {
+  if (value.length === 0) {
+    return requestedHeaders && includeHeaders
+      ? csvLine(requestedHeaders, delimiter)
+      : "";
+  }
+  if (value.every((item) => Array.isArray(item))) {
+    const lines = (value as JsonValue[][]).map((row) =>
+      csvLine(row.map(csvCellValue), delimiter),
+    );
+    if (requestedHeaders && includeHeaders) {
+      lines.unshift(csvLine(requestedHeaders, delimiter));
+    }
+    return lines.join("\n");
+  }
+  if (!value.every(isJsonObject)) {
+    throw transformFieldError(
+      "csv.stringify",
+      "value",
+      "array of objects or arrays",
+      value,
+    );
+  }
+  const objectRows = value as JsonObject[];
+  const headers = requestedHeaders ?? collectCsvHeaders(objectRows);
+  const lines = objectRows.map((row) =>
+    csvLine(
+      headers.map((header) => csvCellValue(row[header])),
+      delimiter,
+    ),
+  );
+  if (includeHeaders) lines.unshift(csvLine(headers, delimiter));
+  return lines.join("\n");
+}
+
+function collectCsvHeaders(rows: JsonObject[]): string[] {
+  const headers: string[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    for (const key of Object.keys(row)) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+      headers.push(key);
+    }
+  }
+  return headers;
+}
+
+function csvCellValue(value: JsonValue | undefined): string {
+  if (value === undefined || value === null) return "";
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return String(value);
+  }
+  return JSON.stringify(value);
+}
+
+function csvLine(values: string[], delimiter: string): string {
+  return values.map((value) => escapeCsvCell(value, delimiter)).join(delimiter);
+}
+
+function escapeCsvCell(value: string, delimiter: string): string {
+  if (
+    !value.includes(delimiter) &&
+    !value.includes('"') &&
+    !value.includes("\n") &&
+    !value.includes("\r")
+  ) {
+    return value;
+  }
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+function applyIpParseTransform(
+  state: RunnerState,
+  transform: JsonObject,
+): JsonValue {
+  const operationKind = "ip.parse";
+  const value = requiredStringTransformField(
+    state,
+    transform,
+    operationKind,
+    "value",
+  );
+  const parsed = parseIpAddress(value);
+  if (!parsed) throw invalidIpError(operationKind, "value", value);
+  return ipParseOutput(parsed);
+}
+
+function applyIpVersionCheckTransform(
+  state: RunnerState,
+  transform: JsonObject,
+  version: 4 | 6,
+): JsonValue {
+  const operationKind = version === 4 ? "ip.is_ipv4" : "ip.is_ipv6";
+  const value = requiredStringTransformField(
+    state,
+    transform,
+    operationKind,
+    "value",
+  );
+  return isIP(value) === version;
+}
+
+function applyIpInSubnetTransform(
+  state: RunnerState,
+  transform: JsonObject,
+): JsonValue {
+  const operationKind = "ip.in_subnet";
+  const value = requiredStringTransformField(
+    state,
+    transform,
+    operationKind,
+    "value",
+  );
+  const cidr = requiredStringTransformField(
+    state,
+    transform,
+    operationKind,
+    "cidr",
+  );
+  const subnet = parseCidr(operationKind, cidr);
+  const parsed = parseIpAddress(value);
+  if (!parsed || parsed.version !== subnet.version) return false;
+  const mask = prefixMask(subnet.version, subnet.prefix);
+  return (parsed.integer & mask) === (subnet.integer & mask);
+}
+
+function applyIpNetmaskTransform(
+  state: RunnerState,
+  transform: JsonObject,
+): JsonValue {
+  const operationKind = "ip.netmask";
+  const prefix = requiredIntegerTransformField(
+    state,
+    transform,
+    operationKind,
+    "prefix",
+  );
+  const version = requiredIpVersionField(state, transform, operationKind);
+  validatePrefix(operationKind, prefix, version);
+  const mask = prefixMask(version, prefix);
+  return version === 4 ? formatIpv4(mask) : formatIpv6(mask);
+}
+
+function applyIpNetworkTransform(
+  state: RunnerState,
+  transform: JsonObject,
+): JsonValue {
+  const operationKind = "ip.network";
+  const cidr = requiredStringTransformField(
+    state,
+    transform,
+    operationKind,
+    "cidr",
+  );
+  const parsed = parseCidr(operationKind, cidr);
+  const mask = prefixMask(parsed.version, parsed.prefix);
+  const networkInteger = parsed.integer & mask;
+  const address =
+    parsed.version === 4
+      ? formatIpv4(networkInteger)
+      : formatIpv6(networkInteger);
+  return {
+    version: parsed.version,
+    address,
+    prefix: parsed.prefix,
+    cidr: `${address}/${parsed.prefix}`,
+  };
+}
+
+function requiredIntegerTransformField(
+  state: RunnerState,
+  transform: JsonObject,
+  operationKind: string,
+  field: string,
+): number {
+  const value = requiredTransformField(state, transform, operationKind, field);
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw transformFieldError(operationKind, field, "integer", value);
+  }
+  return value;
+}
+
+function requiredIpVersionField(
+  state: RunnerState,
+  transform: JsonObject,
+  operationKind: string,
+): 4 | 6 {
+  const version = requiredIntegerTransformField(
+    state,
+    transform,
+    operationKind,
+    "version",
+  );
+  if (version !== 4 && version !== 6) {
+    throw transformFieldError(operationKind, "version", "4 or 6", version);
+  }
+  return version;
+}
+
+type ParsedIpAddress = {
+  version: 4 | 6;
+  address: string;
+  normalized: string;
+  integer: bigint;
+  octets?: number[];
+  hextets?: string[];
+};
+
+type ParsedCidr = {
+  version: 4 | 6;
+  prefix: number;
+  integer: bigint;
+};
+
+function parseIpAddress(value: string): ParsedIpAddress | null {
+  const version = isIP(value);
+  if (version === 4) return parseIpv4Address(value);
+  if (version === 6) return parseIpv6Address(value);
+  return null;
+}
+
+function parseIpv4Address(value: string): ParsedIpAddress | null {
+  const parts = value.split(".");
+  if (parts.length !== 4) return null;
+  const octets = parts.map((part) => {
+    if (!/^\d+$/.test(part)) return Number.NaN;
+    const octet = Number(part);
+    return Number.isInteger(octet) && octet >= 0 && octet <= 255
+      ? octet
+      : Number.NaN;
+  });
+  if (octets.some((octet) => Number.isNaN(octet))) return null;
+  const integer = octets.reduce(
+    (acc, octet) => (acc << 8n) + BigInt(octet),
+    0n,
+  );
+  return {
+    version: 4,
+    address: value,
+    normalized: octets.join("."),
+    integer,
+    octets,
+  };
+}
+
+function parseIpv6Address(value: string): ParsedIpAddress | null {
+  const lower = value.toLowerCase();
+  const doubleColonParts = lower.split("::");
+  if (doubleColonParts.length > 2) return null;
+  const hasCompression = doubleColonParts.length === 2;
+  const left = parseIpv6PartList(doubleColonParts[0] ?? "");
+  const right = parseIpv6PartList(
+    hasCompression ? (doubleColonParts[1] ?? "") : "",
+  );
+  if (!left || !right) return null;
+  const missing = 8 - left.length - right.length;
+  if (hasCompression ? missing < 1 : missing !== 0) return null;
+  const hextetNumbers = [
+    ...left,
+    ...Array.from({ length: missing }, () => 0),
+    ...right,
+  ];
+  if (hextetNumbers.length !== 8) return null;
+  const integer = hextetNumbers.reduce(
+    (acc, hextet) => (acc << 16n) + BigInt(hextet),
+    0n,
+  );
+  const hextets = hextetNumbers.map((hextet) =>
+    hextet.toString(16).padStart(4, "0"),
+  );
+  return {
+    version: 6,
+    address: value,
+    normalized: hextets.join(":"),
+    integer,
+    hextets,
+  };
+}
+
+function parseIpv6PartList(value: string): number[] | null {
+  if (value === "") return [];
+  const parts = value.split(":");
+  const out: number[] = [];
+  for (const part of parts) {
+    if (part.includes(".")) {
+      const ipv4 = parseIpv4Address(part);
+      if (!ipv4 || !ipv4.octets) return null;
+      out.push(ipv4.octets[0]! * 256 + ipv4.octets[1]!);
+      out.push(ipv4.octets[2]! * 256 + ipv4.octets[3]!);
+      continue;
+    }
+    if (!/^[0-9a-f]{1,4}$/.test(part)) return null;
+    out.push(Number.parseInt(part, 16));
+  }
+  return out;
+}
+
+function ipParseOutput(parsed: ParsedIpAddress): JsonObject {
+  const out: JsonObject = {
+    version: parsed.version,
+    address: parsed.address,
+    normalized: parsed.normalized,
+    integer: parsed.integer.toString(),
+  };
+  if (parsed.version === 4 && parsed.octets) out.octets = parsed.octets;
+  if (parsed.version === 6 && parsed.hextets) out.hextets = parsed.hextets;
+  return out;
+}
+
+function parseCidr(operationKind: string, cidr: string): ParsedCidr {
+  const separator = cidr.lastIndexOf("/");
+  if (separator < 0) throw invalidCidrError(operationKind, cidr);
+  const address = cidr.slice(0, separator);
+  const rawPrefix = cidr.slice(separator + 1);
+  if (!/^\d+$/.test(rawPrefix)) throw invalidCidrError(operationKind, cidr);
+  const parsed = parseIpAddress(address);
+  if (!parsed) throw invalidCidrError(operationKind, cidr);
+  const prefix = Number(rawPrefix);
+  validatePrefix(operationKind, prefix, parsed.version, cidr);
+  return {
+    version: parsed.version,
+    prefix,
+    integer: parsed.integer,
+  };
+}
+
+function validatePrefix(
+  operationKind: string,
+  prefix: number,
+  version: 4 | 6,
+  cidr?: string,
+): void {
+  const max = version === 4 ? 32 : 128;
+  if (Number.isInteger(prefix) && prefix >= 0 && prefix <= max) return;
+  if (cidr) throw invalidCidrError(operationKind, cidr);
+  throw new WorkflowNodeExecutionError(
+    `Transform operation ${operationKind} has invalid prefix`,
+    {
+      details: {
+        operationKind,
+        field: "prefix",
+        prefix,
+        version,
+        max,
+      },
+    },
+  );
+}
+
+function prefixMask(version: 4 | 6, prefix: number): bigint {
+  const bits = version === 4 ? 32 : 128;
+  if (prefix === 0) return 0n;
+  return ((1n << BigInt(bits)) - 1n) ^ ((1n << BigInt(bits - prefix)) - 1n);
+}
+
+function formatIpv4(value: bigint): string {
+  return [24n, 16n, 8n, 0n]
+    .map((shift) => Number((value >> shift) & 255n))
+    .join(".");
+}
+
+function formatIpv6(value: bigint): string {
+  const hextets: string[] = [];
+  for (let index = 7; index >= 0; index--) {
+    const shift = BigInt(index * 16);
+    hextets.push(
+      Number((value >> shift) & 0xffffn)
+        .toString(16)
+        .padStart(4, "0"),
+    );
+  }
+  return hextets.join(":");
+}
+
+function applyUriParseTransform(
+  state: RunnerState,
+  transform: JsonObject,
+): JsonValue {
+  const operationKind = "uri.parse";
+  const value = requiredStringTransformField(
+    state,
+    transform,
+    operationKind,
+    "value",
+  );
+  const base = optionalStringTransformField(
+    state,
+    transform,
+    operationKind,
+    "base",
+  );
+  let url: URL;
+  if (base === undefined) {
+    try {
+      url = new URL(value);
+    } catch {
+      throw invalidUriError(operationKind, "value", { value });
+    }
+  } else {
+    let parsedBase: URL;
+    try {
+      parsedBase = new URL(base);
+    } catch {
+      throw invalidUriError(operationKind, "base", { value, base });
+    }
+    try {
+      url = new URL(value, parsedBase);
+    } catch {
+      throw invalidUriError(operationKind, "value", { value, base });
+    }
+  }
+  return uriParseOutput(url);
+}
+
+function uriParseOutput(url: URL): JsonObject {
+  const hasCredentials = url.username !== "" || url.password !== "";
+  const redactedUrl = new URL(url.href);
+  redactedUrl.username = "";
+  redactedUrl.password = "";
+  const query = uriQueryObject(redactedUrl.searchParams);
+  return {
+    href: redactedUrl.href,
+    protocol: redactedUrl.protocol,
+    scheme: redactedUrl.protocol.replace(/:$/, ""),
+    origin: redactedUrl.origin,
+    host: redactedUrl.host,
+    hostname: redactedUrl.hostname,
+    port: redactedUrl.port,
+    pathname: redactedUrl.pathname,
+    path: `${redactedUrl.pathname}${redactedUrl.search}`,
+    search: redactedUrl.search,
+    query,
+    queryList: Array.from(redactedUrl.searchParams.entries()).map(
+      ([key, value]) => ({ key, value }),
+    ),
+    hash: redactedUrl.hash,
+    fragment: redactedUrl.hash.startsWith("#")
+      ? redactedUrl.hash.slice(1)
+      : redactedUrl.hash,
+    username: null,
+    password: null,
+    hasCredentials,
+  };
+}
+
+function uriQueryObject(searchParams: URLSearchParams): JsonObject {
+  const query: JsonObject = {};
+  for (const [key, value] of searchParams.entries()) {
+    const existing = query[key];
+    if (existing === undefined) {
+      query[key] = value;
+    } else if (Array.isArray(existing)) {
+      existing.push(value);
+    } else {
+      query[key] = [existing, value];
+    }
+  }
+  return query;
+}
+
+function invalidIpError(
+  operationKind: string,
+  field: string,
+  value: string,
+): WorkflowNodeExecutionError {
+  return new WorkflowNodeExecutionError(
+    `Transform operation ${operationKind} has invalid IP address`,
+    {
+      details: {
+        operationKind,
+        field,
+        value,
+      },
+    },
+  );
+}
+
+function invalidUriError(
+  operationKind: string,
+  field: string,
+  input: { value: string; base?: string },
+): WorkflowNodeExecutionError {
+  return new WorkflowNodeExecutionError(
+    `Transform operation ${operationKind} has invalid URI`,
+    {
+      details: {
+        operationKind,
+        field,
+        ...input,
+      },
+    },
+  );
+}
+
+function invalidCidrError(
+  operationKind: string,
+  cidr: string,
+): WorkflowNodeExecutionError {
+  return new WorkflowNodeExecutionError(
+    `Transform operation ${operationKind} has invalid CIDR`,
+    {
+      details: {
+        operationKind,
+        field: "cidr",
+        cidr,
+      },
+    },
+  );
+}
+
+function transformFieldError(
+  operationKind: string,
+  field: string,
+  expected: string,
+  actual: JsonValue | undefined,
+): WorkflowNodeExecutionError {
+  return new WorkflowNodeExecutionError(
+    `Transform operation ${operationKind} has invalid field ${field}: expected ${expected}`,
+    {
+      details: {
+        operationKind,
+        field,
+        expected,
+        actualType: jsonTypeName(actual),
+      },
+    },
+  );
+}
+
+function unsupportedTransformOperationError(
+  operationKind: string,
+): WorkflowNodeExecutionError {
+  return new WorkflowNodeExecutionError(
+    `Unsupported transform operation: ${operationKind}`,
+    {
+      details: { operationKind },
+    },
+  );
+}
+
+function assertTransformOutputSize(output: JsonValue): void {
+  const serialized = JSON.stringify(output);
+  const actualBytes = Buffer.byteLength(serialized, "utf8");
+  if (actualBytes <= MAX_TRANSFORM_OUTPUT_BYTES) return;
+  throw new WorkflowNodeExecutionError(
+    `Transform output exceeds ${MAX_TRANSFORM_OUTPUT_BYTES} bytes`,
+    {
+      details: {
+        maxBytes: MAX_TRANSFORM_OUTPUT_BYTES,
+        actualBytes,
+      },
+    },
+  );
 }
 
 function pickTransformSource(
@@ -767,6 +2223,33 @@ function pickTransformSource(
     return input;
   }
   throw new Error("Transform input is not an object");
+}
+
+function sleep(
+  delayMs: number,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(canceledExecutionError());
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(canceledExecutionError());
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function canceledExecutionError(): WorkflowNodeExecutionError {
+  return new WorkflowNodeExecutionError("Workflow run canceled", {
+    status: "canceled",
+  });
 }
 
 function buildStepLogsSummary(
@@ -1168,7 +2651,7 @@ function setContextPath(
   }
   if (mode === "merge") {
     if (!isJsonObject(previous) || !isJsonObject(value)) {
-      throw new Error(`merge assignment requires object values for ${path}`);
+      throw assignmentModeError(path, mode, previous, value);
     }
     target[leaf] = { ...previous, ...cloneJson(value) };
     return;
@@ -1179,10 +2662,38 @@ function setContextPath(
       return;
     }
     if (!Array.isArray(previous)) {
-      throw new Error(`append assignment requires an array target for ${path}`);
+      throw assignmentModeError(path, mode, previous, value);
     }
     target[leaf] = [...previous, cloneJson(value)];
   }
+}
+
+function assignmentModeError(
+  path: string,
+  mode: Exclude<AssignmentMode, "replace">,
+  target: JsonValue | undefined,
+  value: JsonValue,
+): WorkflowNodeExecutionError {
+  const expected =
+    mode === "merge" ? "an object target and object value" : "an array target";
+  return new WorkflowNodeExecutionError(
+    `${mode} assignment for ${path} requires ${expected}`,
+    {
+      details: {
+        assignmentPath: path,
+        assignmentMode: mode,
+        targetType: jsonTypeName(target),
+        valueType: jsonTypeName(value),
+      },
+    },
+  );
+}
+
+function jsonTypeName(value: JsonValue | undefined): string {
+  if (value === undefined) return "missing";
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
 }
 
 function diffAssignedContext(
@@ -1211,6 +2722,27 @@ function snapshotStepOutputs(state: RunnerState): Record<string, JsonValue> {
   return snapshot;
 }
 
+function cloneStepState(
+  steps: Record<string, StepState>,
+): Record<string, StepState> {
+  const out: Record<string, StepState> = {};
+  for (const [nodeId, step] of Object.entries(steps)) {
+    out[nodeId] =
+      step.output === undefined ? {} : { output: cloneJson(step.output) };
+  }
+  return out;
+}
+
+function stepOutputsFromStepState(
+  steps: Record<string, StepState>,
+): Record<string, JsonValue> {
+  const out: Record<string, JsonValue> = {};
+  for (const [nodeId, step] of Object.entries(steps)) {
+    if (step.output !== undefined) out[nodeId] = cloneJson(step.output);
+  }
+  return out;
+}
+
 function itemStepOutputs(
   state: RunnerState,
   beforeStepOutputs: Record<string, JsonValue>,
@@ -1222,6 +2754,66 @@ function itemStepOutputs(
     out[nodeId] = cloneJson(step.output);
   }
   return out;
+}
+
+function latestFailedStepError(state: RunnerState): JsonValue | undefined {
+  for (let index = state.stepAttempts.length - 1; index >= 0; index--) {
+    const step = state.stepAttempts[index]!;
+    if (step.status === "failed" || step.status === "canceled") {
+      return step.error === undefined ? undefined : cloneJson(step.error);
+    }
+  }
+  return undefined;
+}
+
+function parallelBranchesObject(
+  node: Extract<WorkflowNode, { type: "builtin.parallel" }>,
+  branchResults: Map<string, ParallelBranchRunResult>,
+): JsonObject {
+  const out: JsonObject = {};
+  for (const branch of node.branches) {
+    const result = branchResults.get(branch.id);
+    if (result) {
+      out[branch.id] = cloneJson(result.output);
+      continue;
+    }
+    const canceled: ParallelBranchOutput = {
+      id: branch.id,
+      ...(branch.label ? { label: branch.label } : {}),
+      status: "canceled",
+      startedAt: "",
+      endedAt: "",
+      durationMs: 0,
+      steps: {},
+      context: {},
+      error: {
+        message: "Parallel branch was not started because failFast canceled it",
+      },
+    };
+    out[branch.id] = canceled;
+  }
+  return out;
+}
+
+async function runLimited<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  let nextIndex = 0;
+  async function runWorker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      await worker(items[index]!, index);
+    }
+  }
+  await Promise.all(
+    Array.from(
+      { length: Math.min(Math.max(1, concurrency), items.length) },
+      () => runWorker(),
+    ),
+  );
 }
 
 function errorToJson(err: unknown): JsonValue {
@@ -1238,6 +2830,9 @@ function errorToJson(err: unknown): JsonValue {
 }
 
 function errorDetails(err: Error): JsonValue | undefined {
+  if (err instanceof WorkflowNodeExecutionError) {
+    return err.opts.details;
+  }
   const details = (err as Error & { details?: unknown }).details;
   return isJsonValue(details) ? details : undefined;
 }
@@ -1245,6 +2840,10 @@ function errorDetails(err: Error): JsonValue | undefined {
 function completedStepStatus(node: WorkflowNode): WorkflowStepStatus {
   if (node.type === "builtin.exit") return node.status;
   return "succeeded";
+}
+
+function uniqueNodeIds(nodeIds: string[]): string[] {
+  return [...new Set(nodeIds)];
 }
 
 function stepDurationMs(startedAt: string, endedAt: string): number {

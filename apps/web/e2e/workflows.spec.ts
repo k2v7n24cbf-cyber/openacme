@@ -372,6 +372,85 @@ test("edits selected workflow canvas node settings from inspector", async ({
     );
 });
 
+test("edits a transform card with a preset and verifies test run output", async ({
+  page,
+  request,
+}) => {
+  const workflowId = `wf_ui_transform_preset_${Date.now().toString(36)}`;
+
+  const created = await request.post("/api/workflows", {
+    data: {
+      id: workflowId,
+      name: "Workflow Transform Preset Smoke",
+      triggers: [{ id: "manual", kind: "manual", enabled: true }],
+      nodes: [
+        {
+          id: "normalize",
+          type: "builtin.transform",
+          transform: "$.input.value",
+          assign: {
+            value: "$.steps.normalize.output",
+          },
+        },
+        {
+          id: "log_value",
+          type: "builtin.log.info",
+          message: "normalized",
+          payload: "$.context.value",
+        },
+      ],
+    },
+  });
+  expect(created.ok(), await created.text()).toBeTruthy();
+
+  await page.goto(`/workflows?id=${workflowId}`);
+  await expect(
+    page.getByRole("heading", { name: "Workflow Transform Preset Smoke" }),
+  ).toBeVisible();
+
+  const canvas = page.getByLabel("Workflow Canvas", { exact: true });
+  await canvas.locator('[data-workflow-canvas-node-id="normalize"]').click();
+  const settings = page
+    .getByLabel("Workflow Inspector", { exact: true })
+    .getByLabel("Inspector settings normalize");
+  await settings
+    .getByRole("combobox", { name: "normalize transform preset" })
+    .click();
+  await page.getByRole("option", { name: "String Replace" }).click();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+
+  await expect
+    .poll(async () => {
+      const detail = await request.get(`/api/workflows/${workflowId}`);
+      expect(detail.ok(), await detail.text()).toBeTruthy();
+      const payload = (await detail.json()) as {
+        workflow: {
+          nodes: Array<{ id: string; transform?: unknown }>;
+        };
+      };
+      return payload.workflow.nodes.find((node) => node.id === "normalize")
+        ?.transform;
+    })
+    .toEqual({
+      kind: "string.replace",
+      value: "$.input.value",
+      search: "old",
+      replacement: "new",
+      all: true,
+    });
+
+  await page
+    .getByLabel("Run input")
+    .fill(JSON.stringify({ value: "old asset old" }, null, 2));
+  await page.getByRole("button", { name: "Test", exact: true }).click();
+  await expect(
+    page.getByText("Test run complete", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Run Console", { exact: true })).toContainText(
+    "new asset new",
+  );
+});
+
 test("creates workflow nodes from canvas palette and reorders selected node", async ({
   page,
   request,
@@ -1530,6 +1609,191 @@ test("shows empty workflow run console step rail when detail has no attempts", a
   const runConsole = page.getByLabel("Run Console", { exact: true });
   await expect(runConsole.getByText("No step attempts")).toBeVisible();
   await expect(runConsole.getByText("No selected step")).toBeVisible();
+});
+
+test("shows foreach aggregate output in the run console step detail", async ({
+  page,
+}) => {
+  const workflowId = "wf_console_foreach_aggregate";
+  const runId = "run_console_foreach_aggregate";
+  const startedAt = "2026-07-30T10:18:00.000Z";
+  const endedAt = "2026-07-30T10:18:02.000Z";
+  const run = workflowRun({
+    id: runId,
+    workflowId,
+    status: "succeeded",
+    currentNodeId: null,
+    startedAt,
+    endedAt,
+  });
+  const foreachStep = {
+    id: `${run.id}:each_asset:1`,
+    runId: run.id,
+    nodeId: "each_asset",
+    attempt: 1,
+    status: "succeeded",
+    startedAt,
+    endedAt,
+    durationMs: 2000,
+    output: {
+      count: 2,
+      succeededCount: 2,
+      failedCount: 0,
+      items: [
+        {
+          index: 0,
+          item: { id: "asset_1", ip: "10.1.2.3" },
+          status: "succeeded",
+          startedAt: "2026-07-30T10:18:00.100Z",
+          endedAt: "2026-07-30T10:18:00.500Z",
+          durationMs: 400,
+          steps: {
+            normalize_asset: { id: "asset_1", route: "internal" },
+          },
+        },
+        {
+          index: 1,
+          item: { id: "asset_2", ip: "8.8.8.8" },
+          status: "succeeded",
+          startedAt: "2026-07-30T10:18:00.600Z",
+          endedAt: "2026-07-30T10:18:01.000Z",
+          durationMs: 400,
+          steps: {
+            normalize_asset: { id: "asset_2", route: "external" },
+          },
+        },
+      ],
+    },
+  };
+  const detail = {
+    run,
+    steps: [foreachStep],
+    events: [
+      {
+        id: `${run.id}:event:1`,
+        runId: run.id,
+        stepRunId: foreachStep.id,
+        sequence: 1,
+        level: "system",
+        kind: "log",
+        message: "Foreach item 1 completed",
+        payload: foreachStep.output.items[0],
+        createdAt: "2026-07-30T10:18:00.500Z",
+      },
+      {
+        id: `${run.id}:event:2`,
+        runId: run.id,
+        stepRunId: foreachStep.id,
+        sequence: 2,
+        level: "system",
+        kind: "log",
+        message: "Foreach item 2 completed",
+        payload: foreachStep.output.items[1],
+        createdAt: "2026-07-30T10:18:01.000Z",
+      },
+    ],
+    artifacts: [],
+  };
+
+  await page.route("**/api/workflows/mcp/tools", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ tools: [] }),
+    }),
+  );
+  await page.route("**/api/workflows/agents", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ agents: [] }),
+    }),
+  );
+  await page.route(`**/api/workflow-runs/${runId}`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(detail),
+    }),
+  );
+  await page.route(`**/api/workflows/${workflowId}/triggers`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        triggers: [{ id: "manual", kind: "manual", enabled: true }],
+      }),
+    }),
+  );
+  await page.route(`**/api/workflows/${workflowId}/runs?**`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        runs: [run],
+        limit: 25,
+        offset: 0,
+        hasMore: false,
+        nextOffset: null,
+      }),
+    }),
+  );
+  await page.route("**/api/workflows", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        workflows: [
+          {
+            id: workflowId,
+            version: 1,
+            status: "draft",
+            name: "Workflow Console Foreach Aggregate",
+            triggers: [{ id: "manual", kind: "manual", enabled: true }],
+            nodes: [
+              {
+                id: "each_asset",
+                type: "builtin.foreach",
+                items: "$.input.assets",
+                itemVar: "asset",
+                body: ["normalize_asset"],
+              },
+              {
+                id: "normalize_asset",
+                type: "builtin.transform",
+                transform: "$.context.asset",
+              },
+            ],
+            createdAt: startedAt,
+            updatedAt: startedAt,
+          },
+        ],
+      }),
+    }),
+  );
+
+  await page.goto(`/workflows?id=${workflowId}&run=${runId}`);
+  await expect(
+    page.getByRole("heading", { name: "Workflow Console Foreach Aggregate" }),
+  ).toBeVisible();
+  const runConsole = page.getByLabel("Run Console", { exact: true });
+  await expect(
+    runConsole.getByRole("button", { name: /each_asset .* succeeded/ }),
+  ).toBeVisible();
+  await runConsole
+    .getByRole("button", { name: /each_asset .* succeeded/ })
+    .click();
+  const outputJson = runConsole.getByRole("group", {
+    name: "Step output JSON",
+  });
+  await expect(outputJson).toContainText('"count": 2');
+  await expect(outputJson).toContainText('"succeededCount": 2');
+  await expect(outputJson).toContainText('"failedCount": 0');
+  await expect(outputJson).toContainText('"durationMs": 400');
+  await expect(outputJson).toContainText('"asset_1"');
+  await expect(outputJson).toContainText('"route": "internal"');
+  await expect(outputJson).toContainText('"asset_2"');
+  await expect(outputJson).toContainText('"route": "external"');
 });
 
 test("keeps selected workflow run console step after cancel", async ({

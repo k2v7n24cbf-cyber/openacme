@@ -468,6 +468,7 @@ export const workflowRuns = sqliteTable(
     createdAt: text("created_at").notNull(),
     startedAt: text("started_at"),
     endedAt: text("ended_at"),
+    durationMs: integer("duration_ms"),
   },
   (t) => [
     index("idx_workflow_runs_workflow").on(t.workflowId, t.createdAt),

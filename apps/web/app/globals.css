@@ -664,9 +664,15 @@
   border-radius: 9999px;
   background-color: var(--ink-faint);
   pointer-events: auto;
+  cursor: crosshair;
+  transition:
+    background-color 120ms ease,
+    box-shadow 120ms ease;
 }
 .workflow-canvas .react-flow__handle:hover {
-  background-color: var(--signal-blue);
+  background: var(--signal-blue) !important;
+  background-color: var(--signal-blue) !important;
+  box-shadow: 0 0 0 6px rgb(59 130 246 / 18%) !important;
 }
 .workflow-canvas .react-flow__edges {
   z-index: 0;

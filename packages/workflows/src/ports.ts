@@ -1,4 +1,8 @@
-import type { JsonValue, WorkflowRunEventKind } from "./schemas.js";
+import type {
+  JsonValue,
+  WorkflowRunEventKind,
+  WorkflowRunEventLevel,
+} from "./schemas.js";
 
 export interface AgentSummary {
   id: string;
@@ -80,7 +84,7 @@ export interface WorkflowEventPort {
   append(event: {
     runId: string;
     stepRunId?: string | null;
-    level: "debug" | "info" | "error" | "system";
+    level: WorkflowRunEventLevel;
     kind: WorkflowRunEventKind;
     message?: string;
     payload?: JsonValue;

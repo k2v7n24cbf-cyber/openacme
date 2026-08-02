@@ -484,6 +484,7 @@ function cancelWorkflowRun(
     currentNodeId: null,
     waitingReason: null,
     endedAt,
+    durationMs: stepDurationMs(run.startedAt, endedAt),
   });
   store.appendRunEvent({
     runId: id,
@@ -625,12 +626,14 @@ async function executeWorkflowRun(
     });
   }
 
+  const endedAt = new Date().toISOString();
   const updated = store.updateRunState(run.id, {
     status: result.status,
     context: result.context,
     currentNodeId: null,
     waitingReason: null,
-    endedAt: new Date().toISOString(),
+    endedAt,
+    durationMs: stepDurationMs(run.startedAt, endedAt),
   });
   return {
     run: updated,

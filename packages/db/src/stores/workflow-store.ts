@@ -13,6 +13,8 @@ import type {
   WorkflowDefinition,
   WorkflowNode,
   WorkflowRun,
+  WorkflowRunEventKind,
+  WorkflowRunEventLevel,
   WorkflowRunMode,
   WorkflowRunStatus,
   WorkflowRunTrigger,
@@ -64,6 +66,7 @@ export interface WorkflowRunInput {
   createdAt?: string;
   startedAt?: string | null;
   endedAt?: string | null;
+  durationMs?: number | null;
 }
 
 export interface WorkflowStepAttemptInput {
@@ -87,18 +90,8 @@ export interface WorkflowRunEventInput {
   runId: string;
   stepRunId?: string | null;
   sequence?: number;
-  level: "debug" | "info" | "error" | "system";
-  kind:
-    | "run_started"
-    | "step_started"
-    | "step_output"
-    | "step_failed"
-    | "step_completed"
-    | "branch_selected"
-    | "log"
-    | "run_completed"
-    | "run_failed"
-    | "run_canceled";
+  level: WorkflowRunEventLevel;
+  kind: WorkflowRunEventKind;
   message?: string;
   payload?: JsonValue;
   createdAt?: string;
@@ -171,6 +164,7 @@ export interface WorkflowRunStateUpdate {
   waitingReason?: string | null;
   startedAt?: string | null;
   endedAt?: string | null;
+  durationMs?: number | null;
 }
 
 export interface WorkflowStoreOptions {
@@ -392,17 +386,18 @@ export function createWorkflowStore(
         createdAt,
         startedAt: input.startedAt ?? null,
         endedAt: input.endedAt ?? null,
+        durationMs: input.durationMs ?? null,
       });
       db.transaction(() => {
         db.prepare(
           `INSERT INTO workflow_runs
            (id, workflow_id, workflow_version, definition_source, mode,
             trigger_json, status, input_json, context_json, current_node_id,
-            waiting_reason, created_at, started_at, ended_at)
+            waiting_reason, created_at, started_at, ended_at, duration_ms)
            VALUES
            (@id, @workflowId, @workflowVersion, @definitionSource, @mode,
             @triggerJson, @status, @inputJson, @contextJson, @currentNodeId,
-            @waitingReason, @createdAt, @startedAt, @endedAt)`,
+            @waitingReason, @createdAt, @startedAt, @endedAt, @durationMs)`,
         ).run(runToParams(run));
         for (const artifact of [
           ...spilledInput.artifacts,
@@ -451,6 +446,8 @@ export function createWorkflowStore(
         startedAt:
           patch.startedAt === undefined ? current.startedAt : patch.startedAt,
         endedAt: patch.endedAt === undefined ? current.endedAt : patch.endedAt,
+        durationMs:
+          patch.durationMs === undefined ? current.durationMs : patch.durationMs,
       });
       db.transaction(() => {
         db.prepare(
@@ -460,7 +457,8 @@ export function createWorkflowStore(
                current_node_id = @currentNodeId,
                waiting_reason = @waitingReason,
                started_at = @startedAt,
-               ended_at = @endedAt
+               ended_at = @endedAt,
+               duration_ms = @durationMs
            WHERE id = @id`,
         ).run({
           id: updated.id,
@@ -470,6 +468,7 @@ export function createWorkflowStore(
           waitingReason: updated.waitingReason,
           startedAt: updated.startedAt,
           endedAt: updated.endedAt,
+          durationMs: updated.durationMs,
         });
         for (const artifact of spilledContext.artifacts) {
           upsertArtifact(db, artifact);
@@ -865,6 +864,7 @@ function runToParams(run: ReturnType<typeof WorkflowRunSchema.parse>) {
     createdAt: run.createdAt,
     startedAt: run.startedAt,
     endedAt: run.endedAt,
+    durationMs: run.durationMs,
   };
 }
 
@@ -916,6 +916,7 @@ function runFromRow(row: WorkflowRunRaw) {
     createdAt: row.created_at,
     startedAt: row.started_at,
     endedAt: row.ended_at,
+    durationMs: row.duration_ms,
   });
 }
 
@@ -1387,6 +1388,7 @@ interface WorkflowRunRaw {
   created_at: string;
   started_at: string | null;
   ended_at: string | null;
+  duration_ms: number | null;
 }
 
 interface WorkflowStepAttemptRaw {

@@ -3283,23 +3283,45 @@ function AddStepDialog({
       ? items.filter((item) => item.category === "Trigger")
       : items;
   }, [agents, mcpTools, triggerOnly, triggers.length]);
+  const normalizedQuery = query.trim().toLowerCase();
+  const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean);
+  const matchesCatalogQuery = (item: AddStepCatalogItem) => {
+    if (queryTokens.length === 0) return true;
+    const searchableFields = [
+      item.label,
+      item.description,
+      item.category,
+      item.ariaLabel,
+      item.title,
+      ...item.inputs,
+      ...item.outputs,
+    ].map((field) => (field ?? "").toLowerCase());
+    return queryTokens.every((token) =>
+      searchableFields.some((field) => field.includes(token)),
+    );
+  };
   const categories = useMemo(
     () =>
       (["Trigger", "Built-in", "Logic", "AI", "Tools"] as const).filter(
-        (item) => catalog.some((step) => step.category === item),
+        (item) =>
+          catalog.some(
+            (step) => step.category === item && matchesCatalogQuery(step),
+          ),
       ),
-    [catalog],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [catalog, normalizedQuery],
   );
-  const normalizedQuery = query.trim().toLowerCase();
-  const filteredCatalog = catalog.filter((item) => {
-    const matchesCategory = item.category === category;
-    if (!matchesCategory) return false;
-    if (!normalizedQuery) return true;
-    return [item.label, item.description, item.category]
-      .join(" ")
-      .toLowerCase()
-      .includes(normalizedQuery);
-  });
+  useEffect(() => {
+    if (categories.length === 0 || categories.includes(category)) return;
+    setCategory(categories[0]!);
+    setPreviewItemId(null);
+  }, [categories, category]);
+  useEffect(() => {
+    setPreviewItemId(null);
+  }, [query]);
+  const filteredCatalog = catalog.filter(
+    (item) => item.category === category && matchesCatalogQuery(item),
+  );
   const selectedItem =
     filteredCatalog.find((item) => item.id === previewItemId) ??
     filteredCatalog[0] ??
@@ -3308,7 +3330,7 @@ function AddStepDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[calc(100dvh-3rem)] sm:max-w-[980px]">
+      <DialogContent className="max-h-[calc(100dvh-3rem)] overflow-hidden sm:max-w-[980px]">
         <DialogHeader>
           <div className="flex items-start justify-between gap-3 pr-8">
             <div>
@@ -3328,13 +3350,13 @@ function AddStepDialog({
             )}
           </div>
         </DialogHeader>
-        <DialogBody className="p-0">
+        <DialogBody className="min-h-0 overflow-hidden p-0">
           <section
             aria-label="Workflow Node Palette"
-            className="grid min-h-[520px] grid-cols-[240px_minmax(260px,1fr)_minmax(280px,1fr)] overflow-hidden"
+            className="grid h-[min(680px,calc(100dvh-12rem))] min-h-[420px] grid-cols-[240px_minmax(260px,1fr)_minmax(280px,1fr)] overflow-hidden"
           >
             {!triggerOnly && (
-              <div className="border-r border-paper-rule p-4">
+              <div className="flex min-h-0 flex-col border-r border-paper-rule p-4">
                 <div className="relative">
                   <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-faint" />
                   <Input
@@ -3345,7 +3367,7 @@ function AddStepDialog({
                     className="pl-9"
                   />
                 </div>
-                <div className="mt-4 space-y-1">
+                <div className="mt-4 min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
                   {categories.map((item) => (
                     <button
                       key={item}
@@ -3362,8 +3384,24 @@ function AddStepDialog({
                     >
                       <StepCategoryIcon category={item} />
                       <span>{item}</span>
+                      {normalizedQuery && (
+                        <span className="ml-auto text-xs text-ink-faint">
+                          {
+                            catalog.filter(
+                              (step) =>
+                                step.category === item &&
+                                matchesCatalogQuery(step),
+                            ).length
+                          }
+                        </span>
+                      )}
                     </button>
                   ))}
+                  {categories.length === 0 && (
+                    <div className="border border-paper-rule bg-paper-sunk px-3 py-4 text-sm text-ink-soft">
+                      No categories match this search.
+                    </div>
+                  )}
                 </div>
               </div>
             )}

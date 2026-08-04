@@ -222,7 +222,7 @@ export class WorkflowRunner {
     const attempt = opts.attempt ?? 1;
     const attemptId = `${state.runId}:${node.id}:${attempt}`;
     const beforeContext = cloneJson(state.context);
-    const inputAtStart = safeResolvedNodeInput(state, node);
+    const inputAtStart = safeResolvedStepInput(state, node);
     await this.appendEvent(state, {
       stepRunId: attemptId,
       level: "system",
@@ -256,7 +256,7 @@ export class WorkflowRunner {
         startedAt,
         endedAt,
         durationMs: stepDurationMs(startedAt, endedAt),
-        input: resolvedNodeInput(state, node),
+        input: resolvedStepInput(state, node),
         output,
         logsSummary,
         contextDiff,
@@ -317,7 +317,7 @@ export class WorkflowRunner {
         startedAt,
         endedAt,
         durationMs: stepDurationMs(startedAt, endedAt),
-        input: safeResolvedNodeInput(state, node),
+        input: safeResolvedStepInput(state, node),
         error,
         logsSummary,
       });
@@ -1077,12 +1077,27 @@ function resolvedNodeInput(
   return resolveJsonValue(state, node.input);
 }
 
-function safeResolvedNodeInput(
+function resolvedStepInput(
+  state: RunnerState,
+  node: WorkflowNode,
+): JsonValue | undefined {
+  if (node.type !== "agent.call") return resolvedNodeInput(state, node);
+  const input = resolvedNodeInput(state, node) ?? {};
+  const request: JsonObject = {
+    agentId: node.agentId,
+    prompt: renderStringTemplate(state, node.prompt),
+    input,
+  };
+  if (node.timeoutMs !== undefined) request.timeoutMs = node.timeoutMs;
+  return request;
+}
+
+function safeResolvedStepInput(
   state: RunnerState,
   node: WorkflowNode,
 ): JsonValue | undefined {
   try {
-    return resolvedNodeInput(state, node);
+    return resolvedStepInput(state, node);
   } catch {
     return undefined;
   }

@@ -2199,6 +2199,11 @@ describe("WorkflowRunner builtin MVP", () => {
     expect(result.stepAttempts[0]).toMatchObject({
       nodeId: "ask_support",
       status: "succeeded",
+      input: {
+        agentId: "support",
+        prompt: "Review customer cust_1",
+        input: { customerId: "cust_1" },
+      },
       output: {
         response: "Customer cust_1 is ready",
         sessionId: "session_agent_1",

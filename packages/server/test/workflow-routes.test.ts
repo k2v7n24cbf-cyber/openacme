@@ -1115,7 +1115,12 @@ describe("workflow routes", () => {
         context: unknown;
         currentNodeId: string | null;
       };
-      steps: Array<{ nodeId: string; status: string; output?: unknown }>;
+      steps: Array<{
+        nodeId: string;
+        status: string;
+        input?: unknown;
+        output?: unknown;
+      }>;
       events: Array<{ kind: string; sequence: number }>;
     };
     expect(calls).toEqual([
@@ -2429,6 +2434,11 @@ describe("workflow routes", () => {
     expect(detail.steps[0]).toMatchObject({
       nodeId: "ask_support",
       status: "succeeded",
+      input: {
+        agentId: "support",
+        prompt: "Review cust_1",
+        input: { customerId: "cust_1" },
+      },
       output: {
         response: "Support says cust_1 is ready",
         sessionId: "agent_session_1",

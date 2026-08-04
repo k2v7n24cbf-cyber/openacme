@@ -578,6 +578,9 @@ importers:
       '@openacme/tasks':
         specifier: workspace:*
         version: link:../tasks
+      '@openacme/workflows':
+        specifier: workspace:*
+        version: link:../workflows
       drizzle-orm:
         specifier: ^0.44.0
         version: 0.44.7(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.6.1)(better-sqlite3@12.10.0)
@@ -819,6 +822,9 @@ importers:
       '@openacme/tools':
         specifier: workspace:*
         version: link:../tools
+      '@openacme/workflows':
+        specifier: workspace:*
+        version: link:../workflows
       ai:
         specifier: ^6.0.177
         version: 6.0.177(zod@4.4.3)
@@ -1040,6 +1046,25 @@ importers:
       typescript:
         specifier: 5.9.2
         version: 5.9.2
+
+  packages/workflows:
+    dependencies:
+      zod:
+        specifier: ^4.1.8
+        version: 4.4.3
+    devDependencies:
+      '@repo/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@types/node':
+        specifier: ^22.15.3
+        version: 22.15.3
+      typescript:
+        specifier: 5.9.2
+        version: 5.9.2
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.15.3)(jsdom@25.0.1)(lightningcss@1.32.0)
 
 packages:
 

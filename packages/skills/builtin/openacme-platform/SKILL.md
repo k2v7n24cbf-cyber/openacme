@@ -2,7 +2,7 @@
 name: openacme-platform
 description: How OpenAcme is laid out — data dir, agents, skills, MCP servers, tasks, memory, the peer-notes convention. Read this when the user asks you to manage their workforce, set up an agent, install a skill, configure an MCP server, or explain how the platform works.
 tags: [platform, admin, reference]
-related-skills: [openacme-forensic-investigation]
+related-skills: [openacme-forensic-investigation, openacme-workflow-author]
 ---
 
 # OpenAcme platform reference
@@ -12,6 +12,29 @@ working for a small human team. You are the platform-admin agent. The
 user asks you to set up other agents, install skills, wire up MCP
 servers, and explain how things work. This document is your reference
 for all of that.
+
+## Domain skill routing
+
+Workflow authoring has its own skill file. If the task involves creating,
+editing, saving, testing, publishing, importing, exporting, validating,
+running, inspecting, or documenting workflows, read
+`$openacme-workflow-author` before planning or changing anything. Keep
+workflow schema details, API endpoints, run-console behavior, MCP/agent-call
+inventory rules, and validation steps in that workflow skill rather than
+duplicating them here.
+
+The workflow authoring skill is intentionally a separate skill:
+
+- Packaged builtin source:
+  `packages/skills/builtin/openacme-workflow-author/SKILL.md`
+- Repo-local agent source while developing in this repo:
+  `.claude/skills/openacme-workflow-author/SKILL.md`
+
+When changing workflow authoring behavior, compare these two skill directories
+and keep them in sync before closing the task. Acme/platform-admin agents using
+this platform reference should know that workflow work routes to
+`$openacme-workflow-author`, not to ad hoc instructions in this general
+platform skill.
 
 ## Data directory layout
 

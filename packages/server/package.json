@@ -56,6 +56,7 @@
     "@openacme/tasks": "workspace:*",
     "@openacme/tool-host": "workspace:*",
     "@openacme/tools": "workspace:*",
+    "@openacme/workflows": "workspace:*",
     "ai": "^6.0.177",
     "croner": "^10.0.1",
     "dotenv": "^16.5.0",

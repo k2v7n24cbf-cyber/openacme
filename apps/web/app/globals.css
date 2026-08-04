@@ -362,6 +362,15 @@
     );
   }
 
+  .workflow-designer-grid {
+    background-image: radial-gradient(
+      circle,
+      color-mix(in oklch, var(--signal-blue), transparent 72%) 1px,
+      transparent 1px
+    );
+    background-size: 32px 32px;
+  }
+
   /* Agent-tint markers — scope --agent-tint on the parent. */
   .tint-eyebrow {
     box-shadow: inset 0 2px 0 0 var(--agent-tint);
@@ -634,8 +643,7 @@
   overflow-wrap: anywhere;
 }
 
-/* React Flow charts — base.css only; the paper/ink tokens supply the
-   theme. Handles exist for edge anchoring but are never shown. */
+/* React Flow charts — base.css only; the paper/ink tokens supply the theme. */
 .org-chart .react-flow__handle,
 .task-dependency-map .react-flow__handle {
   opacity: 0;
@@ -646,22 +654,71 @@
   border: none;
   pointer-events: none;
 }
+.workflow-canvas .react-flow__handle {
+  opacity: 1;
+  width: 7px;
+  height: 7px;
+  min-width: 7px;
+  min-height: 7px;
+  border: none;
+  border-radius: 9999px;
+  background-color: var(--ink-faint);
+  pointer-events: auto;
+  cursor: crosshair;
+  transition:
+    background-color 120ms ease,
+    box-shadow 120ms ease;
+}
+.workflow-canvas .react-flow__handle:hover {
+  background: var(--signal-blue) !important;
+  background-color: var(--signal-blue) !important;
+  box-shadow: 0 0 0 6px rgb(59 130 246 / 18%) !important;
+}
+.workflow-canvas .react-flow__edges {
+  z-index: 0;
+  overflow: visible;
+}
+.workflow-canvas .react-flow__edge {
+  pointer-events: visibleStroke;
+}
+.workflow-canvas .react-flow__edge-path {
+  fill: none;
+  stroke: var(--ink-soft);
+  stroke-opacity: 0.85;
+}
+.workflow-canvas .react-flow__edge-textbg {
+  fill: var(--paper);
+}
+.workflow-canvas .react-flow__edge-text {
+  fill: var(--ink-faint);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
 .org-chart .react-flow__edge-path,
-.task-dependency-map .react-flow__edge-path {
-  stroke-width: 1;
+.task-dependency-map .react-flow__edge-path,
+.workflow-canvas .react-flow__edge-path {
+  stroke-width: 2.25;
+}
+.workflow-canvas .react-flow__edge.selected .react-flow__edge-path {
+  stroke: var(--signal-blue);
+  stroke-opacity: 1;
+  stroke-width: 3;
 }
 .org-chart .react-flow__attribution,
-.task-dependency-map .react-flow__attribution {
+.task-dependency-map .react-flow__attribution,
+.workflow-canvas .react-flow__attribution {
   background: transparent;
   font-family: var(--font-mono);
   font-size: 9px;
 }
 .org-chart .react-flow__attribution a,
-.task-dependency-map .react-flow__attribution a {
+.task-dependency-map .react-flow__attribution a,
+.workflow-canvas .react-flow__attribution a {
   color: var(--ink-faint);
 }
 .org-chart .react-flow__pane,
-.task-dependency-map .react-flow__pane {
+.task-dependency-map .react-flow__pane,
+.workflow-canvas .react-flow__pane {
   cursor: grab;
 }
 .org-chart .react-flow__pane.dragging,

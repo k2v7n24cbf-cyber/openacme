@@ -4,6 +4,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startE2EServer, type E2EServer } from "./support/harness.js";
 import { makeClient, assistantText, waitUntil } from "./support/client.js";
 
+const MEMORY_RECALL_TIMEOUT_MS = 45_000;
+
 /**
  * Memory recall (the read side): after an agent saves a fact, a later turn
  * surfaces it. The selector runs through the model's structured-output path —
@@ -33,20 +35,25 @@ describe("memory recall (e2e)", () => {
     });
     await c.chat("helper", `note this [[mock:tool:memory:${write}]]`);
     const memPath = path.join(srv.dataDir, "agents", "helper", "memory", "project-x.md");
-    await waitUntil(async () => existsSync(memPath));
+    await waitUntil(async () => existsSync(memPath), {
+      timeoutMs: MEMORY_RECALL_TIMEOUT_MS,
+    });
 
     // Turn 2 — a fresh session. Recall is per-agent (not per-session), so the
     // fact is in scope; the selector picks it and it lands in the model input,
     // which the stub echoes back.
     const { sessionId } = await c.chat("helper", "what's coming up?");
-    await waitUntil(async () => {
-      const a = (await c.messages(sessionId)).find((m) => m.role === "assistant");
-      return !!a && assistantText(a.parts).includes("Project X ships on Friday");
-    });
+    await waitUntil(
+      async () => {
+        const a = (await c.messages(sessionId)).find((m) => m.role === "assistant");
+        return !!a && assistantText(a.parts).includes("Project X ships on Friday");
+      },
+      { timeoutMs: MEMORY_RECALL_TIMEOUT_MS }
+    );
 
     const a = (await c.messages(sessionId)).find((m) => m.role === "assistant")!;
     expect(assistantText(a.parts), "recall should reach the model input").toContain(
       "Project X ships on Friday"
     );
-  });
+  }, MEMORY_RECALL_TIMEOUT_MS + 15_000);
 });

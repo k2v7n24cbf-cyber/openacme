@@ -7,6 +7,7 @@ import {
   index,
   uniqueIndex,
   check,
+  primaryKey,
 } from "drizzle-orm/sqlite-core";
 import {
   COMMENT_KINDS,
@@ -409,6 +410,157 @@ export const sessionTimelineEvents = sqliteTable(
   ],
 );
 
+export const workflowDefinitions = sqliteTable("workflow_definitions", {
+  id: text("id").primaryKey(),
+  status: text("status", {
+    enum: ["draft", "published", "archived"],
+  }).notNull(),
+  currentVersion: integer("current_version").notNull().default(1),
+  name: text("name").notNull(),
+  description: text("description"),
+  inputSchemaJson: text("input_schema_json"),
+  triggersJson: text("triggers_json").notNull(),
+  nodesJson: text("nodes_json").notNull(),
+  uiJson: text("ui_json"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const workflowVersions = sqliteTable(
+  "workflow_versions",
+  {
+    workflowId: text("workflow_id")
+      .notNull()
+      .references(() => workflowDefinitions.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    name: text("name").notNull(),
+    description: text("description"),
+    inputSchemaJson: text("input_schema_json"),
+    triggersJson: text("triggers_json").notNull(),
+    nodesJson: text("nodes_json").notNull(),
+    uiJson: text("ui_json"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.workflowId, t.version] }),
+    index("idx_workflow_versions_workflow").on(t.workflowId, t.version),
+  ],
+);
+
+export const workflowRuns = sqliteTable(
+  "workflow_runs",
+  {
+    id: text("id").primaryKey(),
+    workflowId: text("workflow_id").notNull(),
+    workflowVersion: integer("workflow_version").notNull(),
+    definitionSource: text("definition_source", {
+      enum: ["draft", "published"],
+    }).notNull(),
+    mode: text("mode", { enum: ["test", "live"] }).notNull(),
+    triggerJson: text("trigger_json").notNull(),
+    status: text("status", {
+      enum: ["queued", "running", "waiting", "succeeded", "failed", "canceled"],
+    }).notNull(),
+    inputJson: text("input_json").notNull(),
+    contextJson: text("context_json").notNull(),
+    currentNodeId: text("current_node_id"),
+    waitingReason: text("waiting_reason"),
+    createdAt: text("created_at").notNull(),
+    startedAt: text("started_at"),
+    endedAt: text("ended_at"),
+    durationMs: integer("duration_ms"),
+  },
+  (t) => [
+    index("idx_workflow_runs_workflow").on(t.workflowId, t.createdAt),
+    index("idx_workflow_runs_status").on(t.status, t.createdAt),
+    index("idx_workflow_runs_mode").on(t.mode, t.createdAt),
+  ],
+);
+
+export const workflowStepAttempts = sqliteTable(
+  "workflow_step_attempts",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => workflowRuns.id, { onDelete: "cascade" }),
+    nodeId: text("node_id").notNull(),
+    attempt: integer("attempt").notNull(),
+    status: text("status", {
+      enum: ["queued", "running", "succeeded", "failed", "skipped", "canceled"],
+    }).notNull(),
+    startedAt: text("started_at"),
+    endedAt: text("ended_at"),
+    durationMs: integer("duration_ms"),
+    inputJson: text("input_json"),
+    outputJson: text("output_json"),
+    errorJson: text("error_json"),
+    logsSummaryJson: text("logs_summary_json"),
+    contextDiffJson: text("context_diff_json"),
+  },
+  (t) => [
+    index("idx_workflow_steps_run").on(t.runId, t.nodeId),
+    uniqueIndex("idx_workflow_steps_run_node_attempt").on(
+      t.runId,
+      t.nodeId,
+      t.attempt,
+    ),
+  ],
+);
+
+export const workflowRunEvents = sqliteTable(
+  "workflow_run_events",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => workflowRuns.id, { onDelete: "cascade" }),
+    stepRunId: text("step_run_id"),
+    sequence: integer("sequence").notNull(),
+    level: text("level", {
+      enum: ["debug", "info", "error", "system"],
+    }).notNull(),
+    kind: text("kind", {
+      enum: [
+        "run_started",
+        "step_started",
+        "step_output",
+        "step_failed",
+        "step_completed",
+        "branch_selected",
+        "log",
+        "run_completed",
+        "run_failed",
+      ],
+    }).notNull(),
+    message: text("message"),
+    payloadJson: text("payload_json"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [
+    index("idx_workflow_events_run").on(t.runId, t.sequence),
+    uniqueIndex("idx_workflow_events_run_sequence").on(t.runId, t.sequence),
+  ],
+);
+
+export const workflowArtifacts = sqliteTable(
+  "workflow_artifacts",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => workflowRuns.id, { onDelete: "cascade" }),
+    stepRunId: text("step_run_id").references(() => workflowStepAttempts.id, {
+      onDelete: "set null",
+    }),
+    kind: text("kind").notNull(),
+    path: text("path").notNull(),
+    preview: text("preview"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [index("idx_workflow_artifacts_run").on(t.runId)],
+);
+
 /**
  * Human operators. The deployment is single-org / flat-role: every member
  * is a full admin, distinguished only so the system can route to them.
@@ -494,6 +646,19 @@ export type NewUsageEventRow = typeof usageEvents.$inferInsert;
 export type SessionTimelineEventRow = typeof sessionTimelineEvents.$inferSelect;
 export type NewSessionTimelineEventRow =
   typeof sessionTimelineEvents.$inferInsert;
+export type WorkflowDefinitionRow = typeof workflowDefinitions.$inferSelect;
+export type NewWorkflowDefinitionRow = typeof workflowDefinitions.$inferInsert;
+export type WorkflowVersionRow = typeof workflowVersions.$inferSelect;
+export type NewWorkflowVersionRow = typeof workflowVersions.$inferInsert;
+export type WorkflowRunRow = typeof workflowRuns.$inferSelect;
+export type NewWorkflowRunRow = typeof workflowRuns.$inferInsert;
+export type WorkflowStepAttemptRow = typeof workflowStepAttempts.$inferSelect;
+export type NewWorkflowStepAttemptRow =
+  typeof workflowStepAttempts.$inferInsert;
+export type WorkflowRunEventRow = typeof workflowRunEvents.$inferSelect;
+export type NewWorkflowRunEventRow = typeof workflowRunEvents.$inferInsert;
+export type WorkflowArtifactRow = typeof workflowArtifacts.$inferSelect;
+export type NewWorkflowArtifactRow = typeof workflowArtifacts.$inferInsert;
 export type MemberRow = typeof members.$inferSelect;
 export type NewMemberRow = typeof members.$inferInsert;
 export type AuthSessionRow = typeof authSessions.$inferSelect;

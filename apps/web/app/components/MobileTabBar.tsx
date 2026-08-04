@@ -1,5 +1,13 @@
 import { Link, linkOptions, useLocation } from "@tanstack/react-router";
-import { Home, Bot, BookOpen, ListChecks, Settings, Users } from "lucide-react";
+import {
+  Home,
+  Bot,
+  BookOpen,
+  ListChecks,
+  Settings,
+  Users,
+  Workflow,
+} from "lucide-react";
 import { cn } from "@/app/lib/utils";
 
 const navItems = [
@@ -7,6 +15,7 @@ const navItems = [
   { link: linkOptions({ to: "/agents" }), label: "Agents", icon: Bot },
   { link: linkOptions({ to: "/teams" }), label: "Teams", icon: Users },
   { link: linkOptions({ to: "/tasks" }), label: "Tasks", icon: ListChecks },
+  { link: linkOptions({ to: "/workflows" }), label: "Flows", icon: Workflow },
   { link: linkOptions({ to: "/skills" }), label: "Skills", icon: BookOpen },
   { link: linkOptions({ to: "/settings" }), label: "Settings", icon: Settings },
 ];
@@ -29,7 +38,7 @@ export function MobileTabBar() {
       aria-label="Primary"
       className="fixed inset-x-0 bottom-0 z-40 border-t border-paper-rule bg-paper-sunk pb-[env(safe-area-inset-bottom)] md:hidden"
     >
-      <ul className="grid grid-cols-5">
+      <ul className="grid grid-cols-6">
         {navItems.map((item) => {
           const isActive =
             item.link.to === "/"
@@ -43,9 +52,7 @@ export function MobileTabBar() {
                 aria-current={isActive ? "page" : undefined}
                 className={cn(
                   "flex h-14 flex-col items-center justify-center gap-0.5 text-[10px] uppercase tracking-[0.08em] transition-colors",
-                  isActive
-                    ? "text-plot-red"
-                    : "text-ink-soft hover:text-ink"
+                  isActive ? "text-plot-red" : "text-ink-soft hover:text-ink",
                 )}
               >
                 <Icon className="size-5" aria-hidden />

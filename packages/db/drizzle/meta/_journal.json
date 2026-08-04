@@ -120,6 +120,34 @@
       "when": 1785355333538,
       "tag": "0016_curvy_black_bird",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1785367897944,
+      "tag": "0017_good_paibok",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1785395080465,
+      "tag": "0018_mean_paibok",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1785447745601,
+      "tag": "0019_crazy_talisman",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1785550721159,
+      "tag": "0020_majestic_sally_floyd",
+      "breakpoints": true
     }
   ]
 }

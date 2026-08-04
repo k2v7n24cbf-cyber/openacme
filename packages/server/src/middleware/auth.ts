@@ -35,7 +35,10 @@ export function extractToken(c: Context): string | null {
 }
 
 /** Resolve the member behind a request, or null if unauthenticated. */
-export function resolveMember(c: Context, store: AuthStore): MemberPublic | null {
+export function resolveMember(
+  c: Context,
+  store: AuthStore,
+): MemberPublic | null {
   const token = extractToken(c);
   if (!token) return null;
   return store.resolveSession(token);
@@ -68,6 +71,9 @@ export function authMiddleware(opts: AuthOptions): MiddlewareHandler {
     // Version check is non-sensitive (current + npm latest) — same class as
     // health, and the web banner reads it before any session on local installs.
     if (path === "/api/version/check") return next();
+    // Public workflow webhooks authenticate with their own per-trigger shared
+    // secret, not the operator session cookie/bearer token.
+    if (path.startsWith("/api/workflow-webhooks/")) return next();
     if (
       path === "/login" ||
       path === "/setup" ||
@@ -123,7 +129,10 @@ export function authMiddleware(opts: AuthOptions): MiddlewareHandler {
       return c.json({ error: "Unauthorized" }, 401);
     }
     const next_ = encodeURIComponent(
-      path + (c.req.url.includes("?") ? c.req.url.slice(c.req.url.indexOf("?")) : "")
+      path +
+        (c.req.url.includes("?")
+          ? c.req.url.slice(c.req.url.indexOf("?"))
+          : ""),
     );
     return c.redirect(`/login?next=${next_}`);
   };

@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenAcme Workflow Author"
+  short_description: "Create and validate OpenAcme workflows"
+  default_prompt: "Use $openacme-workflow-author to create, save, test, and document an OpenAcme workflow."

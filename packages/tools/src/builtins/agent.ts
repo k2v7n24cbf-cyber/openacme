@@ -43,6 +43,7 @@ export interface AgentAskRequest {
   message: string;
   sessionId?: string;
   timeoutMs: number;
+  signal?: AbortSignal;
 }
 
 export interface AgentAskResult {

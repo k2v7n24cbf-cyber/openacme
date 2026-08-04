@@ -687,9 +687,21 @@ function updateRunProgressFromEvent(
     return;
   }
 
+  if (event.kind === "step_completed" || event.kind === "step_failed") {
+    recordTerminalStepAttemptFromEvent(store, event);
+    const step = stepAttemptFromEvent(event);
+    store.updateRunState(event.runId, {
+      status: current.status,
+      currentNodeId:
+        step && current.currentNodeId === step.nodeId
+          ? null
+          : current.currentNodeId,
+      waitingReason: null,
+    });
+    return;
+  }
+
   if (
-    event.kind === "step_completed" ||
-    event.kind === "step_failed" ||
     event.kind === "run_completed" ||
     event.kind === "run_failed" ||
     event.kind === "run_canceled"
@@ -700,6 +712,63 @@ function updateRunProgressFromEvent(
       waitingReason: null,
     });
   }
+}
+
+function recordTerminalStepAttemptFromEvent(
+  store: WorkflowStore,
+  event: WorkflowPortEvent,
+  endedAtOverride?: string,
+): void {
+  const step = stepAttemptFromEvent(event);
+  if (!step) return;
+  const status = terminalStepStatusFromEvent(event);
+  const existing = [...store.listStepAttempts(event.runId)]
+    .reverse()
+    .find((item) => item.id === step.id);
+  const endedAt = endedAtOverride ?? new Date().toISOString();
+  store.recordStepAttempt({
+    id: step.id,
+    runId: event.runId,
+    nodeId: step.nodeId,
+    attempt: step.attempt,
+    status,
+    startedAt: existing?.startedAt ?? endedAt,
+    endedAt,
+    durationMs: stepDurationMs(existing?.startedAt ?? endedAt, endedAt),
+    input: existing?.input ?? step.input,
+    output: existing?.output,
+    error: terminalStepErrorFromEvent(event) ?? existing?.error,
+    logsSummary: existing?.logsSummary,
+    contextDiff: existing?.contextDiff,
+  });
+}
+
+function terminalStepStatusFromEvent(
+  event: WorkflowPortEvent,
+): "succeeded" | "failed" | "canceled" {
+  const payloadStatus =
+    isRecord(event.payload) && typeof event.payload["status"] === "string"
+      ? event.payload["status"]
+      : undefined;
+  if (
+    event.kind === "step_completed" &&
+    (payloadStatus === "succeeded" ||
+      payloadStatus === "failed" ||
+      payloadStatus === "canceled")
+  ) {
+    return payloadStatus;
+  }
+  return event.kind === "step_failed" ? "failed" : "succeeded";
+}
+
+function terminalStepErrorFromEvent(
+  event: WorkflowPortEvent,
+): JsonValue | undefined {
+  if (event.kind !== "step_failed") return undefined;
+  if (isRecord(event.payload) && isJsonValue(event.payload["output"])) {
+    return event.payload["output"];
+  }
+  return undefined;
 }
 
 function stepAttemptFromEvent(event: WorkflowPortEvent): {
@@ -902,12 +971,35 @@ function jsonEquals(left: unknown, right: unknown): boolean {
 function getRunDetail(store: WorkflowStore, id: string) {
   const run = store.getRun(id);
   if (!run) return null;
+  healTerminalRunStepAttemptsFromEvents(store, run);
   return {
     run,
     steps: store.listStepAttempts(id),
     events: store.listRunEvents(id),
     artifacts: store.listArtifacts(id),
   };
+}
+
+function healTerminalRunStepAttemptsFromEvents(
+  store: WorkflowStore,
+  run: NonNullable<ReturnType<WorkflowStore["getRun"]>>,
+): void {
+  if (!isTerminalRunStatus(run.status)) return;
+  const nonTerminalSteps = store
+    .listStepAttempts(run.id)
+    .filter((step) => !isTerminalStepStatus(step.status));
+  if (nonTerminalSteps.length === 0) return;
+  const terminalEvents = store
+    .listRunEvents(run.id)
+    .filter(
+      (event) =>
+        event.kind === "step_completed" || event.kind === "step_failed",
+    );
+  for (const step of nonTerminalSteps) {
+    const event = terminalEvents.find((item) => item.stepRunId === step.id);
+    if (!event) continue;
+    recordTerminalStepAttemptFromEvent(store, event, event.createdAt);
+  }
 }
 
 function isTerminalRunStatus(status: string): boolean {

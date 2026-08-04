@@ -2133,6 +2133,12 @@ describe("workflow routes", () => {
       name: "Cancel During Execution",
       nodes: [
         {
+          id: "start_log",
+          type: "builtin.log.info",
+          message: "Starting cancelable workflow",
+          payload: "$.input.customerId",
+        },
+        {
           id: "crm_lookup",
           type: "mcp.tool",
           server: "crm",
@@ -2155,7 +2161,13 @@ describe("workflow routes", () => {
     expect(res.status).toBe(201);
     const detail = (await res.json()) as {
       run: { id: string; status: string; currentNodeId: string | null };
-      steps: Array<{ nodeId: string; status: string; input?: unknown }>;
+      steps: Array<{
+        nodeId: string;
+        status: string;
+        input?: unknown;
+        endedAt?: string | null;
+        durationMs?: number | null;
+      }>;
       events: Array<{ kind: string; payload?: unknown }>;
     };
     expect(cancelResponses).toEqual([{ status: 200, runStatus: "canceled" }]);
@@ -2166,6 +2178,12 @@ describe("workflow routes", () => {
     });
     expect(detail.steps).toEqual([
       expect.objectContaining({
+        nodeId: "start_log",
+        status: "succeeded",
+        endedAt: expect.any(String),
+        durationMs: expect.any(Number),
+      }),
+      expect.objectContaining({
         nodeId: "crm_lookup",
         status: "canceled",
         input: { id: "cust_cancel", apiKey: "[redacted]" },
@@ -2173,12 +2191,21 @@ describe("workflow routes", () => {
     ]);
     expect(JSON.stringify(detail)).not.toContain("raw-cancel-api-key");
     expect(
-      detail.events.find((event) => event.kind === "step_started")?.payload,
+      detail.events.find(
+        (event) =>
+          event.kind === "step_started" &&
+          typeof event.payload === "object" &&
+          event.payload !== null &&
+          "input" in event.payload,
+      )?.payload,
     ).toMatchObject({
       input: { id: "cust_cancel", apiKey: "[redacted]" },
     });
     expect(detail.events.map((event) => event.kind)).toEqual([
       "run_started",
+      "step_started",
+      "log",
+      "step_completed",
       "step_started",
       "run_canceled",
     ]);
@@ -2187,11 +2214,23 @@ describe("workflow routes", () => {
     expect(res.status).toBe(200);
     const persisted = (await res.json()) as {
       run: { status: string };
-      steps: Array<{ nodeId: string; status: string; input?: unknown }>;
+      steps: Array<{
+        nodeId: string;
+        status: string;
+        input?: unknown;
+        endedAt?: string | null;
+        durationMs?: number | null;
+      }>;
       events: Array<{ kind: string; payload?: unknown }>;
     };
     expect(persisted.run.status).toBe("canceled");
     expect(persisted.steps).toEqual([
+      expect.objectContaining({
+        nodeId: "start_log",
+        status: "succeeded",
+        endedAt: expect.any(String),
+        durationMs: expect.any(Number),
+      }),
       expect.objectContaining({
         nodeId: "crm_lookup",
         status: "canceled",
@@ -2200,12 +2239,21 @@ describe("workflow routes", () => {
     ]);
     expect(JSON.stringify(persisted)).not.toContain("raw-cancel-api-key");
     expect(
-      persisted.events.find((event) => event.kind === "step_started")?.payload,
+      persisted.events.find(
+        (event) =>
+          event.kind === "step_started" &&
+          typeof event.payload === "object" &&
+          event.payload !== null &&
+          "input" in event.payload,
+      )?.payload,
     ).toMatchObject({
       input: { id: "cust_cancel", apiKey: "[redacted]" },
     });
     expect(persisted.events.map((event) => event.kind)).toEqual([
       "run_started",
+      "step_started",
+      "log",
+      "step_completed",
       "step_started",
       "run_canceled",
     ]);
@@ -4564,6 +4612,71 @@ describe("workflow routes", () => {
         status: "canceled",
         endedAt: expect.any(String),
         durationMs: expect.any(Number),
+      }),
+    ]);
+  });
+
+  it("heals terminal run details when completed step rows were left running", async () => {
+    const workflow = runtime.workflowStore.createDraft({
+      id: "wf_heal_completed_running_step",
+      name: "Heal Completed Running Step",
+      nodes: runnableNodes(),
+    });
+    const run = runtime.workflowStore.createRun({
+      id: "run_heal_completed_running_step",
+      workflowId: workflow.id,
+      workflowVersion: workflow.version,
+      definitionSource: "draft",
+      mode: "test",
+      status: "canceled",
+      input: { customer: { id: "cust_heal", name: "Heal Ada" } },
+      currentNodeId: null,
+      startedAt: "2026-07-30T10:00:00.000Z",
+      endedAt: "2026-07-30T10:00:02.000Z",
+      durationMs: 2000,
+    });
+    runtime.workflowStore.recordStepAttempt({
+      id: `${run.id}:set_customer:1`,
+      runId: run.id,
+      nodeId: "set_customer",
+      attempt: 1,
+      status: "running",
+      startedAt: "2026-07-30T10:00:00.100Z",
+    });
+    runtime.workflowStore.appendRunEvent({
+      runId: run.id,
+      stepRunId: `${run.id}:set_customer:1`,
+      level: "system",
+      kind: "step_completed",
+      message: "Step set_customer completed",
+      payload: { status: "succeeded" },
+      createdAt: "2026-07-30T10:00:00.300Z",
+    });
+
+    const res = await req(`/api/workflow-runs/${run.id}`);
+    expect(res.status).toBe(200);
+    const detail = (await res.json()) as {
+      steps: Array<{
+        nodeId: string;
+        status: string;
+        endedAt: string | null;
+        durationMs: number | null;
+      }>;
+    };
+    expect(detail.steps).toEqual([
+      expect.objectContaining({
+        nodeId: "set_customer",
+        status: "succeeded",
+        endedAt: "2026-07-30T10:00:00.300Z",
+        durationMs: 200,
+      }),
+    ]);
+    expect(runtime.workflowStore.listStepAttempts(run.id)).toEqual([
+      expect.objectContaining({
+        nodeId: "set_customer",
+        status: "succeeded",
+        endedAt: "2026-07-30T10:00:00.300Z",
+        durationMs: 200,
       }),
     ]);
   });

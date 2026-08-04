@@ -530,9 +530,12 @@ function WorkflowsPage() {
     if (search.run) setDesignerView("runs");
   }, [search.run]);
 
-  const parsedNodes = useMemo(() => parseNodesDraft(nodesDraft), [nodesDraft]);
+  const parsedNodes = useMemo(
+    () => parseNodesDraft(nodesDraftRef.current),
+    [nodesDraft],
+  );
   const parsedTriggersForCanvas = useMemo(() => {
-    const parsed = parseTriggersDraft(triggersDraft);
+    const parsed = parseTriggersDraft(triggersDraftRef.current);
     return parsed.ok
       ? (parsed.value.filter(isRecord) as WorkflowGraphTrigger[])
       : [];
@@ -1034,7 +1037,7 @@ function WorkflowsPage() {
   async function publishWorkflow() {
     if (!selected) return;
     if (!validateCurrentNodeReferences()) return;
-    const triggerDraft = parseTriggersDraft(triggersDraft);
+    const triggerDraft = parseTriggersDraft(triggersDraftRef.current);
     if (!triggerDraft.ok) {
       toast.error(triggerDraft.error);
       return;
@@ -1066,7 +1069,7 @@ function WorkflowsPage() {
 
   function exportWorkflowDefinition() {
     if (!selected) return;
-    const nodes = parseNodesDraft(nodesDraft);
+    const nodes = parseNodesDraft(nodesDraftRef.current);
     if (!nodes.ok) {
       toast.error(nodes.error);
       return;
@@ -1081,7 +1084,7 @@ function WorkflowsPage() {
       toast.error(nodeShape.message);
       return;
     }
-    const triggerDraft = parseTriggersDraft(triggersDraft);
+    const triggerDraft = parseTriggersDraft(triggersDraftRef.current);
     if (!triggerDraft.ok) {
       toast.error(triggerDraft.error);
       return;
@@ -1096,19 +1099,19 @@ function WorkflowsPage() {
       toast.error(triggerIdentity.message);
       return;
     }
-    const inputSchema = parseOptionalJsonDraft(inputSchemaDraft);
+    const inputSchema = parseOptionalJsonDraft(inputSchemaDraftRef.current);
     if (!inputSchema.ok) {
       toast.error(inputSchema.error);
       return;
     }
-    const name = nameDraft.trim();
+    const name = nameDraftRef.current.trim();
     if (!name) {
       toast.error("Workflow needs a name");
       return;
     }
 
-    const description = descriptionDraft.trim();
-    const ui = normalizeWorkflowDefinitionUi(uiDraft, nodes.value);
+    const description = descriptionDraftRef.current.trim();
+    const ui = normalizeWorkflowDefinitionUi(uiDraftRef.current, nodes.value);
     const payload = {
       format: "openacme.workflow.definition.v1",
       exportedAt: new Date().toISOString(),
@@ -1311,7 +1314,7 @@ function WorkflowsPage() {
     tool?: McpToolSummary | AgentSummary,
     placement?: WorkflowCanvasAddPlacement | null,
   ) {
-    const parsed = parseNodesDraft(nodesDraft);
+    const parsed = parseNodesDraft(nodesDraftRef.current);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;
@@ -1406,7 +1409,7 @@ function WorkflowsPage() {
   }
 
   function addManualTriggerFromPalette() {
-    const parsed = parseTriggersDraft(triggersDraft);
+    const parsed = parseTriggersDraft(triggersDraftRef.current);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;
@@ -1477,7 +1480,7 @@ function WorkflowsPage() {
   }
 
   function moveNode(index: number, direction: -1 | 1) {
-    const parsed = parseNodesDraft(nodesDraft);
+    const parsed = parseNodesDraft(nodesDraftRef.current);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;
@@ -1489,7 +1492,7 @@ function WorkflowsPage() {
 
   function moveSelectedCanvasNode(direction: -1 | 1) {
     if (!selectedCanvasNodeId) return;
-    const parsed = parseNodesDraft(nodesDraft);
+    const parsed = parseNodesDraft(nodesDraftRef.current);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;
@@ -1502,7 +1505,7 @@ function WorkflowsPage() {
   }
 
   function cloneSelectedCanvasNode(nodeId: string) {
-    const parsed = parseNodesDraft(nodesDraft);
+    const parsed = parseNodesDraft(nodesDraftRef.current);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;
@@ -1515,7 +1518,7 @@ function WorkflowsPage() {
   }
 
   function makeForeachBodyFirst(foreachNodeId: string, bodyNodeId: string) {
-    const parsed = parseNodesDraft(nodesDraft);
+    const parsed = parseNodesDraft(nodesDraftRef.current);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;
@@ -1534,7 +1537,7 @@ function WorkflowsPage() {
 
   function connectCanvasReferenceEdge(connection: WorkflowCanvasConnection) {
     const kind = referenceEdgeKind(connection.sourceHandle);
-    const parsed = parseNodesDraft(nodesDraft);
+    const parsed = parseNodesDraft(nodesDraftRef.current);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;
@@ -1567,7 +1570,7 @@ function WorkflowsPage() {
   ) {
     const kind = referenceEdgeKind(edge.kind);
     const targetId = edge.targetRef ?? edge.targetId;
-    const parsed = parseNodesDraft(nodesDraft);
+    const parsed = parseNodesDraft(nodesDraftRef.current);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;
@@ -1646,7 +1649,7 @@ function WorkflowsPage() {
   }
 
   function deleteNode(index: number) {
-    const parsed = parseNodesDraft(nodesDraft);
+    const parsed = parseNodesDraft(nodesDraftRef.current);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;
@@ -1657,7 +1660,7 @@ function WorkflowsPage() {
   }
 
   function deleteWorkflowNode(nodeId: string) {
-    const parsed = parseNodesDraft(nodesDraft);
+    const parsed = parseNodesDraft(nodesDraftRef.current);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;
@@ -1668,7 +1671,7 @@ function WorkflowsPage() {
   }
 
   function validateCurrentNodeReferences() {
-    const nodes = parseNodesDraft(nodesDraft);
+    const nodes = parseNodesDraft(nodesDraftRef.current);
     if (!nodes.ok) {
       toast.error(nodes.error);
       return false;
@@ -1687,7 +1690,7 @@ function WorkflowsPage() {
   }
 
   function validateCurrentTriggerDraft() {
-    const triggers = parseTriggersDraft(triggersDraft);
+    const triggers = parseTriggersDraft(triggersDraftRef.current);
     if (!triggers.ok) {
       toast.error(triggers.error);
       return false;
@@ -1709,7 +1712,7 @@ function WorkflowsPage() {
     index: number,
     updater: (node: WorkflowNode) => WorkflowNode,
   ) {
-    const parsed = parseNodesDraft(nodesDraft);
+    const parsed = parseNodesDraft(nodesDraftRef.current);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;
@@ -2273,7 +2276,7 @@ function WorkflowsPage() {
       [key: string]: JsonValue;
     },
   ) {
-    const parsed = parseTriggersDraft(triggersDraft);
+    const parsed = parseTriggersDraft(triggersDraftRef.current);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;

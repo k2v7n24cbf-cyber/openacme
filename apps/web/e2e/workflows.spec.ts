@@ -722,6 +722,105 @@ test("autosaves unsaved draft nodes before starting a test run", async ({
     });
 });
 
+test("saves edited card settings before the next test run", async ({
+  page,
+  request,
+}) => {
+  const workflowId = `wf_ui_save_card_settings_${Date.now().toString(36)}`;
+
+  const created = await request.post("/api/workflows", {
+    data: {
+      id: workflowId,
+      name: "Workflow Save Card Settings",
+      triggers: [{ id: "manual", kind: "manual", enabled: true }],
+      nodes: [
+        {
+          id: "log_01",
+          type: "builtin.log.info",
+          message: "old message",
+        },
+      ],
+    },
+  });
+  expect(created.ok(), await created.text()).toBeTruthy();
+
+  const patchBodies: Array<{
+    nodes?: Array<{ id: string; message?: string }>;
+  }> = [];
+  await page.route(`**/api/workflows/${workflowId}`, async (route) => {
+    if (route.request().method() === "PATCH") {
+      patchBodies.push(
+        route.request().postDataJSON() as {
+          nodes?: Array<{ id: string; message?: string }>;
+        },
+      );
+    }
+    await route.continue();
+  });
+
+  await page.goto(`/workflows?id=${workflowId}`);
+  await expect(
+    page.getByRole("heading", { name: "Workflow Save Card Settings" }),
+  ).toBeVisible();
+
+  const canvas = page.getByLabel("Workflow Canvas", { exact: true });
+  await canvas.locator('[data-workflow-canvas-node-id="log_01"]').click();
+  await page
+    .getByLabel("Inspector settings log_01")
+    .getByLabel("log_01 log message")
+    .fill("new message from card settings");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+
+  expect(patchBodies).toContainEqual(
+    expect.objectContaining({
+      nodes: expect.arrayContaining([
+        expect.objectContaining({
+          id: "log_01",
+          message: "new message from card settings",
+        }),
+      ]),
+    }),
+  );
+
+  await expect
+    .poll(async () => {
+      const detail = await request.get(`/api/workflows/${workflowId}`);
+      expect(detail.ok(), await detail.text()).toBeTruthy();
+      const payload = (await detail.json()) as {
+        workflow: { nodes: Array<{ id: string; message?: string }> };
+      };
+      return payload.workflow.nodes.find((node) => node.id === "log_01")
+        ?.message;
+    })
+    .toBe("new message from card settings");
+
+  await page.getByRole("button", { name: "Test", exact: true }).click();
+
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("run"))
+    .not.toBeNull();
+  const runId = new URL(page.url()).searchParams.get("run");
+  await expect
+    .poll(async () => {
+      const detail = await request.get(`/api/workflow-runs/${runId}`);
+      expect(detail.ok(), await detail.text()).toBeTruthy();
+      const payload = (await detail.json()) as {
+        steps: Array<{
+          nodeId: string;
+          status: string;
+          input?: { message?: string };
+          logsSummary?: unknown;
+        }>;
+      };
+      return payload.steps.find((step) => step.nodeId === "log_01");
+    })
+    .toMatchObject({
+      nodeId: "log_01",
+      status: "succeeded",
+      input: { message: "new message from card settings" },
+    });
+});
+
 test("connects if-else branch references visually from the workflow canvas", async ({
   page,
   request,

@@ -79,6 +79,7 @@ interface WorkflowCanvasConnectionContextValue {
   ) => void;
   cloneNode: (nodeId: string) => void;
   deleteNode: (nodeId: string) => void;
+  makeForeachBodyFirst: (foreachNodeId: string, bodyNodeId: string) => void;
   removeEdge?: (edge: WorkflowCanvasEdgeSelection) => void;
 }
 
@@ -267,6 +268,10 @@ function WorkflowCanvasNodeCard({
         (sourceHandles.length === 0 || isParallel || isForeach)));
   const canAddBranchStep = data.kind === "step" && !isMissing;
   const canEditNode = data.kind === "step" && !isMissing;
+  const canMakeForeachFirst =
+    canEditNode &&
+    typeof data.foreachParentId === "string" &&
+    !data.isForeachFirstBodyStep;
   const parallelRail = parallelRailMetrics(sourceHandles);
   return (
     <div
@@ -348,6 +353,27 @@ function WorkflowCanvasNodeCard({
         </span>
         {selected && canEditNode && (
           <div className="ml-auto flex shrink-0 items-center gap-1">
+            {canMakeForeachFirst && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label={`Make workflow step ${data.id} the first loop body step`}
+                title="Make first in loop body"
+                className="nodrag size-7 text-ink-faint hover:text-signal-blue"
+                onPointerDown={(event) => event.stopPropagation()}
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  connection?.makeForeachBodyFirst(
+                    data.foreachParentId as string,
+                    data.id,
+                  );
+                }}
+              >
+                <ArrowUp className="size-4" />
+              </Button>
+            )}
             <Button
               type="button"
               variant="ghost"
@@ -385,6 +411,9 @@ function WorkflowCanvasNodeCard({
         {data.summary ?? data.id}
       </div>
       <div className="mt-3 flex flex-wrap gap-1.5">
+        {data.isForeachFirstBodyStep && (
+          <Badge variant="outline">Loop start</Badge>
+        )}
         {data.runStatus && (
           <Badge variant={runStatusBadgeVariant(data.runStatus)}>
             {data.runCurrent ? `current ${data.runStatus}` : data.runStatus}
@@ -947,6 +976,7 @@ function WorkflowCanvasInner({
   onMoveSelectedDown,
   onCloneNode,
   onDeleteNode,
+  onMakeForeachBodyFirst,
   onNodePositionChange,
   onBeautifyLayout,
   onAddStep,
@@ -962,6 +992,7 @@ function WorkflowCanvasInner({
   onMoveSelectedDown?: () => void;
   onCloneNode?: (nodeId: string) => void;
   onDeleteNode?: (nodeId: string) => void;
+  onMakeForeachBodyFirst?: (foreachNodeId: string, bodyNodeId: string) => void;
   onNodePositionChange?: (
     nodeId: string,
     position: { x: number; y: number },
@@ -1036,9 +1067,11 @@ function WorkflowCanvasInner({
           nodeId,
           sourceHandle,
           placement ?? workflowNodeAddPlacement(nodes, nodeId, sourceHandle),
-        ),
+      ),
       cloneNode: (nodeId) => onCloneNode?.(nodeId),
       deleteNode: (nodeId) => onDeleteNode?.(nodeId),
+      makeForeachBodyFirst: (foreachNodeId, bodyNodeId) =>
+        onMakeForeachBodyFirst?.(foreachNodeId, bodyNodeId),
       removeEdge: onRemoveSelectedEdge,
     }),
     [
@@ -1047,6 +1080,7 @@ function WorkflowCanvasInner({
       onCloneNode,
       onConnectReference,
       onDeleteNode,
+      onMakeForeachBodyFirst,
       onRemoveSelectedEdge,
       pendingConnection,
     ],
@@ -1150,6 +1184,7 @@ export function WorkflowCanvas(props: {
   onMoveSelectedDown?: () => void;
   onCloneNode?: (nodeId: string) => void;
   onDeleteNode?: (nodeId: string) => void;
+  onMakeForeachBodyFirst?: (foreachNodeId: string, bodyNodeId: string) => void;
   onNodePositionChange?: (
     nodeId: string,
     position: { x: number; y: number },

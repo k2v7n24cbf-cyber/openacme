@@ -27,6 +27,8 @@ export interface WorkflowCanvasNodeData extends Record<string, unknown> {
   groupRailWidth?: number;
   flowDirection?: "vertical" | "horizontal";
   targetSide?: "top" | "left";
+  foreachParentId?: string;
+  isForeachFirstBodyStep?: boolean;
   badges: string[];
   summary?: string;
   sourceHandles: WorkflowCanvasSourceHandle[];
@@ -82,7 +84,7 @@ const PARALLEL_TRACK_X_GAP = 150;
 const PARALLEL_TRACK_NODE_GAP = 120;
 const PARALLEL_NEXT_Y_GAP = 92;
 const FOREACH_BODY_X_GAP = 150;
-const FOREACH_BODY_NODE_GAP = 38;
+const FOREACH_BODY_NODE_GAP = 88;
 const FOREACH_NEXT_Y_GAP = 92;
 const FOREACH_BODY_GROUP_PAD_LEFT = 48;
 const FOREACH_BODY_GROUP_PAD_RIGHT = 28;
@@ -858,7 +860,7 @@ function applyForeachBodyPositions({
     for (const [routeIndex, nodeId] of group.nodeIds.entries()) {
       const current = nextById.get(nodeId);
       if (!current) continue;
-      const height = workflowCanvasNodeHeight(current);
+      const height = renderedBodyHeight(current);
       if (
         !persistedNodeIds.has(nodeId) &&
         (membershipCounts.get(nodeId) ?? 0) <= 1
@@ -875,6 +877,17 @@ function applyForeachBodyPositions({
             ...current.data,
             canvasPosition: position,
             targetSide: routeIndex === 0 ? "left" : "top",
+            foreachParentId: node.id,
+            isForeachFirstBodyStep: routeIndex === 0,
+          },
+        });
+      } else {
+        nextById.set(nodeId, {
+          ...current,
+          data: {
+            ...current.data,
+            foreachParentId: node.id,
+            isForeachFirstBodyStep: routeIndex === 0,
           },
         });
       }
@@ -946,9 +959,14 @@ function applyForeachBodyPositions({
       const current = nextById.get(target.id);
       if (current) {
         const width = workflowCanvasNodeWidth(current);
+        const bodyNodes = group.nodeIds
+          .map((nodeId) => nextById.get(nodeId))
+          .filter((item): item is WorkflowCanvasNode => Boolean(item));
         const bodyHeight =
-          group.nodeIds.length * STEP_H +
-          Math.max(0, group.nodeIds.length - 1) * FOREACH_BODY_NODE_GAP;
+          bodyNodes.reduce(
+            (total, bodyNode) => total + renderedBodyHeight(bodyNode),
+            0,
+          ) + Math.max(0, bodyNodes.length - 1) * FOREACH_BODY_NODE_GAP;
         const position = {
           x: node.position.x + parentWidth / 2 - width / 2,
           y:

@@ -7,6 +7,7 @@ import {
   insertWorkflowNodeFirst,
   moveWorkflowNode,
   removeWorkflowNode,
+  setWorkflowForeachBodyFirst,
   workflowTransformPresetById,
   WORKFLOW_TRANSFORM_PRESETS,
 } from "@/app/workflows/authoring";
@@ -262,6 +263,29 @@ describe("workflow authoring helpers", () => {
     const nodes = [{ id: "only", type: "builtin.exit" }];
     expect(moveWorkflowNode(nodes, 0, -1)).toBe(nodes);
     expect(moveWorkflowNode(nodes, 0, 1)).toBe(nodes);
+  });
+
+  it("moves a foreach body node to the first body slot", () => {
+    const changed = setWorkflowForeachBodyFirst(
+      [
+        {
+          id: "each_asset",
+          type: "builtin.foreach",
+          body: ["normalize", "score", "log"],
+        },
+        { id: "normalize", type: "builtin.transform" },
+        { id: "score", type: "agent.call" },
+        { id: "log", type: "builtin.log.info" },
+      ],
+      "each_asset",
+      "score",
+    );
+
+    expect(changed?.[0]).toEqual({
+      id: "each_asset",
+      type: "builtin.foreach",
+      body: ["score", "normalize", "log"],
+    });
   });
 
   it("exposes transform operation presets with runnable default payloads", () => {

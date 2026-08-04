@@ -354,6 +354,9 @@ describe("buildWorkflowGraphProjection", () => {
     expect(firstBody!.position.x).toBeGreaterThan(parent!.position.x);
     expect(secondBody!.position.x).toBe(firstBody!.position.x);
     expect(secondBody!.position.y).toBeGreaterThan(firstBody!.position.y);
+    expect(secondBody!.position.y - firstBody!.position.y).toBeGreaterThanOrEqual(
+      208,
+    );
     expect(bodyGroup!.position.x).toBeLessThan(firstBody!.position.x);
     expect(bodyGroup!.position.y).toBeLessThan(firstBody!.position.y);
     expect(firstBody!.position.x - bodyGroup!.position.x).toBeLessThan(72);
@@ -385,6 +388,10 @@ describe("buildWorkflowGraphProjection", () => {
     ).toBeLessThan(2);
     expect(continuation!.position.y).toBeGreaterThan(secondBody!.position.y);
     expect(firstBody?.data.flowDirection).toBe("vertical");
+    expect(firstBody?.data.foreachParentId).toBe("each_customer");
+    expect(firstBody?.data.isForeachFirstBodyStep).toBe(true);
+    expect(secondBody?.data.foreachParentId).toBe("each_customer");
+    expect(secondBody?.data.isForeachFirstBodyStep).toBe(false);
   });
 
   it("keeps nested foreach and if route edges separate", () => {

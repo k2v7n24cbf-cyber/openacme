@@ -78,6 +78,7 @@ import {
   isMcpToolSummary,
   moveWorkflowNode,
   removeWorkflowNode,
+  setWorkflowForeachBodyFirst,
   workflowTransformPresetById,
   WORKFLOW_TRANSFORM_PRESETS,
   type WorkflowPaletteKind,
@@ -1431,6 +1432,24 @@ function WorkflowsPage() {
     setSelectedCanvasEdgeId(null);
   }
 
+  function makeForeachBodyFirst(foreachNodeId: string, bodyNodeId: string) {
+    const parsed = parseNodesDraft(nodesDraft);
+    if (!parsed.ok) {
+      toast.error(parsed.error);
+      return;
+    }
+    const nextNodes = setWorkflowForeachBodyFirst(
+      parsed.value,
+      foreachNodeId,
+      bodyNodeId,
+    );
+    if (!nextNodes) return;
+    setNodesDraft(formatJson(nextNodes));
+    setSelectedCanvasNodeId(bodyNodeId);
+    setSelectedCanvasEdgeId(null);
+    toast.success("Loop body start updated");
+  }
+
   function connectCanvasReferenceEdge(connection: WorkflowCanvasConnection) {
     const kind = referenceEdgeKind(connection.sourceHandle);
     const parsed = parseNodesDraft(nodesDraft);
@@ -2497,6 +2516,7 @@ function WorkflowsPage() {
                     onMoveSelectedDown={() => moveSelectedCanvasNode(1)}
                     onCloneNode={cloneSelectedCanvasNode}
                     onDeleteNode={deleteWorkflowNode}
+                    onMakeForeachBodyFirst={makeForeachBodyFirst}
                     onNodePositionChange={updateCanvasNodePosition}
                     onBeautifyLayout={beautifyCanvasLayout}
                     onAddStep={openAddStepDialog}

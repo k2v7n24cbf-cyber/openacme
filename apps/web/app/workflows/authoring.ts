@@ -258,6 +258,34 @@ export function removeWorkflowNode(
     .map((node) => pruneNodeReferences(node, nodeId));
 }
 
+export function setWorkflowForeachBodyFirst(
+  nodes: WorkflowAuthoringNode[],
+  foreachNodeId: string,
+  bodyNodeId: string,
+): WorkflowAuthoringNode[] | null {
+  let changed = false;
+  const nextNodes = nodes.map((node) => {
+    if (node.id !== foreachNodeId || node.type !== "builtin.foreach") {
+      return node;
+    }
+    const body = Array.isArray(node.body)
+      ? node.body.filter((item): item is string => typeof item === "string")
+      : [];
+    const currentIndex = body.indexOf(bodyNodeId);
+    if (currentIndex <= 0) return node;
+    changed = true;
+    return {
+      ...node,
+      body: [
+        bodyNodeId,
+        ...body.slice(0, currentIndex),
+        ...body.slice(currentIndex + 1),
+      ],
+    };
+  });
+  return changed ? nextNodes : null;
+}
+
 export function createWorkflowNodeTemplate(
   kind: WorkflowPaletteKind,
   index: number,

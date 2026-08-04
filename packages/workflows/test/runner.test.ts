@@ -154,6 +154,19 @@ describe("WorkflowRunner builtin MVP", () => {
         },
       ],
     });
+    expect(result.stepAttempts[2]?.input).toEqual({
+      level: "info",
+      input: {},
+      message: "Customer normalized",
+      payload: { id: "cust_1", name: "Ada" },
+      assign: {
+        loggedCustomer: {
+          from: "$.steps.log_customer.output.payload",
+          mode: "replace",
+          value: { id: "cust_1", name: "Ada" },
+        },
+      },
+    });
     expect(result.stepAttempts[2]?.contextDiff).toEqual({
       loggedCustomer: {
         before: null,
@@ -171,7 +184,20 @@ describe("WorkflowRunner builtin MVP", () => {
       nodeType: "builtin.transform",
       nodeLabel: "Normalize customer",
       input: {
-        customer: { id: "cust_1", name: "Ada", secret: "not selected" },
+        input: {
+          customer: { id: "cust_1", name: "Ada", secret: "not selected" },
+        },
+        transform: {
+          kind: "object_pick",
+          source: "customer",
+          fields: ["id", "name"],
+        },
+        assign: {
+          customer: {
+            from: "$.steps.normalize_customer.output",
+            mode: "replace",
+          },
+        },
       },
     });
     expect(result.events.map((event) => event.kind)).toEqual([
@@ -2137,7 +2163,11 @@ describe("WorkflowRunner builtin MVP", () => {
     expect(result.stepAttempts[0]).toMatchObject({
       nodeId: "lookup_customer",
       status: "failed",
-      input: { id: "cust_1" },
+      input: {
+        server: "crm",
+        tool: "lookup",
+        input: { id: "cust_1" },
+      },
       error: { message: "crm unavailable" },
     });
     expect(result.events.map((event) => event.kind)).toContain("run_failed");
@@ -2620,13 +2650,41 @@ describe("WorkflowRunner builtin MVP", () => {
       [
         1,
         "succeeded",
-        { customer: { id: "cust_1", name: "Ada" } },
+        {
+          input: { customer: { id: "cust_1", name: "Ada" } },
+          transform: {
+            kind: "object_pick",
+            source: "customer",
+            fields: ["id"],
+          },
+          assign: {
+            customerIds: {
+              from: "$.steps.pick_customer.output",
+              mode: "append",
+              value: { id: "cust_1" },
+            },
+          },
+        },
         { id: "cust_1" },
       ],
       [
         2,
         "succeeded",
-        { customer: { id: "cust_2", name: "Lin" } },
+        {
+          input: { customer: { id: "cust_2", name: "Lin" } },
+          transform: {
+            kind: "object_pick",
+            source: "customer",
+            fields: ["id"],
+          },
+          assign: {
+            customerIds: {
+              from: "$.steps.pick_customer.output",
+              mode: "append",
+              value: { id: "cust_2" },
+            },
+          },
+        },
         { id: "cust_2" },
       ],
     ]);

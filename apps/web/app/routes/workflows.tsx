@@ -402,14 +402,16 @@ function WorkflowsPage() {
     useState<WorkflowReferenceEdgeKind | null>(null);
   const [addStepPlacement, setAddStepPlacement] =
     useState<WorkflowCanvasAddPlacement | null>(null);
-  const [nameDraft, setNameDraft] = useState("");
-  const [descriptionDraft, setDescriptionDraft] = useState("");
-  const [inputSchemaDraft, setInputSchemaDraft] = useState("null");
-  const [nodesDraft, setNodesDraft] = useState(formatJson(DEFAULT_NODES));
-  const [triggersDraft, setTriggersDraft] = useState(
+  const [nameDraft, setNameDraftState] = useState("");
+  const [descriptionDraft, setDescriptionDraftState] = useState("");
+  const [inputSchemaDraft, setInputSchemaDraftState] = useState("null");
+  const [nodesDraft, setNodesDraftState] = useState(formatJson(DEFAULT_NODES));
+  const [triggersDraft, setTriggersDraftState] = useState(
     formatJson(DEFAULT_TRIGGERS),
   );
-  const [uiDraft, setUiDraft] = useState<WorkflowDefinitionUi | null>(null);
+  const [uiDraft, setUiDraftState] = useState<WorkflowDefinitionUi | null>(
+    null,
+  );
   const [inputDraft, setInputDraft] = useState(formatJson(DEFAULT_INPUT));
   const [mcpTools, setMcpTools] = useState<McpToolSummary[]>([]);
   const [agents, setAgents] = useState<AgentSummary[]>([]);
@@ -422,6 +424,48 @@ function WorkflowsPage() {
   const triggerId = search.triggerId ?? "";
   const createdFrom = search.createdFrom ?? "";
   const createdTo = search.createdTo ?? "";
+  const nameDraftRef = useRef(nameDraft);
+  const descriptionDraftRef = useRef(descriptionDraft);
+  const inputSchemaDraftRef = useRef(inputSchemaDraft);
+  const nodesDraftRef = useRef(nodesDraft);
+  const triggersDraftRef = useRef(triggersDraft);
+  const uiDraftRef = useRef(uiDraft);
+
+  function setNameDraft(value: string) {
+    nameDraftRef.current = value;
+    setNameDraftState(value);
+  }
+
+  function setDescriptionDraft(value: string) {
+    descriptionDraftRef.current = value;
+    setDescriptionDraftState(value);
+  }
+
+  function setInputSchemaDraft(value: string) {
+    inputSchemaDraftRef.current = value;
+    setInputSchemaDraftState(value);
+  }
+
+  function setNodesDraft(value: string) {
+    nodesDraftRef.current = value;
+    setNodesDraftState(value);
+  }
+
+  function setTriggersDraft(value: string) {
+    triggersDraftRef.current = value;
+    setTriggersDraftState(value);
+  }
+
+  function setUiDraft(
+    value:
+      | WorkflowDefinitionUi
+      | null
+      | ((current: WorkflowDefinitionUi | null) => WorkflowDefinitionUi | null),
+  ) {
+    const next = typeof value === "function" ? value(uiDraftRef.current) : value;
+    uiDraftRef.current = next;
+    setUiDraftState(next);
+  }
 
   usePublishCurrentView(
     useMemo(
@@ -906,70 +950,85 @@ function WorkflowsPage() {
 
   async function saveDraft() {
     if (!selected) return;
-    const nodes = parseNodesDraft(nodesDraft);
-    if (!nodes.ok) {
-      toast.error(nodes.error);
-      return;
-    }
-    const references = validateNodeReferences(nodes.value);
-    if (!references.ok) {
-      toast.error(references.message);
-      return;
-    }
-    const nodeShape = validateExportedNodeShape(nodes.value);
-    if (!nodeShape.ok) {
-      toast.error(nodeShape.message);
-      return;
-    }
-    const triggerDraft = parseTriggersDraft(triggersDraft);
-    if (!triggerDraft.ok) {
-      toast.error(triggerDraft.error);
-      return;
-    }
-    const triggerShape = validateTriggerShape(triggerDraft.value);
-    if (!triggerShape.ok) {
-      toast.error(triggerShape.message);
-      return;
-    }
-    const triggerIdentity = validateTriggerIdentity(triggerDraft.value);
-    if (!triggerIdentity.ok) {
-      toast.error(triggerIdentity.message);
-      return;
-    }
-    const inputSchema = parseOptionalJsonDraft(inputSchemaDraft);
-    if (!inputSchema.ok) {
-      toast.error(inputSchema.error);
-      return;
-    }
-    const name = nameDraft.trim();
-    if (!name) {
-      toast.error("Workflow needs a name");
-      return;
-    }
     setBusy("save");
     try {
-      const data = await api<{ workflow: WorkflowDefinition }>(
-        `/api/workflows/${encodeURIComponent(selected.id)}`,
-        {
-          method: "PATCH",
-          body: {
-            name,
-            description: descriptionDraft.trim() || null,
-            inputSchema: inputSchema.value,
-            triggers: triggerDraft.value,
-            nodes: nodes.value,
-            ui: normalizeWorkflowDefinitionUi(uiDraft, nodes.value) ?? null,
-          },
-        },
-      );
+      const workflow = await saveCurrentDraft(selected.id);
       toast.success("Draft saved");
-      setSelected(data.workflow);
-      await loadWorkflows(data.workflow.id);
+      setSelected(workflow);
+      await loadWorkflows(workflow.id);
     } catch (err) {
       toast.error(errorMessage(err));
     } finally {
       setBusy(null);
     }
+  }
+
+  async function saveCurrentDraft(workflowId: string) {
+    const body = currentDraftUpdateBody();
+    const data = await api<{ workflow: WorkflowDefinition }>(
+      `/api/workflows/${encodeURIComponent(workflowId)}`,
+      {
+        method: "PATCH",
+        body,
+      },
+    );
+    return data.workflow;
+  }
+
+  function currentDraftUpdateBody() {
+    const nodes = parseNodesDraft(nodesDraftRef.current);
+    if (!nodes.ok) {
+      throw new Error(nodes.error);
+    }
+    const references = validateNodeReferences(nodes.value);
+    if (!references.ok) {
+      throw new Error(references.message);
+    }
+    const nodeShape = validateExportedNodeShape(nodes.value);
+    if (!nodeShape.ok) {
+      throw new Error(nodeShape.message);
+    }
+    const triggerDraft = parseTriggersDraft(triggersDraftRef.current);
+    if (!triggerDraft.ok) {
+      throw new Error(triggerDraft.error);
+    }
+    const triggerShape = validateTriggerShape(triggerDraft.value);
+    if (!triggerShape.ok) {
+      throw new Error(triggerShape.message);
+    }
+    const triggerIdentity = validateTriggerIdentity(triggerDraft.value);
+    if (!triggerIdentity.ok) {
+      throw new Error(triggerIdentity.message);
+    }
+    const inputSchema = parseOptionalJsonDraft(inputSchemaDraftRef.current);
+    if (!inputSchema.ok) {
+      throw new Error(inputSchema.error);
+    }
+    const name = nameDraftRef.current.trim();
+    if (!name) {
+      throw new Error("Workflow needs a name");
+    }
+
+    return {
+      name,
+      description: descriptionDraftRef.current.trim() || null,
+      inputSchema: inputSchema.value,
+      triggers: triggerDraft.value,
+      nodes: nodes.value,
+      ui: normalizeWorkflowDefinitionUi(uiDraftRef.current, nodes.value) ?? null,
+    };
+  }
+
+  function currentDraftHasChanges(workflow: WorkflowDefinition) {
+    const body = currentDraftUpdateBody();
+    return (
+      body.name !== workflow.name ||
+      (body.description ?? "") !== (workflow.description ?? "") ||
+      !jsonEquivalent(body.inputSchema, workflow.inputSchema) ||
+      !jsonEquivalent(body.triggers, workflow.triggers) ||
+      !jsonEquivalent(body.nodes, workflow.nodes) ||
+      !jsonEquivalent(body.ui, workflow.ui ?? null)
+    );
   }
 
   async function publishWorkflow() {
@@ -1090,8 +1149,20 @@ function WorkflowsPage() {
     }
     setBusy(mode);
     try {
+      const runWorkflow =
+        mode === "test" && currentDraftHasChanges(selected)
+          ? await saveCurrentDraft(selected.id)
+          : selected;
+      if (runWorkflow !== selected) {
+        setSelected(runWorkflow);
+        setWorkflows((current) =>
+          current.map((workflow) =>
+            workflow.id === runWorkflow.id ? runWorkflow : workflow,
+          ),
+        );
+      }
       const data = await api<RunDetail>(
-        `/api/workflows/${encodeURIComponent(selected.id)}/runs/${mode}`,
+        `/api/workflows/${encodeURIComponent(runWorkflow.id)}/runs/${mode}`,
         {
           method: "POST",
           body: { input: input.value, async: true },
@@ -1110,7 +1181,7 @@ function WorkflowsPage() {
         runId: data.run.id,
       });
       void navigate({
-        search: workflowSearch({ id: selected.id, run: data.run.id }),
+        search: workflowSearch({ id: runWorkflow.id, run: data.run.id }),
         replace: true,
       });
     } catch (err) {
@@ -1131,8 +1202,19 @@ function WorkflowsPage() {
     const busyKey = `trigger:${trigger.id}`;
     setBusy(busyKey);
     try {
+      const runWorkflow = currentDraftHasChanges(selected)
+        ? await saveCurrentDraft(selected.id)
+        : selected;
+      if (runWorkflow !== selected) {
+        setSelected(runWorkflow);
+        setWorkflows((current) =>
+          current.map((workflow) =>
+            workflow.id === runWorkflow.id ? runWorkflow : workflow,
+          ),
+        );
+      }
       const data = await api<RunDetail>(
-        `/api/workflows/${encodeURIComponent(selected.id)}/triggers/${encodeURIComponent(trigger.id)}/runs`,
+        `/api/workflows/${encodeURIComponent(runWorkflow.id)}/triggers/${encodeURIComponent(trigger.id)}/runs`,
         {
           method: "POST",
           body: { input: input.value, async: true },
@@ -1149,7 +1231,7 @@ function WorkflowsPage() {
         runId: data.run.id,
       });
       void navigate({
-        search: workflowSearch({ id: selected.id, run: data.run.id }),
+        search: workflowSearch({ id: runWorkflow.id, run: data.run.id }),
         replace: true,
       });
     } catch (err) {
@@ -5746,22 +5828,43 @@ function StepDetailPanel({
           <TabsTrigger value="context">Context</TabsTrigger>
         </TabsList>
         <TabsContent value="input" className="p-3 pt-3">
-          <JsonBlock label="Step input" value={step.input} runId={runId} />
+          <JsonBlock
+            label="Input"
+            value={step.input}
+            runId={runId}
+            framed={false}
+          />
         </TabsContent>
         <TabsContent value="output" className="p-3 pt-3">
-          <JsonBlock label="Step output" value={step.output} runId={runId} />
+          <JsonBlock
+            label="Output"
+            value={step.output}
+            runId={runId}
+            framed={false}
+          />
         </TabsContent>
         <TabsContent value="logs" className="p-3 pt-3">
-          <JsonBlock label="Step logs" value={step.logsSummary} runId={runId} />
+          <JsonBlock
+            label="Logs"
+            value={step.logsSummary}
+            runId={runId}
+            framed={false}
+          />
         </TabsContent>
         <TabsContent value="error" className="p-3 pt-3">
-          <JsonBlock label="Step error" value={step.error} runId={runId} />
+          <JsonBlock
+            label="Error"
+            value={step.error}
+            runId={runId}
+            framed={false}
+          />
         </TabsContent>
         <TabsContent value="context" className="p-3 pt-3">
           <JsonBlock
-            label="Context diff"
+            label="Context"
             value={step.contextDiff}
             runId={runId}
+            framed={false}
           />
         </TabsContent>
       </Tabs>
@@ -5805,10 +5908,12 @@ function JsonBlock({
   label,
   value,
   runId,
+  framed = true,
 }: {
   label: string;
   value: unknown;
   runId?: string;
+  framed?: boolean;
 }) {
   const [open, setOpen] = useState(true);
   const artifact = artifactReference(value);
@@ -5856,6 +5961,63 @@ function JsonBlock({
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
+  }
+
+  const controls =
+    artifact || redacted ? (
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        {artifact && (
+          <>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              className="h-6 px-1.5 font-mono text-[9px] uppercase tracking-[0.08em]"
+              disabled={artifactLoading || !runId}
+              onClick={() => void loadArtifact()}
+            >
+              {artifactLoading ? (
+                <Loader2 className="size-3 animate-spin" />
+              ) : (
+                <ScrollText className="size-3" />
+              )}
+              Load artifact
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              className="h-6 px-1.5 font-mono text-[9px] uppercase tracking-[0.08em]"
+              disabled={!runId}
+              onClick={downloadArtifact}
+            >
+              <Download className="size-3" />
+              Download artifact
+            </Button>
+          </>
+        )}
+        {redacted && (
+          <span className="border border-paper-rule px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-ink-soft">
+            redacted
+          </span>
+        )}
+      </div>
+    ) : null;
+
+  if (!framed) {
+    return (
+      <div aria-label={`${label} JSON`}>
+        {controls}
+        <pre className="max-h-64 overflow-auto font-mono text-[11px] leading-relaxed text-ink-soft">
+          {displayValue === undefined
+            ? "undefined"
+            : JSON.stringify(displayValue, null, 2)}
+        </pre>
+        {artifactError && (
+          <div className="mt-2 text-xs text-plot-red">{artifactError}</div>
+        )}
+      </div>
+    );
   }
 
   return (
@@ -7237,6 +7399,10 @@ function timelineEmptyMessage(level: EventLevelFilter): string {
 
 function formatJson(value: unknown): string {
   return JSON.stringify(value, null, 2);
+}
+
+function jsonEquivalent(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
 }
 
 function formatOptionalJson(value: unknown): string {

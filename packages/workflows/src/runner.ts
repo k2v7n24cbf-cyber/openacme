@@ -1081,15 +1081,145 @@ function resolvedStepInput(
   state: RunnerState,
   node: WorkflowNode,
 ): JsonValue | undefined {
-  if (node.type !== "agent.call") return resolvedNodeInput(state, node);
-  const input = resolvedNodeInput(state, node) ?? {};
-  const request: JsonObject = {
-    agentId: node.agentId,
-    prompt: renderStringTemplate(state, node.prompt),
-    input,
-  };
-  if (node.timeoutMs !== undefined) request.timeoutMs = node.timeoutMs;
-  return request;
+  switch (node.type) {
+    case "builtin.set":
+      return { assign: resolvedAssignments(state, node.assign) };
+
+    case "builtin.transform": {
+      const request: JsonObject = {
+        input: resolvedNodeInput(state, node) ?? {},
+        transform: cloneJson(node.transform),
+      };
+      if (node.assign) request.assign = resolvedAssignments(state, node.assign);
+      return request;
+    }
+
+    case "builtin.if":
+    case "builtin.if_else": {
+      const matches = evaluateCondition(state, node.condition);
+      return {
+        condition: node.condition,
+        result: matches,
+        selected: matches ? node.then : node.else,
+        skipped: matches ? node.else : node.then,
+      };
+    }
+
+    case "builtin.switch": {
+      const value = resolveJsonValue(state, node.value);
+      const matched = node.cases.find((item) => jsonEquals(item.value, value));
+      const selected = matched ? matched.nodes : node.default;
+      const skipped = uniqueNodeIds([
+        ...node.cases.flatMap((item) => item.nodes),
+        ...node.default,
+      ]).filter((nodeId) => !selected.includes(nodeId));
+      return {
+        value,
+        selected,
+        skipped,
+        ...(matched ? { case: matched.id } : { case: "default" }),
+      };
+    }
+
+    case "builtin.foreach": {
+      const request: JsonObject = {
+        input: resolvedNodeInput(state, node) ?? {},
+        items: resolveJsonValue(state, node.items),
+        itemVar: node.itemVar,
+        body: node.body,
+      };
+      if (node.concurrency !== undefined) request.concurrency = node.concurrency;
+      if (node.assign) request.assign = resolvedAssignments(state, node.assign);
+      return request;
+    }
+
+    case "builtin.exit": {
+      const request: JsonObject = { status: node.status };
+      if (node.output !== undefined) {
+        request.output = resolveJsonValue(state, node.output);
+      }
+      return request;
+    }
+
+    case "builtin.throw_error": {
+      const request: JsonObject = { message: node.message };
+      if (node.code !== undefined) request.code = node.code;
+      if (node.details !== undefined) {
+        request.details = resolveJsonValue(state, node.details);
+      }
+      return request;
+    }
+
+    case "builtin.sleep": {
+      const request: JsonObject = { delayMs: node.delayMs };
+      if (node.reason !== undefined) request.reason = node.reason;
+      return request;
+    }
+
+    case "builtin.log.info":
+    case "builtin.log.debug":
+    case "builtin.log.warn":
+    case "builtin.log.error": {
+      const request: JsonObject = {
+        level: node.type.replace("builtin.log.", ""),
+        input: resolvedNodeInput(state, node) ?? {},
+        message: node.message,
+      };
+      if (node.payload !== undefined) {
+        request.payload = resolveJsonValue(state, node.payload);
+      }
+      if (node.assign) request.assign = resolvedAssignments(state, node.assign);
+      return request;
+    }
+
+    case "builtin.parallel": {
+      const request: JsonObject = {
+        input: resolvedNodeInput(state, node) ?? {},
+        branches: node.branches.map((branch) => ({
+          id: branch.id,
+          ...(branch.label ? { label: branch.label } : {}),
+          nodes: branch.nodes,
+        })),
+        concurrency: node.concurrency ?? node.branches.length,
+        failFast: node.failFast,
+      };
+      if (node.assign) request.assign = resolvedAssignments(state, node.assign);
+      return request;
+    }
+
+    case "builtin.python": {
+      const request: JsonObject = {
+        code: node.code,
+        input: resolvedNodeInput(state, node) ?? {},
+      };
+      if (node.reset !== undefined) request.reset = node.reset;
+      if (node.timeoutMs !== undefined) request.timeoutMs = node.timeoutMs;
+      if (node.assign) request.assign = resolvedAssignments(state, node.assign);
+      return request;
+    }
+
+    case "mcp.tool": {
+      const request: JsonObject = {
+        server: node.server,
+        tool: node.tool,
+        input: resolvedNodeInput(state, node) ?? {},
+      };
+      if (node.timeoutMs !== undefined) request.timeoutMs = node.timeoutMs;
+      if (node.assign) request.assign = resolvedAssignments(state, node.assign);
+      return request;
+    }
+
+    case "agent.call": {
+      const request: JsonObject = {
+        agentId: node.agentId,
+        prompt: renderStringTemplate(state, node.prompt),
+        input: resolvedNodeInput(state, node) ?? {},
+      };
+      if (node.timeoutMs !== undefined) request.timeoutMs = node.timeoutMs;
+      if (node.assign) request.assign = resolvedAssignments(state, node.assign);
+      return request;
+    }
+  }
 }
 
 function safeResolvedStepInput(
@@ -1098,6 +1228,37 @@ function safeResolvedStepInput(
 ): JsonValue | undefined {
   try {
     return resolvedStepInput(state, node);
+  } catch {
+    return undefined;
+  }
+}
+
+function resolvedAssignments(
+  state: RunnerState,
+  assignments: WorkflowAssignmentMap,
+): JsonObject {
+  const assigned: JsonObject = {};
+  for (const [path, assignment] of Object.entries(assignments)) {
+    const source =
+      typeof assignment === "string" ? assignment : assignment.from;
+    const mode = typeof assignment === "string" ? "replace" : assignment.mode;
+    const item: JsonObject = {
+      from: source,
+      mode,
+    };
+    const value = tryResolveJsonValue(state, source);
+    if (value !== undefined) item.value = value;
+    assigned[path] = item;
+  }
+  return assigned;
+}
+
+function tryResolveJsonValue(
+  state: RunnerState,
+  reference: JsonValue,
+): JsonValue | undefined {
+  try {
+    return resolveJsonValue(state, reference);
   } catch {
     return undefined;
   }

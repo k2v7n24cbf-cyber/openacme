@@ -721,7 +721,19 @@ describe("workflow routes", () => {
       (step) => step.nodeId === "normalize",
     );
     expect(normalizeStep?.input).toEqual({
-      customer: { id: "cust_1", name: "Ada" },
+      input: { customer: { id: "cust_1", name: "Ada" } },
+      transform: {
+        kind: "object_pick",
+        source: "customer",
+        fields: ["id", "name"],
+      },
+      assign: {
+        customer: {
+          from: "$.steps.normalize.output",
+          mode: "replace",
+          value: { id: "cust_1", name: "Ada" },
+        },
+      },
     });
     expect(normalizeStep?.output).toEqual({ id: "cust_1", name: "Ada" });
     expect(normalizeStep?.contextDiff).toEqual({
@@ -2243,7 +2255,17 @@ describe("workflow routes", () => {
       expect.objectContaining({
         nodeId: "crm_lookup",
         status: "canceled",
-        input: { id: "cust_cancel", apiKey: "[redacted]" },
+        input: {
+          server: "crm",
+          tool: "lookup",
+          input: { id: "cust_cancel", apiKey: "[redacted]" },
+          assign: {
+            crm: {
+              from: "$.steps.crm_lookup.output",
+              mode: "replace",
+            },
+          },
+        },
       }),
     ]);
     expect(JSON.stringify(detail)).not.toContain("raw-cancel-api-key");
@@ -2253,10 +2275,14 @@ describe("workflow routes", () => {
           event.kind === "step_started" &&
           typeof event.payload === "object" &&
           event.payload !== null &&
+          "nodeId" in event.payload &&
+          event.payload.nodeId === "crm_lookup" &&
           "input" in event.payload,
       )?.payload,
     ).toMatchObject({
-      input: { id: "cust_cancel", apiKey: "[redacted]" },
+      input: {
+        input: { id: "cust_cancel", apiKey: "[redacted]" },
+      },
     });
     expect(detail.events.map((event) => event.kind)).toEqual([
       "run_started",
@@ -2291,7 +2317,17 @@ describe("workflow routes", () => {
       expect.objectContaining({
         nodeId: "crm_lookup",
         status: "canceled",
-        input: { id: "cust_cancel", apiKey: "[redacted]" },
+        input: {
+          server: "crm",
+          tool: "lookup",
+          input: { id: "cust_cancel", apiKey: "[redacted]" },
+          assign: {
+            crm: {
+              from: "$.steps.crm_lookup.output",
+              mode: "replace",
+            },
+          },
+        },
       }),
     ]);
     expect(JSON.stringify(persisted)).not.toContain("raw-cancel-api-key");
@@ -2301,10 +2337,14 @@ describe("workflow routes", () => {
           event.kind === "step_started" &&
           typeof event.payload === "object" &&
           event.payload !== null &&
+          "nodeId" in event.payload &&
+          event.payload.nodeId === "crm_lookup" &&
           "input" in event.payload,
       )?.payload,
     ).toMatchObject({
-      input: { id: "cust_cancel", apiKey: "[redacted]" },
+      input: {
+        input: { id: "cust_cancel", apiKey: "[redacted]" },
+      },
     });
     expect(persisted.events.map((event) => event.kind)).toEqual([
       "run_started",
@@ -2622,13 +2662,35 @@ describe("workflow routes", () => {
       [
         1,
         "succeeded",
-        { value: 2 },
+        {
+          code: "output = input['value'] * 2",
+          input: { value: 2 },
+          timeoutMs: 1000,
+          assign: {
+            doubled: {
+              from: "$.steps.double_value.output.value",
+              mode: "append",
+              value: 4,
+            },
+          },
+        },
         { value: 4, stdout: "doubled 2\n", stderr: "" },
       ],
       [
         2,
         "succeeded",
-        { value: 5 },
+        {
+          code: "output = input['value'] * 2",
+          input: { value: 5 },
+          timeoutMs: 1000,
+          assign: {
+            doubled: {
+              from: "$.steps.double_value.output.value",
+              mode: "append",
+              value: 10,
+            },
+          },
+        },
         { value: 10, stdout: "doubled 5\n", stderr: "" },
       ],
     ]);

@@ -634,6 +634,94 @@ test("creates workflow nodes from canvas palette and reorders selected node", as
   );
 });
 
+test("autosaves unsaved draft nodes before starting a test run", async ({
+  page,
+  request,
+}) => {
+  const workflowId = `wf_ui_autosave_test_${Date.now().toString(36)}`;
+
+  const created = await request.post("/api/workflows", {
+    data: {
+      id: workflowId,
+      name: "Workflow Autosave Test Run",
+      triggers: [{ id: "manual", kind: "manual", enabled: true }],
+      nodes: [],
+    },
+  });
+  expect(created.ok(), await created.text()).toBeTruthy();
+
+  const patchBodies: Array<{ nodes?: Array<{ id: string; type: string }> }> =
+    [];
+  await page.route(`**/api/workflows/${workflowId}`, async (route) => {
+    if (route.request().method() === "PATCH") {
+      patchBodies.push(
+        route.request().postDataJSON() as {
+          nodes?: Array<{ id: string; type: string }>;
+        },
+      );
+    }
+    await route.continue();
+  });
+
+  await page.goto(`/workflows?id=${workflowId}`);
+  await expect(
+    page.getByRole("heading", { name: "Workflow Autosave Test Run" }),
+  ).toBeVisible();
+
+  const canvas = page.getByLabel("Workflow Canvas", { exact: true });
+  await addWorkflowStep(page, canvas, "trigger:manual", "Log");
+  await expect(
+    canvas.locator('[data-workflow-canvas-node-id="log_01"]'),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Test", exact: true }).click();
+  await expect(page.getByText("Test run started", { exact: true })).toBeVisible();
+  expect(patchBodies).toContainEqual(
+    expect.objectContaining({
+      nodes: expect.arrayContaining([
+        expect.objectContaining({ id: "log_01", type: "builtin.log.info" }),
+      ]),
+    }),
+  );
+
+  await expect
+    .poll(async () => {
+      const detail = await request.get(`/api/workflows/${workflowId}`);
+      expect(detail.ok(), await detail.text()).toBeTruthy();
+      const payload = (await detail.json()) as {
+        workflow: { nodes: Array<{ id: string; type: string }> };
+      };
+      return payload.workflow.nodes;
+    })
+    .toContainEqual(
+      expect.objectContaining({ id: "log_01", type: "builtin.log.info" }),
+    );
+
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("run"))
+    .not.toBeNull();
+  const runId = new URL(page.url()).searchParams.get("run");
+  expect(runId).not.toBeNull();
+  const workflowRunId = runId ?? "";
+  await expect
+    .poll(async () => {
+      const detail = await request.get(`/api/workflow-runs/${workflowRunId}`);
+      expect(detail.ok(), await detail.text()).toBeTruthy();
+      const payload = (await detail.json()) as {
+        run: { status: string };
+        steps: Array<{ nodeId: string; status: string }>;
+      };
+      return {
+        runStatus: payload.run.status,
+        logStep: payload.steps.find((step) => step.nodeId === "log_01"),
+      };
+    })
+    .toMatchObject({
+      runStatus: "succeeded",
+      logStep: { nodeId: "log_01", status: "succeeded" },
+    });
+});
+
 test("connects if-else branch references visually from the workflow canvas", async ({
   page,
   request,

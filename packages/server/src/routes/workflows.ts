@@ -49,6 +49,7 @@ const WorkflowRunBodySchema = z
   .object({
     input: JsonValueSchema.optional(),
     version: z.number().int().positive().optional(),
+    async: z.boolean().optional(),
   })
   .strict();
 
@@ -269,6 +270,7 @@ export function registerWorkflowRoutes(
         requestId: c.req.header("x-openacme-webhook-request-id"),
         ports: opts.ports,
         runAbortControllers,
+        waitForCompletion: body.value.async !== true,
       });
       return c.json(detail, 201);
     } catch (err) {
@@ -295,6 +297,7 @@ export function registerWorkflowRoutes(
         trigger: manualTriggerSnapshot("manual", body.value.input ?? {}),
         ports: opts.ports,
         runAbortControllers,
+        waitForCompletion: body.value.async !== true,
       });
       return c.json(detail, 201);
     } catch (err) {
@@ -322,6 +325,7 @@ export function registerWorkflowRoutes(
         trigger: manualTriggerSnapshot("manual", body.value.input ?? {}),
         ports: opts.ports,
         runAbortControllers,
+        waitForCompletion: body.value.async !== true,
       });
       return c.json(detail, 201);
     } catch (err) {
@@ -543,6 +547,7 @@ async function executeWorkflowRun(
     trigger: WorkflowRunTrigger;
     ports?: WorkflowExecutionPorts;
     runAbortControllers?: Map<string, AbortController>;
+    waitForCompletion?: boolean;
   },
 ) {
   const references = validateNodes(args.definition.nodes);
@@ -570,6 +575,31 @@ async function executeWorkflowRun(
   const abortController = new AbortController();
   args.runAbortControllers?.set(run.id, abortController);
 
+  const finish = finishWorkflowRunExecution(store, {
+    ...args,
+    run,
+    abortController,
+  });
+  if (args.waitForCompletion === false) {
+    void finish.catch(() => {
+      // The background path persists unexpected execution failures itself.
+    });
+    return getRunDetail(store, run.id)!;
+  }
+  return finish;
+}
+
+async function finishWorkflowRunExecution(
+  store: WorkflowStore,
+  args: {
+    definition: WorkflowDefinition;
+    input: JsonValue;
+    ports?: WorkflowExecutionPorts;
+    runAbortControllers?: Map<string, AbortController>;
+    run: WorkflowRun;
+    abortController: AbortController;
+  },
+) {
   const eventPorts = {
     ...(args.ports ?? {}),
     events: {
@@ -589,22 +619,36 @@ async function executeWorkflowRun(
   let result: Awaited<ReturnType<WorkflowRunner["run"]>>;
   try {
     result = await new WorkflowRunner({ ports: eventPorts }).run({
-      runId: run.id,
+      runId: args.run.id,
       definition: args.definition,
-      input: executionInputForRun(store, run),
-      signal: abortController.signal,
+      input: executionInputForRun(store, args.run),
+      signal: args.abortController.signal,
     });
+  } catch (err) {
+    const latest = store.getRun(args.run.id);
+    if (latest && isTerminalRunStatus(latest.status)) {
+      return getRunDetail(store, args.run.id)!;
+    }
+    const endedAt = new Date().toISOString();
+    store.updateRunState(args.run.id, {
+      status: "failed",
+      currentNodeId: null,
+      waitingReason: null,
+      endedAt,
+      durationMs: stepDurationMs(args.run.startedAt, endedAt),
+    });
+    throw err;
   } finally {
-    args.runAbortControllers?.delete(run.id);
+    args.runAbortControllers?.delete(args.run.id);
   }
 
-  const latest = store.getRun(run.id);
+  const latest = store.getRun(args.run.id);
   if (latest && isTerminalRunStatus(latest.status)) {
     return {
       run: latest,
-      steps: store.listStepAttempts(run.id),
-      events: store.listRunEvents(run.id),
-      artifacts: store.listArtifacts(run.id),
+      steps: store.listStepAttempts(args.run.id),
+      events: store.listRunEvents(args.run.id),
+      artifacts: store.listArtifacts(args.run.id),
     };
   }
 
@@ -627,19 +671,19 @@ async function executeWorkflowRun(
   }
 
   const endedAt = new Date().toISOString();
-  const updated = store.updateRunState(run.id, {
+  const updated = store.updateRunState(args.run.id, {
     status: result.status,
     context: result.context,
     currentNodeId: null,
     waitingReason: null,
     endedAt,
-    durationMs: stepDurationMs(run.startedAt, endedAt),
+    durationMs: stepDurationMs(args.run.startedAt, endedAt),
   });
   return {
     run: updated,
-    steps: store.listStepAttempts(run.id),
-    events: store.listRunEvents(run.id),
-    artifacts: store.listArtifacts(run.id),
+    steps: store.listStepAttempts(args.run.id),
+    events: store.listRunEvents(args.run.id),
+    artifacts: store.listArtifacts(args.run.id),
   };
 }
 
@@ -815,6 +859,7 @@ export async function executePublishedTriggerRun(
     scheduledAt?: string;
     ports?: WorkflowExecutionPorts;
     runAbortControllers?: Map<string, AbortController>;
+    waitForCompletion?: boolean;
   },
 ) {
   const workflowInputValidation = validateWorkflowInputSchema(
@@ -845,6 +890,7 @@ export async function executePublishedTriggerRun(
     ),
     ports: args.ports,
     runAbortControllers: args.runAbortControllers,
+    waitForCompletion: args.waitForCompletion,
   });
 }
 

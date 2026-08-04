@@ -1094,11 +1094,11 @@ function WorkflowsPage() {
         `/api/workflows/${encodeURIComponent(selected.id)}/runs/${mode}`,
         {
           method: "POST",
-          body: { input: input.value },
+          body: { input: input.value, async: true },
         },
       );
       toast.success(
-        mode === "test" ? "Test run complete" : "Live run complete",
+        mode === "test" ? "Test run started" : "Live run started",
       );
       setDetail(data);
       setSelectedStepId((current) => retainedStepId(data.steps, current));
@@ -1135,10 +1135,10 @@ function WorkflowsPage() {
         `/api/workflows/${encodeURIComponent(selected.id)}/triggers/${encodeURIComponent(trigger.id)}/runs`,
         {
           method: "POST",
-          body: { input: input.value },
+          body: { input: input.value, async: true },
         },
       );
-      toast.success("Trigger run complete");
+      toast.success("Trigger run started");
       setDetail(data);
       setSelectedStepId((current) => retainedStepId(data.steps, current));
       setRuns((current) =>

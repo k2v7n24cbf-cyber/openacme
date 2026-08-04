@@ -892,6 +892,58 @@ describe("workflow routes", () => {
     ]);
   });
 
+  it("starts workflow test runs asynchronously when requested", async () => {
+    let res = await jsonReq("/api/workflows", {
+      id: "wf_async_test_run",
+      name: "Async test run",
+      triggers: [{ id: "manual", kind: "manual", enabled: true }],
+      nodes: [
+        { id: "wait", type: "builtin.sleep", delayMs: 1000 },
+        {
+          id: "log_done",
+          type: "builtin.log.info",
+          message: "async complete",
+        },
+      ],
+    });
+    expect(res.status).toBe(201);
+
+    const startedAt = Date.now();
+    res = await jsonReq("/api/workflows/wf_async_test_run/runs/test", {
+      input: { marker: "async" },
+      async: true,
+    });
+    const elapsedMs = Date.now() - startedAt;
+    expect(res.status).toBe(201);
+    expect(elapsedMs).toBeLessThan(500);
+    const initial = (await res.json()) as {
+      run: { id: string; status: string; currentNodeId?: string | null };
+    };
+    expect(initial.run.status).toBe("running");
+
+    let detail:
+      | {
+          run: { status: string };
+          steps: Array<{ nodeId: string; status: string }>;
+          events: Array<{ kind: string; message?: string }>;
+        }
+      | undefined;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      res = await req(`/api/workflow-runs/${initial.run.id}`);
+      expect(res.status).toBe(200);
+      detail = (await res.json()) as typeof detail;
+      if (detail?.run.status === "succeeded") break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    expect(detail?.run.status).toBe("succeeded");
+    expect(detail?.steps.map((step) => [step.nodeId, step.status])).toEqual([
+      ["wait", "succeeded"],
+      ["log_done", "succeeded"],
+    ]);
+    expect(detail?.events.map((event) => event.kind)).toContain("log");
+  });
+
   it("executes multiple workflow test runs concurrently without sharing run state", async () => {
     for (const workflow of [
       { id: "wf_concurrent_alpha", message: "alpha complete" },

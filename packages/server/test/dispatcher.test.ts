@@ -349,9 +349,50 @@ describe("Dispatcher spawn rule", () => {
     });
 
     const d = makeDispatcher(manager);
-    await tick(d);
+    await d.start();
+    await d.drain(5_000);
 
     expect(calls).toEqual([]);
+  });
+
+  it("wakes a taskless chat session with targeted objective closeout inbox", async () => {
+    const { manager, calls } = fakeManager(["a1"]);
+    const session = sessionStore.create("a1");
+    expect(session.kind).toBe("chat");
+    inboxStore.deliver({
+      agentId: "a1",
+      kind: "system_notice",
+      source: "system",
+      sourceId: "system:objective-closeout",
+      relatedSession: session.id,
+      payload: { eventKind: "objective_ready_for_closeout" },
+    });
+
+    const d = makeDispatcher(manager);
+    await d.start();
+    await d.drain(5_000);
+
+    expect(calls).toEqual([{ agentId: "a1", sessionId: session.id }]);
+  });
+
+  it("wakes an owner session from agent-wide objective closeout inbox", async () => {
+    const { manager, calls } = fakeManager(["a1"]);
+    const session = sessionStore.create("a1");
+    expect(session.kind).toBe("chat");
+    inboxStore.deliver({
+      agentId: "a1",
+      kind: "system_notice",
+      source: "system",
+      sourceId: "system:objective-closeout",
+      relatedSession: null,
+      payload: { eventKind: "objective_ready_for_closeout" },
+    });
+
+    const d = makeDispatcher(manager);
+    await d.start();
+    await d.drain(5_000);
+
+    expect(calls).toEqual([{ agentId: "a1", sessionId: session.id }]);
   });
 
   it("does not wake a session with a turn block, even with queued inbox", async () => {

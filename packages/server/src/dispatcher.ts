@@ -472,6 +472,7 @@ export class Dispatcher {
       const targetedSessions = pending.targetedSessionIds;
       const userMessageSessions = pending.userMessageSessionIds;
       const userTaskCommentSessions = pending.userTaskCommentSessionIds;
+      const objectiveCloseoutSessions = pending.objectiveCloseoutSessionIds;
 
       const sessions = this.sessionStore.listActive(agentId);
       const ordered = this.orderSessionsForScheduling(sessions, {
@@ -489,11 +490,19 @@ export class Dispatcher {
         const hasTargetedInbox = targetedSessions.has(session.id);
         const hasDirectUserInbox = userMessageSessions.has(session.id);
         const hasAgentWideInbox = pending.hasAgentWide && !agentWideAssigned;
+        const hasObjectiveCloseoutInbox =
+          objectiveCloseoutSessions.has(session.id) ||
+          (pending.hasObjectiveCloseoutAgentWide && !agentWideAssigned);
         const hasInbox = hasTargetedInbox || hasAgentWideInbox;
+        const hasChatWakeInbox =
+          hasDirectUserInbox ||
+          userTaskCommentSessions.has(session.id) ||
+          hasObjectiveCloseoutInbox;
 
         const blockedWake = this.blockedWakeDecision(session, nowMs, {
           hasInbox,
           hasDirectUserInbox,
+          hasChatWakeInbox,
         });
         if (blockedWake) {
           this.recordBlockedSkipped(agentId, session.id, blockedWake.decision, {
@@ -514,6 +523,7 @@ export class Dispatcher {
           const deferredDecision = this.spawnDecision(session, nowMs, {
             hasInbox: false,
             hasDirectUserInbox: false,
+            hasChatWakeInbox: false,
           });
           if (deferredDecision) {
             this.recordDeferSkipped(agentId, session.id, deferredDecision, {
@@ -526,6 +536,7 @@ export class Dispatcher {
         const decision = this.spawnDecision(session, nowMs, {
           hasInbox,
           hasDirectUserInbox,
+          hasChatWakeInbox,
         });
         if (decision) {
           if (available <= 0) {
@@ -554,7 +565,11 @@ export class Dispatcher {
   private blockedWakeDecision(
     session: Session,
     nowMs: number,
-    inbox: { hasInbox: boolean; hasDirectUserInbox: boolean },
+    inbox: {
+      hasInbox: boolean;
+      hasDirectUserInbox: boolean;
+      hasChatWakeInbox: boolean;
+    },
   ): {
     decision: SpawnDecision;
     blockReason: string;
@@ -566,7 +581,7 @@ export class Dispatcher {
     const taskId = this.timelineTaskFromTasks(tasks, nowMs)?.id ?? null;
     const sessionKind = tasks.length > 0 ? "task" : session.kind;
 
-    if (inbox.hasInbox) {
+    if (inbox.hasInbox && (sessionKind !== "chat" || inbox.hasChatWakeInbox)) {
       return {
         decision: { reason: "inbox", taskId, hasInbox: true },
         blockReason:
@@ -692,7 +707,11 @@ export class Dispatcher {
   private spawnDecision(
     session: Session,
     nowMs: number,
-    inbox: { hasInbox: boolean; hasDirectUserInbox: boolean },
+    inbox: {
+      hasInbox: boolean;
+      hasDirectUserInbox: boolean;
+      hasChatWakeInbox: boolean;
+    },
   ): SpawnDecision | null {
     const sessionId = session.id;
     const tasks = this.taskStore.list({ session_id: sessionId });
@@ -709,10 +728,14 @@ export class Dispatcher {
     if (tasks.some((t) => t.status === "system_blocked")) {
       return null;
     }
-    if (sessionKind === "chat" && !inbox.hasInbox && !deferExpiredRecently) {
+    if (
+      sessionKind === "chat" &&
+      !inbox.hasChatWakeInbox &&
+      !deferExpiredRecently
+    ) {
       return null;
     }
-    if (inbox.hasInbox) {
+    if (inbox.hasInbox && (sessionKind !== "chat" || inbox.hasChatWakeInbox)) {
       return {
         reason: "inbox",
         taskId: this.timelineTaskForSession(sessionId, nowMs)?.id ?? null,

@@ -95,6 +95,7 @@ const TaskCreateInputSchema = z.object({
   created_in_session_id: z.string().min(1).nullable().optional(),
   body: z.string().optional(),
   session_id: z.string().min(1).nullable().optional(),
+  objective_id: z.string().min(1).nullable().optional(),
   parent_id: TaskIdSchema.nullable().optional(),
   depends_on: z.array(TaskIdSchema).optional(),
   start_at: NullableIso.optional(),
@@ -109,6 +110,7 @@ const TaskUpdateInputSchema = z.object({
   status: TaskStatusSchema.optional(),
   assignee: z.string().min(1).optional(),
   session_id: z.string().min(1).nullable().optional(),
+  objective_id: z.string().min(1).nullable().optional(),
   depends_on: z.array(TaskIdSchema).optional(),
   start_at: NullableIso.optional(),
   due_at: NullableIso.optional(),
@@ -216,6 +218,7 @@ interface TaskSqlRow {
   status: string;
   assignee: string;
   session_id: string | null;
+  objective_id: string | null;
   created_by: string;
   created_in_session_id: string | null;
   parent_id: string | null;
@@ -245,6 +248,7 @@ function taskFromSqlRow(row: TaskSqlRow): Task | null {
       status: row.status,
       assignee: row.assignee,
       session_id: row.session_id,
+      objective_id: row.objective_id,
       created_by: row.created_by,
       created_in_session_id: row.created_in_session_id,
       parent_id: row.parent_id,
@@ -480,6 +484,14 @@ export class TaskStore {
         params.push(filter.session_id);
       }
     }
+    if (filter?.objective_id !== undefined) {
+      if (filter.objective_id === null) {
+        where.push("objective_id IS NULL");
+      } else {
+        where.push("objective_id = ?");
+        params.push(filter.objective_id);
+      }
+    }
     if (filter?.parent_id !== undefined) {
       if (filter.parent_id === null) {
         where.push("parent_id IS NULL");
@@ -525,6 +537,7 @@ export class TaskStore {
         status,
         assignee,
         session_id,
+        objective_id,
         created_by,
         created_in_session_id,
         parent_id,
@@ -539,13 +552,14 @@ export class TaskStore {
         last_run_at,
         team,
         body
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       task.id,
       task.title,
       task.status,
       task.assignee,
       task.session_id,
+      task.objective_id,
       task.created_by,
       task.created_in_session_id,
       task.parent_id,
@@ -572,6 +586,7 @@ export class TaskStore {
         status = ?,
         assignee = ?,
         session_id = ?,
+        objective_id = ?,
         created_by = ?,
         created_in_session_id = ?,
         parent_id = ?,
@@ -592,6 +607,7 @@ export class TaskStore {
       task.status,
       task.assignee,
       task.session_id,
+      task.objective_id,
       task.created_by,
       task.created_in_session_id,
       task.parent_id,
@@ -710,6 +726,7 @@ export class TaskStore {
         status,
         assignee: input.assignee!,
         session_id: input.session_id ?? null,
+        objective_id: input.objective_id ?? null,
         created_by: input.created_by,
         created_in_session_id: input.created_in_session_id ?? null,
         parent_id: input.parent_id ?? null,
@@ -835,6 +852,10 @@ export class TaskStore {
         status: nextStatus,
         assignee: patch.assignee ?? existing.assignee,
         session_id: nextSessionId,
+        objective_id:
+          patch.objective_id !== undefined
+            ? patch.objective_id
+            : existing.objective_id,
         depends_on: nextDeps,
         start_at:
           patch.start_at !== undefined
@@ -1193,6 +1214,7 @@ export class TaskStore {
         status,
         assignee,
         session_id: input.session_id ?? null,
+        objective_id: input.objective_id ?? null,
         created_by: input.created_by,
         created_in_session_id: input.created_in_session_id ?? null,
         parent_id: input.parent_id ?? null,
@@ -1353,6 +1375,10 @@ export class TaskStore {
         status: nextStatus,
         assignee: patch.assignee ?? existing.assignee,
         session_id: nextSessionId,
+        objective_id:
+          patch.objective_id !== undefined
+            ? patch.objective_id
+            : existing.objective_id,
         depends_on: nextDeps,
         start_at:
           patch.start_at !== undefined
@@ -1989,6 +2015,11 @@ function matchesFilter(task: Task, filter?: TaskListFilter): boolean {
   if (filter.created_by !== undefined && task.created_by !== filter.created_by)
     return false;
   if (filter.session_id !== undefined && task.session_id !== filter.session_id)
+    return false;
+  if (
+    filter.objective_id !== undefined &&
+    task.objective_id !== filter.objective_id
+  )
     return false;
   if (filter.parent_id !== undefined && task.parent_id !== filter.parent_id)
     return false;

@@ -9,6 +9,7 @@ import {
 
 export type CurrentViewEntityType =
   | "agent"
+  | "objective"
   | "skill"
   | "settings"
   | "team"

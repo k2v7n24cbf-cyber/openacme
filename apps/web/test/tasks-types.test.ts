@@ -11,6 +11,7 @@ import {
   dueUrgencyClass,
   recurrenceTitle,
   type Recurrence,
+  type Task,
 } from "@/app/tasks/types";
 
 const NOW = new Date("2026-06-12T12:00:00Z").getTime();
@@ -35,6 +36,34 @@ describe("status constants", () => {
     expect(Object.keys(STATUS_VARIANT).sort()).toEqual(
       [...STATUS_ORDER].sort()
     );
+  });
+});
+
+describe("Task DTO mirror", () => {
+  it("includes nullable objective_id from task frontmatter", () => {
+    const task = {
+      id: "1",
+      title: "Linked task",
+      status: "open",
+      assignee: "agent-1",
+      session_id: "session-1",
+      objective_id: "objective-1",
+      created_by: "agent-1",
+      created_in_session_id: "session-1",
+      parent_id: null,
+      depends_on: [],
+      start_at: null,
+      due_at: null,
+      created_at: "2026-08-11T00:00:00.000Z",
+      updated_at: "2026-08-11T00:00:00.000Z",
+      closed_at: null,
+      recurrence: null,
+      runs: 0,
+      last_run_at: null,
+      team: null,
+    } satisfies Task;
+
+    expect(task.objective_id).toBe("objective-1");
   });
 });
 

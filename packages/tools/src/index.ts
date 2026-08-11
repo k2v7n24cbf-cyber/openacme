@@ -42,14 +42,12 @@ export {
   type ProcessBindings,
   type ProcessCompletionEvent,
 } from "./builtins/process.js";
+export { bindMemory, type MemoryBindings } from "./builtins/memory.js";
+export { bindTaskStore, type TaskStoreBindings } from "./builtins/tasks.js";
 export {
-  bindMemory,
-  type MemoryBindings,
-} from "./builtins/memory.js";
-export {
-  bindTaskStore,
-  type TaskStoreBindings,
-} from "./builtins/tasks.js";
+  bindObjectiveStore,
+  type ObjectiveStoreBindings,
+} from "./builtins/objectives.js";
 export {
   bindBrowser,
   type BrowserBindings,
@@ -113,6 +111,7 @@ import "./builtins/process.js";
 import "./builtins/skill.js";
 import "./builtins/memory.js";
 import "./builtins/tasks.js";
+import "./builtins/objectives.js";
 import "./builtins/agent.js";
 import "./builtins/ping.js";
 import "./builtins/defer-session.js";

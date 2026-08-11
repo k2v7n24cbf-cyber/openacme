@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Link } from "@tanstack/react-router";
 import {
   DndContext,
   DragOverlay,
@@ -273,6 +274,17 @@ function CardInner({ task, selected }: { task: Task; selected: boolean }) {
             Team, past starts, and comment counts live in the detail pane. */}
         <div className="flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[11px] tabular-nums text-ink-faint">
           <span>#{task.id}</span>
+          {task.objective_id && (
+            <Link
+              to="/objectives"
+              search={{ id: task.objective_id }}
+              onClick={(e) => e.stopPropagation()}
+              className="text-signal-blue hover:text-plot-red"
+              title={`Open objective ${task.objective_id}`}
+            >
+              obj {task.objective_id.slice(0, 8)}
+            </Link>
+          )}
           <AgentRef id={task.assignee} />
           {task.due_at && (
             <span

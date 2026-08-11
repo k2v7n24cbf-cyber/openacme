@@ -9,6 +9,8 @@ import {
   createMessageStore,
   createInboxStore,
   createContextSnapshotStore,
+  createObjectiveStore,
+  type ObjectiveStore,
 } from "@openacme/db";
 import { MemoryStore } from "@openacme/memory";
 import { TaskStore } from "@openacme/tasks";
@@ -103,6 +105,10 @@ function makeAgent(opts: {
   contextWindow?: number | null;
   protectFirstN?: number;
   tailTokenBudget?: number;
+  tools?: string[];
+  taskStore?: TaskStore;
+  objectiveStore?: ObjectiveStore;
+  toolRegistry?: ToolRegistry;
 }): Agent {
   const sessionStore = createSessionStore(opts.db);
   const messageStore = createMessageStore(opts.db);
@@ -118,7 +124,7 @@ function makeAgent(opts: {
       cacheTtl: "5m",
     },
     persona: "test",
-    tools: ["shell"],
+    tools: opts.tools ?? ["shell"],
     maxSteps: 1,
     workspaceDir: "/tmp/openacme-preflight-test-ws",
     compression: {
@@ -137,12 +143,13 @@ function makeAgent(opts: {
   return new Agent(config, {
     sessionStore,
     messageStore,
-    toolRegistry: stubToolRegistry,
+    toolRegistry: opts.toolRegistry ?? stubToolRegistry,
     attachmentsRoot: path.join(tmpRoot, "attachments"),
     memoryStore: new MemoryStore(path.join(tmpRoot, "agents")),
-    taskStore: new TaskStore(path.join(tmpRoot, "tasks")),
+    taskStore: opts.taskStore ?? new TaskStore(path.join(tmpRoot, "tasks")),
     inboxStore: createInboxStore(opts.db),
     contextSnapshotStore,
+    objectiveStore: opts.objectiveStore,
   });
 }
 
@@ -227,6 +234,74 @@ describe("Agent.preflightCompress", () => {
     const newId = await agent.preflightCompress(parent.id, seed);
     expect(newId).toBe(parent.id);
     expect(sessions.findChildOf(parent.id)).toBeNull();
+  });
+
+  it("counts the objectives snapshot as part of the preflight system prompt", async () => {
+    const db = freshDb();
+    const sessions = createSessionStore(db);
+    const parent = sessions.create("a1", { id: "objective-context" });
+    const objectiveStore = createObjectiveStore(db);
+    const taskStore = new TaskStore(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agent-preflight-tasks-")),
+      { db },
+    );
+    const objectiveToolRegistry = {
+      get: () => ({}),
+      getVercelTools: () => ({
+        objective_create: { description: "objective create" },
+        objective_view: { description: "objective view" },
+      }),
+    } as unknown as ToolRegistry;
+
+    for (let i = 0; i < 8; i++) {
+      const objective = objectiveStore.createObjective({
+        id: `objective-${i}`,
+        title: `Objective ${i} ${"x".repeat(80)}`,
+        ownerAgentId: "a1",
+        ownerSessionId: parent.id,
+        createdBy: "a1",
+        createdInSessionId: parent.id,
+        closeoutPrompt: `Review ${i} ${"y".repeat(60)}`,
+      });
+      await taskStore.create({
+        title: `Task for ${objective.id}`,
+        assignee: "a1",
+        created_by: "a1",
+        session_id: parent.id,
+        objective_id: objective.id,
+      });
+    }
+
+    const withoutObjectives = makeAgent({
+      db,
+      thresholdTokens: 10_000,
+      tools: ["objective_create", "objective_view"],
+      taskStore,
+      toolRegistry: objectiveToolRegistry,
+    });
+    const withObjectives = makeAgent({
+      db,
+      thresholdTokens: 10_000,
+      tools: ["objective_create", "objective_view"],
+      taskStore,
+      objectiveStore,
+      toolRegistry: objectiveToolRegistry,
+    });
+
+    const withoutPrepared = await withoutObjectives.prepareModelHistory(
+      parent.id,
+      [],
+      "proactive",
+    );
+    const withPrepared = await withObjectives.prepareModelHistory(
+      parent.id,
+      [],
+      "proactive",
+    );
+
+    expect(withPrepared.estimatedTokens ?? 0).toBeGreaterThan(
+      (withoutPrepared.estimatedTokens ?? 0) + 100,
+    );
   });
 
   it("prepares compressed model context without mutating canonical history", async () => {

@@ -49,8 +49,10 @@ import type {
   SessionTimelineEventInput,
   ContextSnapshotStore,
   ContextSnapshotReason,
+  ObjectiveStore,
 } from "@openacme/db";
 import { buildSystemPrompt } from "./prompt.js";
+import { renderObjectivesForPrompt } from "./objectives-context.js";
 import {
   Compressor,
   canCompressHistory,
@@ -451,6 +453,7 @@ export class Agent {
   readonly attachmentsRoot: string;
   readonly memoryStore: MemoryStore;
   readonly taskStore: TaskStore;
+  readonly objectiveStore: ObjectiveStore | null;
   readonly inboxStore: InboxStore;
   readonly contextSnapshotStore: ContextSnapshotStore | null;
   readonly broadcaster: AutonomousBroadcaster | null;
@@ -486,6 +489,10 @@ export class Agent {
       /** Shared task store. Same instance is bound to the task tools and
        *  driven by the server-side TaskScheduler. */
       taskStore: TaskStore;
+      /** Optional objective store. When present, the session-start system
+       *  prompt gets a compact objective snapshot; live state still comes
+       *  from objective/task tools. */
+      objectiveStore?: ObjectiveStore | null;
       /** Per-agent delivery queue. Drained at turn start + at LLM-step
        *  boundaries; rows hard-deleted after delivery. The autonomous
        *  loop reads from here for both initial wake content and
@@ -521,6 +528,7 @@ export class Agent {
     this.attachmentsRoot = deps.attachmentsRoot;
     this.memoryStore = deps.memoryStore;
     this.taskStore = deps.taskStore;
+    this.objectiveStore = deps.objectiveStore ?? null;
     this.inboxStore = deps.inboxStore;
     this.contextSnapshotStore = deps.contextSnapshotStore ?? null;
     this.broadcaster = deps.broadcaster ?? null;
@@ -2093,6 +2101,24 @@ export class Agent {
       );
     }
 
+    let objectivesContext: string | undefined;
+    if (this.objectiveStore && resolvedTools.includes("objective_create")) {
+      try {
+        const rendered = renderObjectivesForPrompt({
+          agentId: this.config.id,
+          currentSessionId: sessionId,
+          objectives: this.objectiveStore.listObjectives({ limit: 200 }),
+          tasks: this.taskStore.list(),
+        });
+        if (rendered) objectivesContext = rendered;
+      } catch (e) {
+        log.warn(
+          { err: e, agentId: this.config.id },
+          "failed to render objectives for prompt",
+        );
+      }
+    }
+
     // Recent Activity is NOT in the cached system prompt — it's
     // appended to the autonomous user message at runAutonomous time so
     // it stays per-turn fresh and doesn't contaminate interactive
@@ -2103,6 +2129,7 @@ export class Agent {
       toolNames: resolvedTools,
       skillsIndex: this.config.skillsIndex,
       tasksContext,
+      objectivesContext,
       memorySnapshot,
       agentsMd: this.config.agentsMd,
       teams: this.config.teams,

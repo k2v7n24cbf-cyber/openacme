@@ -534,6 +534,39 @@ describe("InboxStore — session-aware claim", () => {
     expect([...summary.userTaskCommentSessionIds]).toEqual(["human-comment"]);
   });
 
+  it("summarizes objective closeout notices separately", () => {
+    inbox.deliver({
+      agentId: "agent-a",
+      kind: "system_notice",
+      source: "system",
+      sourceId: "system:objective-closeout",
+      relatedSession: "objective-owner-session",
+      payload: { eventKind: "objective_ready_for_closeout" },
+    });
+    inbox.deliver({
+      agentId: "agent-a",
+      kind: "system_notice",
+      source: "system",
+      sourceId: "system:objective-closeout",
+      relatedSession: null,
+      payload: { eventKind: "objective_ready_for_closeout" },
+    });
+    inbox.deliver({
+      agentId: "agent-a",
+      kind: "system_notice",
+      source: "system",
+      sourceId: "background",
+      relatedSession: "background-session",
+      payload: { eventKind: "background_notice" },
+    });
+
+    const summary = inbox.pendingSummaryFor("agent-a");
+    expect([...summary.objectiveCloseoutSessionIds]).toEqual([
+      "objective-owner-session",
+    ]);
+    expect(summary.hasObjectiveCloseoutAgentWide).toBe(true);
+  });
+
   it("cancels a queued user message only for the matching session", () => {
     inbox.deliver({
       agentId: "agent-a",

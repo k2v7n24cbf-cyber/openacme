@@ -12,6 +12,7 @@ const baseTask = (patch: Partial<Task> & Pick<Task, "id" | "title">): Task => ({
   status: patch.status ?? "open",
   assignee: patch.assignee ?? "agent",
   session_id: patch.session_id ?? null,
+  objective_id: patch.objective_id ?? null,
   created_by: patch.created_by ?? "system:user",
   created_in_session_id: patch.created_in_session_id ?? null,
   parent_id: patch.parent_id ?? null,

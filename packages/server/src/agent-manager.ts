@@ -44,6 +44,7 @@ import {
   createSessionTimelineStore,
   createContextSnapshotStore,
   createAuthStore,
+  createObjectiveStore,
   type AuthStore,
   type SessionStore,
   type MessageStore,
@@ -54,6 +55,7 @@ import {
   type UsageStore,
   type SessionTimelineStore,
   type ContextSnapshotStore,
+  type ObjectiveStore,
   type SessionTimelineEventInput,
   type UsageCostSource,
 } from "@openacme/db";
@@ -66,6 +68,7 @@ import {
   bindReloadConfig,
   bindMemory,
   bindTaskStore,
+  bindObjectiveStore,
   bindBrowser,
   bindEmail,
   bindAgentTool,
@@ -94,6 +97,9 @@ import {
 } from "@openacme/browser";
 import { EmailManager } from "@openacme/email";
 import { Dispatcher } from "./dispatcher.js";
+import { ObjectiveCloseoutWatcher } from "./objective-closeout-watcher.js";
+import { ObjectiveCloseoutService } from "./objective-closeout-service.js";
+import { createObjectiveCloseoutSummarizer } from "./objective-closeout-model-caller.js";
 import { SessionBroadcaster } from "./broadcaster.js";
 import {
   MCPClient,
@@ -244,6 +250,8 @@ export class AgentManager {
   private agentsMd: string | undefined;
   readonly memoryStore: MemoryStore;
   readonly taskStore: TaskStore;
+  readonly objectiveStore: ObjectiveStore;
+  readonly objectiveCloseoutService: ObjectiveCloseoutService;
   /** Periodic state-checker. Replaces the old event-driven
    *  `TaskScheduler`. Public-readonly so `app.ts` (`/api/chat`'s
    *  interactive busy hooks) and `routes/home.ts` (runningSessionIds)
@@ -379,7 +387,12 @@ export class AgentManager {
         return team.manager ?? null;
       },
     });
+    this.objectiveStore = createObjectiveStore(this.db);
     bindTaskStore({ store: this.taskStore });
+    bindObjectiveStore({
+      objectiveStore: this.objectiveStore,
+      taskStore: this.taskStore,
+    });
 
     // ping_user fires a session-anchored event the EventStore listener
     // fans out to (a) the broadcaster for the operator's inbox row and
@@ -417,6 +430,24 @@ export class AgentManager {
       broadcaster: this.broadcaster,
       onTimelineEvent: (event) => this.recordSessionTimeline(event),
       tickIntervalMs: opts?.tickIntervalMs,
+    });
+    this.objectiveCloseoutService = new ObjectiveCloseoutService({
+      watcher: new ObjectiveCloseoutWatcher({
+        objectiveStore: this.objectiveStore,
+        taskStore: this.taskStore,
+      }),
+      summarizer:
+        this.config.model.provider && this.config.model.model
+          ? createObjectiveCloseoutSummarizer({
+              model: this.config.model,
+              behavior: this.config.behavior,
+              resolveModel: this.modelResolver,
+            })
+          : null,
+      objectiveStore: this.objectiveStore,
+      inboxStore: this.inboxStore,
+      sessionStore: this.sessionStore,
+      dispatcher: this.dispatcher,
     });
     // Event fan-out has two branches now:
     //   1. Inbox delivery — each event is delivered to every *relevant*
@@ -746,7 +777,15 @@ export class AgentManager {
     const orphanTasks = this.taskStore
       .list()
       .filter((t) => !knownAgentIds.has(t.assignee));
-    if (orphanSessions.length === 0 && orphanTasks.length === 0) return;
+    const orphanObjectives = this.objectiveStore
+      .listObjectives()
+      .filter((objective) => !knownAgentIds.has(objective.ownerAgentId));
+    if (
+      orphanSessions.length === 0 &&
+      orphanTasks.length === 0 &&
+      orphanObjectives.length === 0
+    )
+      return;
     for (const s of orphanSessions) {
       try {
         this.sessionStore.delete(s.id);
@@ -754,6 +793,21 @@ export class AgentManager {
         log.warn(
           { err: e, sessionId: s.id },
           "purgeOrphans: failed to drop session",
+        );
+      }
+    }
+    for (const ownerAgentId of new Set(
+      orphanObjectives.map((objective) => objective.ownerAgentId),
+    )) {
+      try {
+        this.objectiveStore.deleteObjectivesForOwner(
+          ownerAgentId,
+          "system:purge-orphans",
+        );
+      } catch (e) {
+        log.warn(
+          { err: e, ownerAgentId },
+          "purgeOrphans: failed to drop objectives",
         );
       }
     }
@@ -776,7 +830,7 @@ export class AgentManager {
       }
     })();
     console.log(
-      `Workforce GC: cleaned ${orphanSessions.length} orphan session(s) and ${orphanTasks.length} orphan task(s) from deleted agents.`,
+      `Workforce GC: cleaned ${orphanSessions.length} orphan session(s), ${orphanTasks.length} orphan task(s), and ${orphanObjectives.length} orphan objective(s) from deleted agents.`,
     );
   }
 
@@ -1678,6 +1732,15 @@ export class AgentManager {
       }
     }
 
+    try {
+      this.objectiveStore.deleteObjectivesForOwner(id, "system:agent-delete");
+    } catch (e) {
+      log.warn(
+        { err: e, agentId: id },
+        "deleteAgent: failed to drop objectives",
+      );
+    }
+
     this.agentStore.delete(id);
   }
 
@@ -1691,6 +1754,10 @@ export class AgentManager {
     // Kill the agent's tool-host worker too — the next worker-runtime
     // tool call respawns it under a freshly compiled policy.
     void this.toolHostManager.stopWorker(id);
+  }
+
+  startObjectiveCloseoutService(): void {
+    this.objectiveCloseoutService.start();
   }
 
   /** For events emitted by TaskStore before the new sessionId column
@@ -2219,6 +2286,7 @@ export class AgentManager {
       attachmentsRoot: this.attachmentsRoot,
       memoryStore: this.memoryStore,
       taskStore: this.taskStore,
+      objectiveStore: this.objectiveStore,
       inboxStore: this.inboxStore,
       contextSnapshotStore: this.contextSnapshotStore,
       broadcaster: this.broadcaster,
@@ -2779,6 +2847,8 @@ export class AgentManager {
     // closed sqlite handle ("The database connection is not open") at
     // exit. Particularly visible in CLI chat where the scheduler runs
     // in-process and a turn may have been kicked just before exit.
+    this.objectiveCloseoutService.stop();
+    await this.objectiveCloseoutService.drain();
     this.dispatcher.stop();
     await this.dispatcher.drain();
     this.closing = true;

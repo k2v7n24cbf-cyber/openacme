@@ -5,6 +5,7 @@ import {
   BookOpen,
   ListChecks,
   Settings,
+  Target,
   Users,
   Workflow,
 } from "lucide-react";
@@ -15,6 +16,7 @@ const navItems = [
   { link: linkOptions({ to: "/agents" }), label: "Agents", icon: Bot },
   { link: linkOptions({ to: "/teams" }), label: "Teams", icon: Users },
   { link: linkOptions({ to: "/tasks" }), label: "Tasks", icon: ListChecks },
+  { link: linkOptions({ to: "/objectives" }), label: "Goals", icon: Target },
   { link: linkOptions({ to: "/workflows" }), label: "Flows", icon: Workflow },
   { link: linkOptions({ to: "/skills" }), label: "Skills", icon: BookOpen },
   { link: linkOptions({ to: "/settings" }), label: "Settings", icon: Settings },
@@ -38,7 +40,7 @@ export function MobileTabBar() {
       aria-label="Primary"
       className="fixed inset-x-0 bottom-0 z-40 border-t border-paper-rule bg-paper-sunk pb-[env(safe-area-inset-bottom)] md:hidden"
     >
-      <ul className="grid grid-cols-6">
+      <ul className="grid grid-cols-7">
         {navItems.map((item) => {
           const isActive =
             item.link.to === "/"

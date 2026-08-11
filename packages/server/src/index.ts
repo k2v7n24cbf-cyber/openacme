@@ -85,6 +85,7 @@ export async function startServer(dataDirOverride?: string) {
   // stale in_progress from any prior crash) and schedules the 60s
   // tick. Replaces the old event-driven `TaskScheduler`.
   await manager.dispatcher.start();
+  manager.startObjectiveCloseoutService();
   await runtime.startWorkflowDispatcher();
 
   const port = config.server.port;

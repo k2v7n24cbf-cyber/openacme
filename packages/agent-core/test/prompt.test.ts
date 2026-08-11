@@ -340,6 +340,79 @@ describe("Workspace section (per-agent default cwd)", () => {
   });
 });
 
+describe("Objectives tool guidance", () => {
+  it("includes objective guidance when objective tools are available", () => {
+    const prompt = buildSystemPrompt({
+      persona: PERSONA,
+      toolNames: ["objective_create", "objective_view", "task_create"],
+    });
+
+    expect(prompt).toContain("## Objectives tool");
+    expect(prompt).toContain("Objectives group tracked outcomes");
+    expect(prompt).toContain("do not create sessions or tasks by themselves");
+    expect(prompt).toContain(
+      "If you are going to create multiple tasks for the same intended outcome",
+    );
+    expect(prompt).toContain(
+      "same logical grouping and original scope",
+    );
+    expect(prompt).toContain(
+      "Do not reopen or attach new work to a past objective merely because the title sounds related",
+    );
+    expect(prompt).toContain(
+      "Only relink, cancel, or reopen prior work when the user is explicitly asking to continue, correct, or rectify that prior work",
+    );
+    expect(prompt).toContain(
+      "Do not leave a multi-task outcome as loose unrelated tasks",
+    );
+    expect(prompt).toContain(
+      "don't create an objective for a simple one-turn action",
+    );
+    expect(prompt).toContain(
+      "If an objective's work naturally has a parent/checklist shape",
+    );
+    expect(prompt).toContain(
+      "Parent/subtask hierarchy is for visibility and structure",
+    );
+    expect(prompt).toContain(
+      "`depends_on` is still the execution gate",
+    );
+  });
+
+  it("omits objective guidance when objective tools are unavailable", () => {
+    const prompt = buildSystemPrompt({
+      persona: PERSONA,
+      toolNames: ["task_create"],
+    });
+
+    expect(prompt).not.toContain("## Objectives tool");
+    expect(prompt).not.toContain("Objectives group tracked outcomes");
+  });
+});
+
+describe("Objectives snapshot assembly", () => {
+  it("renders a bounded objectives snapshot when provided", () => {
+    const prompt = buildSystemPrompt({
+      persona: PERSONA,
+      toolNames: ["objective_create"],
+      objectivesContext:
+        "- [obj-1] active · linked tasks 2, terminal 1, nonterminal 1",
+    });
+
+    expect(prompt).toContain("## Objectives");
+    expect(prompt).toContain("[obj-1]");
+  });
+
+  it("omits the objectives snapshot when not provided", () => {
+    const prompt = buildSystemPrompt({
+      persona: PERSONA,
+      toolNames: ["objective_create"],
+    });
+
+    expect(prompt).not.toContain("## Objectives\n");
+  });
+});
+
 describe("teams section assembly", () => {
   const team = (over: Partial<import("../src/prompt.js").PromptTeam> = {}) => ({
     id: "website",

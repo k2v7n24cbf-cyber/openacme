@@ -17,6 +17,7 @@ import { Route as TasksRouteImport } from './routes/tasks'
 import { Route as SkillsRouteImport } from './routes/skills'
 import { Route as SetupRouteImport } from './routes/setup'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as ObjectivesRouteImport } from './routes/objectives'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as EnrollRouteImport } from './routes/enroll'
 import { Route as AgentsRouteImport } from './routes/agents'
@@ -62,6 +63,11 @@ const SettingsRoute = SettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ObjectivesRoute = ObjectivesRouteImport.update({
+  id: '/objectives',
+  path: '/objectives',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
@@ -88,6 +94,7 @@ export interface FileRoutesByFullPath {
   '/agents': typeof AgentsRoute
   '/enroll': typeof EnrollRoute
   '/login': typeof LoginRoute
+  '/objectives': typeof ObjectivesRoute
   '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
   '/skills': typeof SkillsRoute
@@ -102,6 +109,7 @@ export interface FileRoutesByTo {
   '/agents': typeof AgentsRoute
   '/enroll': typeof EnrollRoute
   '/login': typeof LoginRoute
+  '/objectives': typeof ObjectivesRoute
   '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
   '/skills': typeof SkillsRoute
@@ -117,6 +125,7 @@ export interface FileRoutesById {
   '/agents': typeof AgentsRoute
   '/enroll': typeof EnrollRoute
   '/login': typeof LoginRoute
+  '/objectives': typeof ObjectivesRoute
   '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
   '/skills': typeof SkillsRoute
@@ -133,6 +142,7 @@ export interface FileRouteTypes {
     | '/agents'
     | '/enroll'
     | '/login'
+    | '/objectives'
     | '/settings'
     | '/setup'
     | '/skills'
@@ -147,6 +157,7 @@ export interface FileRouteTypes {
     | '/agents'
     | '/enroll'
     | '/login'
+    | '/objectives'
     | '/settings'
     | '/setup'
     | '/skills'
@@ -161,6 +172,7 @@ export interface FileRouteTypes {
     | '/agents'
     | '/enroll'
     | '/login'
+    | '/objectives'
     | '/settings'
     | '/setup'
     | '/skills'
@@ -176,6 +188,7 @@ export interface RootRouteChildren {
   AgentsRoute: typeof AgentsRoute
   EnrollRoute: typeof EnrollRoute
   LoginRoute: typeof LoginRoute
+  ObjectivesRoute: typeof ObjectivesRoute
   SettingsRoute: typeof SettingsRoute
   SetupRoute: typeof SetupRoute
   SkillsRoute: typeof SkillsRoute
@@ -244,6 +257,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/objectives': {
+      id: '/objectives'
+      path: '/objectives'
+      fullPath: '/objectives'
+      preLoaderRoute: typeof ObjectivesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/login': {
       id: '/login'
       path: '/login'
@@ -280,6 +300,7 @@ const rootRouteChildren: RootRouteChildren = {
   AgentsRoute: AgentsRoute,
   EnrollRoute: EnrollRoute,
   LoginRoute: LoginRoute,
+  ObjectivesRoute: ObjectivesRoute,
   SettingsRoute: SettingsRoute,
   SetupRoute: SetupRoute,
   SkillsRoute: SkillsRoute,

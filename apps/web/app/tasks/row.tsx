@@ -1,4 +1,5 @@
 import { Repeat2 } from "lucide-react";
+import { Link } from "@tanstack/react-router";
 import { Badge } from "@/app/components/ui/badge";
 import { ActiveMarker } from "@/app/components/ui/active-marker";
 import { AgentRef } from "@/app/components/ui/agent-ref";
@@ -53,6 +54,17 @@ export function TaskListRow({
           declared gates. The rest lives in the detail pane. */}
       <div className="flex w-full flex-wrap gap-x-3 font-mono text-[11px] tabular-nums text-ink-faint">
         <span>#{task.id}</span>
+        {task.objective_id && (
+          <Link
+            to="/objectives"
+            search={{ id: task.objective_id }}
+            onClick={(e) => e.stopPropagation()}
+            className="text-signal-blue hover:text-plot-red"
+            title={`Open objective ${task.objective_id}`}
+          >
+            obj {task.objective_id.slice(0, 8)}
+          </Link>
+        )}
         <AgentRef id={task.assignee} />
         {task.team && <span>{task.team}</span>}
         {task.due_at && (

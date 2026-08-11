@@ -69,6 +69,32 @@ describe("TaskStore SQL-backed reads", () => {
     ]);
   });
 
+  it("imports objective_id from markdown and filters SQL reads by link", async () => {
+    const fileStore = new TaskStore(dir);
+    const linked = await fileStore.create({
+      title: "Linked legacy task",
+      assignee: "ops",
+      created_by: "acme",
+      objective_id: "objective-1",
+    });
+    const unlinked = await fileStore.create({
+      title: "Unlinked legacy task",
+      assignee: "ops",
+      created_by: "acme",
+    });
+
+    const sqlStore = new TaskStore(dir, { db });
+
+    expect(sqlStore.get(linked.id)?.objective_id).toBe("objective-1");
+    expect(sqlStore.get(unlinked.id)?.objective_id).toBeNull();
+    expect(
+      sqlStore.list({ objective_id: "objective-1" }).map((t) => t.id),
+    ).toEqual([linked.id]);
+    expect(sqlStore.list({ objective_id: null }).map((t) => t.id)).toEqual([
+      unlinked.id,
+    ]);
+  });
+
   it("surfaces legacy import constraint conflicts as typed TaskStoreError", async () => {
     const fileStore = new TaskStore(dir);
     const first = await fileStore.create({
@@ -110,6 +136,46 @@ describe("TaskStore SQL-backed writes", () => {
       assignee: "platform",
     });
     expect(sqlStore.get("1")?.body.trim()).toBe("Use SQLite");
+  });
+
+  it("creates, updates, clears, and filters objective_id in SQL", async () => {
+    const sqlStore = new TaskStore(dir, { db });
+    const linked = await sqlStore.create({
+      title: "Linked SQL task",
+      assignee: "platform",
+      created_by: "acme",
+      objective_id: "objective-1",
+    });
+    const unlinked = await sqlStore.create({
+      title: "Unlinked SQL task",
+      assignee: "platform",
+      created_by: "acme",
+    });
+
+    expect(linked.objective_id).toBe("objective-1");
+    expect(unlinked.objective_id).toBeNull();
+    expect(sqlStore.get(linked.id)?.objective_id).toBe("objective-1");
+    expect(
+      sqlStore.list({ objective_id: "objective-1" }).map((t) => t.id),
+    ).toEqual([linked.id]);
+    expect(sqlStore.list({ objective_id: null }).map((t) => t.id)).toEqual([
+      unlinked.id,
+    ]);
+
+    const moved = await sqlStore.update(linked.id, {
+      objective_id: "objective-2",
+    });
+    expect(moved.objective_id).toBe("objective-2");
+    expect(
+      sqlStore.list({ objective_id: "objective-2" }).map((t) => t.id),
+    ).toEqual([linked.id]);
+
+    const cleared = await sqlStore.update(linked.id, { objective_id: null });
+    expect(cleared.objective_id).toBeNull();
+    expect(sqlStore.list({ objective_id: null }).map((t) => t.id)).toEqual([
+      linked.id,
+      unlinked.id,
+    ]);
   });
 
   it("allocates unique SQL ids for parallel creates", async () => {

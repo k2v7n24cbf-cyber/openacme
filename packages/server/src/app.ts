@@ -32,6 +32,7 @@ import {
 import { registerFilesRoutes } from "./routes/files.js";
 import { registerFsRoutes } from "./routes/fs.js";
 import { registerTaskRoutes } from "./routes/tasks.js";
+import { registerObjectiveRoutes } from "./routes/objectives.js";
 import { registerTeamRoutes } from "./routes/teams.js";
 import { registerSetupRoutes, setDefaultModelIfUnset } from "./routes/setup.js";
 import { registerSkillsHubRoutes } from "./routes/skills-hub.js";
@@ -256,6 +257,7 @@ export async function createApp(
   // Tasks: founder read/edit/delete. POST is intentionally absent — task
   // creation is agent-only via the `task_create` tool.
   registerTaskRoutes(app, manager);
+  registerObjectiveRoutes(app, manager);
 
   // Teams: human-owned rosters + charters. No DELETE (archive instead);
   // no agent-side write path by design.

@@ -44,6 +44,8 @@ describe("database clean bootstrap", () => {
           "task_meta",
           "task_comments",
           "task_events",
+          "objectives",
+          "objective_events",
           "usage_events",
           "session_timeline_events",
           "workflow_definitions",
@@ -63,6 +65,7 @@ describe("database clean bootstrap", () => {
           "status",
           "assignee",
           "session_id",
+          "objective_id",
           "created_by",
           "created_in_session_id",
           "parent_id",
@@ -77,6 +80,41 @@ describe("database clean bootstrap", () => {
           "last_run_at",
           "team",
           "body",
+        ]),
+      );
+
+      const objectiveColumns = tableColumns(db, "objectives");
+      expect(objectiveColumns).toEqual(
+        expect.arrayContaining([
+          "id",
+          "title",
+          "description",
+          "status",
+          "owner_agent_id",
+          "owner_session_id",
+          "created_by",
+          "created_in_session_id",
+          "closeout_prompt",
+          "created_at",
+          "updated_at",
+          "completed_at",
+          "completion_summary",
+          "last_closeout_fingerprint",
+          "last_closeout_brief_json",
+          "last_closeout_brief_at",
+        ]),
+      );
+
+      const objectiveEventColumns = tableColumns(db, "objective_events");
+      expect(objectiveEventColumns).toEqual(
+        expect.arrayContaining([
+          "id",
+          "objective_id",
+          "event_type",
+          "actor",
+          "summary",
+          "details_json",
+          "created_at",
         ]),
       );
 
@@ -162,7 +200,12 @@ describe("database clean bootstrap", () => {
           "idx_tasks_created_by",
           "idx_tasks_team",
           "idx_tasks_parent",
+          "idx_tasks_objective",
           "idx_tasks_one_in_progress_per_session",
+          "idx_objectives_status",
+          "idx_objectives_owner",
+          "idx_objectives_owner_session",
+          "idx_objective_events_objective",
           "idx_session_timeline_session",
           "idx_session_timeline_trace",
           "idx_session_timeline_forensic_run",

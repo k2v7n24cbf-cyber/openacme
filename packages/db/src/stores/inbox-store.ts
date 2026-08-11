@@ -47,8 +47,12 @@ export interface InboxPendingSummary {
   targetedSessionIds: Set<string>;
   userMessageSessionIds: Set<string>;
   userTaskCommentSessionIds: Set<string>;
+  objectiveCloseoutSessionIds: Set<string>;
   hasAgentWide: boolean;
+  hasObjectiveCloseoutAgentWide: boolean;
 }
+
+const OBJECTIVE_CLOSEOUT_SOURCE_ID = "system:objective-closeout";
 
 function parseRow(row: AgentInboxRow): InboxRow {
   let payload: unknown = null;
@@ -95,6 +99,16 @@ function isUserTaskCommentNotice(row: {
   } catch {
     return false;
   }
+}
+
+function isObjectiveCloseoutNotice(row: {
+  kind: string;
+  sourceId: string | null;
+}): boolean {
+  return (
+    row.kind === "system_notice" &&
+    row.sourceId === OBJECTIVE_CLOSEOUT_SOURCE_ID
+  );
 }
 
 /**
@@ -172,6 +186,7 @@ export function createInboxStore(db: WasmDatabase) {
       const rows = orm
         .select({
           kind: agentInbox.kind,
+          sourceId: agentInbox.sourceId,
           relatedSession: agentInbox.relatedSession,
           payload: agentInbox.payload,
         })
@@ -181,7 +196,9 @@ export function createInboxStore(db: WasmDatabase) {
       const targetedSessionIds = new Set<string>();
       const userMessageSessionIds = new Set<string>();
       const userTaskCommentSessionIds = new Set<string>();
+      const objectiveCloseoutSessionIds = new Set<string>();
       let hasAgentWide = false;
+      let hasObjectiveCloseoutAgentWide = false;
       for (const row of rows) {
         if (row.relatedSession) {
           targetedSessionIds.add(row.relatedSession);
@@ -191,8 +208,14 @@ export function createInboxStore(db: WasmDatabase) {
           if (isUserTaskCommentNotice(row)) {
             userTaskCommentSessionIds.add(row.relatedSession);
           }
+          if (isObjectiveCloseoutNotice(row)) {
+            objectiveCloseoutSessionIds.add(row.relatedSession);
+          }
         } else {
           hasAgentWide = true;
+          if (isObjectiveCloseoutNotice(row)) {
+            hasObjectiveCloseoutAgentWide = true;
+          }
         }
       }
       return {
@@ -200,7 +223,9 @@ export function createInboxStore(db: WasmDatabase) {
         targetedSessionIds,
         userMessageSessionIds,
         userTaskCommentSessionIds,
+        objectiveCloseoutSessionIds,
         hasAgentWide,
+        hasObjectiveCloseoutAgentWide,
       };
     },
 

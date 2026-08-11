@@ -235,6 +235,52 @@ describe("TaskStore team tag", () => {
   });
 });
 
+describe("TaskStore objective link", () => {
+  it("round-trips objective_id through create / disk / update, null clears", async () => {
+    const task = await store.create({
+      title: "Implement objective store",
+      assignee: "platform",
+      created_by: "founder-agent",
+      objective_id: "objective-1",
+    });
+    expect(task.objective_id).toBe("objective-1");
+
+    const reread = new TaskStore(dir).get(task.id);
+    expect(reread?.objective_id).toBe("objective-1");
+
+    const moved = await store.update(task.id, { objective_id: "objective-2" });
+    expect(moved.objective_id).toBe("objective-2");
+
+    const cleared = await store.update(task.id, { objective_id: null });
+    expect(cleared.objective_id).toBeNull();
+
+    const retitled = await store.update(task.id, { title: "Objective store" });
+    expect(retitled.objective_id).toBeNull();
+  });
+
+  it("defaults to null and filters by objective_id in list()", async () => {
+    const linked = await store.create({
+      title: "Linked",
+      assignee: "platform",
+      created_by: "founder-agent",
+      objective_id: "objective-1",
+    });
+    const unlinked = await store.create({
+      title: "Unlinked",
+      assignee: "platform",
+      created_by: "founder-agent",
+    });
+
+    expect(unlinked.objective_id).toBeNull();
+    expect(
+      store.list({ objective_id: "objective-1" }).map((t) => t.id),
+    ).toEqual([linked.id]);
+    expect(store.list({ objective_id: null }).map((t) => t.id)).toEqual([
+      unlinked.id,
+    ]);
+  });
+});
+
 describe("TaskStore team-manager resolution", () => {
   const resolver = (teamId: string) =>
     teamId === "website" ? "zoe-manager" : null;

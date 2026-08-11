@@ -118,6 +118,11 @@ registry.register({
       .describe(
         "Status filter. Defaults to non-terminal (open, in_progress, blocked).",
       ),
+    objective_id: z
+      .string()
+      .nullable()
+      .optional()
+      .describe("Filter by objective id, or null for tasks without objective."),
     limit: z
       .number()
       .int()
@@ -135,6 +140,7 @@ registry.register({
     const a = args as {
       assignee?: string;
       status?: TaskStatus | TaskStatus[];
+      objective_id?: string | null;
       limit?: number;
     };
     const agentId = getCurrentAgentId();
@@ -153,7 +159,13 @@ registry.register({
         : [a.status]
       : (["open", "in_progress", "blocked"] as TaskStatus[]);
 
-    const all = b.store.list({ assignee, status });
+    const all = b.store.list({
+      assignee,
+      status,
+      ...(Object.prototype.hasOwnProperty.call(a, "objective_id")
+        ? { objective_id: a.objective_id }
+        : {}),
+    });
     const limited = all.slice(0, a.limit ?? 50);
     return JSON.stringify({
       ok: true,
@@ -233,8 +245,14 @@ registry.register({
       .string()
       .optional()
       .describe("Markdown description / acceptance criteria / working notes."),
+    objective_id: z
+      .string()
+      .optional()
+      .describe(
+        "Objective id to group this task under. If you create multiple tasks for the same intended outcome, create/use one objective and set this on each related task. Reuse an existing objective only when it is the same logical grouping and original scope; do not attach new work merely because a past objective title sounds related. Only relink/cancel/reopen prior work when the user explicitly asks to continue, correct, or rectify it.",
+      ),
     parent_id: TaskIdParam.optional().describe(
-      "Parent task id (for subtask hierarchy).",
+      "Parent task id for a real subtask hierarchy. Use this when the work should be visible as one parent/checklist/workstream plus child tasks. Do not use it as an execution dependency; use depends_on for ordering. When the parent belongs to an objective, link the parent and subtasks to that same objective_id.",
     ),
     depends_on: z
       .array(TaskIdParam)
@@ -279,6 +297,7 @@ registry.register({
       title: string;
       assignee?: string;
       body?: string;
+      objective_id?: string;
       parent_id?: string | number;
       depends_on?: (string | number)[];
       start_at?: string;
@@ -342,6 +361,7 @@ registry.register({
         created_by: agentId,
         created_in_session_id: callerSession,
         body: a.body,
+        objective_id: a.objective_id ?? null,
         parent_id: parentId,
         depends_on: dependsOn,
         start_at: a.start_at ?? undefined,
@@ -422,6 +442,13 @@ registry.register({
       .nullable()
       .optional()
       .describe("Bind to a session, or null to detach."),
+    objective_id: z
+      .string()
+      .nullable()
+      .optional()
+      .describe(
+        "Attach to an objective id, or null to detach from objectives.",
+      ),
     depends_on: z.array(TaskIdParam).optional(),
     start_at: z.string().nullable().optional(),
     due_at: z.string().nullable().optional(),
@@ -447,6 +474,7 @@ registry.register({
       status?: TaskStatus;
       assignee?: string;
       session_id?: string | null;
+      objective_id?: string | null;
       depends_on?: (string | number)[];
       start_at?: string | null;
       due_at?: string | null;
@@ -485,6 +513,9 @@ registry.register({
           assignee: a.assignee,
           ...(Object.prototype.hasOwnProperty.call(a, "session_id")
             ? { session_id: a.session_id }
+            : {}),
+          ...(Object.prototype.hasOwnProperty.call(a, "objective_id")
+            ? { objective_id: a.objective_id }
             : {}),
           depends_on: a.depends_on?.map(taskId),
           ...(Object.prototype.hasOwnProperty.call(a, "start_at")

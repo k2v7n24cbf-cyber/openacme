@@ -84,6 +84,9 @@ export const TaskFrontmatterSchema = z
      *    "reuse"`: the session the next fire will run in.
      */
     session_id: z.string().min(1).nullable().default(null),
+    // Optional objective grouping link. TaskStore only carries this id; it does
+    // not validate objective existence or trigger objective closeout behavior.
+    objective_id: z.string().min(1).nullable().default(null),
     created_by: z.string().min(1),
     // The conversation/session that issued task_create. Distinct from
     // session_id, which is the session where this task itself runs.
@@ -121,6 +124,7 @@ export interface TaskCreate {
   created_in_session_id?: string | null;
   body?: string;
   session_id?: string | null;
+  objective_id?: string | null;
   parent_id?: string | null;
   depends_on?: string[];
   start_at?: string | null;
@@ -136,6 +140,7 @@ export interface TaskUpdate {
   status?: TaskStatus;
   assignee?: string;
   session_id?: string | null;
+  objective_id?: string | null;
   depends_on?: string[];
   start_at?: string | null;
   due_at?: string | null;
@@ -147,6 +152,7 @@ export interface TaskListFilter {
   assignee?: string;
   status?: TaskStatus | TaskStatus[];
   session_id?: string | null;
+  objective_id?: string | null;
   parent_id?: string | null;
   created_by?: string;
   team?: string;

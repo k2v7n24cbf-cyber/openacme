@@ -72,6 +72,10 @@ function defaultApiUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
 
+function shortId(id: string): string {
+  return id.length > 12 ? id.slice(0, 12) : id;
+}
+
 function PropertyRow({
   label,
   children,
@@ -329,6 +333,24 @@ export function TaskDetailPanel({
                 onUnbind={() => onChange({ ...draft, session_id: null })}
                 readOnly={readOnly}
               />
+            </PropertyRow>
+
+            <PropertyRow label="Objective">
+              {selected.objective_id ? (
+                <Link
+                  to="/objectives"
+                  search={{ id: selected.objective_id }}
+                  className={cn(GHOST_TRIGGER, "inline-flex items-center gap-1.5")}
+                  title={`Open objective ${selected.objective_id}`}
+                >
+                  <span>{shortId(selected.objective_id)}</span>
+                  <ArrowUpRight className="size-3.5 text-ink-faint" />
+                </Link>
+              ) : (
+                <span className="font-mono text-[12px] text-ink-faint">
+                  None
+                </span>
+              )}
             </PropertyRow>
 
             <PropertyRow label="Repeat">

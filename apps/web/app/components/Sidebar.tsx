@@ -10,6 +10,7 @@ import {
   ListChecks,
   Settings,
   ScrollText,
+  Target,
   Workflow,
   PanelLeftClose,
   PanelLeftOpen,
@@ -37,6 +38,11 @@ const navItems = [
   { link: linkOptions({ to: "/agents" }), label: "Agents", icon: Bot },
   { link: linkOptions({ to: "/teams" }), label: "Teams", icon: Users },
   { link: linkOptions({ to: "/tasks" }), label: "Tasks", icon: ListChecks },
+  {
+    link: linkOptions({ to: "/objectives" }),
+    label: "Objectives",
+    icon: Target,
+  },
   {
     link: linkOptions({ to: "/workflows" }),
     label: "Workflows",

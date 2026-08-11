@@ -22,6 +22,15 @@ import {
   USAGE_COST_SOURCES,
 } from "./usage-kinds.js";
 
+export const OBJECTIVE_STATUSES = [
+  "active",
+  "waiting_on_tasks",
+  "ready_for_closeout",
+  "completed",
+  "failed",
+  "canceled",
+] as const;
+
 /**
  * Drizzle schema definitions. Source of truth for the structured tables;
  * `drizzle-kit generate` reads this file to produce SQL migrations under
@@ -138,6 +147,42 @@ export const userProfiles = sqliteTable("user_profiles", {
 });
 
 /**
+ * Objective records group tasks under a tracked outcome. V1 objectives
+ * are SQL-only and do not create sessions, dispatch work, or verify results
+ * themselves; closeout is handled by a separate server service.
+ */
+export const objectives = sqliteTable(
+  "objectives",
+  {
+    id: text("id").primaryKey(),
+    title: text("title").notNull(),
+    description: text("description").notNull().default(""),
+    status: text("status", { enum: OBJECTIVE_STATUSES }).notNull(),
+    ownerAgentId: text("owner_agent_id").notNull(),
+    ownerSessionId: text("owner_session_id"),
+    createdBy: text("created_by").notNull(),
+    createdInSessionId: text("created_in_session_id"),
+    closeoutPrompt: text("closeout_prompt").notNull().default(""),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    completedAt: text("completed_at"),
+    completionSummary: text("completion_summary"),
+    lastCloseoutFingerprint: text("last_closeout_fingerprint"),
+    lastCloseoutBriefJson: text("last_closeout_brief_json"),
+    lastCloseoutBriefAt: text("last_closeout_brief_at"),
+  },
+  (t) => [
+    check(
+      "objectives_status_check",
+      sql`${t.status} IN ('active', 'waiting_on_tasks', 'ready_for_closeout', 'completed', 'failed', 'canceled')`,
+    ),
+    index("idx_objectives_status").on(t.status),
+    index("idx_objectives_owner").on(t.ownerAgentId, t.status),
+    index("idx_objectives_owner_session").on(t.ownerSessionId),
+  ],
+);
+
+/**
  * Canonical task state. Markdown task files are imported once for local
  * migration/backup; live task reads and writes move through this table.
  */
@@ -149,6 +194,7 @@ export const tasks = sqliteTable(
     status: text("status", { enum: TASK_STATUSES }).notNull(),
     assignee: text("assignee").notNull(),
     sessionId: text("session_id"),
+    objectiveId: text("objective_id"),
     createdBy: text("created_by").notNull(),
     createdInSessionId: text("created_in_session_id"),
     parentId: text("parent_id"),
@@ -174,6 +220,7 @@ export const tasks = sqliteTable(
     index("idx_tasks_created_by").on(t.createdBy),
     index("idx_tasks_team").on(t.team),
     index("idx_tasks_parent").on(t.parentId),
+    index("idx_tasks_objective").on(t.objectiveId),
     uniqueIndex("idx_tasks_one_in_progress_per_session")
       .on(t.sessionId)
       .where(sql`${t.sessionId} IS NOT NULL AND ${t.status} = 'in_progress'`),
@@ -211,6 +258,33 @@ export const taskComments = sqliteTable(
   (t) => [
     index("idx_task_comments_task").on(t.taskId, t.createdAt),
     index("idx_task_comments_kind").on(t.taskId, t.kind),
+  ],
+);
+
+/**
+ * Objective ledger. Unlike task events, objective events are SQL-only and can
+ * cascade with their objective record.
+ */
+export const objectiveEvents = sqliteTable(
+  "objective_events",
+  {
+    id: text("id").primaryKey(),
+    objectiveId: text("objective_id")
+      .notNull()
+      .references(() => objectives.id, { onDelete: "cascade" }),
+    eventType: text("event_type").notNull(),
+    actor: text("actor").notNull(),
+    summary: text("summary").notNull(),
+    detailsJson: text("details_json"),
+    createdAt: integer("created_at")
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (t) => [
+    index("idx_objective_events_objective").on(
+      t.objectiveId,
+      t.createdAt,
+    ),
   ],
 );
 
@@ -633,6 +707,10 @@ export type NewSessionContextSnapshotRow =
   typeof sessionContextSnapshots.$inferInsert;
 export type UserProfile = typeof userProfiles.$inferSelect;
 export type NewUserProfile = typeof userProfiles.$inferInsert;
+export type ObjectiveRow = typeof objectives.$inferSelect;
+export type NewObjectiveRow = typeof objectives.$inferInsert;
+export type ObjectiveEventRow = typeof objectiveEvents.$inferSelect;
+export type NewObjectiveEventRow = typeof objectiveEvents.$inferInsert;
 export type TaskCommentRow = typeof taskComments.$inferSelect;
 export type NewTaskCommentRow = typeof taskComments.$inferInsert;
 export type TaskEventRow = typeof taskEvents.$inferSelect;

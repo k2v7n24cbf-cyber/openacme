@@ -34,6 +34,7 @@ export interface Task {
   status: TaskStatus;
   assignee: string;
   session_id: string | null;
+  objective_id: string | null;
   created_by: string;
   created_in_session_id: string | null;
   parent_id: string | null;

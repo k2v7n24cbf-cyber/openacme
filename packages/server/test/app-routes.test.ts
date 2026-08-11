@@ -128,6 +128,125 @@ describe("health", () => {
   });
 });
 
+describe("objectives routes", () => {
+  it("creates, lists, views, updates, closes, and reads objective events", async () => {
+    await createAgent("owner", "Owner");
+
+    let res = await req("/api/objectives", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        title: "Ship objective layer",
+        description: "Backend objective tracking",
+        owner_agent_id: "owner",
+        owner_session_id: "owner-session",
+        closeout_prompt: "Check the result before closing.",
+      }),
+    });
+    expect(res.status).toBe(201);
+    const created = (await res.json()) as {
+      objective: { id: string; ownerAgentId: string; status: string };
+    };
+    expect(created.objective).toMatchObject({
+      ownerAgentId: "owner",
+      status: "active",
+    });
+
+    res = await req("/api/objectives?owner_agent_id=owner");
+    expect(res.status).toBe(200);
+    const list = (await res.json()) as {
+      objectives: Array<{ id: string; rollup: { linked_task_count: number } }>;
+    };
+    expect(list.objectives.map((o) => o.id)).toEqual([created.objective.id]);
+    expect(list.objectives[0]!.rollup.linked_task_count).toBe(0);
+
+    res = await req(`/api/objectives/${created.objective.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        status: "waiting_on_tasks",
+        title: "Ship objective layer MVP",
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { objective: { status: string } }).objective.status).toBe(
+      "waiting_on_tasks",
+    );
+
+    res = await req(`/api/objectives/${created.objective.id}/close`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        status: "completed",
+        summary: "Done",
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { objective: { status: string } }).objective.status).toBe(
+      "completed",
+    );
+
+    res = await req(`/api/objectives/${created.objective.id}/events`);
+    expect(res.status).toBe(200);
+    const events = (await res.json()) as {
+      events: Array<{ eventType: string }>;
+    };
+    expect(events.events.map((event) => event.eventType)).toEqual([
+      "objective_created",
+      "objective_updated",
+      "objective_completed",
+    ]);
+  });
+
+  it("attaches and detaches tasks with rollups", async () => {
+    await createAgent("owner", "Owner");
+    const objective = manager.objectiveStore.createObjective({
+      id: "objective-1",
+      title: "Group work",
+      ownerAgentId: "owner",
+      createdBy: "owner",
+    });
+    const task = await manager.taskStore.create({
+      title: "Do work",
+      assignee: "owner",
+      created_by: "owner",
+    });
+
+    let res = await req(`/api/objectives/${objective.id}/tasks/${task.id}`, {
+      method: "POST",
+    });
+    expect(res.status).toBe(200);
+    expect(manager.taskStore.get(task.id)?.objective_id).toBe(objective.id);
+
+    res = await req(`/api/objectives/${objective.id}`);
+    expect(res.status).toBe(200);
+    expect(
+      ((await res.json()) as { rollup: { linked_task_count: number } }).rollup
+        .linked_task_count,
+    ).toBe(1);
+
+    res = await req(`/api/objectives/${objective.id}/tasks/${task.id}`, {
+      method: "DELETE",
+    });
+    expect(res.status).toBe(200);
+    expect(manager.taskStore.get(task.id)?.objective_id).toBeNull();
+  });
+
+  it("deletes objectives owned by a deleted agent", async () => {
+    await createAgent("owner", "Owner");
+    const objective = manager.objectiveStore.createObjective({
+      id: "objective-delete",
+      title: "Delete with agent",
+      ownerAgentId: "owner",
+      createdBy: "owner",
+    });
+
+    const res = await req("/api/agents/owner", { method: "DELETE" });
+    expect(res.status).toBe(200);
+    expect(manager.objectiveStore.getObjective(objective.id)).toBeNull();
+  });
+});
+
 describe("agents CRUD", () => {
   it("creates, lists, updates, deletes", async () => {
     await createAgent();

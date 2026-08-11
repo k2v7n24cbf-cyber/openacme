@@ -149,6 +149,21 @@ describe("task_create", () => {
     );
   });
 
+  it("accepts objective_id and returns it in task frontmatter", async () => {
+    const r = await call(
+      "task_create",
+      { title: "linked", assignee: "me", objective_id: "objective-1" },
+      { agentId: "me", sessionId: "s1" },
+    );
+    expect(r.ok).toBe(true);
+    expect((r as { task: { objective_id: string } }).task.objective_id).toBe(
+      "objective-1",
+    );
+    expect(
+      store.get((r as { task: { id: string } }).task.id)?.objective_id,
+    ).toBe("objective-1");
+  });
+
   it("rejects unknown depends_on", async () => {
     const r = await call(
       "task_create",
@@ -206,6 +221,30 @@ describe("task_list", () => {
     );
     expect(r.ok).toBe(true);
     expect((r as { tasks: unknown[] }).tasks).toHaveLength(1);
+  });
+
+  it("filters by objective_id", async () => {
+    const linked = await store.create({
+      title: "linked",
+      assignee: "me",
+      created_by: "me",
+      objective_id: "objective-1",
+    });
+    await store.create({
+      title: "unlinked",
+      assignee: "me",
+      created_by: "me",
+    });
+
+    const r = await call(
+      "task_list",
+      { objective_id: "objective-1" },
+      { agentId: "me" },
+    );
+    expect(r.ok).toBe(true);
+    expect(
+      (r as { tasks: Array<{ id: string }> }).tasks.map((t) => t.id),
+    ).toEqual([linked.id]);
   });
 });
 
@@ -283,6 +322,35 @@ describe("task_update", () => {
     expect(r.ok).toBe(true);
     expect(
       (r as { task: { session_id: string | null } }).task.session_id,
+    ).toBeNull();
+  });
+
+  it("updates objective_id and allows clearing it", async () => {
+    const task = await store.create({
+      title: "x",
+      assignee: "me",
+      created_by: "me",
+      objective_id: "objective-1",
+    });
+
+    const moved = await call(
+      "task_update",
+      { id: task.id, objective_id: "objective-2" },
+      { agentId: "me" },
+    );
+    expect(moved.ok).toBe(true);
+    expect(
+      (moved as { task: { objective_id: string } }).task.objective_id,
+    ).toBe("objective-2");
+
+    const cleared = await call(
+      "task_update",
+      { id: task.id, objective_id: null },
+      { agentId: "me" },
+    );
+    expect(cleared.ok).toBe(true);
+    expect(
+      (cleared as { task: { objective_id: string | null } }).task.objective_id,
     ).toBeNull();
   });
 

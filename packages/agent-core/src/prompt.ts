@@ -142,6 +142,13 @@ const TASKS_GUIDANCE =
   "default). Result comments are the assignee's single canonical final answer " +
   'for the task — include `mode: "result"` only for that final answer, immediately before marking ' +
   "the task done.\n" +
+  "Parent/subtask hierarchy: use `parent_id` only when the user or plan calls " +
+  "for a real parent item with child work, such as a checklist, workstream, " +
+  "or acceptance bundle that should be visible as one tracked task plus " +
+  "subtasks. Do not create a decorative parent when an objective plus sibling " +
+  "tasks already represents the grouping. If you do create a parent task, link " +
+  "both the parent and its subtasks to the same objective, and use `depends_on` " +
+  "for execution order rather than parentage.\n" +
   'Teams: tag tasks with `team: "<team-id>"` when the work belongs to one of ' +
   "your teams; deliverables for team-tagged work go in that team's shared " +
   "workspace. With an explicit `assignee` the tag is organizational only. If you " +
@@ -181,6 +188,32 @@ const TASKS_GUIDANCE =
   "immediately. Defer is sticky: a signal-driven wake fires the turn but the " +
   "remaining window keeps holding against subsequent routine ticks. One call " +
   "covers the whole duration; you don't need to re-call it each turn.";
+
+const OBJECTIVES_GUIDANCE =
+  "Objectives group tracked outcomes across one or more tasks. Use them when " +
+  "the result needs durable closeout, follow-up, or later review; don't create " +
+  "an objective for a simple one-turn action you can finish now.\n" +
+  "If you are going to create multiple tasks for the same intended outcome, " +
+  "you must create one objective first, or use an existing objective only when " +
+  "it is the same logical grouping and original scope, then link every related " +
+  "task to it. Do not reopen or attach new work to a past objective merely " +
+  "because the title sounds related; if the work is a new phase, new scope, or " +
+  "new outcome, create a new objective. Only relink, cancel, or reopen prior " +
+  "work when the user is explicitly asking to continue, correct, or rectify " +
+  "that prior work. Do not leave a multi-task outcome as " +
+  "loose unrelated tasks.\n" +
+  "Objectives do not create sessions or tasks by themselves. Create or attach " +
+  "tasks explicitly when separate executable work is needed, and choose each " +
+  "task's session behavior with the normal task tools.\n" +
+  "If an objective's work naturally has a parent/checklist shape, create the " +
+  "parent and subtasks through the task tools and link all of them to the " +
+  "objective. Parent/subtask hierarchy is for visibility and structure; " +
+  "`depends_on` is still the execution gate.\n" +
+  "When all linked tasks finish, the objective owner is woken to decide whether " +
+  "to close the objective or create/attach more work. The system does not " +
+  "verify or close objectives automatically.\n" +
+  "Use `objective_view`, `objective_list`, `task_list`, and `task_comments` for " +
+  "fresh state before making closeout decisions; any prompt snapshot may be stale.";
 
 /**
  * Workforce-side primitives for talking to the human and pacing your
@@ -301,6 +334,7 @@ export function buildSystemPrompt(options: {
   toolNames: string[];
   skillsIndex?: string;
   tasksContext?: string;
+  objectivesContext?: string;
   memorySnapshot?: IndexSnapshot;
   platformHints?: string;
   /** Verbatim AGENTS.md contents. Empty/undefined ⇒ section omitted. */
@@ -422,6 +456,10 @@ export function buildSystemPrompt(options: {
     parts.push(`\n## Tasks tool\n${TASKS_GUIDANCE}`);
   }
 
+  if (options.toolNames.includes("objective_create")) {
+    parts.push(`\n## Objectives tool\n${OBJECTIVES_GUIDANCE}`);
+  }
+
   // ping_user + sleep — always-on system tools; the guidance is short
   // but load-bearing for the workforce shape (when to bring the human
   // in vs comment on a task; what cadence to wake at).
@@ -448,6 +486,10 @@ export function buildSystemPrompt(options: {
   // message instead so it stays per-turn fresh and doesn't get cached.
   if (options.tasksContext) {
     parts.push(`\n## Tasks\n${options.tasksContext}`);
+  }
+
+  if (options.objectivesContext) {
+    parts.push(`\n## Objectives\n${options.objectivesContext}`);
   }
 
   // Platform-specific hints

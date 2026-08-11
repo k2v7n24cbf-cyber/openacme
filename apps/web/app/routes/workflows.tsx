@@ -7667,7 +7667,17 @@ async function api<T>(
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
   const text = await res.text();
-  const body = text ? (JSON.parse(text) as unknown) : null;
+  let body: unknown = null;
+  if (text) {
+    try {
+      body = JSON.parse(text) as unknown;
+    } catch {
+      if (!res.ok) {
+        throw new Error(text.trim() || `${res.status} ${res.statusText}`);
+      }
+      throw new Error("Server returned an invalid JSON response");
+    }
+  }
   if (!res.ok) {
     const message =
       isRecord(body) && typeof body["error"] === "string"

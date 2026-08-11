@@ -32,8 +32,10 @@ documented only as a UI click.
 
 Use this loop for every workflow you create or materially edit:
 
-1. Define the user goal, input JSON shape, trigger type, and expected final
-   context/output.
+1. Define the user goal, trigger type, expected final context/output, and the
+   workflow input contract as JSON Schema. Use normal JSON Schema object
+   patterns for nested data; arrays of complex objects must define
+   `items.type = "object"`, `items.required`, and `items.properties`.
 2. Draft the workflow as JSON first. Use safe ids:
    `[A-Za-z0-9][A-Za-z0-9_.-]*`.
 3. Discover external inventory before using MCP tools or agent calls:
@@ -42,21 +44,40 @@ Use this loop for every workflow you create or materially edit:
    responses as the runtime source of truth and refresh them before authoring or
    validating external-call nodes. Do not assume an agent already knows all
    available MCP tools.
-4. Add nodes in execution order, then add `builtin.if` true/false,
-   `builtin.foreach` body, and `builtin.parallel` branch references. Use
-   `builtin.if` for new branching workflows; do not create new `builtin.if_else`
-   definitions.
-5. Use explicit `assign` maps to set variables in run `context`.
-6. Save the draft through the API or import/export JSON path. Human operators
+4. Add nodes in execution order, then add explicit route references:
+   `builtin.if` true/false, `builtin.switch` case/default, `builtin.foreach`
+   body, and `builtin.parallel` branch references. Use `builtin.if` for new
+   branching workflows; do not create new `builtin.if_else` definitions.
+   Do not rely on adjacent `nodes[]` entries for execution. Normal card-to-card
+   continuation must be stored as `source.next = ["target"]`; without that edge,
+   the later card is not part of the execution chain.
+5. Use the canonical reference roots: `$.workflowTrigger.input` for the
+   run-start payload, `$.workflowTrigger.meta` for trigger provenance,
+   `$.context` for run variables, and `$.steps.<nodeId>.input/output/status/error`
+   for per-card evidence.
+6. Step ids are human-editable stable slugs. Labels may contain spaces; when a
+   label changes, the UI derives a clean id and updates `$.steps.<oldId>`
+   references automatically.
+7. Treat every step output as inspectable under `$.steps.<nodeId>.output`, but
+   use the node-type-specific fields from the standard output contract in
+   `references/workflow-authoring.md`. For example, transformer values are at
+   `$.steps.<nodeId>.output.value`, MCP raw results are at
+   `$.steps.<nodeId>.output.result`, and agent free-text responses are at
+   `$.steps.<nodeId>.output.response`.
+   Normalize uncertain output with a concrete transformer node such as
+   `builtin.transform.object_pick`, `builtin.transform.json_parse`, or
+   `builtin.transform.uri_parse`. The node type must match `transform.kind`.
+   Persist reusable variables with an explicit `builtin.set` node.
+8. Save the draft through the API or import/export JSON path. Human operators
    may use the UI; workflow-authoring agents should not use Playwright to
    create definitions.
-7. Run a draft test run and inspect the run console.
-8. Fix step input/output, assignments, and trigger input until the run trace is
-   explainable.
-9. Publish only after local validation and a passing test run.
-10. Run the published trigger path when the workflow is meant to be live.
-11. Export the definition when a reusable artifact is needed.
-12. Update docs or task notes with exact commands, run ids, and evidence.
+9. Run a draft test run and inspect the run console.
+10. Fix step input/output, variables, and trigger input until the run trace is
+    explainable.
+11. Publish only after local validation and a passing test run.
+12. Run the published trigger path when the workflow is meant to be live.
+13. Export the definition when a reusable artifact is needed.
+14. Update docs or task notes with exact commands, run ids, and evidence.
 
 ## Required Validation
 

@@ -9,13 +9,26 @@ import {
 import {
   ArrowDown,
   ArrowUp,
+  AlertCircle,
+  Bot,
+  Braces,
+  CheckCircle2,
+  Clock3,
+  Code2,
   Copy,
+  GitBranch,
+  ListRestart,
   Maximize,
   Minus,
   Plus,
   RefreshCw,
+  ScrollText,
   Trash2,
+  Workflow as WorkflowIcon,
+  Wrench,
   X,
+  XCircle,
+  type LucideIcon,
 } from "lucide-react";
 import {
   BaseEdge,
@@ -43,6 +56,7 @@ import type {
   WorkflowCanvasNodeData,
   WorkflowGraphProjection,
 } from "./graph";
+import { isWorkflowTransformNodeType } from "./authoring";
 
 export interface WorkflowCanvasConnection {
   sourceId: string;
@@ -69,6 +83,7 @@ interface WorkflowCanvasPendingConnection {
 }
 
 interface WorkflowCanvasConnectionContextValue {
+  readOnly: boolean;
   pending: WorkflowCanvasPendingConnection | null;
   beginConnection: (connection: WorkflowCanvasPendingConnection) => void;
   completeConnection: (targetId: string) => void;
@@ -261,13 +276,15 @@ function WorkflowCanvasNodeCard({
   const targetOnLeft = isHorizontal || data.targetSide === "left";
   const sourceHandles = data.sourceHandles;
   const connection = useContext(WorkflowCanvasConnectionContext);
+  const readOnly = connection?.readOnly ?? false;
   const canAddAfter =
+    !readOnly &&
     !isMissing &&
     (data.kind === "trigger" ||
       (data.kind === "step" &&
         (sourceHandles.length === 0 || isParallel || isForeach)));
-  const canAddBranchStep = data.kind === "step" && !isMissing;
-  const canEditNode = data.kind === "step" && !isMissing;
+  const canAddBranchStep = !readOnly && data.kind === "step" && !isMissing;
+  const canEditNode = !readOnly && data.kind === "step" && !isMissing;
   const canMakeForeachFirst =
     canEditNode &&
     typeof data.foreachParentId === "string" &&
@@ -281,7 +298,10 @@ function WorkflowCanvasNodeCard({
       data-workflow-run-status={data.runStatus}
       className={cn(
         "relative w-[250px] cursor-grab overflow-visible rounded-md border bg-paper px-3.5 pb-4 pt-3 text-left shadow-sm transition-colors active:cursor-grabbing",
-        selected ? "border-ink" : "border-paper-rule hover:border-ink-faint",
+        runStatusCardClass(data.runStatus),
+        selected && !data.runStatus && "border-ink",
+        !selected && !data.runStatus && "border-paper-rule hover:border-ink-faint",
+        selected && data.runStatus && "ring-1 ring-ink/30",
         data.runCurrent && "ring-1 ring-signal-blue",
         isTrigger && "w-[190px] cursor-default bg-paper-sunk",
         isMissing &&
@@ -300,12 +320,16 @@ function WorkflowCanvasNodeCard({
           : undefined
       }
     >
+      {data.runStatus && (
+        <RunStatusCornerMark status={data.runStatus} current={data.runCurrent} />
+      )}
       {!isMissing && (
         <Handle
           id="source"
           type="source"
           position={isHorizontal ? Position.Right : Position.Bottom}
           isConnectable={
+            !readOnly &&
             data.kind === "step" &&
             (sourceHandles.length === 0 || isParallel || isForeach)
           }
@@ -323,7 +347,7 @@ function WorkflowCanvasNodeCard({
           id="target"
           type="target"
           position={targetOnLeft ? Position.Left : Position.Top}
-          isConnectable={!isMissing}
+          isConnectable={!readOnly && !isMissing}
           aria-label={`${data.id} target handle`}
           data-workflow-target-handle={data.id}
           style={
@@ -332,17 +356,14 @@ function WorkflowCanvasNodeCard({
               : WORKFLOW_TARGET_HANDLE_STYLE
           }
           onClick={(event: MouseEvent) => {
+            if (readOnly) return;
             event.stopPropagation();
             connection?.completeConnection(data.id);
           }}
         />
       )}
       <div className="flex min-w-0 items-center gap-2">
-        {typeof data.index === "number" && (
-          <span className="font-mono text-[10px] text-ink-faint/80">
-            {String(data.index + 1).padStart(2, "0")}
-          </span>
-        )}
+        <WorkflowNodeTypeIcon data={data} />
         <span
           className={cn(
             "min-w-0 flex-1 truncate text-[15px] font-semibold leading-5",
@@ -727,6 +748,101 @@ function WorkflowCanvasNodeCard({
   );
 }
 
+function WorkflowNodeTypeIcon({ data }: { data: WorkflowCanvasNodeData }) {
+  const Icon = workflowNodeIcon(data);
+  const label = workflowNodeIconLabel(data);
+  return (
+    <span
+      aria-label={label}
+      title={label}
+      className={cn(
+        "flex size-7 shrink-0 items-center justify-center rounded border bg-paper-sunk",
+        workflowNodeIconClass(data),
+      )}
+    >
+      <Icon className="size-4" />
+    </span>
+  );
+}
+
+function workflowNodeIcon(data: WorkflowCanvasNodeData): LucideIcon {
+  if (data.kind === "missing") return AlertCircle;
+  if (data.kind === "trigger") return WorkflowIcon;
+  if (data.type === "agent.call") return Bot;
+  if (data.type === "mcp.tool") return Wrench;
+  if (data.type === "builtin.if" || data.type === "builtin.switch") {
+    return GitBranch;
+  }
+  if (data.type === "builtin.foreach") return RefreshCw;
+  if (data.type === "builtin.parallel") return ListRestart;
+  if (data.type === "builtin.set") return Braces;
+  if (isWorkflowTransformNodeType(data.type) || data.type === "builtin.python") {
+    return Code2;
+  }
+  if (data.type?.startsWith("builtin.log.")) return ScrollText;
+  if (data.type === "builtin.throw_error") return XCircle;
+  if (data.type === "builtin.sleep") return Clock3;
+  if (data.type === "builtin.exit") return CheckCircle2;
+  return WorkflowIcon;
+}
+
+function workflowNodeIconLabel(data: WorkflowCanvasNodeData): string {
+  if (data.kind === "missing") return "Missing workflow step";
+  if (data.kind === "trigger") return "Workflow trigger";
+  if (data.type === "agent.call") return "Agent step";
+  if (data.type === "mcp.tool") return "MCP tool step";
+  if (data.type === "builtin.if" || data.type === "builtin.switch") {
+    return "Branch step";
+  }
+  if (data.type === "builtin.foreach") return "Loop step";
+  if (data.type === "builtin.parallel") return "Parallel step";
+  if (data.type === "builtin.set") return "Set variable step";
+  if (isWorkflowTransformNodeType(data.type)) return "Transformer step";
+  if (data.type === "builtin.python") return "Python step";
+  if (data.type?.startsWith("builtin.log.")) return "Log step";
+  if (data.type === "builtin.throw_error") return "Error step";
+  if (data.type === "builtin.sleep") return "Delay step";
+  if (data.type === "builtin.exit") return "Exit step";
+  return "Workflow step";
+}
+
+function workflowNodeIconClass(data: WorkflowCanvasNodeData): string {
+  if (data.kind === "missing") {
+    return "border-destructive/40 bg-destructive/10 text-destructive";
+  }
+  if (data.kind === "trigger") {
+    return "border-signal-green/30 bg-signal-green/10 text-signal-green";
+  }
+  if (
+    data.type === "builtin.if" ||
+    data.type === "builtin.switch" ||
+    data.type === "builtin.foreach" ||
+    data.type === "builtin.parallel"
+  ) {
+    return "border-plot-red/35 bg-plot-red/10 text-plot-red";
+  }
+  if (
+    data.type === "agent.call" ||
+    data.type === "mcp.tool" ||
+    data.type === "builtin.python"
+  ) {
+    return "border-signal-blue/30 bg-signal-blue/10 text-signal-blue";
+  }
+  if (data.type?.startsWith("builtin.log.")) {
+    return "border-signal-green/30 bg-signal-green/10 text-signal-green";
+  }
+  if (data.type === "builtin.throw_error") {
+    return "border-destructive/40 bg-destructive/10 text-destructive";
+  }
+  if (data.type === "builtin.sleep") {
+    return "border-signal-amber/35 bg-signal-amber/10 text-signal-amber";
+  }
+  if (data.type === "builtin.exit") {
+    return "border-signal-green/30 bg-signal-green/10 text-signal-green";
+  }
+  return "border-paper-rule text-ink-muted";
+}
+
 const NODE_TYPES = {
   workflowStep: WorkflowStepNode,
   workflowTrigger: WorkflowTriggerNode,
@@ -966,6 +1082,8 @@ function CanvasEdgeControls({
 
 function WorkflowCanvasInner({
   projection,
+  readOnly = false,
+  allowNodeRelocation = !readOnly,
   selectedNodeId,
   selectedEdgeId,
   onSelectNode,
@@ -982,9 +1100,11 @@ function WorkflowCanvasInner({
   onAddStep,
 }: {
   projection: WorkflowGraphProjection;
+  readOnly?: boolean;
+  allowNodeRelocation?: boolean;
   selectedNodeId: string | null;
   selectedEdgeId: string | null;
-  onSelectNode: (nodeId: string) => void;
+  onSelectNode: (nodeId: string | null) => void;
   onSelectEdge?: (edge: WorkflowCanvasEdgeSelection | null) => void;
   onConnectReference?: (connection: WorkflowCanvasConnection) => void;
   onRemoveSelectedEdge?: (edge: WorkflowCanvasEdgeSelection) => void;
@@ -1051,9 +1171,11 @@ function WorkflowCanvasInner({
     : -1;
   const connectionContext = useMemo<WorkflowCanvasConnectionContextValue>(
     () => ({
+      readOnly,
       pending: pendingConnection,
       beginConnection: (connection) => setPendingConnection(connection),
       completeConnection: (targetId) => {
+        if (readOnly) return;
         if (!pendingConnection) return;
         onConnectReference?.({
           sourceId: pendingConnection.sourceId,
@@ -1063,16 +1185,17 @@ function WorkflowCanvasInner({
         setPendingConnection(null);
       },
       openAddStepAfterNode: (nodeId, sourceHandle, placement) =>
+        !readOnly &&
         onAddStep?.(
-          nodeId,
-          sourceHandle,
-          placement ?? workflowNodeAddPlacement(nodes, nodeId, sourceHandle),
-      ),
-      cloneNode: (nodeId) => onCloneNode?.(nodeId),
-      deleteNode: (nodeId) => onDeleteNode?.(nodeId),
+            nodeId,
+            sourceHandle,
+            placement ?? workflowNodeAddPlacement(nodes, nodeId, sourceHandle),
+        ),
+      cloneNode: (nodeId) => !readOnly && onCloneNode?.(nodeId),
+      deleteNode: (nodeId) => !readOnly && onDeleteNode?.(nodeId),
       makeForeachBodyFirst: (foreachNodeId, bodyNodeId) =>
-        onMakeForeachBodyFirst?.(foreachNodeId, bodyNodeId),
-      removeEdge: onRemoveSelectedEdge,
+        !readOnly && onMakeForeachBodyFirst?.(foreachNodeId, bodyNodeId),
+      removeEdge: readOnly ? undefined : onRemoveSelectedEdge,
     }),
     [
       nodes,
@@ -1083,6 +1206,7 @@ function WorkflowCanvasInner({
       onMakeForeachBodyFirst,
       onRemoveSelectedEdge,
       pendingConnection,
+      readOnly,
     ],
   );
 
@@ -1093,8 +1217,8 @@ function WorkflowCanvasInner({
         edges={edges}
         nodeTypes={NODE_TYPES}
         edgeTypes={EDGE_TYPES}
-        nodesDraggable
-        nodesConnectable
+        nodesDraggable={allowNodeRelocation}
+        nodesConnectable={!readOnly}
         elementsSelectable
         panOnDrag
         zoomOnScroll
@@ -1114,19 +1238,24 @@ function WorkflowCanvasInner({
           );
         }}
         onNodeDragStart={(_, node) => {
+          if (!allowNodeRelocation) return;
           if (node.data.kind !== "step") return;
           setDraggingNodeId(node.id);
         }}
         onNodeDragStop={(_, node) => {
+          if (!allowNodeRelocation) return;
           if (node.data.kind !== "step") return;
           setDraggingNodeId(null);
           onNodePositionChange?.(node.id, node.position);
         }}
         onEdgeClick={(_, edge) => onSelectEdge?.(edgeSelectionFromEdge(edge))}
-        onPaneClick={() => onSelectEdge?.(null)}
+        onPaneClick={() => {
+          onSelectNode(null);
+          onSelectEdge?.(null);
+        }}
         onConnect={(connection) => {
           const next = connectionFromReactFlow(connection);
-          if (next) onConnectReference?.(next);
+          if (!readOnly && next) onConnectReference?.(next);
           setPendingConnection(null);
         }}
         className="workflow-canvas"
@@ -1152,21 +1281,29 @@ function WorkflowCanvasInner({
               onBeautifyLayout={onBeautifyLayout}
             />
             <CanvasControls />
-            <CanvasOrderControls
-              selectedIndex={selectedStepIndex >= 0 ? selectedStepIndex : null}
-              totalSteps={stepNodes.length}
-              onMoveSelectedUp={onMoveSelectedUp}
-              onMoveSelectedDown={onMoveSelectedDown}
-            />
-            <CanvasEdgeControls
-              selectedEdge={selectedEdge}
-              onRemoveSelectedEdge={onRemoveSelectedEdge}
-            />
+            {!readOnly && (
+              <>
+                <CanvasOrderControls
+                  selectedIndex={
+                    selectedStepIndex >= 0 ? selectedStepIndex : null
+                  }
+                  totalSteps={stepNodes.length}
+                  onMoveSelectedUp={onMoveSelectedUp}
+                  onMoveSelectedDown={onMoveSelectedDown}
+                />
+                <CanvasEdgeControls
+                  selectedEdge={selectedEdge}
+                  onRemoveSelectedEdge={onRemoveSelectedEdge}
+                />
+              </>
+            )}
           </div>
         </Panel>
-        <Panel position="bottom-left">
-          <CanvasAddControls nodes={nodes} onAddStep={onAddStep} />
-        </Panel>
+        {!readOnly && (
+          <Panel position="bottom-left">
+            <CanvasAddControls nodes={nodes} onAddStep={onAddStep} />
+          </Panel>
+        )}
       </ReactFlow>
     </WorkflowCanvasConnectionContext.Provider>
   );
@@ -1174,9 +1311,11 @@ function WorkflowCanvasInner({
 
 export function WorkflowCanvas(props: {
   projection: WorkflowGraphProjection;
+  readOnly?: boolean;
+  allowNodeRelocation?: boolean;
   selectedNodeId: string | null;
   selectedEdgeId: string | null;
-  onSelectNode: (nodeId: string) => void;
+  onSelectNode: (nodeId: string | null) => void;
   onSelectEdge?: (edge: WorkflowCanvasEdgeSelection | null) => void;
   onConnectReference?: (connection: WorkflowCanvasConnection) => void;
   onRemoveSelectedEdge?: (edge: WorkflowCanvasEdgeSelection) => void;
@@ -1264,6 +1403,7 @@ function edgeSelectionFromEdge(
 
 function isRemovableCanvasEdge(edge: WorkflowCanvasEdgeSelection): boolean {
   return (
+    edge.kind === "sequence" ||
     edge.kind === "then" ||
     edge.kind === "else" ||
     edge.kind === "body" ||
@@ -1464,4 +1604,68 @@ function runStatusBadgeVariant(
   if (status === "running" || status === "queued") return "working";
   if (status === "canceled" || status === "skipped") return "attention";
   return "outline";
+}
+
+function runStatusCardClass(
+  status: WorkflowCanvasNodeData["runStatus"],
+): string | false {
+  if (status === "succeeded")
+    return "border-signal-green shadow-[0_0_0_1px_rgb(16_185_129_/_35%)]";
+  if (status === "failed")
+    return "border-destructive shadow-[0_0_0_1px_rgb(239_68_68_/_35%)]";
+  if (status === "running" || status === "queued")
+    return "border-signal-blue shadow-[0_0_0_1px_rgb(59_130_246_/_35%)]";
+  if (status === "canceled" || status === "skipped")
+    return "border-signal-amber shadow-[0_0_0_1px_rgb(245_158_11_/_25%)]";
+  return false;
+}
+
+function RunStatusCornerMark({
+  status,
+  current,
+}: {
+  status: NonNullable<WorkflowCanvasNodeData["runStatus"]>;
+  current?: boolean;
+}) {
+  const iconClass = "size-4";
+  if (status === "succeeded") {
+    return (
+      <span
+        aria-label="Step succeeded"
+        className="absolute -right-2 -top-2 z-20 flex size-6 items-center justify-center rounded-full bg-signal-green text-paper shadow-sm"
+      >
+        <CheckCircle2 className={iconClass} />
+      </span>
+    );
+  }
+  if (status === "failed") {
+    return (
+      <span
+        aria-label="Step failed"
+        className="absolute -right-2 -top-2 z-20 flex size-6 items-center justify-center rounded-full bg-destructive text-paper shadow-sm"
+      >
+        <XCircle className={iconClass} />
+      </span>
+    );
+  }
+  if (status === "running" || status === "queued") {
+    return (
+      <span
+        aria-label={current ? "Current step running" : "Step running"}
+        className="absolute -right-2 -top-2 z-20 flex size-6 items-center justify-center rounded-full border border-signal-blue bg-paper shadow-sm"
+      >
+        <span className="relative size-4 rounded-full border-2 border-signal-blue bg-paper">
+          <span className="absolute inset-y-0 left-0 w-1/2 rounded-l-full bg-signal-blue" />
+        </span>
+      </span>
+    );
+  }
+  return (
+    <span
+      aria-label={`Step ${status}`}
+      className="absolute -right-2 -top-2 z-20 flex size-6 items-center justify-center rounded-full bg-signal-amber text-paper shadow-sm"
+    >
+      <AlertCircle className={iconClass} />
+    </span>
+  );
 }

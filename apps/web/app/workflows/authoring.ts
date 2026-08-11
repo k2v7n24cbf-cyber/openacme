@@ -38,12 +38,31 @@ export interface WorkflowTransformPreset {
 
 export const WORKFLOW_TRANSFORM_PRESETS: WorkflowTransformPreset[] = [
   {
+    id: "value.resolve",
+    label: "Value Resolve",
+    description: "Resolve a workflow reference or literal value.",
+    transform: {
+      kind: "value.resolve",
+      value: "$.workflowTrigger.input.value",
+    },
+  },
+  {
+    id: "object_pick",
+    label: "Object Pick",
+    description: "Copy selected fields from an object.",
+    transform: {
+      kind: "object_pick",
+      source: "value",
+      fields: ["id", "name"],
+    },
+  },
+  {
     id: "string.replace",
     label: "String Replace",
     description: "Replace text once or everywhere.",
     transform: {
       kind: "string.replace",
-      value: "$.input.value",
+      value: "$.workflowTrigger.input.value",
       search: "old",
       replacement: "new",
       all: true,
@@ -55,7 +74,7 @@ export const WORKFLOW_TRANSFORM_PRESETS: WorkflowTransformPreset[] = [
     description: "Replace text with a regular expression.",
     transform: {
       kind: "string.regex_replace",
-      value: "$.input.value",
+      value: "$.workflowTrigger.input.value",
       pattern: "old-(\\d+)",
       replacement: "new-$1",
       flags: "g",
@@ -67,7 +86,7 @@ export const WORKFLOW_TRANSFORM_PRESETS: WorkflowTransformPreset[] = [
     description: "Extract match, capture groups, and named groups.",
     transform: {
       kind: "string.regex_match",
-      value: "$.input.value",
+      value: "$.workflowTrigger.input.value",
       pattern: "(?<id>[A-Za-z]+-\\d+)",
       flags: "",
     },
@@ -78,7 +97,7 @@ export const WORKFLOW_TRANSFORM_PRESETS: WorkflowTransformPreset[] = [
     description: "Parse a JSON string into an object or array.",
     transform: {
       kind: "json.parse",
-      value: "$.input.json",
+      value: "$.workflowTrigger.input.json",
     },
   },
   {
@@ -97,7 +116,7 @@ export const WORKFLOW_TRANSFORM_PRESETS: WorkflowTransformPreset[] = [
     description: "Parse CSV text into rows.",
     transform: {
       kind: "csv.parse",
-      value: "$.input.csv",
+      value: "$.workflowTrigger.input.csv",
       headers: true,
       maxRows: 10000,
     },
@@ -120,7 +139,7 @@ export const WORKFLOW_TRANSFORM_PRESETS: WorkflowTransformPreset[] = [
     description: "Parse an IPv4 or IPv6 address into stable metadata.",
     transform: {
       kind: "ip.parse",
-      value: "$.input.ip",
+      value: "$.workflowTrigger.input.ip",
     },
   },
   {
@@ -129,7 +148,7 @@ export const WORKFLOW_TRANSFORM_PRESETS: WorkflowTransformPreset[] = [
     description: "Return true when the value is an IPv4 address.",
     transform: {
       kind: "ip.is_ipv4",
-      value: "$.input.ip",
+      value: "$.workflowTrigger.input.ip",
     },
   },
   {
@@ -138,7 +157,7 @@ export const WORKFLOW_TRANSFORM_PRESETS: WorkflowTransformPreset[] = [
     description: "Return true when the value is an IPv6 address.",
     transform: {
       kind: "ip.is_ipv6",
-      value: "$.input.ip",
+      value: "$.workflowTrigger.input.ip",
     },
   },
   {
@@ -147,7 +166,7 @@ export const WORKFLOW_TRANSFORM_PRESETS: WorkflowTransformPreset[] = [
     description: "Return true when the IP belongs to a CIDR subnet.",
     transform: {
       kind: "ip.in_subnet",
-      value: "$.input.ip",
+      value: "$.workflowTrigger.input.ip",
       cidr: "10.0.0.0/8",
     },
   },
@@ -176,7 +195,7 @@ export const WORKFLOW_TRANSFORM_PRESETS: WorkflowTransformPreset[] = [
     description: "Parse a URL into host, path, query, and fragment fields.",
     transform: {
       kind: "uri.parse",
-      value: "$.input.url",
+      value: "$.workflowTrigger.input.url",
     },
   },
 ];
@@ -187,12 +206,40 @@ export function workflowTransformPresetById(
   return WORKFLOW_TRANSFORM_PRESETS.find((preset) => preset.id === id);
 }
 
+export function workflowTransformNodeTypeFromPresetId(id: string): string {
+  return `builtin.transform.${id.replace(/[^A-Za-z0-9]+/g, "_")}`;
+}
+
+export function workflowTransformPresetIdFromNodeType(
+  type: string,
+): string | null {
+  if (!type.startsWith("builtin.transform.")) return null;
+  const suffix = type.slice("builtin.transform.".length);
+  return (
+    WORKFLOW_TRANSFORM_PRESETS.find(
+      (preset) => preset.id.replace(/[^A-Za-z0-9]+/g, "_") === suffix,
+    )?.id ?? null
+  );
+}
+
+export function isWorkflowTransformNodeType(type: string): boolean {
+  return workflowTransformPresetIdFromNodeType(type) !== null;
+}
+
+export function workflowTransformPresetForNodeType(
+  type: string,
+): WorkflowTransformPreset | undefined {
+  const presetId = workflowTransformPresetIdFromNodeType(type);
+  return presetId ? workflowTransformPresetById(presetId) : undefined;
+}
+
 export function appendWorkflowNode(
   nodes: WorkflowAuthoringNode[],
   kind: WorkflowPaletteKind,
   tool?: WorkflowAuthoringMcpTool | WorkflowAuthoringAgent,
+  transformPresetId?: string,
 ): WorkflowAuthoringNode[] {
-  return insertWorkflowNodeAfter(nodes, null, kind, tool);
+  return insertWorkflowNodeAfter(nodes, null, kind, tool, transformPresetId);
 }
 
 export function insertWorkflowNodeAfter(
@@ -200,8 +247,14 @@ export function insertWorkflowNodeAfter(
   afterNodeId: string | null,
   kind: WorkflowPaletteKind,
   tool?: WorkflowAuthoringMcpTool | WorkflowAuthoringAgent,
+  transformPresetId?: string,
 ): WorkflowAuthoringNode[] {
-  const nextNode = createNextWorkflowNodeTemplate(nodes, kind, tool);
+  const nextNode = createNextWorkflowNodeTemplate(
+    nodes,
+    kind,
+    tool,
+    transformPresetId,
+  );
   if (!afterNodeId) return [...nodes, nextNode];
   const index = nodes.findIndex((node) => node.id === afterNodeId);
   if (index < 0) return [...nodes, nextNode];
@@ -212,8 +265,12 @@ export function insertWorkflowNodeFirst(
   nodes: WorkflowAuthoringNode[],
   kind: WorkflowPaletteKind,
   tool?: WorkflowAuthoringMcpTool | WorkflowAuthoringAgent,
+  transformPresetId?: string,
 ): WorkflowAuthoringNode[] {
-  return [createNextWorkflowNodeTemplate(nodes, kind, tool), ...nodes];
+  return [
+    createNextWorkflowNodeTemplate(nodes, kind, tool, transformPresetId),
+    ...nodes,
+  ];
 }
 
 export function moveWorkflowNode(
@@ -227,6 +284,23 @@ export function moveWorkflowNode(
   const [node] = next.splice(index, 1);
   if (!node) return nodes;
   next.splice(target, 0, node);
+  return next;
+}
+
+export function moveWorkflowNodeAfter(
+  nodes: WorkflowAuthoringNode[],
+  nodeId: string,
+  afterNodeId: string,
+): WorkflowAuthoringNode[] | null {
+  if (nodeId === afterNodeId) return null;
+  const nodeIndex = nodes.findIndex((node) => node.id === nodeId);
+  const afterIndex = nodes.findIndex((node) => node.id === afterNodeId);
+  if (nodeIndex < 0 || afterIndex < 0) return null;
+  const next = [...nodes];
+  const [node] = next.splice(nodeIndex, 1);
+  if (!node) return null;
+  const adjustedAfterIndex = nodeIndex < afterIndex ? afterIndex - 1 : afterIndex;
+  next.splice(adjustedAfterIndex + 1, 0, node);
   return next;
 }
 
@@ -256,6 +330,51 @@ export function removeWorkflowNode(
   return nodes
     .filter((node) => node.id !== nodeId)
     .map((node) => pruneNodeReferences(node, nodeId));
+}
+
+export function renameWorkflowNodeId(
+  nodes: WorkflowAuthoringNode[],
+  oldNodeId: string,
+  newNodeId: string,
+): WorkflowAuthoringNode[] | null {
+  if (oldNodeId === newNodeId) return nodes;
+  const index = nodes.findIndex((node) => node.id === oldNodeId);
+  if (index < 0 || nodes.some((node) => node.id === newNodeId)) return null;
+  return nodes.map((node) => {
+    const renamed = replaceNodeIdReferences(node, oldNodeId, newNodeId);
+    return node.id === oldNodeId ? { ...renamed, id: newNodeId } : renamed;
+  });
+}
+
+export function workflowNodeIdFromLabel(label: string): string {
+  return label
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[^A-Za-z0-9_.-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^[^A-Za-z0-9]+/, "")
+    .replace(/[^A-Za-z0-9]+$/, "")
+    .toLowerCase();
+}
+
+export function uniqueWorkflowNodeIdFromLabel(
+  nodes: WorkflowAuthoringNode[],
+  currentNodeId: string,
+  label: string,
+): string | null {
+  const base = workflowNodeIdFromLabel(label);
+  if (!base) return null;
+  const existingIds = new Set(
+    nodes
+      .map((node) => node.id)
+      .filter((nodeId) => nodeId !== currentNodeId),
+  );
+  if (!existingIds.has(base)) return base;
+  for (let index = 2; index < 1000; index += 1) {
+    const candidate = `${base}_${index}`;
+    if (!existingIds.has(candidate)) return candidate;
+  }
+  return `${base}_${Date.now()}`;
 }
 
 export function setWorkflowForeachBodyFirst(
@@ -290,23 +409,32 @@ export function createWorkflowNodeTemplate(
   kind: WorkflowPaletteKind,
   index: number,
   tool?: WorkflowAuthoringMcpTool | WorkflowAuthoringAgent,
+  transformPresetId?: string,
 ): WorkflowAuthoringNode {
   const suffix = String(index).padStart(2, "0");
   if (kind === "set") {
     return {
       id: `set_${suffix}`,
       type: "builtin.set",
-      assign: { value: "$.input.value" },
+      assign: { value: "$.workflowTrigger.input.value" },
     };
   }
   if (kind === "transform") {
+    const preset =
+      transformPresetId ? workflowTransformPresetById(transformPresetId) : undefined;
+    if (!preset) {
+      throw new Error("Transformer preset is required");
+    }
     return {
-      id: `transform_${suffix}`,
-      type: "builtin.transform",
-      input: { value: "$.context.value" },
-      transform: "$.context.value",
-      assign: {
-        value: { from: `$.steps.transform_${suffix}.output`, mode: "replace" },
+      id: `${safeIdSegment(preset?.id ?? "transform")}_${suffix}`,
+      type: workflowTransformNodeTypeFromPresetId(preset.id),
+      label: preset?.label,
+      transform: preset?.transform ?? {
+        kind: "string.replace",
+        value: "$.workflowTrigger.input.value",
+        search: "old",
+        replacement: "new",
+        all: true,
       },
     };
   }
@@ -314,7 +442,7 @@ export function createWorkflowNodeTemplate(
     return {
       id: `if_${suffix}`,
       type: "builtin.if",
-      condition: "$.input.enabled == true",
+      condition: "",
       then: [],
       else: [],
     };
@@ -323,7 +451,7 @@ export function createWorkflowNodeTemplate(
     return {
       id: `switch_${suffix}`,
       type: "builtin.switch",
-      value: "$.input.kind",
+      value: "",
       cases: [
         { id: "case_a", label: "Case A", value: "a", nodes: [] },
         { id: "case_b", label: "Case B", value: "b", nodes: [] },
@@ -360,7 +488,7 @@ export function createWorkflowNodeTemplate(
     return {
       id: `foreach_${suffix}`,
       type: "builtin.foreach",
-      items: "$.input.items",
+      items: "",
       itemVar: "item",
       body: [],
       concurrency: 1,
@@ -382,15 +510,9 @@ export function createWorkflowNodeTemplate(
     return {
       id: `python_${suffix}`,
       type: "builtin.python",
-      input: { value: "$.input.value" },
+      input: { value: "$.workflowTrigger.input.value" },
       code: "output = input.get('value')",
       timeoutMs: 30000,
-      assign: {
-        pythonResult: {
-          from: `$.steps.python_${suffix}.output.value`,
-          mode: "replace",
-        },
-      },
     };
   }
   if (kind === "mcp") {
@@ -404,12 +526,6 @@ export function createWorkflowNodeTemplate(
       server,
       tool: toolName,
       input: {},
-      assign: {
-        [safeIdSegment(`${server}_${toolName}`)]: {
-          from: `$.steps.${id}.output`,
-          mode: "replace",
-        },
-      },
     };
   }
   if (kind === "agent") {
@@ -422,12 +538,6 @@ export function createWorkflowNodeTemplate(
       agentId,
       prompt: "Review workflow input",
       input: {},
-      assign: {
-        [safeIdSegment(`${agentId}_result`)]: {
-          from: `$.steps.${id}.output`,
-          mode: "replace",
-        },
-      },
     };
   }
   return {
@@ -463,15 +573,16 @@ function createNextWorkflowNodeTemplate(
   nodes: WorkflowAuthoringNode[],
   kind: WorkflowPaletteKind,
   tool?: WorkflowAuthoringMcpTool | WorkflowAuthoringAgent,
+  transformPresetId?: string,
 ): WorkflowAuthoringNode {
   const existingIds = new Set(nodes.map((node) => node.id));
   let index = nodes.length + 1;
   for (let attempt = 0; attempt < 1000; attempt += 1) {
-    const node = createWorkflowNodeTemplate(kind, index, tool);
+    const node = createWorkflowNodeTemplate(kind, index, tool, transformPresetId);
     if (!existingIds.has(node.id)) return node;
     index += 1;
   }
-  return createWorkflowNodeTemplate(kind, Date.now(), tool);
+  return createWorkflowNodeTemplate(kind, Date.now(), tool, transformPresetId);
 }
 
 function uniqueCloneNodeId(
@@ -493,7 +604,7 @@ function pruneNodeReferences(
   deletedNodeId: string,
 ): WorkflowAuthoringNode {
   const next = { ...node };
-  for (const key of ["then", "else", "body"]) {
+  for (const key of ["next", "then", "else", "body"]) {
     const value = next[key];
     if (!Array.isArray(value)) continue;
     next[key] = value.filter((item) => item !== deletedNodeId);
@@ -523,6 +634,74 @@ function pruneNodeReferences(
     next["default"] = defaultRoute.filter((nodeId) => nodeId !== deletedNodeId);
   }
   return next;
+}
+
+function replaceNodeIdReferences(
+  node: WorkflowAuthoringNode,
+  oldNodeId: string,
+  newNodeId: string,
+): WorkflowAuthoringNode {
+  const next = replaceStepReferenceStrings(node, oldNodeId, newNodeId);
+  for (const key of ["next", "then", "else", "body"]) {
+    const value = next[key];
+    if (!Array.isArray(value)) continue;
+    next[key] = value.map((item) => (item === oldNodeId ? newNodeId : item));
+  }
+  const branches = next["branches"];
+  if (Array.isArray(branches)) {
+    next["branches"] = branches.map((branch) => {
+      if (!isRecord(branch) || !Array.isArray(branch["nodes"])) return branch;
+      return {
+        ...branch,
+        nodes: branch["nodes"].map((nodeId) =>
+          nodeId === oldNodeId ? newNodeId : nodeId,
+        ),
+      };
+    });
+  }
+  const cases = next["cases"];
+  if (Array.isArray(cases)) {
+    next["cases"] = cases.map((item) => {
+      if (!isRecord(item) || !Array.isArray(item["nodes"])) return item;
+      return {
+        ...item,
+        nodes: item["nodes"].map((nodeId) =>
+          nodeId === oldNodeId ? newNodeId : nodeId,
+        ),
+      };
+    });
+  }
+  const defaultRoute = next["default"];
+  if (Array.isArray(defaultRoute)) {
+    next["default"] = defaultRoute.map((nodeId) =>
+      nodeId === oldNodeId ? newNodeId : nodeId,
+    );
+  }
+  return next;
+}
+
+function replaceStepReferenceStrings<T>(
+  value: T,
+  oldNodeId: string,
+  newNodeId: string,
+): T {
+  if (typeof value === "string") {
+    return value.split(`$.steps.${oldNodeId}`).join(`$.steps.${newNodeId}`) as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) =>
+      replaceStepReferenceStrings(item, oldNodeId, newNodeId),
+    ) as T;
+  }
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        replaceStepReferenceStrings(item, oldNodeId, newNodeId),
+      ]),
+    ) as T;
+  }
+  return value;
 }
 
 function replaceStringReferences<T>(

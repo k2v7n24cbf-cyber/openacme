@@ -16,7 +16,7 @@ test("renders workflow canvas and opens selected node inspector", async ({
         {
           id: "branch",
           type: "builtin.if_else",
-          condition: "$.input.risky",
+          condition: "$.workflowTrigger.input.risky",
           then: ["call_mcp"],
           else: ["call_agent"],
         },
@@ -25,19 +25,19 @@ test("renders workflow canvas and opens selected node inspector", async ({
           type: "mcp.tool",
           server: "demo",
           tool: "echo",
-          input: { message: "$.input.message" },
+          input: { message: "$.workflowTrigger.input.message" },
         },
         {
           id: "call_agent",
           type: "agent.call",
           agentId: "demo-agent",
-          prompt: "Review $.input",
-          input: { payload: "$.input" },
+          prompt: "Review $.workflowTrigger.input",
+          input: { payload: "$.workflowTrigger.input" },
         },
         {
           id: "each_item",
           type: "builtin.foreach",
-          items: "$.input.items",
+          items: "$.workflowTrigger.input.items",
           itemVar: "item",
           body: ["python_score"],
         },
@@ -199,11 +199,11 @@ test("edits selected workflow canvas node settings from inspector", async ({
         {
           id: "set_customer",
           type: "builtin.set",
-          assign: { customer: "$.input.customer" },
+          assign: { customer: "$.workflowTrigger.input.customer" },
         },
         {
           id: "normalize",
-          type: "builtin.transform",
+          type: "builtin.transform.object_pick",
           input: { customer: "$.context.customer" },
           transform: {
             kind: "object_pick",
@@ -214,7 +214,7 @@ test("edits selected workflow canvas node settings from inspector", async ({
         {
           id: "if_else",
           type: "builtin.if_else",
-          condition: "$.input.risky",
+          condition: "$.workflowTrigger.input.risky",
           then: ["mcp_echo"],
           else: ["agent_review"],
         },
@@ -223,19 +223,19 @@ test("edits selected workflow canvas node settings from inspector", async ({
           type: "mcp.tool",
           server: "demo",
           tool: "echo",
-          input: { message: "$.input.message" },
+          input: { message: "$.workflowTrigger.input.message" },
         },
         {
           id: "agent_review",
           type: "agent.call",
           agentId: "demo-agent",
-          prompt: "Review $.input",
-          input: { payload: "$.input" },
+          prompt: "Review $.workflowTrigger.input",
+          input: { payload: "$.workflowTrigger.input" },
         },
         {
           id: "foreach_items",
           type: "builtin.foreach",
-          items: "$.input.items",
+          items: "$.workflowTrigger.input.items",
           itemVar: "item",
           body: ["python_score"],
         },
@@ -277,23 +277,23 @@ test("edits selected workflow canvas node settings from inspector", async ({
     .fill("review.customer");
   await settings
     .getByLabel("set_customer assignment source")
-    .fill("$.input.reviewCustomer");
+    .fill("$.workflowTrigger.input.reviewCustomer");
   await settings.getByLabel("set_customer card label").fill("Load customer");
 
   await canvas.locator('[data-workflow-canvas-node-id="if_else"]').click();
   settings = inspector.getByLabel("Inspector settings if_else");
   await expect(settings.getByLabel("if_else branch condition")).toHaveValue(
-    "$.input.risky",
+    "$.workflowTrigger.input.risky",
   );
   await settings
     .getByLabel("if_else branch condition")
-    .fill("$.input.riskScore >= 70");
+    .fill("$.workflowTrigger.input.riskScore >= 70");
 
   await canvas.locator('[data-workflow-canvas-node-id="mcp_echo"]').click();
   settings = inspector.getByLabel("Inspector settings mcp_echo");
   await settings
     .getByLabel("mcp_echo MCP input JSON")
-    .fill(JSON.stringify({ message: "$.input.reviewMessage" }, null, 2));
+    .fill(JSON.stringify({ message: "$.workflowTrigger.input.reviewMessage" }, null, 2));
 
   await canvas.locator('[data-workflow-canvas-node-id="agent_review"]').click();
   settings = inspector.getByLabel("Inspector settings agent_review");
@@ -306,7 +306,7 @@ test("edits selected workflow canvas node settings from inspector", async ({
     .click();
   settings = inspector.getByLabel("Inspector settings foreach_items");
   await expect(settings.getByLabel("foreach_items foreach items")).toHaveValue(
-    "$.input.items",
+    "$.workflowTrigger.input.items",
   );
 
   await canvas.locator('[data-workflow-canvas-node-id="python_score"]').click();
@@ -350,15 +350,15 @@ test("edits selected workflow canvas node settings from inspector", async ({
         expect.objectContaining({
           id: "set_customer",
           label: "Load customer",
-          assign: { "review.customer": "$.input.reviewCustomer" },
+          assign: { "review.customer": "$.workflowTrigger.input.reviewCustomer" },
         }),
         expect.objectContaining({
           id: "if_else",
-          condition: "$.input.riskScore >= 70",
+          condition: "$.workflowTrigger.input.riskScore >= 70",
         }),
         expect.objectContaining({
           id: "mcp_echo",
-          input: { message: "$.input.reviewMessage" },
+          input: { message: "$.workflowTrigger.input.reviewMessage" },
         }),
         expect.objectContaining({
           id: "agent_review",
@@ -386,8 +386,8 @@ test("edits a transform card with a preset and verifies test run output", async 
       nodes: [
         {
           id: "normalize",
-          type: "builtin.transform",
-          transform: "$.input.value",
+          type: "builtin.transform.value_resolve",
+          transform: { kind: "value.resolve", value: "$.workflowTrigger.input.value" },
           assign: {
             value: "$.steps.normalize.output",
           },
@@ -433,7 +433,7 @@ test("edits a transform card with a preset and verifies test run output", async 
     })
     .toEqual({
       kind: "string.replace",
-      value: "$.input.value",
+      value: "$.workflowTrigger.input.value",
       search: "old",
       replacement: "new",
       all: true,
@@ -550,7 +550,7 @@ test("creates workflow nodes from canvas palette and reorders selected node", as
       JSON.stringify(
         {
           message: "$.context.value",
-          customerId: "$.input.customerId",
+          customerId: "$.workflowTrigger.input.customerId",
         },
         null,
         2,
@@ -589,7 +589,7 @@ test("creates workflow nodes from canvas palette and reorders selected node", as
       expect.objectContaining({ id: "set_01", type: "builtin.set" }),
       expect.objectContaining({
         id: "transform_02",
-        type: "builtin.transform",
+        type: "builtin.transform.value_resolve",
       }),
       expect.objectContaining({
         id: "mcp_demo_echo_03",
@@ -598,7 +598,7 @@ test("creates workflow nodes from canvas palette and reorders selected node", as
         tool: "echo",
         input: {
           message: "$.context.value",
-          customerId: "$.input.customerId",
+          customerId: "$.workflowTrigger.input.customerId",
         },
       }),
       expect.objectContaining({
@@ -634,6 +634,193 @@ test("creates workflow nodes from canvas palette and reorders selected node", as
   );
 });
 
+test("autosaves unsaved draft nodes before starting a test run", async ({
+  page,
+  request,
+}) => {
+  const workflowId = `wf_ui_autosave_test_${Date.now().toString(36)}`;
+
+  const created = await request.post("/api/workflows", {
+    data: {
+      id: workflowId,
+      name: "Workflow Autosave Test Run",
+      triggers: [{ id: "manual", kind: "manual", enabled: true }],
+      nodes: [],
+    },
+  });
+  expect(created.ok(), await created.text()).toBeTruthy();
+
+  const patchBodies: Array<{ nodes?: Array<{ id: string; type: string }> }> =
+    [];
+  await page.route(`**/api/workflows/${workflowId}`, async (route) => {
+    if (route.request().method() === "PATCH") {
+      patchBodies.push(
+        route.request().postDataJSON() as {
+          nodes?: Array<{ id: string; type: string }>;
+        },
+      );
+    }
+    await route.continue();
+  });
+
+  await page.goto(`/workflows?id=${workflowId}`);
+  await expect(
+    page.getByRole("heading", { name: "Workflow Autosave Test Run" }),
+  ).toBeVisible();
+
+  const canvas = page.getByLabel("Workflow Canvas", { exact: true });
+  await addWorkflowStep(page, canvas, "trigger:manual", "Log");
+  await expect(
+    canvas.locator('[data-workflow-canvas-node-id="log_01"]'),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Test", exact: true }).click();
+  await expect(page.getByText("Test run started", { exact: true })).toBeVisible();
+  expect(patchBodies).toContainEqual(
+    expect.objectContaining({
+      nodes: expect.arrayContaining([
+        expect.objectContaining({ id: "log_01", type: "builtin.log.info" }),
+      ]),
+    }),
+  );
+
+  await expect
+    .poll(async () => {
+      const detail = await request.get(`/api/workflows/${workflowId}`);
+      expect(detail.ok(), await detail.text()).toBeTruthy();
+      const payload = (await detail.json()) as {
+        workflow: { nodes: Array<{ id: string; type: string }> };
+      };
+      return payload.workflow.nodes;
+    })
+    .toContainEqual(
+      expect.objectContaining({ id: "log_01", type: "builtin.log.info" }),
+    );
+
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("run"))
+    .not.toBeNull();
+  const runId = new URL(page.url()).searchParams.get("run");
+  expect(runId).not.toBeNull();
+  const workflowRunId = runId ?? "";
+  await expect
+    .poll(async () => {
+      const detail = await request.get(`/api/workflow-runs/${workflowRunId}`);
+      expect(detail.ok(), await detail.text()).toBeTruthy();
+      const payload = (await detail.json()) as {
+        run: { status: string };
+        steps: Array<{ nodeId: string; status: string }>;
+      };
+      return {
+        runStatus: payload.run.status,
+        logStep: payload.steps.find((step) => step.nodeId === "log_01"),
+      };
+    })
+    .toMatchObject({
+      runStatus: "succeeded",
+      logStep: { nodeId: "log_01", status: "succeeded" },
+    });
+});
+
+test("saves edited card settings before the next test run", async ({
+  page,
+  request,
+}) => {
+  const workflowId = `wf_ui_save_card_settings_${Date.now().toString(36)}`;
+
+  const created = await request.post("/api/workflows", {
+    data: {
+      id: workflowId,
+      name: "Workflow Save Card Settings",
+      triggers: [{ id: "manual", kind: "manual", enabled: true }],
+      nodes: [
+        {
+          id: "log_01",
+          type: "builtin.log.info",
+          message: "old message",
+        },
+      ],
+    },
+  });
+  expect(created.ok(), await created.text()).toBeTruthy();
+
+  const patchBodies: Array<{
+    nodes?: Array<{ id: string; message?: string }>;
+  }> = [];
+  await page.route(`**/api/workflows/${workflowId}`, async (route) => {
+    if (route.request().method() === "PATCH") {
+      patchBodies.push(
+        route.request().postDataJSON() as {
+          nodes?: Array<{ id: string; message?: string }>;
+        },
+      );
+    }
+    await route.continue();
+  });
+
+  await page.goto(`/workflows?id=${workflowId}`);
+  await expect(
+    page.getByRole("heading", { name: "Workflow Save Card Settings" }),
+  ).toBeVisible();
+
+  const canvas = page.getByLabel("Workflow Canvas", { exact: true });
+  await canvas.locator('[data-workflow-canvas-node-id="log_01"]').click();
+  await page
+    .getByLabel("Inspector settings log_01")
+    .getByLabel("log_01 log message")
+    .fill("new message from card settings");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+
+  expect(patchBodies).toContainEqual(
+    expect.objectContaining({
+      nodes: expect.arrayContaining([
+        expect.objectContaining({
+          id: "log_01",
+          message: "new message from card settings",
+        }),
+      ]),
+    }),
+  );
+
+  await expect
+    .poll(async () => {
+      const detail = await request.get(`/api/workflows/${workflowId}`);
+      expect(detail.ok(), await detail.text()).toBeTruthy();
+      const payload = (await detail.json()) as {
+        workflow: { nodes: Array<{ id: string; message?: string }> };
+      };
+      return payload.workflow.nodes.find((node) => node.id === "log_01")
+        ?.message;
+    })
+    .toBe("new message from card settings");
+
+  await page.getByRole("button", { name: "Test", exact: true }).click();
+
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("run"))
+    .not.toBeNull();
+  const runId = new URL(page.url()).searchParams.get("run");
+  await expect
+    .poll(async () => {
+      const detail = await request.get(`/api/workflow-runs/${runId}`);
+      expect(detail.ok(), await detail.text()).toBeTruthy();
+      const payload = (await detail.json()) as {
+        steps: Array<{
+          nodeId: string;
+          status: string;
+          input?: { message?: string };
+          logsSummary?: unknown;
+        }>;
+      };
+      return payload.steps.find((step) => step.nodeId === "log_01");
+    })
+    .toMatchObject({
+      nodeId: "log_01",
+      status: "succeeded",
+      input: { message: "new message from card settings" },
+    });
+});
+
 test("connects if-else branch references visually from the workflow canvas", async ({
   page,
   request,
@@ -649,7 +836,7 @@ test("connects if-else branch references visually from the workflow canvas", asy
         {
           id: "branch",
           type: "builtin.if",
-          condition: "$.input.risky == true",
+          condition: "$.workflowTrigger.input.risky == true",
           then: [],
           else: [],
         },
@@ -802,7 +989,7 @@ test("shows workflow run status overlay on the canvas", async ({
         {
           id: "set_input",
           type: "builtin.set",
-          assign: { value: "$.input.value" },
+          assign: { value: "$.workflowTrigger.input.value" },
         },
         {
           id: "log_done",
@@ -880,7 +1067,7 @@ test("persists dragged workflow canvas layout metadata", async ({
         {
           id: "set_input",
           type: "builtin.set",
-          assign: { value: "$.input.value" },
+          assign: { value: "$.workflowTrigger.input.value" },
         },
         {
           id: "exit",
@@ -1037,12 +1224,12 @@ test("opens failed run step evidence from a canvas node", async ({
           id: "log_customer",
           type: "builtin.log.info",
           message: "About to inspect failed customer",
-          payload: "$.input.customer",
+          payload: "$.workflowTrigger.input.customer",
         },
         {
           id: "route_customer",
           type: "builtin.if_else",
-          condition: "$.input.customer.riskScore >= 70",
+          condition: "$.workflowTrigger.input.customer.riskScore >= 70",
           then: ["missing_customer"],
           else: ["low_customer"],
         },
@@ -1054,9 +1241,9 @@ test("opens failed run step evidence from a canvas node", async ({
         {
           id: "missing_customer",
           label: "Missing customer lookup",
-          type: "builtin.transform",
+          type: "builtin.transform.object_pick",
           input: { customer: "$.context.customer.missing" },
-          transform: { kind: "identity" },
+          transform: { kind: "value.resolve", value: "$" },
         },
       ],
     },
@@ -1128,7 +1315,7 @@ test("rejects workflow console run deep-links owned by another workflow", async 
           id: "exit",
           type: "builtin.exit",
           status: "succeeded",
-          output: "$.input",
+          output: "$.workflowTrigger.input",
         },
       ],
     },
@@ -1144,7 +1331,7 @@ test("rejects workflow console run deep-links owned by another workflow", async 
           id: "exit",
           type: "builtin.exit",
           status: "succeeded",
-          output: "$.input",
+          output: "$.workflowTrigger.input",
         },
       ],
     },
@@ -1190,7 +1377,7 @@ test("loads older workflow-scoped run console history pages", async ({
           id: "exit",
           type: "builtin.exit",
           status: "succeeded",
-          output: "$.input",
+          output: "$.workflowTrigger.input",
         },
       ],
     },
@@ -1333,7 +1520,7 @@ test("filters workflow-scoped run console history by status trigger and date", a
           id: "exit",
           type: "builtin.exit",
           status: "succeeded",
-          output: "$.input",
+          output: "$.workflowTrigger.input",
         },
       ],
     },
@@ -1355,7 +1542,7 @@ test("filters workflow-scoped run console history by status trigger and date", a
           id: "exit",
           type: "builtin.exit",
           status: "failed",
-          output: "$.input",
+          output: "$.workflowTrigger.input",
         },
       ],
     },
@@ -1456,7 +1643,7 @@ test("auto-refreshes non-terminal workflow run console details", async ({
                 type: "mcp.tool",
                 server: "crm",
                 tool: "lookup",
-                input: { id: "$.input.customerId" },
+                input: { id: "$.workflowTrigger.input.customerId" },
               },
             ],
             createdAt: startedAt,
@@ -1754,14 +1941,14 @@ test("shows foreach aggregate output in the run console step detail", async ({
               {
                 id: "each_asset",
                 type: "builtin.foreach",
-                items: "$.input.assets",
+                items: "$.workflowTrigger.input.assets",
                 itemVar: "asset",
                 body: ["normalize_asset"],
               },
               {
                 id: "normalize_asset",
-                type: "builtin.transform",
-                transform: "$.context.asset",
+                type: "builtin.transform.value_resolve",
+                transform: { kind: "value.resolve", value: "$.context.asset" },
               },
             ],
             createdAt: startedAt,
@@ -1851,7 +2038,7 @@ test("keeps selected workflow run console step after cancel", async ({
                 type: "mcp.tool",
                 server: "crm",
                 tool: "lookup",
-                input: { id: "$.input.customerId" },
+                input: { id: "$.workflowTrigger.input.customerId" },
               },
               {
                 id: "notify",
@@ -1995,7 +2182,7 @@ test("keeps loaded workflow run console pages after cancel", async ({
                 type: "mcp.tool",
                 server: "crm",
                 tool: "lookup",
-                input: { id: "$.input.customerId" },
+                input: { id: "$.workflowTrigger.input.customerId" },
               },
               {
                 id: "notify",
@@ -2156,7 +2343,7 @@ test("keeps loaded workflow run console pages after rerun", async ({
                 type: "mcp.tool",
                 server: "crm",
                 tool: "lookup",
-                input: { id: "$.input.customerId" },
+                input: { id: "$.workflowTrigger.input.customerId" },
               },
               {
                 id: "notify",
@@ -2326,7 +2513,7 @@ test("keeps loaded workflow run console pages after test run", async ({
                 type: "mcp.tool",
                 server: "crm",
                 tool: "lookup",
-                input: { id: "$.input.customerId" },
+                input: { id: "$.workflowTrigger.input.customerId" },
               },
               {
                 id: "notify",
@@ -2496,7 +2683,7 @@ test("keeps loaded workflow run console pages after trigger run", async ({
                 type: "mcp.tool",
                 server: "crm",
                 tool: "lookup",
-                input: { id: "$.input.customerId" },
+                input: { id: "$.workflowTrigger.input.customerId" },
               },
               {
                 id: "notify",
@@ -2636,7 +2823,7 @@ test("keeps external node actions disabled when no inventory is available", asyn
         {
           id: "set_customer",
           type: "builtin.set",
-          assign: { customer: "$.input.customer" },
+          assign: { customer: "$.workflowTrigger.input.customer" },
         },
         {
           id: "exit",
@@ -2688,7 +2875,7 @@ test("runs configured manual workflow triggers from the console", async ({
         {
           id: "branch",
           type: "builtin.if",
-          condition: "$.input.ready",
+          condition: "$.workflowTrigger.input.ready",
           then: ["missing_node"],
         },
       ],
@@ -2725,13 +2912,13 @@ test("runs configured manual workflow triggers from the console", async ({
         {
           id: "set_customer",
           type: "builtin.set",
-          assign: { customer: "$.input.customer" },
+          assign: { customer: "$.workflowTrigger.input.customer" },
         },
         {
           id: "normalize",
-          type: "builtin.transform",
+          type: "builtin.transform.value_resolve",
           input: { value: "$.context.customer" },
-          transform: { kind: "identity" },
+          transform: { kind: "value.resolve", value: "$" },
           assign: {
             customer: {
               from: "$.steps.normalize.output",
@@ -2757,7 +2944,7 @@ test("runs configured manual workflow triggers from the console", async ({
           type: "mcp.tool",
           server: "demo",
           tool: "echo",
-          input: { message: "$.input.customer.name" },
+          input: { message: "$.workflowTrigger.input.customer.name" },
           assign: {
             mcpEcho: {
               from: "$.steps.mcp_echo.output",
@@ -2788,7 +2975,7 @@ test("runs configured manual workflow triggers from the console", async ({
     page.getByRole("heading", { name: "Workflow UI Trigger Smoke" }),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Paused" })).toBeDisabled();
-  await expect(page.getByText("customer <- $.input.customer")).toBeVisible();
+  await expect(page.getByText("customer <- $.workflowTrigger.input.customer")).toBeVisible();
   await expect(
     page.getByText("customer <- $.steps.normalize.output"),
   ).toBeVisible();
@@ -3310,7 +3497,7 @@ test("runs configured manual workflow triggers from the console", async ({
   await page.getByLabel("mcp_echo MCP tool").fill("echo");
   await expect(page.getByText("Schema Input")).toBeVisible();
   await expect(page.getByLabel("mcp_echo MCP schema message")).toHaveValue(
-    "$.input.customer.name",
+    "$.workflowTrigger.input.customer.name",
   );
   await page
     .getByLabel("mcp_echo MCP schema message")
@@ -3420,14 +3607,14 @@ test("runs configured manual workflow triggers from the console", async ({
     .toBe("if_07");
   await nodeCards
     .getByLabel("if_07 branch condition")
-    .fill("$.input.customer.riskScore >= 70");
+    .fill("$.workflowTrigger.input.customer.riskScore >= 70");
   await expect
     .poll(async () => JSON.parse(await nodesJson.inputValue())[6]?.condition)
-    .toBe("$.input.customer.riskScore >= 70");
+    .toBe("$.workflowTrigger.input.customer.riskScore >= 70");
   await nodeCards.getByLabel("if_07 branch condition").fill("");
   await expect
     .poll(async () => JSON.parse(await nodesJson.inputValue())[6]?.condition)
-    .toBe("$.input.customer.riskScore >= 70");
+    .toBe("$.workflowTrigger.input.customer.riskScore >= 70");
   await nodeCards
     .getByLabel("if_07 then nodes")
     .fill("mcp_echo, missing_step");
@@ -3449,14 +3636,14 @@ test("runs configured manual workflow triggers from the console", async ({
     .toBe("foreach_08");
   await nodeCards
     .getByLabel("foreach_08 foreach items")
-    .fill("$.input.customers");
+    .fill("$.workflowTrigger.input.customers");
   await expect
     .poll(async () => JSON.parse(await nodesJson.inputValue())[7]?.items)
-    .toBe("$.input.customers");
+    .toBe("$.workflowTrigger.input.customers");
   await nodeCards.getByLabel("foreach_08 foreach items").fill("");
   await expect
     .poll(async () => JSON.parse(await nodesJson.inputValue())[8]?.items)
-    .toBe("$.input.customers");
+    .toBe("$.workflowTrigger.input.customers");
   await nodeCards
     .getByLabel("foreach_09 foreach item variable")
     .fill("customer");
@@ -3483,10 +3670,10 @@ test("runs configured manual workflow triggers from the console", async ({
     .toBe("python_10");
   await nodeCards
     .getByLabel("python_10 python input")
-    .fill('{\n  "customer": "$.input.customer"\n}');
+    .fill('{\n  "customer": "$.workflowTrigger.input.customer"\n}');
   await expect
     .poll(async () => JSON.parse(await nodesJson.inputValue())[9]?.input)
-    .toEqual({ customer: "$.input.customer" });
+    .toEqual({ customer: "$.workflowTrigger.input.customer" });
   await nodeCards.getByLabel("python_10 python timeout").fill("45000");
   await expect
     .poll(async () => JSON.parse(await nodesJson.inputValue())[9]?.timeoutMs)

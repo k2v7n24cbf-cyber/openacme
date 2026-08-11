@@ -6,15 +6,18 @@ import type {
   WorkflowDefinition,
   WorkflowNode,
   WorkflowRunEvent,
+  WorkflowRunTrigger,
   WorkflowRunStatus,
   WorkflowStepAttempt,
   WorkflowStepStatus,
 } from "./schemas.js";
 import {
+  isWorkflowTransformNodeType,
   WorkflowDefinitionSchema,
   WorkflowRunEventSchema,
   WorkflowStepAttemptSchema,
 } from "./schemas.js";
+import { normalizeWorkflowDefinitionGraph } from "./graph-contract.js";
 import type { WorkflowExecutionPorts } from "./ports.js";
 
 export interface WorkflowRunnerOptions {
@@ -26,6 +29,7 @@ export interface WorkflowRunnerRunRequest {
   runId?: string;
   definition: WorkflowDefinition;
   input?: JsonValue;
+  trigger?: WorkflowRunTrigger;
   signal?: AbortSignal;
 }
 
@@ -42,13 +46,17 @@ export interface WorkflowRunnerRunResult {
 }
 
 interface StepState {
+  input?: JsonValue;
   output?: JsonValue;
+  error?: JsonValue;
+  status?: WorkflowStepStatus;
 }
 
 interface RunnerState {
   runId: string;
   definition: WorkflowDefinition;
   input: JsonValue;
+  workflowTrigger: JsonObject;
   context: JsonObject;
   steps: Record<string, StepState>;
   foreachStack: ForeachFrame[];
@@ -67,6 +75,7 @@ const MAX_TRANSFORM_OUTPUT_BYTES = 1_048_576;
 const MAX_CSV_INPUT_BYTES = 1_048_576;
 const DEFAULT_MAX_CSV_ROWS = 10_000;
 const TRANSFORM_OPERATION_KINDS = new Set([
+  "value.resolve",
   "object_pick",
   "string.replace",
   "string.regex_replace",
@@ -96,6 +105,7 @@ type RunnerEventInput = {
 };
 type ExecuteNodeOptions = {
   attempt?: number;
+  path?: string[];
 };
 type ForeachFrame = {
   name: string;
@@ -157,11 +167,18 @@ export class WorkflowRunner {
   }
 
   async run(req: WorkflowRunnerRunRequest): Promise<WorkflowRunnerRunResult> {
-    const definition = WorkflowDefinitionSchema.parse(req.definition);
+    const definition = normalizeWorkflowDefinitionGraph(
+      WorkflowDefinitionSchema.parse(req.definition),
+    );
+    const input = cloneJson(req.input ?? {});
     const state: RunnerState = {
       runId: req.runId ?? randomUUID(),
       definition,
-      input: cloneJson(req.input ?? {}),
+      input,
+      workflowTrigger: {
+        input: cloneJson(input),
+        meta: workflowTriggerMeta(req.trigger),
+      },
       context: {},
       steps: {},
       foreachStack: [],
@@ -180,12 +197,9 @@ export class WorkflowRunner {
     });
 
     const nodesById = new Map(definition.nodes.map((node) => [node.id, node]));
-    const branchNodeIds = collectBranchNodeIds(definition.nodes);
-
-    for (const node of definition.nodes) {
-      if (state.stopped) break;
-      if (branchNodeIds.has(node.id)) continue;
-      await this.executeNode(state, node, nodesById);
+    const entryNode = definition.nodes[0];
+    if (entryNode) {
+      await this.executeNode(state, entryNode, nodesById);
     }
 
     if (state.status === "running") {
@@ -218,11 +232,18 @@ export class WorkflowRunner {
     nodesById: Map<string, WorkflowNode>,
     opts: ExecuteNodeOptions = {},
   ): Promise<void> {
+    if (opts.path?.includes(node.id)) {
+      throw new Error(
+        `Workflow cycle detected: ${[...opts.path, node.id].join(" -> ")}`,
+      );
+    }
+    const path = [...(opts.path ?? []), node.id];
     const startedAt = this.now();
     const attempt = opts.attempt ?? 1;
     const attemptId = `${state.runId}:${node.id}:${attempt}`;
     const beforeContext = cloneJson(state.context);
-    const inputAtStart = safeResolvedNodeInput(state, node);
+    const inputAtStart = safeResolvedStepInput(state, node);
+    recordStepRunning(state, node.id, inputAtStart);
     await this.appendEvent(state, {
       stepRunId: attemptId,
       level: "system",
@@ -256,14 +277,15 @@ export class WorkflowRunner {
         startedAt,
         endedAt,
         durationMs: stepDurationMs(startedAt, endedAt),
-        input: resolvedNodeInput(state, node),
+        input: resolvedStepInput(state, node),
         output,
         logsSummary,
         contextDiff,
       });
       state.stepAttempts.push(step);
+      recordStepSucceeded(state, node.id, step.input, output, step.status);
       if (
-        (node.type === "builtin.transform" ||
+        (isWorkflowTransformNodeType(node.type) ||
           node.type === "builtin.foreach" ||
           node.type === "builtin.parallel" ||
           node.type === "builtin.python" ||
@@ -289,8 +311,13 @@ export class WorkflowRunner {
         this.recordSkippedSteps(state, branch.skipped, attempt);
         await this.executeSelectedBranch(state, nodesById, branch.selected, {
           attempt,
+          path,
         });
       }
+      await this.executeNextNodes(state, nodesById, node.next, {
+        attempt,
+        path,
+      });
     } catch (err) {
       const workflowErr =
         err instanceof WorkflowNodeExecutionError ? err : null;
@@ -317,11 +344,12 @@ export class WorkflowRunner {
         startedAt,
         endedAt,
         durationMs: stepDurationMs(startedAt, endedAt),
-        input: safeResolvedNodeInput(state, node),
+        input: safeResolvedStepInput(state, node),
         error,
         logsSummary,
       });
       state.stepAttempts.push(step);
+      recordStepFailed(state, node.id, step.input, error, step.status);
       await this.appendEvent(state, {
         stepRunId: step.id,
         level: "error",
@@ -360,23 +388,26 @@ export class WorkflowRunner {
     switch (node.type) {
       case "builtin.set": {
         const assigned = applyAssignments(state, node.assign);
-        return assigned;
+        return { assigned };
       }
 
-      case "builtin.transform": {
-        const input = resolvedNodeInput(state, node);
-        const output = applyTransform(state, input, node.transform);
-        state.steps[node.id] = { output };
-        if (node.assign) applyAssignments(state, node.assign);
-        return output;
-      }
+      default:
+        if (isWorkflowTransformNodeType(node.type)) {
+          const input = resolvedNodeInput(state, node);
+          const value = applyTransform(state, input, node.transform);
+          const output: JsonObject = { value };
+          recordStepOutput(state, node.id, output);
+          if (node.assign) applyAssignments(state, node.assign);
+          return output;
+        }
+        throw new Error(`Unsupported workflow node type: ${node.type}`);
 
       case "builtin.if": {
         const matches = evaluateCondition(state, node.condition);
         const selected = matches ? node.then : node.else;
         const skipped = matches ? node.else : node.then;
         await this.appendBranchEvent(state, node.condition, selected, skipped);
-        return { selected, skipped };
+        return { result: matches, selected, skipped };
       }
 
       case "builtin.if_else": {
@@ -384,7 +415,7 @@ export class WorkflowRunner {
         const selected = matches ? node.then : node.else;
         const skipped = matches ? node.else : node.then;
         await this.appendBranchEvent(state, node.condition, selected, skipped);
-        return { selected, skipped };
+        return { result: matches, selected, skipped };
       }
 
       case "builtin.switch": {
@@ -400,6 +431,7 @@ export class WorkflowRunner {
           value,
           selected,
           skipped,
+          matched: matched !== undefined,
           ...(matched ? { case: matched.id } : { case: "default" }),
         };
       }
@@ -421,7 +453,7 @@ export class WorkflowRunner {
           payload === undefined
             ? { message: node.message }
             : { message: node.message, payload };
-        state.steps[node.id] = { output };
+        recordStepOutput(state, node.id, output);
         await this.appendEvent(state, {
           stepRunId: attemptId,
           level,
@@ -451,7 +483,9 @@ export class WorkflowRunner {
               ? { status: node.status }
               : { status: node.status, output: state.output },
         });
-        return state.output;
+        return state.output === undefined
+          ? { status: node.status }
+          : { status: node.status, output: state.output };
       }
 
       case "builtin.throw_error": {
@@ -469,7 +503,7 @@ export class WorkflowRunner {
         await sleep(node.delayMs, state.signal);
         const output: JsonObject = { delayMs: node.delayMs };
         if (node.reason !== undefined) output.reason = node.reason;
-        state.steps[node.id] = { output };
+        recordStepOutput(state, node.id, output);
         return output;
       }
 
@@ -605,7 +639,7 @@ export class WorkflowRunner {
       failedCount,
       items: outputs,
     };
-    state.steps[node.id] = { output };
+    recordStepOutput(state, node.id, output);
     if (node.assign) applyAssignments(state, node.assign);
     return output;
   }
@@ -724,7 +758,7 @@ export class WorkflowRunner {
       branches,
       branchOrder: node.branches.map((branch) => branch.id),
     };
-    state.steps[node.id] = { output };
+    recordStepOutput(state, node.id, output);
 
     if (firstFailure && node.failFast) {
       await this.appendEvent(state, {
@@ -862,9 +896,14 @@ export class WorkflowRunner {
       timeoutMs: node.timeoutMs,
       ...(state.signal ? { signal: state.signal } : {}),
     });
-    state.steps[node.id] = { output: result.output };
+    const output: JsonObject = {
+      server: node.server,
+      tool: node.tool,
+      result: result.output,
+    };
+    recordStepOutput(state, node.id, output);
     if (node.assign) applyAssignments(state, node.assign);
-    return result.output;
+    return output;
   }
 
   private async executeAgentCall(
@@ -884,11 +923,19 @@ export class WorkflowRunner {
       timeoutMs: node.timeoutMs,
       ...(state.signal ? { signal: state.signal } : {}),
     });
-    const output =
-      result.sessionId === undefined || isJsonObject(result.output)
-        ? result.output
-        : { response: result.output, sessionId: result.sessionId };
-    state.steps[node.id] = { output };
+    const output = isJsonObject(result.output)
+      ? {
+          ...result.output,
+          ...(result.sessionId !== undefined &&
+          result.output["sessionId"] === undefined
+            ? { sessionId: result.sessionId }
+            : {}),
+        }
+      : {
+          response: result.output,
+          ...(result.sessionId !== undefined ? { sessionId: result.sessionId } : {}),
+        };
+    recordStepOutput(state, node.id, output);
     if (node.assign) applyAssignments(state, node.assign);
     return output;
   }
@@ -911,7 +958,7 @@ export class WorkflowRunner {
     const output: JsonObject = { value: result.output };
     if (result.stdout !== undefined) output.stdout = result.stdout;
     if (result.stderr !== undefined) output.stderr = result.stderr;
-    state.steps[node.id] = { output };
+    recordStepOutput(state, node.id, output);
     if (node.assign) applyAssignments(state, node.assign);
     return output;
   }
@@ -969,6 +1016,20 @@ export class WorkflowRunner {
       if (!branchNode)
         throw new Error(`Branch references unknown node: ${nodeId}`);
       await this.executeNode(state, branchNode, nodesById, opts);
+    }
+  }
+
+  private async executeNextNodes(
+    state: RunnerState,
+    nodesById: Map<string, WorkflowNode>,
+    next: string[],
+    opts: ExecuteNodeOptions = {},
+  ): Promise<void> {
+    for (const nodeId of next) {
+      if (state.stopped) break;
+      const nextNode = nodesById.get(nodeId);
+      if (!nextNode) throw new Error(`Next references unknown node: ${nodeId}`);
+      await this.executeNode(state, nextNode, nodesById, opts);
     }
   }
 
@@ -1077,12 +1138,190 @@ function resolvedNodeInput(
   return resolveJsonValue(state, node.input);
 }
 
-function safeResolvedNodeInput(
+function resolvedStepInput(
+  state: RunnerState,
+  node: WorkflowNode,
+): JsonValue | undefined {
+  switch (node.type) {
+    case "builtin.set":
+      return { assign: resolvedAssignments(state, node.assign) };
+
+    default:
+      if (isWorkflowTransformNodeType(node.type)) {
+      const request: JsonObject = {
+        input: resolvedNodeInput(state, node) ?? {},
+        transform: cloneJson(node.transform),
+      };
+      if (node.assign) request.assign = resolvedAssignments(state, node.assign);
+      return request;
+      }
+      throw new Error(`Unsupported workflow node type: ${node.type}`);
+
+    case "builtin.if":
+    case "builtin.if_else": {
+      const matches = evaluateCondition(state, node.condition);
+      return {
+        condition: node.condition,
+        result: matches,
+        selected: matches ? node.then : node.else,
+        skipped: matches ? node.else : node.then,
+      };
+    }
+
+    case "builtin.switch": {
+      const value = resolveJsonValue(state, node.value);
+      const matched = node.cases.find((item) => jsonEquals(item.value, value));
+      const selected = matched ? matched.nodes : node.default;
+      const skipped = uniqueNodeIds([
+        ...node.cases.flatMap((item) => item.nodes),
+        ...node.default,
+      ]).filter((nodeId) => !selected.includes(nodeId));
+      return {
+        value,
+        selected,
+        skipped,
+        ...(matched ? { case: matched.id } : { case: "default" }),
+      };
+    }
+
+    case "builtin.foreach": {
+      const request: JsonObject = {
+        input: resolvedNodeInput(state, node) ?? {},
+        items: resolveJsonValue(state, node.items),
+        itemVar: node.itemVar,
+        body: node.body,
+      };
+      if (node.concurrency !== undefined) request.concurrency = node.concurrency;
+      if (node.assign) request.assign = resolvedAssignments(state, node.assign);
+      return request;
+    }
+
+    case "builtin.exit": {
+      const request: JsonObject = { status: node.status };
+      if (node.output !== undefined) {
+        request.output = resolveJsonValue(state, node.output);
+      }
+      return request;
+    }
+
+    case "builtin.throw_error": {
+      const request: JsonObject = { message: node.message };
+      if (node.code !== undefined) request.code = node.code;
+      if (node.details !== undefined) {
+        request.details = resolveJsonValue(state, node.details);
+      }
+      return request;
+    }
+
+    case "builtin.sleep": {
+      const request: JsonObject = { delayMs: node.delayMs };
+      if (node.reason !== undefined) request.reason = node.reason;
+      return request;
+    }
+
+    case "builtin.log.info":
+    case "builtin.log.debug":
+    case "builtin.log.warn":
+    case "builtin.log.error": {
+      const request: JsonObject = {
+        level: node.type.replace("builtin.log.", ""),
+        input: resolvedNodeInput(state, node) ?? {},
+        message: node.message,
+      };
+      if (node.payload !== undefined) {
+        request.payload = resolveJsonValue(state, node.payload);
+      }
+      if (node.assign) request.assign = resolvedAssignments(state, node.assign);
+      return request;
+    }
+
+    case "builtin.parallel": {
+      const request: JsonObject = {
+        input: resolvedNodeInput(state, node) ?? {},
+        branches: node.branches.map((branch) => ({
+          id: branch.id,
+          ...(branch.label ? { label: branch.label } : {}),
+          nodes: branch.nodes,
+        })),
+        concurrency: node.concurrency ?? node.branches.length,
+        failFast: node.failFast,
+      };
+      if (node.assign) request.assign = resolvedAssignments(state, node.assign);
+      return request;
+    }
+
+    case "builtin.python": {
+      const request: JsonObject = {
+        code: node.code,
+        input: resolvedNodeInput(state, node) ?? {},
+      };
+      if (node.reset !== undefined) request.reset = node.reset;
+      if (node.timeoutMs !== undefined) request.timeoutMs = node.timeoutMs;
+      if (node.assign) request.assign = resolvedAssignments(state, node.assign);
+      return request;
+    }
+
+    case "mcp.tool": {
+      const request: JsonObject = {
+        server: node.server,
+        tool: node.tool,
+        input: resolvedNodeInput(state, node) ?? {},
+      };
+      if (node.timeoutMs !== undefined) request.timeoutMs = node.timeoutMs;
+      if (node.assign) request.assign = resolvedAssignments(state, node.assign);
+      return request;
+    }
+
+    case "agent.call": {
+      const request: JsonObject = {
+        agentId: node.agentId,
+        prompt: renderStringTemplate(state, node.prompt),
+        input: resolvedNodeInput(state, node) ?? {},
+      };
+      if (node.timeoutMs !== undefined) request.timeoutMs = node.timeoutMs;
+      if (node.assign) request.assign = resolvedAssignments(state, node.assign);
+      return request;
+    }
+  }
+}
+
+function safeResolvedStepInput(
   state: RunnerState,
   node: WorkflowNode,
 ): JsonValue | undefined {
   try {
-    return resolvedNodeInput(state, node);
+    return resolvedStepInput(state, node);
+  } catch {
+    return undefined;
+  }
+}
+
+function resolvedAssignments(
+  state: RunnerState,
+  assignments: WorkflowAssignmentMap,
+): JsonObject {
+  const assigned: JsonObject = {};
+  for (const [path, assignment] of Object.entries(assignments)) {
+    const source =
+      typeof assignment === "string" ? assignment : assignment.from;
+    const mode = typeof assignment === "string" ? "replace" : assignment.mode;
+    const item: JsonObject = {
+      from: source,
+      mode,
+    };
+    const value = tryResolveJsonValue(state, source);
+    if (value !== undefined) item.value = value;
+    assigned[path] = item;
+  }
+  return assigned;
+}
+
+function tryResolveJsonValue(
+  state: RunnerState,
+  reference: JsonValue,
+): JsonValue | undefined {
+  try {
+    return resolveJsonValue(state, reference);
   } catch {
     return undefined;
   }
@@ -1126,6 +1365,8 @@ function applyTransformValue(
   const operationKind = transformOperationKind(transform);
   if (operationKind === undefined) return resolveJsonValue(state, transform);
   switch (operationKind) {
+    case "value.resolve":
+      return requiredTransformField(state, transform, operationKind, "value");
     case "object_pick":
       return applyObjectPickTransform(input, transform);
     case "string.replace":
@@ -2337,6 +2578,24 @@ function evaluateCondition(state: RunnerState, expression: string): boolean {
         ? collection.includes(needle)
         : false;
   }
+  const startsWith = /^startsWith\((.+),(.+)\)$/.exec(trimmed);
+  if (startsWith) {
+    const args = splitFunctionArgs(startsWith[1]!, startsWith[2]!);
+    const value = evaluateOperand(state, args[0]);
+    const prefix = evaluateOperand(state, args[1]);
+    return typeof value === "string" && typeof prefix === "string"
+      ? value.startsWith(prefix)
+      : false;
+  }
+  const endsWith = /^endsWith\((.+),(.+)\)$/.exec(trimmed);
+  if (endsWith) {
+    const args = splitFunctionArgs(endsWith[1]!, endsWith[2]!);
+    const value = evaluateOperand(state, args[0]);
+    const suffix = evaluateOperand(state, args[1]);
+    return typeof value === "string" && typeof suffix === "string"
+      ? value.endsWith(suffix)
+      : false;
+  }
   const comparison = parseComparison(trimmed);
   if (comparison) {
     const left = evaluateOperand(state, comparison.left);
@@ -2586,7 +2845,7 @@ function resolveReference(
   }
   const path = reference.startsWith("$.") ? reference.slice(2).split(".") : [];
   let current: unknown;
-  if (path[0] === "input") current = state.input;
+  if (path[0] === "workflowTrigger") current = state.workflowTrigger;
   else if (path[0] === "context") current = state.context;
   else if (path[0] === "steps") current = state.steps;
   else throw new Error(`Unsupported reference: ${reference}`);
@@ -2722,13 +2981,79 @@ function snapshotStepOutputs(state: RunnerState): Record<string, JsonValue> {
   return snapshot;
 }
 
+function workflowTriggerMeta(trigger: WorkflowRunTrigger | undefined): JsonObject {
+  if (trigger === undefined) return {};
+  const meta: JsonObject = {};
+  for (const [key, value] of Object.entries(trigger)) {
+    if (key === "input") continue;
+    meta[key] = cloneJson(value as JsonValue);
+  }
+  return meta;
+}
+
+function recordStepRunning(
+  state: RunnerState,
+  nodeId: string,
+  input: JsonValue | undefined,
+): void {
+  state.steps[nodeId] = {
+    ...(state.steps[nodeId] ?? {}),
+    ...(input === undefined ? {} : { input: cloneJson(input) }),
+    status: "running",
+  };
+}
+
+function recordStepOutput(
+  state: RunnerState,
+  nodeId: string,
+  output: JsonValue,
+): void {
+  state.steps[nodeId] = {
+    ...(state.steps[nodeId] ?? {}),
+    output: cloneJson(output),
+  };
+}
+
+function recordStepSucceeded(
+  state: RunnerState,
+  nodeId: string,
+  input: JsonValue | undefined,
+  output: JsonValue | undefined,
+  status: WorkflowStepStatus,
+): void {
+  state.steps[nodeId] = {
+    ...(state.steps[nodeId] ?? {}),
+    ...(input === undefined ? {} : { input: cloneJson(input) }),
+    ...(output === undefined ? {} : { output: cloneJson(output) }),
+    status,
+  };
+}
+
+function recordStepFailed(
+  state: RunnerState,
+  nodeId: string,
+  input: JsonValue | undefined,
+  error: JsonValue,
+  status: WorkflowStepStatus,
+): void {
+  state.steps[nodeId] = {
+    ...(state.steps[nodeId] ?? {}),
+    ...(input === undefined ? {} : { input: cloneJson(input) }),
+    error: cloneJson(error),
+    status,
+  };
+}
+
 function cloneStepState(
   steps: Record<string, StepState>,
 ): Record<string, StepState> {
   const out: Record<string, StepState> = {};
   for (const [nodeId, step] of Object.entries(steps)) {
-    out[nodeId] =
-      step.output === undefined ? {} : { output: cloneJson(step.output) };
+    out[nodeId] = {};
+    if (step.input !== undefined) out[nodeId]!.input = cloneJson(step.input);
+    if (step.output !== undefined) out[nodeId]!.output = cloneJson(step.output);
+    if (step.error !== undefined) out[nodeId]!.error = cloneJson(step.error);
+    if (step.status !== undefined) out[nodeId]!.status = step.status;
   }
   return out;
 }

@@ -100,7 +100,7 @@ try {
       {
         id: "py_value",
         type: "builtin.python",
-        input: { value: "$.input.value" },
+        input: { value: "$.workflowTrigger.input.value" },
         code: "print('deploy python ok')\noutput = input['value'] * 3",
         reset: true,
         timeoutMs: 5000,
@@ -111,7 +111,7 @@ try {
       {
         id: "each_value",
         type: "builtin.foreach",
-        items: "$.input.values",
+        items: "$.workflowTrigger.input.values",
         body: ["py_each"],
         concurrency: 1,
         assign: {

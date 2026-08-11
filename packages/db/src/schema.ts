@@ -530,6 +530,7 @@ export const workflowRuns = sqliteTable(
     definitionSource: text("definition_source", {
       enum: ["draft", "published"],
     }).notNull(),
+    definitionSnapshotJson: text("definition_snapshot_json"),
     mode: text("mode", { enum: ["test", "live"] }).notNull(),
     triggerJson: text("trigger_json").notNull(),
     status: text("status", {

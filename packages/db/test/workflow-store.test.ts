@@ -51,7 +51,7 @@ describe("WorkflowStore definitions", () => {
         {
           id: "set_customer",
           type: "builtin.set",
-          assign: { customerId: "$.input.customerId" },
+          assign: { customerId: "$.workflowTrigger.input.customerId" },
         },
       ],
       now: later,
@@ -1070,8 +1070,9 @@ describe("WorkflowStore run audit", () => {
         {
           id: "set_customer",
           type: "builtin.set",
+          next: ["exit"],
           assign: {
-            customerId: "$.input.customerId",
+            customerId: "$.workflowTrigger.input.customerId",
           },
         },
         {

@@ -118,8 +118,8 @@ try {
         type: "agent.call",
         agentId,
         prompt:
-          "Return [[mock:text:deployed workflow support ok]] for {{$.input.customerId}}",
-        input: { customerId: "$.input.customerId" },
+          "Return [[mock:text:deployed workflow support ok]] for {{$.workflowTrigger.input.customerId}}",
+        input: { customerId: "$.workflowTrigger.input.customerId" },
         assign: {
           support: "$.steps.ask_support.output",
         },

@@ -267,6 +267,10 @@ function ChatPage() {
     >
   >({});
 
+  useEffect(() => {
+    setStatusBoard({});
+  }, [activeSessionId]);
+
   const liveSession = useLiveSession(
     activeSessionId || null,
     activeSessionId ? setMessages : null,

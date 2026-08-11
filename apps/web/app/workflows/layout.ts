@@ -8,6 +8,7 @@ export interface WorkflowCanvasUi {
 
 export interface WorkflowCanvasNodeUi {
   position?: WorkflowCanvasPosition;
+  detached?: boolean;
 }
 
 export interface WorkflowCanvasPosition {
@@ -31,7 +32,33 @@ export function updateWorkflowCanvasNodePosition(
   ui: WorkflowDefinitionUi | null,
   nodeId: string,
   position: WorkflowCanvasPosition,
+  opts: { detached?: boolean } = {},
 ): WorkflowDefinitionUi {
+  const nodeUi = {
+    ...ui?.canvas?.nodes?.[nodeId],
+    position,
+  };
+  if (opts.detached !== undefined) {
+    nodeUi.detached = opts.detached;
+  }
+  return {
+    ...ui,
+    canvas: {
+      ...ui?.canvas,
+      nodes: {
+        ...ui?.canvas?.nodes,
+        [nodeId]: nodeUi,
+      },
+    },
+  };
+}
+
+export function updateWorkflowCanvasNodeDetached(
+  ui: WorkflowDefinitionUi | null,
+  nodeId: string,
+  detached: boolean,
+): WorkflowDefinitionUi {
+  const nodeUi = ui?.canvas?.nodes?.[nodeId];
   return {
     ...ui,
     canvas: {
@@ -39,10 +66,33 @@ export function updateWorkflowCanvasNodePosition(
       nodes: {
         ...ui?.canvas?.nodes,
         [nodeId]: {
-          ...ui?.canvas?.nodes?.[nodeId],
-          position,
+          ...nodeUi,
+          detached,
         },
       },
+    },
+  };
+}
+
+export function renameWorkflowCanvasNode(
+  ui: WorkflowDefinitionUi | null,
+  oldNodeId: string,
+  newNodeId: string,
+): WorkflowDefinitionUi | null {
+  const nodes = ui?.canvas?.nodes;
+  const nodeUi = nodes?.[oldNodeId];
+  if (!nodes || nodeUi === undefined) return ui;
+  const nextNodes = { ...nodes };
+  delete nextNodes[oldNodeId];
+  nextNodes[newNodeId] = {
+    ...nextNodes[newNodeId],
+    ...nodeUi,
+  };
+  return {
+    ...ui,
+    canvas: {
+      ...ui?.canvas,
+      nodes: nextNodes,
     },
   };
 }
@@ -57,7 +107,6 @@ export function beautifyWorkflowCanvasPositions(
       continue;
     }
     nextNodes[node.id] = {
-      ...ui?.canvas?.nodes?.[node.id],
       position: {
         x: Math.round(node.position.x),
         y: Math.round(node.position.y),
@@ -84,6 +133,7 @@ export function normalizeWorkflowDefinitionUi(
       continue;
     }
     nextNodes[nodeId] = {
+      ...nodeUi,
       position: {
         x: nodeUi.position.x,
         y: nodeUi.position.y,
@@ -134,7 +184,10 @@ export function parseWorkflowDefinitionUi(
         error: `Imported workflow ui.canvas.nodes.${nodeId}.position must have finite x and y numbers`,
       };
     }
-    nextNodes[nodeId] = { position };
+    nextNodes[nodeId] = {
+      position,
+      ...(nodeUi["detached"] === true ? { detached: true } : {}),
+    };
   }
   return { ok: true, value: { canvas: { nodes: nextNodes } } };
 }

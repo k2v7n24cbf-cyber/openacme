@@ -15,7 +15,7 @@ test("loads older global workflow run history pages", async ({
           id: "exit",
           type: "builtin.exit",
           status: "succeeded",
-          output: "$.input",
+          output: "$.workflowTrigger.input",
         },
       ],
     },
@@ -860,7 +860,7 @@ test("filters global workflow run history and opens failed run details", async (
         {
           id: "set_customer",
           type: "builtin.set",
-          assign: { customer: "$.input.customer" },
+          assign: { customer: "$.workflowTrigger.input.customer" },
         },
       ],
     },
@@ -880,12 +880,12 @@ test("filters global workflow run history and opens failed run details", async (
           id: "log_customer",
           type: "builtin.log.info",
           message: "About to inspect failed customer",
-          payload: "$.input.customer",
+          payload: "$.workflowTrigger.input.customer",
         },
         {
           id: "route_customer",
           type: "builtin.if_else",
-          condition: "$.input.customer.riskScore >= 70",
+          condition: "$.workflowTrigger.input.customer.riskScore >= 70",
           then: ["missing_customer"],
           else: ["low_customer"],
         },
@@ -897,9 +897,9 @@ test("filters global workflow run history and opens failed run details", async (
         {
           id: "missing_customer",
           label: "Missing customer lookup",
-          type: "builtin.transform",
+          type: "builtin.transform.value_resolve",
           input: { customer: "$.context.customer.missing" },
-          transform: { kind: "identity" },
+          transform: { kind: "value.resolve", value: "$" },
         },
       ],
     },
@@ -1027,7 +1027,7 @@ test("filters global workflow run history and opens failed run details", async (
   );
   await expect(selectedStepMetadata).toContainText("branch selected");
   await expect(selectedStepMetadata).toContainText(
-    "condition $.input.customer.riskScore >= 70",
+    "condition $.workflowTrigger.input.customer.riskScore >= 70",
   );
   await expect(selectedStepMetadata).toContainText(/duration \d+ms/);
   await expect(selectedStepMetadata).toContainText("started ");

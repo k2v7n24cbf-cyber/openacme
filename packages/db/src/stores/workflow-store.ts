@@ -23,6 +23,7 @@ import type {
 } from "@openacme/workflows";
 import {
   JsonValueSchema,
+  normalizeWorkflowDefinitionGraph,
   WorkflowDefinitionSchema,
   WorkflowRunSchema,
   WorkflowStepAttemptSchema,
@@ -56,6 +57,7 @@ export interface WorkflowRunInput {
   workflowId: string;
   workflowVersion: number;
   definitionSource?: "draft" | "published";
+  definitionSnapshot?: WorkflowDefinition;
   mode: WorkflowRunMode;
   trigger?: WorkflowRunTrigger;
   status?: WorkflowRunStatus;
@@ -183,19 +185,21 @@ export function createWorkflowStore(
   return {
     createDraft(input: WorkflowDraftInput): WorkflowDefinition {
       const now = input.now ?? new Date().toISOString();
-      const definition = WorkflowDefinitionSchema.parse({
-        id: input.id ?? randomUUID(),
-        version: 1,
-        status: "draft",
-        name: input.name,
-        description: input.description ?? undefined,
-        inputSchema: input.inputSchema,
-        triggers: input.triggers,
-        nodes: input.nodes ?? [],
-        ui: input.ui,
-        createdAt: now,
-        updatedAt: now,
-      });
+      const definition = normalizeWorkflowDefinitionGraph(
+        WorkflowDefinitionSchema.parse({
+          id: input.id ?? randomUUID(),
+          version: 1,
+          status: "draft",
+          name: input.name,
+          description: input.description ?? undefined,
+          inputSchema: input.inputSchema,
+          triggers: input.triggers,
+          nodes: input.nodes ?? [],
+          ui: input.ui,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      );
       db.prepare(
         `INSERT INTO workflow_definitions
          (id, status, current_version, name, description, input_schema_json,
@@ -233,23 +237,25 @@ export function createWorkflowStore(
       if (current.status === "archived") {
         throw new Error(`Workflow is archived: ${id}`);
       }
-      const updated = WorkflowDefinitionSchema.parse({
-        ...current,
-        status: "draft",
-        name: patch.name ?? current.name,
-        description:
-          patch.description === null
-            ? undefined
-            : (patch.description ?? current.description),
-        inputSchema:
-          patch.inputSchema === null
-            ? undefined
-            : (patch.inputSchema ?? current.inputSchema),
-        triggers: patch.triggers ?? current.triggers,
-        nodes: patch.nodes ?? current.nodes,
-        ui: patch.ui === null ? undefined : (patch.ui ?? current.ui),
-        updatedAt: patch.now ?? new Date().toISOString(),
-      });
+      const updated = normalizeWorkflowDefinitionGraph(
+        WorkflowDefinitionSchema.parse({
+          ...current,
+          status: "draft",
+          name: patch.name ?? current.name,
+          description:
+            patch.description === null
+              ? undefined
+              : (patch.description ?? current.description),
+          inputSchema:
+            patch.inputSchema === null
+              ? undefined
+              : (patch.inputSchema ?? current.inputSchema),
+          triggers: patch.triggers ?? current.triggers,
+          nodes: patch.nodes ?? current.nodes,
+          ui: patch.ui === null ? undefined : (patch.ui ?? current.ui),
+          updatedAt: patch.now ?? new Date().toISOString(),
+        }),
+      );
       db.prepare(
         `UPDATE workflow_definitions
          SET status = @status,
@@ -376,6 +382,7 @@ export function createWorkflowStore(
         workflowId: input.workflowId,
         workflowVersion: input.workflowVersion,
         definitionSource: input.definitionSource ?? "published",
+        definitionSnapshot: input.definitionSnapshot,
         mode: input.mode,
         trigger: redact(input.trigger ?? { kind: "manual" }),
         status: input.status ?? "queued",
@@ -391,11 +398,13 @@ export function createWorkflowStore(
       db.transaction(() => {
         db.prepare(
           `INSERT INTO workflow_runs
-           (id, workflow_id, workflow_version, definition_source, mode,
+           (id, workflow_id, workflow_version, definition_source,
+            definition_snapshot_json, mode,
             trigger_json, status, input_json, context_json, current_node_id,
             waiting_reason, created_at, started_at, ended_at, duration_ms)
            VALUES
-           (@id, @workflowId, @workflowVersion, @definitionSource, @mode,
+           (@id, @workflowId, @workflowVersion, @definitionSource,
+            @definitionSnapshotJson, @mode,
             @triggerJson, @status, @inputJson, @contextJson, @currentNodeId,
             @waitingReason, @createdAt, @startedAt, @endedAt, @durationMs)`,
         ).run(runToParams(run));
@@ -854,6 +863,7 @@ function runToParams(run: ReturnType<typeof WorkflowRunSchema.parse>) {
     workflowId: run.workflowId,
     workflowVersion: run.workflowVersion,
     definitionSource: run.definitionSource,
+    definitionSnapshotJson: maybeStringify(run.definitionSnapshot),
     mode: run.mode,
     triggerJson: stringify(run.trigger),
     status: run.status,
@@ -869,35 +879,39 @@ function runToParams(run: ReturnType<typeof WorkflowRunSchema.parse>) {
 }
 
 function definitionFromRow(row: WorkflowDefinitionRaw): WorkflowDefinition {
-  return WorkflowDefinitionSchema.parse({
-    id: row.id,
-    version: row.current_version,
-    status: row.status,
-    name: row.name,
-    description: row.description ?? undefined,
-    inputSchema: parseOptionalJson(row.input_schema_json),
-    triggers: parseJson(row.triggers_json),
-    nodes: parseJson(row.nodes_json),
-    ui: parseOptionalJson(row.ui_json),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  });
+  return normalizeWorkflowDefinitionGraph(
+    WorkflowDefinitionSchema.parse({
+      id: row.id,
+      version: row.current_version,
+      status: row.status,
+      name: row.name,
+      description: row.description ?? undefined,
+      inputSchema: parseOptionalJson(row.input_schema_json),
+      triggers: parseJson(row.triggers_json),
+      nodes: parseJson(row.nodes_json),
+      ui: parseOptionalJson(row.ui_json),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }),
+  );
 }
 
 function definitionFromVersionRow(row: WorkflowVersionRaw): WorkflowDefinition {
-  return WorkflowDefinitionSchema.parse({
-    id: row.workflow_id,
-    version: row.version,
-    status: "published",
-    name: row.name,
-    description: row.description ?? undefined,
-    inputSchema: parseOptionalJson(row.input_schema_json),
-    triggers: parseJson(row.triggers_json),
-    nodes: parseJson(row.nodes_json),
-    ui: parseOptionalJson(row.ui_json),
-    createdAt: row.created_at,
-    updatedAt: row.created_at,
-  });
+  return normalizeWorkflowDefinitionGraph(
+    WorkflowDefinitionSchema.parse({
+      id: row.workflow_id,
+      version: row.version,
+      status: "published",
+      name: row.name,
+      description: row.description ?? undefined,
+      inputSchema: parseOptionalJson(row.input_schema_json),
+      triggers: parseJson(row.triggers_json),
+      nodes: parseJson(row.nodes_json),
+      ui: parseOptionalJson(row.ui_json),
+      createdAt: row.created_at,
+      updatedAt: row.created_at,
+    }),
+  );
 }
 
 function runFromRow(row: WorkflowRunRaw) {
@@ -906,6 +920,7 @@ function runFromRow(row: WorkflowRunRaw) {
     workflowId: row.workflow_id,
     workflowVersion: row.workflow_version,
     definitionSource: row.definition_source,
+    definitionSnapshot: parseOptionalJson(row.definition_snapshot_json),
     mode: row.mode,
     trigger: parseRedactedJson(row.trigger_json),
     status: row.status,
@@ -1378,6 +1393,7 @@ interface WorkflowRunRaw {
   workflow_id: string;
   workflow_version: number;
   definition_source: string;
+  definition_snapshot_json: string | null;
   mode: string;
   trigger_json: string;
   status: string;

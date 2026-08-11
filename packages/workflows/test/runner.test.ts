@@ -11,10 +11,46 @@ function definition(nodes: WorkflowDefinition["nodes"]): WorkflowDefinition {
     status: "draft",
     name: "Runner workflow",
     triggers: [{ id: "manual", kind: "manual", enabled: true }],
-    nodes,
+    nodes: withLegacyTopLevelNext(nodes),
     createdAt: now,
     updatedAt: now,
   };
+}
+
+function withLegacyTopLevelNext(
+  nodes: WorkflowDefinition["nodes"],
+): WorkflowDefinition["nodes"] {
+  const referenced = new Set<string>();
+  for (const node of nodes) {
+    if (node.type === "builtin.if" || node.type === "builtin.if_else") {
+      node.then.forEach((nodeId) => referenced.add(nodeId));
+      node.else.forEach((nodeId) => referenced.add(nodeId));
+    } else if (node.type === "builtin.switch") {
+      node.cases.forEach((item) =>
+        item.nodes.forEach((nodeId) => referenced.add(nodeId)),
+      );
+      node.default.forEach((nodeId) => referenced.add(nodeId));
+    } else if (node.type === "builtin.foreach") {
+      node.body.forEach((nodeId) => referenced.add(nodeId));
+    } else if (node.type === "builtin.parallel") {
+      node.branches.forEach((branch) =>
+        branch.nodes.forEach((nodeId) => referenced.add(nodeId)),
+      );
+    }
+  }
+  const topLevel = nodes.filter((node) => !referenced.has(node.id));
+  const nextById = new Map<string, string>();
+  for (let index = 0; index < topLevel.length - 1; index += 1) {
+    const source = topLevel[index];
+    const target = topLevel[index + 1];
+    if (!source || !target) continue;
+    nextById.set(source.id, target.id);
+  }
+  return nodes.map((node) =>
+    (node.next ?? []).length > 0 || !nextById.has(node.id)
+      ? node
+      : { ...node, next: [nextById.get(node.id)!] },
+  );
 }
 
 function steppedNow(stepMs = 25): () => string {
@@ -24,6 +60,132 @@ function steppedNow(stepMs = 25): () => string {
 }
 
 describe("WorkflowRunner builtin MVP", () => {
+  it("does not execute adjacent nodes without an explicit next edge", async () => {
+    const result = await new WorkflowRunner().run({
+      runId: "run_no_implicit_next",
+      definition: {
+        id: "wf_runner",
+        version: 1,
+        status: "draft",
+        name: "Runner workflow",
+        triggers: [{ id: "manual", kind: "manual", enabled: true }],
+        nodes: [
+          {
+            id: "start",
+            type: "builtin.log.info",
+            message: "Start only",
+          },
+          {
+            id: "should_not_run",
+            type: "builtin.log.info",
+            message: "No edge",
+          },
+        ],
+        createdAt: now,
+        updatedAt: now,
+      },
+      input: {},
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(result.stepAttempts.map((step) => step.nodeId)).toEqual(["start"]);
+  });
+
+  it("executes adjacent nodes only when an explicit next edge exists", async () => {
+    const result = await new WorkflowRunner().run({
+      runId: "run_explicit_next",
+      definition: {
+        id: "wf_runner",
+        version: 1,
+        status: "draft",
+        name: "Runner workflow",
+        triggers: [{ id: "manual", kind: "manual", enabled: true }],
+        nodes: [
+          {
+            id: "start",
+            type: "builtin.log.info",
+            message: "Start",
+            next: ["after_start"],
+          },
+          {
+            id: "after_start",
+            type: "builtin.log.info",
+            message: "Connected",
+          },
+        ],
+        createdAt: now,
+        updatedAt: now,
+      },
+      input: {},
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(result.stepAttempts.map((step) => step.nodeId)).toEqual([
+      "start",
+      "after_start",
+    ]);
+  });
+
+  it("normalizes legacy route arrays into explicit next chains before execution", async () => {
+    const result = await new WorkflowRunner().run({
+      runId: "run_legacy_route_array_normalized",
+      definition: {
+        id: "wf_runner",
+        version: 1,
+        status: "draft",
+        name: "Runner workflow",
+        triggers: [{ id: "manual", kind: "manual", enabled: true }],
+        nodes: [
+          {
+            id: "gate",
+            type: "builtin.if",
+            condition: "$.workflowTrigger.input.internal == true",
+            then: ["log_internal", "kind_switch"],
+            else: ["log_external", "kind_switch"],
+          },
+          {
+            id: "log_internal",
+            type: "builtin.log.info",
+            message: "internal",
+          },
+          {
+            id: "log_external",
+            type: "builtin.log.info",
+            message: "external",
+          },
+          {
+            id: "kind_switch",
+            type: "builtin.switch",
+            value: "$.workflowTrigger.input.kind",
+            cases: [{ id: "audit", value: "audit", nodes: ["log_audit"] }],
+            default: [],
+          },
+          {
+            id: "log_audit",
+            type: "builtin.log.info",
+            message: "audit",
+          },
+        ],
+        createdAt: now,
+        updatedAt: now,
+      },
+      input: { internal: true, kind: "audit" },
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(result.stepAttempts.map((step) => step.nodeId)).toEqual([
+      "gate",
+      "log_external",
+      "log_internal",
+      "kind_switch",
+      "log_audit",
+    ]);
+    expect(
+      result.stepAttempts.find((step) => step.nodeId === "log_external")
+        ?.status,
+    ).toBe("skipped");
+  });
+
   it("emits events to the event port while execution is still in progress", async () => {
     const eventKinds: string[] = [];
     const observedBeforeToolReturn: string[][] = [];
@@ -68,6 +230,65 @@ describe("WorkflowRunner builtin MVP", () => {
     ]);
   });
 
+  it("resolves canonical workflow trigger and step input/output references", async () => {
+    const result = await new WorkflowRunner().run({
+      runId: "run_workflow_trigger_refs",
+      definition: definition([
+        {
+          id: "normalize",
+          type: "builtin.transform.value_resolve",
+          input: {
+            customer: "$.workflowTrigger.input.customer",
+            triggerCustomer: "$.workflowTrigger.input.customer",
+            triggerKind: "$.workflowTrigger.meta.kind",
+          },
+          transform: { kind: "value.resolve", value: "$.workflowTrigger.input.customer" },
+          assign: {
+            normalizedCustomer: "$.steps.normalize.output.value",
+            triggerKind: "$.workflowTrigger.meta.kind",
+          },
+        },
+        {
+          id: "log_customer",
+          type: "builtin.log.info",
+          message: "Customer normalized",
+          input: {
+            customerId: "$.steps.normalize.output.value.id",
+            normalizeStatus: "$.steps.normalize.status",
+          },
+          payload: "$.steps.normalize.input.input",
+          assign: {
+            loggedInput: "$.steps.normalize.input.input",
+            loggedOutput: "$.steps.log_customer.output.payload",
+          },
+        },
+      ]),
+      input: { customer: { id: "cust-1", name: "Acme" } },
+      trigger: {
+        kind: "manual",
+        triggerId: "manual_review",
+        requestedBy: "operator",
+        input: { customer: { id: "cust-1", name: "Acme" } },
+      },
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(result.context).toMatchObject({
+      normalizedCustomer: { id: "cust-1", name: "Acme" },
+      triggerKind: "manual",
+      loggedInput: {
+        customer: { id: "cust-1", name: "Acme" },
+        triggerCustomer: { id: "cust-1", name: "Acme" },
+        triggerKind: "manual",
+      },
+      loggedOutput: {
+        customer: { id: "cust-1", name: "Acme" },
+        triggerCustomer: { id: "cust-1", name: "Acme" },
+        triggerKind: "manual",
+      },
+    });
+  });
+
   it("executes set, transform, log, and exit with inspectable trace", async () => {
     const runner = new WorkflowRunner();
 
@@ -78,13 +299,13 @@ describe("WorkflowRunner builtin MVP", () => {
           id: "set_customer",
           type: "builtin.set",
           assign: {
-            customer: "$.input.customer",
+            customer: "$.workflowTrigger.input.customer",
           },
         },
         {
           id: "normalize_customer",
           label: "Normalize customer",
-          type: "builtin.transform",
+          type: "builtin.transform.object_pick",
           input: {
             customer: "$.context.customer",
           },
@@ -95,7 +316,7 @@ describe("WorkflowRunner builtin MVP", () => {
           },
           assign: {
             customer: {
-              from: "$.steps.normalize_customer.output",
+              from: "$.steps.normalize_customer.output.value",
               mode: "replace",
             },
           },
@@ -154,6 +375,19 @@ describe("WorkflowRunner builtin MVP", () => {
         },
       ],
     });
+    expect(result.stepAttempts[2]?.input).toEqual({
+      level: "info",
+      input: {},
+      message: "Customer normalized",
+      payload: { id: "cust_1", name: "Ada" },
+      assign: {
+        loggedCustomer: {
+          from: "$.steps.log_customer.output.payload",
+          mode: "replace",
+          value: { id: "cust_1", name: "Ada" },
+        },
+      },
+    });
     expect(result.stepAttempts[2]?.contextDiff).toEqual({
       loggedCustomer: {
         before: null,
@@ -168,10 +402,23 @@ describe("WorkflowRunner builtin MVP", () => {
       )?.payload,
     ).toEqual({
       nodeId: "normalize_customer",
-      nodeType: "builtin.transform",
+      nodeType: "builtin.transform.object_pick",
       nodeLabel: "Normalize customer",
       input: {
-        customer: { id: "cust_1", name: "Ada", secret: "not selected" },
+        input: {
+          customer: { id: "cust_1", name: "Ada", secret: "not selected" },
+        },
+        transform: {
+          kind: "object_pick",
+          source: "customer",
+          fields: ["id", "name"],
+        },
+        assign: {
+          customer: {
+            from: "$.steps.normalize_customer.output.value",
+            mode: "replace",
+          },
+        },
       },
     });
     expect(result.events.map((event) => event.kind)).toEqual([
@@ -197,7 +444,7 @@ describe("WorkflowRunner builtin MVP", () => {
         {
           id: "route",
           type: "builtin.if",
-          condition: "$.input.ready",
+          condition: "$.workflowTrigger.input.ready",
           then: ["log_ready"],
           else: ["log_not_ready"],
         },
@@ -279,7 +526,10 @@ describe("WorkflowRunner builtin MVP", () => {
       expect.objectContaining({
         nodeId: "exit",
         status: "canceled",
-        output: { reason: "operator-defined stop" },
+        output: {
+          status: "canceled",
+          output: { reason: "operator-defined stop" },
+        },
       }),
     ]);
     expect(result.events.map((event) => event.kind)).toEqual([
@@ -319,7 +569,10 @@ describe("WorkflowRunner builtin MVP", () => {
       expect.objectContaining({
         nodeId: "exit",
         status: "failed",
-        output: { reason: "business rule failed" },
+        output: {
+          status: "failed",
+          output: { reason: "business rule failed" },
+        },
       }),
     ]);
     expect(result.events.map((event) => event.kind)).toEqual([
@@ -334,7 +587,10 @@ describe("WorkflowRunner builtin MVP", () => {
       message: "Step exit failed",
       payload: {
         status: "failed",
-        output: { reason: "business rule failed" },
+        output: {
+          status: "failed",
+          output: { reason: "business rule failed" },
+        },
       },
     });
   });
@@ -392,7 +648,7 @@ describe("WorkflowRunner builtin MVP", () => {
           type: "builtin.throw_error",
           message: "Asset owner is missing",
           code: "asset_owner_missing",
-          details: { assetId: "$.input.asset.id" },
+          details: { assetId: "$.workflowTrigger.input.asset.id" },
         },
         {
           id: "after_failure",
@@ -498,7 +754,7 @@ describe("WorkflowRunner builtin MVP", () => {
         {
           id: "branch",
           type: "builtin.if",
-          condition: "$.input.riskScore >= 70",
+          condition: "$.workflowTrigger.input.riskScore >= 70",
           then: ["high_log"],
           else: ["low_log"],
         },
@@ -527,7 +783,7 @@ describe("WorkflowRunner builtin MVP", () => {
     expect(
       result.events.find((event) => event.kind === "branch_selected")?.payload,
     ).toEqual({
-      condition: "$.input.riskScore >= 70",
+      condition: "$.workflowTrigger.input.riskScore >= 70",
       selected: ["high_log"],
       skipped: ["low_log"],
     });
@@ -540,7 +796,7 @@ describe("WorkflowRunner builtin MVP", () => {
         {
           id: "route_by_kind",
           type: "builtin.switch",
-          value: "$.input.kind",
+          value: "$.workflowTrigger.input.kind",
           cases: [
             { id: "asset", value: "asset", nodes: ["asset_log"] },
             { id: "owner", value: "owner", nodes: ["owner_log"] },
@@ -592,7 +848,7 @@ describe("WorkflowRunner builtin MVP", () => {
           id: "branch",
           type: "builtin.if_else",
           condition:
-            'contains($.input.note, "red or blue") or contains($.input.note, "review and hold")',
+            'contains($.workflowTrigger.input.note, "red or blue") or contains($.workflowTrigger.input.note, "review and hold")',
           then: ["matched_log"],
           else: ["unmatched_log"],
         },
@@ -627,7 +883,7 @@ describe("WorkflowRunner builtin MVP", () => {
         {
           id: "branch",
           type: "builtin.if_else",
-          condition: 'contains($.input.note, "red, blue")',
+          condition: 'contains($.workflowTrigger.input.note, "red, blue")',
           then: ["matched_log"],
           else: ["unmatched_log"],
         },
@@ -662,7 +918,7 @@ describe("WorkflowRunner builtin MVP", () => {
         {
           id: "branch",
           type: "builtin.if_else",
-          condition: '"a >= b" == $.input.note',
+          condition: '"a >= b" == $.workflowTrigger.input.note',
           then: ["matched_log"],
           else: ["unmatched_log"],
         },
@@ -697,7 +953,7 @@ describe("WorkflowRunner builtin MVP", () => {
         {
           id: "branch",
           type: "builtin.if_else",
-          condition: 'not(contains($.input.note, "blocked"))',
+          condition: 'not(contains($.workflowTrigger.input.note, "blocked"))',
           then: ["matched_log"],
           else: ["unmatched_log"],
         },
@@ -725,6 +981,85 @@ describe("WorkflowRunner builtin MVP", () => {
     ]);
   });
 
+  it("supports string prefix and suffix conditions", async () => {
+    const result = await new WorkflowRunner().run({
+      runId: "run_branch_prefix_suffix",
+      definition: definition([
+        {
+          id: "starts",
+          type: "builtin.if_else",
+          condition: 'startsWith($.workflowTrigger.input.name, "prod-")',
+          then: ["ends"],
+          else: ["unmatched_log"],
+        },
+        {
+          id: "ends",
+          type: "builtin.if_else",
+          condition: 'endsWith($.workflowTrigger.input.name, "-01")',
+          then: ["matched_log"],
+          else: ["unmatched_log"],
+        },
+        {
+          id: "matched_log",
+          type: "builtin.log.info",
+          message: "Matched name",
+        },
+        {
+          id: "unmatched_log",
+          type: "builtin.log.info",
+          message: "Unmatched name",
+        },
+      ]),
+      input: { name: "prod-api-01" },
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(
+      result.stepAttempts.map((step) => [step.nodeId, step.status]),
+    ).toEqual([
+      ["starts", "succeeded"],
+      ["unmatched_log", "skipped"],
+      ["ends", "succeeded"],
+      ["unmatched_log", "skipped"],
+      ["matched_log", "succeeded"],
+    ]);
+  });
+
+  it("supports negated string prefix conditions", async () => {
+    const result = await new WorkflowRunner().run({
+      runId: "run_branch_not_prefix",
+      definition: definition([
+        {
+          id: "branch",
+          type: "builtin.if_else",
+          condition: 'not(startsWith($.workflowTrigger.input.name, "dev-"))',
+          then: ["matched_log"],
+          else: ["unmatched_log"],
+        },
+        {
+          id: "matched_log",
+          type: "builtin.log.info",
+          message: "Matched non-dev name",
+        },
+        {
+          id: "unmatched_log",
+          type: "builtin.log.info",
+          message: "Unmatched dev name",
+        },
+      ]),
+      input: { name: "prod-api-01" },
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(
+      result.stepAttempts.map((step) => [step.nodeId, step.status]),
+    ).toEqual([
+      ["branch", "succeeded"],
+      ["unmatched_log", "skipped"],
+      ["matched_log", "succeeded"],
+    ]);
+  });
+
   it("does not mutate context when a step expression fails", async () => {
     const result = await new WorkflowRunner().run({
       runId: "run_failure",
@@ -732,7 +1067,7 @@ describe("WorkflowRunner builtin MVP", () => {
         {
           id: "set_initial",
           type: "builtin.set",
-          assign: { customerId: "$.input.customerId" },
+          assign: { customerId: "$.workflowTrigger.input.customerId" },
         },
         {
           id: "set_missing",
@@ -764,13 +1099,13 @@ describe("WorkflowRunner builtin MVP", () => {
           id: "set_customer",
           type: "builtin.set",
           assign: {
-            customer: "$.input.customer",
-            tags: "$.input.initialTags",
+            customer: "$.workflowTrigger.input.customer",
+            tags: "$.workflowTrigger.input.initialTags",
           },
         },
         {
           id: "pick_customer",
-          type: "builtin.transform",
+          type: "builtin.transform.object_pick",
           input: { customer: "$.context.customer" },
           transform: {
             kind: "object_pick",
@@ -779,19 +1114,19 @@ describe("WorkflowRunner builtin MVP", () => {
           },
           assign: {
             customer: {
-              from: "$.steps.pick_customer.output",
+              from: "$.steps.pick_customer.output.value",
               mode: "merge",
             },
           },
         },
         {
           id: "make_tag",
-          type: "builtin.transform",
-          input: { tag: "$.input.nextTag" },
-          transform: "$.input.nextTag",
+          type: "builtin.transform.value_resolve",
+          input: { tag: "$.workflowTrigger.input.nextTag" },
+          transform: { kind: "value.resolve", value: "$.workflowTrigger.input.nextTag" },
           assign: {
             tags: {
-              from: "$.steps.make_tag.output",
+              from: "$.steps.make_tag.output.value",
               mode: "append",
             },
           },
@@ -811,35 +1146,37 @@ describe("WorkflowRunner builtin MVP", () => {
     });
   });
 
-  it("preserves transform compatibility for references, literals, and object_pick", async () => {
+  it("runs explicit value resolve and object_pick transformer cards", async () => {
     const result = await new WorkflowRunner().run({
       runId: "run_transform_compatibility",
       definition: definition([
         {
           id: "reference_transform",
-          type: "builtin.transform",
-          transform: "$.input.customer.id",
+          type: "builtin.transform.value_resolve",
+          transform: { kind: "value.resolve", value: "$.workflowTrigger.input.customer.id" },
           assign: {
-            customerId: "$.steps.reference_transform.output",
+            customerId: "$.steps.reference_transform.output.value",
           },
         },
         {
           id: "literal_transform",
-          type: "builtin.transform",
+          type: "builtin.transform.value_resolve",
           transform: {
-            kind: "identity",
-            note: "literal objects with non-operation kind remain literals",
-            customerId: "$.context.customerId",
+            kind: "value.resolve",
+            value: {
+              note: "literal objects can be resolved explicitly",
+              customerId: "$.context.customerId",
+            },
           },
           assign: {
-            literal: "$.steps.literal_transform.output",
+            literal: "$.steps.literal_transform.output.value",
           },
         },
         {
           id: "pick_transform",
-          type: "builtin.transform",
+          type: "builtin.transform.object_pick",
           input: {
-            customer: "$.input.customer",
+            customer: "$.workflowTrigger.input.customer",
           },
           transform: {
             kind: "object_pick",
@@ -847,7 +1184,7 @@ describe("WorkflowRunner builtin MVP", () => {
             fields: ["id", "name"],
           },
           assign: {
-            picked: "$.steps.pick_transform.output",
+            picked: "$.steps.pick_transform.output.value",
           },
         },
       ]),
@@ -860,8 +1197,7 @@ describe("WorkflowRunner builtin MVP", () => {
     expect(result.context).toEqual({
       customerId: "cust_1",
       literal: {
-        kind: "identity",
-        note: "literal objects with non-operation kind remain literals",
+        note: "literal objects can be resolved explicitly",
         customerId: "cust_1",
       },
       picked: { id: "cust_1", name: "Ada" },
@@ -874,9 +1210,9 @@ describe("WorkflowRunner builtin MVP", () => {
       definition: definition([
         {
           id: "invalid_pick",
-          type: "builtin.transform",
+          type: "builtin.transform.object_pick",
           input: {
-            customer: "$.input.customer",
+            customer: "$.workflowTrigger.input.customer",
           },
           transform: {
             kind: "object_pick",
@@ -908,34 +1244,23 @@ describe("WorkflowRunner builtin MVP", () => {
     });
   });
 
-  it("rejects unsupported operation-style transform kinds with operation details", async () => {
-    const result = await new WorkflowRunner().run({
-      runId: "run_transform_unsupported_operation",
-      definition: definition([
-        {
-          id: "unsupported_transform",
-          type: "builtin.transform",
-          transform: {
-            kind: "string.future_operation",
-            value: "$.input.value",
+  it("rejects unsupported transformer card types at schema validation", async () => {
+    await expect(
+      new WorkflowRunner().run({
+        runId: "run_transform_unsupported_operation",
+        definition: definition([
+          {
+            id: "unsupported_transform",
+            type: "builtin.transform.string_future_operation",
+            transform: {
+              kind: "string.future_operation",
+              value: "$.workflowTrigger.input.value",
+            },
           },
-        },
-      ]),
-      input: { value: "hello" },
-    });
-
-    expect(result.status).toBe("failed");
-    expect(result.stepAttempts[0]).toMatchObject({
-      nodeId: "unsupported_transform",
-      status: "failed",
-      error: {
-        name: "WorkflowNodeExecutionError",
-        message: "Unsupported transform operation: string.future_operation",
-        details: {
-          operationKind: "string.future_operation",
-        },
-      },
-    });
+        ]),
+        input: { value: "hello" },
+      }),
+    ).rejects.toThrow("Invalid discriminator value");
   });
 
   it("supports transform assignment back to the same variable", async () => {
@@ -946,12 +1271,12 @@ describe("WorkflowRunner builtin MVP", () => {
           id: "set_customer",
           type: "builtin.set",
           assign: {
-            customer: "$.input.customer",
+            customer: "$.workflowTrigger.input.customer",
           },
         },
         {
           id: "normalize_customer",
-          type: "builtin.transform",
+          type: "builtin.transform.object_pick",
           input: {
             customer: "$.context.customer",
           },
@@ -962,7 +1287,7 @@ describe("WorkflowRunner builtin MVP", () => {
           },
           assign: {
             customer: {
-              from: "$.steps.normalize_customer.output",
+              from: "$.steps.normalize_customer.output.value",
               mode: "replace",
             },
           },
@@ -991,8 +1316,9 @@ describe("WorkflowRunner builtin MVP", () => {
       definition: definition([
         {
           id: "large_transform",
-          type: "builtin.transform",
+          type: "builtin.transform.value_resolve",
           transform: {
+            kind: "value.resolve",
             value: "x".repeat(1_048_577),
           },
         },
@@ -1021,29 +1347,29 @@ describe("WorkflowRunner builtin MVP", () => {
       definition: definition([
         {
           id: "replace_first",
-          type: "builtin.transform",
+          type: "builtin.transform.string_replace",
           transform: {
             kind: "string.replace",
-            value: "$.input.text",
+            value: "$.workflowTrigger.input.text",
             search: "risk",
             replacement: "issue",
           },
           assign: {
-            first: "$.steps.replace_first.output",
+            first: "$.steps.replace_first.output.value",
           },
         },
         {
           id: "replace_all",
-          type: "builtin.transform",
+          type: "builtin.transform.string_replace",
           transform: {
             kind: "string.replace",
-            value: "$.input.text",
+            value: "$.workflowTrigger.input.text",
             search: "risk",
             replacement: "issue",
             all: true,
           },
           assign: {
-            all: "$.steps.replace_all.output",
+            all: "$.steps.replace_all.output.value",
           },
         },
       ]),
@@ -1065,28 +1391,28 @@ describe("WorkflowRunner builtin MVP", () => {
       definition: definition([
         {
           id: "regex_replace",
-          type: "builtin.transform",
+          type: "builtin.transform.string_regex_replace",
           transform: {
             kind: "string.regex_replace",
-            value: "$.input.vuln",
+            value: "$.workflowTrigger.input.vuln",
             pattern: "CVE-(\\d{4})-(\\d+)",
             replacement: "CVE:$1:$2",
             flags: "g",
           },
           assign: {
-            normalized: "$.steps.regex_replace.output",
+            normalized: "$.steps.regex_replace.output.value",
           },
         },
         {
           id: "regex_match",
-          type: "builtin.transform",
+          type: "builtin.transform.string_regex_match",
           transform: {
             kind: "string.regex_match",
-            value: "$.input.vuln",
+            value: "$.workflowTrigger.input.vuln",
             pattern: "CVE-(?<year>\\d{4})-(?<number>\\d+)",
           },
           assign: {
-            match: "$.steps.regex_match.output",
+            match: "$.steps.regex_match.output.value",
           },
         },
       ]),
@@ -1114,10 +1440,10 @@ describe("WorkflowRunner builtin MVP", () => {
       definition: definition([
         {
           id: "bad_regex",
-          type: "builtin.transform",
+          type: "builtin.transform.string_regex_match",
           transform: {
             kind: "string.regex_match",
-            value: "$.input.value",
+            value: "$.workflowTrigger.input.value",
             pattern: "(",
           },
         },
@@ -1150,25 +1476,25 @@ describe("WorkflowRunner builtin MVP", () => {
       definition: definition([
         {
           id: "parse_json",
-          type: "builtin.transform",
+          type: "builtin.transform.json_parse",
           transform: {
             kind: "json.parse",
-            value: "$.input.raw",
+            value: "$.workflowTrigger.input.raw",
           },
           assign: {
-            parsed: "$.steps.parse_json.output",
+            parsed: "$.steps.parse_json.output.value",
           },
         },
         {
           id: "stringify_json",
-          type: "builtin.transform",
+          type: "builtin.transform.json_stringify",
           transform: {
             kind: "json.stringify",
             value: "$.context.parsed",
             pretty: true,
           },
           assign: {
-            serialized: "$.steps.stringify_json.output",
+            serialized: "$.steps.stringify_json.output.value",
           },
         },
       ]),
@@ -1190,26 +1516,26 @@ describe("WorkflowRunner builtin MVP", () => {
       definition: definition([
         {
           id: "parse_csv",
-          type: "builtin.transform",
+          type: "builtin.transform.csv_parse",
           transform: {
             kind: "csv.parse",
-            value: "$.input.csv",
+            value: "$.workflowTrigger.input.csv",
             headers: true,
           },
           assign: {
-            rows: "$.steps.parse_csv.output",
+            rows: "$.steps.parse_csv.output.value",
           },
         },
         {
           id: "stringify_csv",
-          type: "builtin.transform",
+          type: "builtin.transform.csv_stringify",
           transform: {
             kind: "csv.stringify",
             value: "$.context.rows",
             headers: ["id", "name", "note"],
           },
           assign: {
-            csv: "$.steps.stringify_csv.output",
+            csv: "$.steps.stringify_csv.output.value",
           },
         },
       ]),
@@ -1234,10 +1560,10 @@ describe("WorkflowRunner builtin MVP", () => {
       definition: definition([
         {
           id: "parse_csv",
-          type: "builtin.transform",
+          type: "builtin.transform.csv_parse",
           transform: {
             kind: "csv.parse",
-            value: "$.input.csv",
+            value: "$.workflowTrigger.input.csv",
             headers: true,
             maxRows: 1,
           },
@@ -1270,24 +1596,24 @@ describe("WorkflowRunner builtin MVP", () => {
       definition: definition([
         {
           id: "parse_ipv4",
-          type: "builtin.transform",
+          type: "builtin.transform.ip_parse",
           transform: {
             kind: "ip.parse",
-            value: "$.input.ipv4",
+            value: "$.workflowTrigger.input.ipv4",
           },
           assign: {
-            ipv4: "$.steps.parse_ipv4.output",
+            ipv4: "$.steps.parse_ipv4.output.value",
           },
         },
         {
           id: "parse_ipv6",
-          type: "builtin.transform",
+          type: "builtin.transform.ip_parse",
           transform: {
             kind: "ip.parse",
-            value: "$.input.ipv6",
+            value: "$.workflowTrigger.input.ipv6",
           },
           assign: {
-            ipv6: "$.steps.parse_ipv6.output",
+            ipv6: "$.steps.parse_ipv6.output.value",
           },
         },
       ]),
@@ -1331,21 +1657,21 @@ describe("WorkflowRunner builtin MVP", () => {
       definition: definition([
         {
           id: "is_ipv4",
-          type: "builtin.transform",
-          transform: { kind: "ip.is_ipv4", value: "$.input.ipv4" },
-          assign: { isIpv4: "$.steps.is_ipv4.output" },
+          type: "builtin.transform.ip_is_ipv4",
+          transform: { kind: "ip.is_ipv4", value: "$.workflowTrigger.input.ipv4" },
+          assign: { isIpv4: "$.steps.is_ipv4.output.value" },
         },
         {
           id: "is_ipv6",
-          type: "builtin.transform",
-          transform: { kind: "ip.is_ipv6", value: "$.input.ipv6" },
-          assign: { isIpv6: "$.steps.is_ipv6.output" },
+          type: "builtin.transform.ip_is_ipv6",
+          transform: { kind: "ip.is_ipv6", value: "$.workflowTrigger.input.ipv6" },
+          assign: { isIpv6: "$.steps.is_ipv6.output.value" },
         },
         {
           id: "invalid_ipv4",
-          type: "builtin.transform",
-          transform: { kind: "ip.is_ipv4", value: "$.input.invalid" },
-          assign: { invalidIsIpv4: "$.steps.invalid_ipv4.output" },
+          type: "builtin.transform.ip_is_ipv4",
+          transform: { kind: "ip.is_ipv4", value: "$.workflowTrigger.input.invalid" },
+          assign: { invalidIsIpv4: "$.steps.invalid_ipv4.output.value" },
         },
       ]),
       input: {
@@ -1369,33 +1695,33 @@ describe("WorkflowRunner builtin MVP", () => {
       definition: definition([
         {
           id: "internal_ipv4",
-          type: "builtin.transform",
+          type: "builtin.transform.ip_in_subnet",
           transform: {
             kind: "ip.in_subnet",
-            value: "$.input.privateIp",
+            value: "$.workflowTrigger.input.privateIp",
             cidr: "10.0.0.0/8",
           },
-          assign: { internalIpv4: "$.steps.internal_ipv4.output" },
+          assign: { internalIpv4: "$.steps.internal_ipv4.output.value" },
         },
         {
           id: "external_ipv4",
-          type: "builtin.transform",
+          type: "builtin.transform.ip_in_subnet",
           transform: {
             kind: "ip.in_subnet",
-            value: "$.input.publicIp",
+            value: "$.workflowTrigger.input.publicIp",
             cidr: "10.0.0.0/8",
           },
-          assign: { externalIpv4: "$.steps.external_ipv4.output" },
+          assign: { externalIpv4: "$.steps.external_ipv4.output.value" },
         },
         {
           id: "internal_ipv6",
-          type: "builtin.transform",
+          type: "builtin.transform.ip_in_subnet",
           transform: {
             kind: "ip.in_subnet",
-            value: "$.input.ipv6",
+            value: "$.workflowTrigger.input.ipv6",
             cidr: "2001:db8::/32",
           },
-          assign: { internalIpv6: "$.steps.internal_ipv6.output" },
+          assign: { internalIpv6: "$.steps.internal_ipv6.output.value" },
         },
       ]),
       input: {
@@ -1419,27 +1745,27 @@ describe("WorkflowRunner builtin MVP", () => {
       definition: definition([
         {
           id: "netmask_v4",
-          type: "builtin.transform",
+          type: "builtin.transform.ip_netmask",
           transform: { kind: "ip.netmask", prefix: 24, version: 4 },
-          assign: { netmaskV4: "$.steps.netmask_v4.output" },
+          assign: { netmaskV4: "$.steps.netmask_v4.output.value" },
         },
         {
           id: "netmask_v6",
-          type: "builtin.transform",
+          type: "builtin.transform.ip_netmask",
           transform: { kind: "ip.netmask", prefix: 64, version: 6 },
-          assign: { netmaskV6: "$.steps.netmask_v6.output" },
+          assign: { netmaskV6: "$.steps.netmask_v6.output.value" },
         },
         {
           id: "network_v4",
-          type: "builtin.transform",
+          type: "builtin.transform.ip_network",
           transform: { kind: "ip.network", cidr: "192.168.1.42/24" },
-          assign: { networkV4: "$.steps.network_v4.output" },
+          assign: { networkV4: "$.steps.network_v4.output.value" },
         },
         {
           id: "network_v6",
-          type: "builtin.transform",
+          type: "builtin.transform.ip_network",
           transform: { kind: "ip.network", cidr: "2001:db8:abcd::1234/64" },
-          assign: { networkV6: "$.steps.network_v6.output" },
+          assign: { networkV6: "$.steps.network_v6.output.value" },
         },
       ]),
       input: {},
@@ -1470,10 +1796,10 @@ describe("WorkflowRunner builtin MVP", () => {
       definition: definition([
         {
           id: "invalid_cidr",
-          type: "builtin.transform",
+          type: "builtin.transform.ip_in_subnet",
           transform: {
             kind: "ip.in_subnet",
-            value: "$.input.ip",
+            value: "$.workflowTrigger.input.ip",
             cidr: "10.0.0.0/33",
           },
         },
@@ -1503,13 +1829,13 @@ describe("WorkflowRunner builtin MVP", () => {
       definition: definition([
         {
           id: "check_internal",
-          type: "builtin.transform",
+          type: "builtin.transform.ip_in_subnet",
           transform: {
             kind: "ip.in_subnet",
-            value: "$.input.ip",
+            value: "$.workflowTrigger.input.ip",
             cidr: "10.0.0.0/8",
           },
-          assign: { isInternal: "$.steps.check_internal.output" },
+          assign: { isInternal: "$.steps.check_internal.output.value" },
         },
         {
           id: "route_ip",
@@ -1522,13 +1848,13 @@ describe("WorkflowRunner builtin MVP", () => {
           id: "log_internal",
           type: "builtin.log.info",
           message: "internal ip",
-          payload: "$.input.ip",
+          payload: "$.workflowTrigger.input.ip",
         },
         {
           id: "log_external",
           type: "builtin.log.info",
           message: "external ip",
-          payload: "$.input.ip",
+          payload: "$.workflowTrigger.input.ip",
         },
       ]),
       input: { ip: "10.1.2.3" },
@@ -1554,13 +1880,13 @@ describe("WorkflowRunner builtin MVP", () => {
       definition: definition([
         {
           id: "parse_uri",
-          type: "builtin.transform",
+          type: "builtin.transform.uri_parse",
           transform: {
             kind: "uri.parse",
-            value: "$.input.url",
+            value: "$.workflowTrigger.input.url",
           },
           assign: {
-            uri: "$.steps.parse_uri.output",
+            uri: "$.steps.parse_uri.output.value",
           },
         },
       ]),
@@ -1603,13 +1929,13 @@ describe("WorkflowRunner builtin MVP", () => {
       definition: definition([
         {
           id: "parse_uri",
-          type: "builtin.transform",
+          type: "builtin.transform.uri_parse",
           transform: {
             kind: "uri.parse",
-            value: "$.input.url",
+            value: "$.workflowTrigger.input.url",
           },
           assign: {
-            uri: "$.steps.parse_uri.output",
+            uri: "$.steps.parse_uri.output.value",
           },
         },
       ]),
@@ -1638,14 +1964,14 @@ describe("WorkflowRunner builtin MVP", () => {
       definition: definition([
         {
           id: "parse_uri",
-          type: "builtin.transform",
+          type: "builtin.transform.uri_parse",
           transform: {
             kind: "uri.parse",
-            value: "$.input.path",
+            value: "$.workflowTrigger.input.path",
             base: "https://api.example.com/root/",
           },
           assign: {
-            uri: "$.steps.parse_uri.output",
+            uri: "$.steps.parse_uri.output.value",
           },
         },
       ]),
@@ -1671,10 +1997,10 @@ describe("WorkflowRunner builtin MVP", () => {
       definition: definition([
         {
           id: "parse_uri",
-          type: "builtin.transform",
+          type: "builtin.transform.uri_parse",
           transform: {
             kind: "uri.parse",
-            value: "$.input.url",
+            value: "$.workflowTrigger.input.url",
           },
         },
       ]),
@@ -1708,7 +2034,7 @@ describe("WorkflowRunner builtin MVP", () => {
           type: "builtin.set",
           assign: {
             findings: {
-              from: "$.input.finding",
+              from: "$.workflowTrigger.input.finding",
               mode: "append",
             },
           },
@@ -1742,7 +2068,7 @@ describe("WorkflowRunner builtin MVP", () => {
           id: "set_asset",
           type: "builtin.set",
           assign: {
-            asset: "$.input.asset",
+            asset: "$.workflowTrigger.input.asset",
           },
         },
         {
@@ -1750,7 +2076,7 @@ describe("WorkflowRunner builtin MVP", () => {
           type: "builtin.set",
           assign: {
             asset: {
-              from: "$.input.enrichment",
+              from: "$.workflowTrigger.input.enrichment",
               mode: "merge",
             },
           },
@@ -1785,13 +2111,13 @@ describe("WorkflowRunner builtin MVP", () => {
           id: "set_initial",
           type: "builtin.set",
           assign: {
-            asset: "$.input.asset",
+            asset: "$.workflowTrigger.input.asset",
           },
         },
         {
           id: "route_asset",
           type: "builtin.if",
-          condition: "$.input.routeTrue",
+          condition: "$.workflowTrigger.input.routeTrue",
           then: ["mark_true", "record_true"],
           else: ["mark_false", "record_false"],
         },
@@ -1800,7 +2126,7 @@ describe("WorkflowRunner builtin MVP", () => {
           type: "builtin.set",
           assign: {
             asset: {
-              from: "$.input.truePatch",
+              from: "$.workflowTrigger.input.truePatch",
               mode: "merge",
             },
           },
@@ -1820,7 +2146,7 @@ describe("WorkflowRunner builtin MVP", () => {
           type: "builtin.set",
           assign: {
             asset: {
-              from: "$.input.falsePatch",
+              from: "$.workflowTrigger.input.falsePatch",
               mode: "merge",
             },
           },
@@ -1855,7 +2181,6 @@ describe("WorkflowRunner builtin MVP", () => {
       ["set_initial", "succeeded"],
       ["route_asset", "succeeded"],
       ["mark_false", "skipped"],
-      ["record_false", "skipped"],
       ["mark_true", "succeeded"],
       ["record_true", "succeeded"],
     ]);
@@ -1869,13 +2194,13 @@ describe("WorkflowRunner builtin MVP", () => {
           id: "set_initial",
           type: "builtin.set",
           assign: {
-            asset: "$.input.asset",
+            asset: "$.workflowTrigger.input.asset",
           },
         },
         {
           id: "route_asset",
           type: "builtin.if",
-          condition: "$.input.routeTrue",
+          condition: "$.workflowTrigger.input.routeTrue",
           then: ["mark_true", "record_true"],
           else: ["mark_false", "record_false"],
         },
@@ -1884,7 +2209,7 @@ describe("WorkflowRunner builtin MVP", () => {
           type: "builtin.set",
           assign: {
             asset: {
-              from: "$.input.truePatch",
+              from: "$.workflowTrigger.input.truePatch",
               mode: "merge",
             },
           },
@@ -1904,7 +2229,7 @@ describe("WorkflowRunner builtin MVP", () => {
           type: "builtin.set",
           assign: {
             asset: {
-              from: "$.input.falsePatch",
+              from: "$.workflowTrigger.input.falsePatch",
               mode: "merge",
             },
           },
@@ -1939,7 +2264,6 @@ describe("WorkflowRunner builtin MVP", () => {
       ["set_initial", "succeeded"],
       ["route_asset", "succeeded"],
       ["mark_true", "skipped"],
-      ["record_true", "skipped"],
       ["mark_false", "succeeded"],
       ["record_false", "succeeded"],
     ]);
@@ -1953,8 +2277,8 @@ describe("WorkflowRunner builtin MVP", () => {
           id: "set_initial",
           type: "builtin.set",
           assign: {
-            asset: "$.input.asset",
-            notes: "$.input.notes",
+            asset: "$.workflowTrigger.input.asset",
+            notes: "$.workflowTrigger.input.notes",
           },
         },
         {
@@ -1962,11 +2286,11 @@ describe("WorkflowRunner builtin MVP", () => {
           type: "builtin.set",
           assign: {
             notes: {
-              from: "$.input.newNote",
+              from: "$.workflowTrigger.input.newNote",
               mode: "append",
             },
             asset: {
-              from: "$.input.invalidMergeValue",
+              from: "$.workflowTrigger.input.invalidMergeValue",
               mode: "merge",
             },
           },
@@ -2010,7 +2334,7 @@ describe("WorkflowRunner builtin MVP", () => {
           id: "set_tags",
           type: "builtin.set",
           assign: {
-            tags: "$.input.tags",
+            tags: "$.workflowTrigger.input.tags",
           },
         },
         {
@@ -2018,7 +2342,7 @@ describe("WorkflowRunner builtin MVP", () => {
           type: "builtin.set",
           assign: {
             tags: {
-              from: "$.input.nextTag",
+              from: "$.workflowTrigger.input.nextTag",
               mode: "append",
             },
           },
@@ -2072,10 +2396,10 @@ describe("WorkflowRunner builtin MVP", () => {
           server: "crm",
           tool: "lookup",
           input: {
-            id: "$.input.customerId",
+            id: "$.workflowTrigger.input.customerId",
           },
           assign: {
-            crmResult: "$.steps.lookup_customer.output",
+            crmResult: "$.steps.lookup_customer.output.result",
           },
         },
       ]),
@@ -2097,7 +2421,11 @@ describe("WorkflowRunner builtin MVP", () => {
     expect(result.stepAttempts[0]).toMatchObject({
       nodeId: "lookup_customer",
       status: "succeeded",
-      output: { normalized: true, customerId: "cust_1" },
+      output: {
+        server: "crm",
+        tool: "lookup",
+        result: { normalized: true, customerId: "cust_1" },
+      },
       contextDiff: {
         crmResult: {
           before: null,
@@ -2126,7 +2454,7 @@ describe("WorkflowRunner builtin MVP", () => {
           server: "crm",
           tool: "lookup",
           input: {
-            id: "$.input.customerId",
+            id: "$.workflowTrigger.input.customerId",
           },
         },
       ]),
@@ -2137,7 +2465,11 @@ describe("WorkflowRunner builtin MVP", () => {
     expect(result.stepAttempts[0]).toMatchObject({
       nodeId: "lookup_customer",
       status: "failed",
-      input: { id: "cust_1" },
+      input: {
+        server: "crm",
+        tool: "lookup",
+        input: { id: "cust_1" },
+      },
       error: { message: "crm unavailable" },
     });
     expect(result.events.map((event) => event.kind)).toContain("run_failed");
@@ -2168,9 +2500,9 @@ describe("WorkflowRunner builtin MVP", () => {
           id: "ask_support",
           type: "agent.call",
           agentId: "support",
-          prompt: "Review customer {{$.input.customerId}}",
+          prompt: "Review customer {{$.workflowTrigger.input.customerId}}",
           input: {
-            customerId: "$.input.customerId",
+            customerId: "$.workflowTrigger.input.customerId",
           },
           assign: {
             agentResult: "$.steps.ask_support.output",
@@ -2199,6 +2531,11 @@ describe("WorkflowRunner builtin MVP", () => {
     expect(result.stepAttempts[0]).toMatchObject({
       nodeId: "ask_support",
       status: "succeeded",
+      input: {
+        agentId: "support",
+        prompt: "Review customer cust_1",
+        input: { customerId: "cust_1" },
+      },
       output: {
         response: "Customer cust_1 is ready",
         sessionId: "session_agent_1",
@@ -2260,18 +2597,18 @@ describe("WorkflowRunner builtin MVP", () => {
         },
         {
           id: "parse_asset",
-          type: "builtin.transform",
-          transform: "$.input.asset",
+          type: "builtin.transform.value_resolve",
+          transform: { kind: "value.resolve", value: "$.workflowTrigger.input.asset" },
           assign: {
-            shared: "$.steps.parse_asset.output",
+            shared: "$.steps.parse_asset.output.value",
           },
         },
         {
           id: "parse_owner",
-          type: "builtin.transform",
-          transform: "$.input.owner",
+          type: "builtin.transform.value_resolve",
+          transform: { kind: "value.resolve", value: "$.workflowTrigger.input.owner" },
           assign: {
-            shared: "$.steps.parse_owner.output",
+            shared: "$.steps.parse_owner.output.value",
           },
         },
       ]),
@@ -2291,7 +2628,9 @@ describe("WorkflowRunner builtin MVP", () => {
           startedAt: expect.any(String),
           endedAt: expect.any(String),
           durationMs: expect.any(Number),
-          steps: { parse_asset: { id: "asset_1", risk: "critical" } },
+          steps: {
+            parse_asset: { value: { id: "asset_1", risk: "critical" } },
+          },
           context: { shared: { id: "asset_1", risk: "critical" } },
         }),
         owner: expect.objectContaining({
@@ -2301,7 +2640,7 @@ describe("WorkflowRunner builtin MVP", () => {
           startedAt: expect.any(String),
           endedAt: expect.any(String),
           durationMs: expect.any(Number),
-          steps: { parse_owner: { team: "security" } },
+          steps: { parse_owner: { value: { team: "security" } } },
           context: { shared: { team: "security" } },
         }),
       },
@@ -2361,8 +2700,8 @@ describe("WorkflowRunner builtin MVP", () => {
         },
         {
           id: "ok_transform",
-          type: "builtin.transform",
-          transform: "$.input.ok",
+          type: "builtin.transform.value_resolve",
+          transform: { kind: "value.resolve", value: "$.workflowTrigger.input.ok" },
         },
         {
           id: "bad_check",
@@ -2385,7 +2724,7 @@ describe("WorkflowRunner builtin MVP", () => {
         branches: {
           ok: {
             status: "succeeded",
-            steps: { ok_transform: { ready: true } },
+            steps: { ok_transform: { value: { ready: true } } },
           },
           bad: {
             status: "failed",
@@ -2545,7 +2884,7 @@ describe("WorkflowRunner builtin MVP", () => {
         {
           id: "each_customer",
           type: "builtin.foreach",
-          items: "$.input.customers",
+          items: "$.workflowTrigger.input.customers",
           itemVar: "customer",
           body: ["pick_customer"],
           concurrency: 1,
@@ -2555,7 +2894,7 @@ describe("WorkflowRunner builtin MVP", () => {
         },
         {
           id: "pick_customer",
-          type: "builtin.transform",
+          type: "builtin.transform.object_pick",
           input: { customer: "customer" },
           transform: {
             kind: "object_pick",
@@ -2564,7 +2903,7 @@ describe("WorkflowRunner builtin MVP", () => {
           },
           assign: {
             customerIds: {
-              from: "$.steps.pick_customer.output",
+              from: "$.steps.pick_customer.output.value",
               mode: "append",
             },
           },
@@ -2593,7 +2932,7 @@ describe("WorkflowRunner builtin MVP", () => {
             startedAt: expect.any(String),
             endedAt: expect.any(String),
             durationMs: expect.any(Number),
-            steps: { pick_customer: { id: "cust_1" } },
+            steps: { pick_customer: { value: { id: "cust_1" } } },
           },
           {
             index: 1,
@@ -2602,7 +2941,7 @@ describe("WorkflowRunner builtin MVP", () => {
             startedAt: expect.any(String),
             endedAt: expect.any(String),
             durationMs: expect.any(Number),
-            steps: { pick_customer: { id: "cust_2" } },
+            steps: { pick_customer: { value: { id: "cust_2" } } },
           },
         ],
       },
@@ -2615,14 +2954,42 @@ describe("WorkflowRunner builtin MVP", () => {
       [
         1,
         "succeeded",
-        { customer: { id: "cust_1", name: "Ada" } },
-        { id: "cust_1" },
+        {
+          input: { customer: { id: "cust_1", name: "Ada" } },
+          transform: {
+            kind: "object_pick",
+            source: "customer",
+            fields: ["id"],
+          },
+          assign: {
+            customerIds: {
+              from: "$.steps.pick_customer.output.value",
+              mode: "append",
+              value: { id: "cust_1" },
+            },
+          },
+        },
+        { value: { id: "cust_1" } },
       ],
       [
         2,
         "succeeded",
-        { customer: { id: "cust_2", name: "Lin" } },
-        { id: "cust_2" },
+        {
+          input: { customer: { id: "cust_2", name: "Lin" } },
+          transform: {
+            kind: "object_pick",
+            source: "customer",
+            fields: ["id"],
+          },
+          assign: {
+            customerIds: {
+              from: "$.steps.pick_customer.output.value",
+              mode: "append",
+              value: { id: "cust_2" },
+            },
+          },
+        },
+        { value: { id: "cust_2" } },
       ],
     ]);
     expect(
@@ -2639,7 +3006,7 @@ describe("WorkflowRunner builtin MVP", () => {
           startedAt: expect.any(String),
           endedAt: expect.any(String),
           durationMs: expect.any(Number),
-          steps: { pick_customer: { id: "cust_1" } },
+          steps: { pick_customer: { value: { id: "cust_1" } } },
         },
         {
           index: 1,
@@ -2647,7 +3014,7 @@ describe("WorkflowRunner builtin MVP", () => {
           startedAt: expect.any(String),
           endedAt: expect.any(String),
           durationMs: expect.any(Number),
-          steps: { pick_customer: { id: "cust_2" } },
+          steps: { pick_customer: { value: { id: "cust_2" } } },
         },
       ],
     });
@@ -2681,13 +3048,13 @@ describe("WorkflowRunner builtin MVP", () => {
           id: "set_summary",
           type: "builtin.set",
           assign: {
-            riskSummary: "$.input.initialSummary",
+            riskSummary: "$.workflowTrigger.input.initialSummary",
           },
         },
         {
           id: "each_asset",
           type: "builtin.foreach",
-          items: "$.input.assets",
+          items: "$.workflowTrigger.input.assets",
           itemVar: "asset",
           body: ["merge_asset_risk"],
         },
@@ -2750,14 +3117,14 @@ describe("WorkflowRunner builtin MVP", () => {
         {
           id: "each_customer",
           type: "builtin.foreach",
-          items: "$.input.customers",
+          items: "$.workflowTrigger.input.customers",
           body: ["pick_customer"],
         },
         {
           id: "pick_customer",
-          type: "builtin.transform",
+          type: "builtin.transform.value_resolve",
           input: { customer: "item" },
-          transform: "$.input.never",
+          transform: { kind: "value.resolve", value: "$.workflowTrigger.input.never" },
         },
       ]),
       input: { customers: [] },
@@ -2781,7 +3148,7 @@ describe("WorkflowRunner builtin MVP", () => {
         {
           id: "each_customer",
           type: "builtin.foreach",
-          items: "$.input.customers",
+          items: "$.workflowTrigger.input.customers",
           itemVar: "customer",
           body: ["capture_id"],
         },
@@ -2839,7 +3206,7 @@ describe("WorkflowRunner builtin MVP", () => {
           {
             id: "each_customer",
             type: "builtin.foreach",
-            items: "$.input.customers",
+            items: "$.workflowTrigger.input.customers",
             body: ["noop"],
             concurrency: 2,
           },
@@ -2883,7 +3250,7 @@ describe("WorkflowRunner builtin MVP", () => {
         {
           id: "python_step",
           type: "builtin.python",
-          input: { value: "$.input.value" },
+          input: { value: "$.workflowTrigger.input.value" },
           code: "output = {'doubled': input['value'] * 2}",
           reset: true,
           timeoutMs: 1000,

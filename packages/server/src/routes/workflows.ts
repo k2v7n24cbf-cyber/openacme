@@ -8,6 +8,8 @@ import {
   WorkflowNodeSchema,
   WorkflowRunner,
   WorkflowTriggerSchema,
+  validateWorkflowInputSchema,
+  validateWorkflowJsonSchema,
   validateWorkflowNodeReferences,
   validateWorkflowTriggers,
   type JsonValue,
@@ -49,6 +51,7 @@ const WorkflowRunBodySchema = z
   .object({
     input: JsonValueSchema.optional(),
     version: z.number().int().positive().optional(),
+    async: z.boolean().optional(),
   })
   .strict();
 
@@ -154,6 +157,11 @@ export function registerWorkflowRoutes(
     if (!references.ok) return c.json({ error: references.message }, 400);
     const triggers = validateTriggers(body.value.triggers ?? []);
     if (!triggers.ok) return c.json({ error: triggers.message }, 400);
+    const schemas = validateInputSchemas(
+      body.value.inputSchema,
+      body.value.triggers ?? [],
+    );
+    if (!schemas.ok) return c.json({ error: schemas.message }, 400);
     try {
       const workflow = store.createDraft(body.value);
       return c.json({ workflow }, 201);
@@ -199,6 +207,15 @@ export function registerWorkflowRoutes(
       const triggers = validateTriggers(body.value.triggers);
       if (!triggers.ok) return c.json({ error: triggers.message }, 400);
     }
+    const current = store.getDefinition(id);
+    if (!current) return c.json({ error: "not_found" }, 404);
+    const schemas = validateInputSchemas(
+      body.value.inputSchema === null
+        ? undefined
+        : (body.value.inputSchema ?? current.inputSchema),
+      body.value.triggers ?? current.triggers,
+    );
+    if (!schemas.ok) return c.json({ error: schemas.message }, 400);
     try {
       return c.json({ workflow: store.updateDraft(id, body.value) });
     } catch (err) {
@@ -225,6 +242,11 @@ export function registerWorkflowRoutes(
     if (!references.ok) return c.json({ error: references.message }, 400);
     const triggers = validateTriggers(workflow.triggers);
     if (!triggers.ok) return c.json({ error: triggers.message }, 400);
+    const schemas = validateInputSchemas(
+      workflow.inputSchema,
+      workflow.triggers,
+    );
+    if (!schemas.ok) return c.json({ error: schemas.message }, 400);
     try {
       return c.json({ workflow: store.publish(id) });
     } catch (err) {
@@ -269,6 +291,7 @@ export function registerWorkflowRoutes(
         requestId: c.req.header("x-openacme-webhook-request-id"),
         ports: opts.ports,
         runAbortControllers,
+        waitForCompletion: body.value.async !== true,
       });
       return c.json(detail, 201);
     } catch (err) {
@@ -295,6 +318,7 @@ export function registerWorkflowRoutes(
         trigger: manualTriggerSnapshot("manual", body.value.input ?? {}),
         ports: opts.ports,
         runAbortControllers,
+        waitForCompletion: body.value.async !== true,
       });
       return c.json(detail, 201);
     } catch (err) {
@@ -322,6 +346,7 @@ export function registerWorkflowRoutes(
         trigger: manualTriggerSnapshot("manual", body.value.input ?? {}),
         ports: opts.ports,
         runAbortControllers,
+        waitForCompletion: body.value.async !== true,
       });
       return c.json(detail, 201);
     } catch (err) {
@@ -543,6 +568,7 @@ async function executeWorkflowRun(
     trigger: WorkflowRunTrigger;
     ports?: WorkflowExecutionPorts;
     runAbortControllers?: Map<string, AbortController>;
+    waitForCompletion?: boolean;
   },
 ) {
   const references = validateNodes(args.definition.nodes);
@@ -560,6 +586,7 @@ async function executeWorkflowRun(
     workflowId: args.definition.id,
     workflowVersion: args.definition.version,
     definitionSource: args.definitionSource,
+    definitionSnapshot: args.definition,
     mode: args.mode,
     trigger: args.trigger,
     input: args.input,
@@ -570,6 +597,31 @@ async function executeWorkflowRun(
   const abortController = new AbortController();
   args.runAbortControllers?.set(run.id, abortController);
 
+  const finish = finishWorkflowRunExecution(store, {
+    ...args,
+    run,
+    abortController,
+  });
+  if (args.waitForCompletion === false) {
+    void finish.catch(() => {
+      // The background path persists unexpected execution failures itself.
+    });
+    return getRunDetail(store, run.id)!;
+  }
+  return finish;
+}
+
+async function finishWorkflowRunExecution(
+  store: WorkflowStore,
+  args: {
+    definition: WorkflowDefinition;
+    input: JsonValue;
+    ports?: WorkflowExecutionPorts;
+    runAbortControllers?: Map<string, AbortController>;
+    run: WorkflowRun;
+    abortController: AbortController;
+  },
+) {
   const eventPorts = {
     ...(args.ports ?? {}),
     events: {
@@ -589,22 +641,37 @@ async function executeWorkflowRun(
   let result: Awaited<ReturnType<WorkflowRunner["run"]>>;
   try {
     result = await new WorkflowRunner({ ports: eventPorts }).run({
-      runId: run.id,
+      runId: args.run.id,
       definition: args.definition,
-      input: executionInputForRun(store, run),
-      signal: abortController.signal,
+      input: executionInputForRun(store, args.run),
+      trigger: args.run.trigger,
+      signal: args.abortController.signal,
     });
+  } catch (err) {
+    const latest = store.getRun(args.run.id);
+    if (latest && isTerminalRunStatus(latest.status)) {
+      return getRunDetail(store, args.run.id)!;
+    }
+    const endedAt = new Date().toISOString();
+    store.updateRunState(args.run.id, {
+      status: "failed",
+      currentNodeId: null,
+      waitingReason: null,
+      endedAt,
+      durationMs: stepDurationMs(args.run.startedAt, endedAt),
+    });
+    throw err;
   } finally {
-    args.runAbortControllers?.delete(run.id);
+    args.runAbortControllers?.delete(args.run.id);
   }
 
-  const latest = store.getRun(run.id);
+  const latest = store.getRun(args.run.id);
   if (latest && isTerminalRunStatus(latest.status)) {
     return {
       run: latest,
-      steps: store.listStepAttempts(run.id),
-      events: store.listRunEvents(run.id),
-      artifacts: store.listArtifacts(run.id),
+      steps: store.listStepAttempts(args.run.id),
+      events: store.listRunEvents(args.run.id),
+      artifacts: store.listArtifacts(args.run.id),
     };
   }
 
@@ -627,19 +694,19 @@ async function executeWorkflowRun(
   }
 
   const endedAt = new Date().toISOString();
-  const updated = store.updateRunState(run.id, {
+  const updated = store.updateRunState(args.run.id, {
     status: result.status,
     context: result.context,
     currentNodeId: null,
     waitingReason: null,
     endedAt,
-    durationMs: stepDurationMs(run.startedAt, endedAt),
+    durationMs: stepDurationMs(args.run.startedAt, endedAt),
   });
   return {
     run: updated,
-    steps: store.listStepAttempts(run.id),
-    events: store.listRunEvents(run.id),
-    artifacts: store.listArtifacts(run.id),
+    steps: store.listStepAttempts(args.run.id),
+    events: store.listRunEvents(args.run.id),
+    artifacts: store.listArtifacts(args.run.id),
   };
 }
 
@@ -687,9 +754,21 @@ function updateRunProgressFromEvent(
     return;
   }
 
+  if (event.kind === "step_completed" || event.kind === "step_failed") {
+    recordTerminalStepAttemptFromEvent(store, event);
+    const step = stepAttemptFromEvent(event);
+    store.updateRunState(event.runId, {
+      status: current.status,
+      currentNodeId:
+        step && current.currentNodeId === step.nodeId
+          ? null
+          : current.currentNodeId,
+      waitingReason: null,
+    });
+    return;
+  }
+
   if (
-    event.kind === "step_completed" ||
-    event.kind === "step_failed" ||
     event.kind === "run_completed" ||
     event.kind === "run_failed" ||
     event.kind === "run_canceled"
@@ -700,6 +779,63 @@ function updateRunProgressFromEvent(
       waitingReason: null,
     });
   }
+}
+
+function recordTerminalStepAttemptFromEvent(
+  store: WorkflowStore,
+  event: WorkflowPortEvent,
+  endedAtOverride?: string,
+): void {
+  const step = stepAttemptFromEvent(event);
+  if (!step) return;
+  const status = terminalStepStatusFromEvent(event);
+  const existing = [...store.listStepAttempts(event.runId)]
+    .reverse()
+    .find((item) => item.id === step.id);
+  const endedAt = endedAtOverride ?? new Date().toISOString();
+  store.recordStepAttempt({
+    id: step.id,
+    runId: event.runId,
+    nodeId: step.nodeId,
+    attempt: step.attempt,
+    status,
+    startedAt: existing?.startedAt ?? endedAt,
+    endedAt,
+    durationMs: stepDurationMs(existing?.startedAt ?? endedAt, endedAt),
+    input: existing?.input ?? step.input,
+    output: existing?.output,
+    error: terminalStepErrorFromEvent(event) ?? existing?.error,
+    logsSummary: existing?.logsSummary,
+    contextDiff: existing?.contextDiff,
+  });
+}
+
+function terminalStepStatusFromEvent(
+  event: WorkflowPortEvent,
+): "succeeded" | "failed" | "canceled" {
+  const payloadStatus =
+    isRecord(event.payload) && typeof event.payload["status"] === "string"
+      ? event.payload["status"]
+      : undefined;
+  if (
+    event.kind === "step_completed" &&
+    (payloadStatus === "succeeded" ||
+      payloadStatus === "failed" ||
+      payloadStatus === "canceled")
+  ) {
+    return payloadStatus;
+  }
+  return event.kind === "step_failed" ? "failed" : "succeeded";
+}
+
+function terminalStepErrorFromEvent(
+  event: WorkflowPortEvent,
+): JsonValue | undefined {
+  if (event.kind !== "step_failed") return undefined;
+  if (isRecord(event.payload) && isJsonValue(event.payload["output"])) {
+    return event.payload["output"];
+  }
+  return undefined;
 }
 
 function stepAttemptFromEvent(event: WorkflowPortEvent): {
@@ -746,6 +882,7 @@ export async function executePublishedTriggerRun(
     scheduledAt?: string;
     ports?: WorkflowExecutionPorts;
     runAbortControllers?: Map<string, AbortController>;
+    waitForCompletion?: boolean;
   },
 ) {
   const workflowInputValidation = validateWorkflowInputSchema(
@@ -776,6 +913,7 @@ export async function executePublishedTriggerRun(
     ),
     ports: args.ports,
     runAbortControllers: args.runAbortControllers,
+    waitForCompletion: args.waitForCompletion,
   });
 }
 
@@ -787,127 +925,63 @@ function validateTriggers(triggers: WorkflowDefinition["triggers"]) {
   return validateWorkflowTriggers(triggers);
 }
 
-function validateWorkflowInputSchema(
-  schema: JsonValue | undefined,
-  input: JsonValue,
-  label = "Input",
-): { ok: true } | { ok: false; error: string } {
-  if (schema === undefined || schema === null || schema === true) {
-    return { ok: true };
-  }
-  if (schema === false) {
-    return {
-      ok: false,
-      error: `${label} does not match schema: $ is disallowed`,
-    };
-  }
-  if (!isRecord(schema)) return { ok: true };
-  const issue = validateJsonSchemaValue(schema, input, "$");
-  return issue
-    ? { ok: false, error: `${label} does not match schema: ${issue}` }
-    : { ok: true };
-}
+function validateInputSchemas(
+  inputSchema: JsonValue | undefined,
+  triggers: WorkflowDefinition["triggers"],
+): { ok: true } | { ok: false; message: string } {
+  const workflowSchema = validateWorkflowJsonSchema(inputSchema);
+  if (!workflowSchema.ok) return { ok: false, message: workflowSchema.message };
 
-function validateJsonSchemaValue(
-  schema: Record<string, unknown>,
-  value: JsonValue,
-  path: string,
-): string | null {
-  if ("const" in schema && !jsonEquals(value, schema.const)) {
-    return `${path} must equal ${JSON.stringify(schema.const)}`;
-  }
-  if (
-    Array.isArray(schema.enum) &&
-    !schema.enum.some((item) => jsonEquals(value, item))
-  ) {
-    return `${path} must be one of ${JSON.stringify(schema.enum)}`;
-  }
-  const typeIssue = validateJsonSchemaType(schema.type, value, path);
-  if (typeIssue) return typeIssue;
-
-  if (isRecord(value)) {
-    const required = Array.isArray(schema.required)
-      ? schema.required.filter(
-          (item): item is string => typeof item === "string",
-        )
-      : [];
-    for (const key of required) {
-      if (!(key in value)) return `${path}.${key} is required`;
-    }
-    const properties = isRecord(schema.properties) ? schema.properties : {};
-    for (const [key, childSchema] of Object.entries(properties)) {
-      if (!(key in value) || !isRecord(childSchema)) continue;
-      const issue = validateJsonSchemaValue(
-        childSchema,
-        value[key] as JsonValue,
-        `${path}.${key}`,
-      );
-      if (issue) return issue;
-    }
-    if (schema.additionalProperties === false) {
-      const allowed = new Set(Object.keys(properties));
-      const extra = Object.keys(value).find((key) => !allowed.has(key));
-      if (extra) return `${path}.${extra} is not allowed`;
+  for (const trigger of triggers) {
+    const triggerSchema = validateWorkflowJsonSchema(
+      triggerInputSchema(trigger),
+      `Trigger ${trigger.id} input schema`,
+    );
+    if (!triggerSchema.ok) {
+      return { ok: false, message: triggerSchema.message };
     }
   }
-
-  if (Array.isArray(value) && isRecord(schema.items)) {
-    for (let index = 0; index < value.length; index += 1) {
-      const issue = validateJsonSchemaValue(
-        schema.items,
-        value[index] as JsonValue,
-        `${path}[${index}]`,
-      );
-      if (issue) return issue;
-    }
-  }
-
-  return null;
-}
-
-function validateJsonSchemaType(
-  type: unknown,
-  value: JsonValue,
-  path: string,
-): string | null {
-  if (type === undefined) return null;
-  const allowed = Array.isArray(type)
-    ? type.filter((item): item is string => typeof item === "string")
-    : typeof type === "string"
-      ? [type]
-      : [];
-  if (allowed.length === 0) return null;
-  return allowed.some((item) => jsonSchemaTypeMatches(item, value))
-    ? null
-    : `${path} must be ${allowed.join("|")}`;
-}
-
-function jsonSchemaTypeMatches(type: string, value: JsonValue): boolean {
-  if (type === "null") return value === null;
-  if (type === "array") return Array.isArray(value);
-  if (type === "object") return isRecord(value);
-  if (type === "string") return typeof value === "string";
-  if (type === "boolean") return typeof value === "boolean";
-  if (type === "number")
-    return typeof value === "number" && Number.isFinite(value);
-  if (type === "integer")
-    return typeof value === "number" && Number.isInteger(value);
-  return true;
-}
-
-function jsonEquals(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  return { ok: true };
 }
 
 function getRunDetail(store: WorkflowStore, id: string) {
   const run = store.getRun(id);
   if (!run) return null;
+  healTerminalRunStepAttemptsFromEvents(store, run);
+  const definition =
+    run.definitionSnapshot ??
+    (run.definitionSource === "published"
+      ? store.getVersion(run.workflowId, run.workflowVersion)
+      : store.getDefinition(run.workflowId));
   return {
     run,
+    ...(definition ? { definition } : {}),
     steps: store.listStepAttempts(id),
     events: store.listRunEvents(id),
     artifacts: store.listArtifacts(id),
   };
+}
+
+function healTerminalRunStepAttemptsFromEvents(
+  store: WorkflowStore,
+  run: NonNullable<ReturnType<WorkflowStore["getRun"]>>,
+): void {
+  if (!isTerminalRunStatus(run.status)) return;
+  const nonTerminalSteps = store
+    .listStepAttempts(run.id)
+    .filter((step) => !isTerminalStepStatus(step.status));
+  if (nonTerminalSteps.length === 0) return;
+  const terminalEvents = store
+    .listRunEvents(run.id)
+    .filter(
+      (event) =>
+        event.kind === "step_completed" || event.kind === "step_failed",
+    );
+  for (const step of nonTerminalSteps) {
+    const event = terminalEvents.find((item) => item.stepRunId === step.id);
+    if (!event) continue;
+    recordTerminalStepAttemptFromEvent(store, event, event.createdAt);
+  }
 }
 
 function isTerminalRunStatus(status: string): boolean {

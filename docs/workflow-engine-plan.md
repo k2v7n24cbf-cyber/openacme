@@ -152,6 +152,33 @@ interface WorkflowDefinition {
 The first UI can be a vertical card builder. The engine should still store a
 graph-capable structure so a later canvas does not require a runtime rewrite.
 
+### Execution Graph Contract
+
+`nodes[]` is definition inventory and editor ordering only. It is not an
+execution chain.
+
+Execution starts at the first node in `nodes[]` for the current manual-trigger
+slice, then advances only through explicit graph references:
+
+- `node.next[]` for normal card-to-card continuation.
+- `builtin.if.then[]` and `builtin.if.else[]` for true/false route starts.
+- `builtin.switch.cases[].nodes[]` and `builtin.switch.default[]` for case
+  route starts.
+- `builtin.foreach.body[]` for loop body starts.
+- `builtin.parallel.branches[].nodes[]` for branch starts.
+
+Canvas sequence lines must persist as `source.next = [target]`. Removing a
+sequence line must remove the matching `next` target; it must not only mark UI
+layout metadata. The runner must never infer `A -> B` from adjacent `nodes[]`
+entries. If a branch, parallel, or foreach card should continue after its
+route/body/branches finish, that continuation must be represented by an
+explicit `next` edge on the parent card or by explicit `next` edges from route
+body cards, depending on the intended visual flow.
+
+Save validation should reject missing targets and unreachable visible cards so
+operators can freely rearrange the canvas while still publishing only complete
+flows.
+
 ## Trigger Model
 
 The first release started with manual triggers only. The runtime and storage
@@ -404,7 +431,7 @@ Executable-card output assignment example:
   "id": "lookup_customer",
   "type": "mcp.crm.get_customer",
   "input": {
-    "email": "$.input.email"
+    "email": "$.workflowTrigger.input.email"
   },
   "assign": {
     "customer": "$.steps.lookup_customer.output",
@@ -446,7 +473,7 @@ Assignment rules:
 - The default write mode is `replace`.
 - `merge` and `append` must be explicit write modes; they are never inferred.
 - Replacing a variable records the before/after diff in the step trace.
-- Assignment expressions can read `$.input`, `$.context`, previous
+- Assignment expressions can read `$.workflowTrigger.input`, `$.context`, previous
   `$.steps.*.output`, and `item` inside `foreach`.
 - The UI must show each card's output assignment section so the operator can
   see which variables the card updates.
@@ -463,7 +490,7 @@ Start with a constrained expression language that can be validated and audited.
 
 Required references:
 
-- `$.input`
+- `$.workflowTrigger.input`
 - `$.context`
 - `$.steps.<nodeId>.output`
 - `item` inside `foreach`
@@ -1662,7 +1689,7 @@ Card assignment visibility hardening record:
   `assign` map, showing each target variable, source expression, and explicit
   write mode when present.
 - The summary covers direct variable setting such as
-  `customer <- $.input.customer` and transformer-style replacement such as
+  `customer <- $.workflowTrigger.input.customer` and transformer-style replacement such as
   `customer <- $.steps.normalize.output` with `mode replace`.
 - This is still a read-only structured summary over the JSON-backed editor; it
   does not introduce richer per-node forms or drag reordering.
@@ -3330,7 +3357,7 @@ Deployed server validation:
     skipped, and run count stays `4`.
   - First deployed smoke attempt caught a real scenario issue: scheduled
     dispatcher input defaulted to `{}` while the smoke workflow expected
-    `$.input.customer`, producing a failed persisted run. The smoke now passes
+    `$.workflowTrigger.input.customer`, producing a failed persisted run. The smoke now passes
     scheduled input explicitly.
 - Post-smoke port checks showed no listener on `3458` or `61087`.
 
@@ -6324,7 +6351,7 @@ Quoted boolean operator condition slice record:
   when they appear outside quoted string literals and outside function-call
   parentheses.
 - This fixes branch expressions such as
-  `contains($.input.note, "red or blue") or contains($.input.note, "review and hold")`.
+  `contains($.workflowTrigger.input.note, "red or blue") or contains($.workflowTrigger.input.note, "review and hold")`.
   The words `or` and `and` inside the quoted search strings no longer split the
   expression into unrelated operands.
 - The change is scoped to the workflow runner's boolean operator splitter. The
@@ -6372,7 +6399,7 @@ Deployed server validation:
   - The accepted smoke created workflow `wf_trigger_deployed_ms7eqjwq` and ran
     manual trigger run `adb12071-bb42-498e-aa5f-e1c7e333df09`.
   - The workflow included `quoted_condition` with
-    `contains($.input.customer.name, "Trigger or Ada") or contains($.input.customer.name, "Review and Hold")`.
+    `contains($.workflowTrigger.input.customer.name, "Trigger or Ada") or contains($.workflowTrigger.input.customer.name, "Review and Hold")`.
     The smoke verified `quoted_match` was skipped and `quoted_miss` succeeded,
     proving quoted `or`/`and` text did not become top-level boolean operators.
   - The same smoke preserved the existing trigger coverage: authenticated
@@ -6389,7 +6416,7 @@ Quoted comma `contains` argument slice record:
 - `contains(collection, needle)` now splits its arguments on top-level commas
   only. Commas inside quoted string literals or nested function-call
   parentheses no longer corrupt the argument boundary.
-- This fixes expressions such as `contains($.input.note, "red, blue")`, where
+- This fixes expressions such as `contains($.workflowTrigger.input.note, "red, blue")`, where
   the comma belongs to the string operand and not to the function call syntax.
 - The change is scoped to `contains` argument parsing in the workflow runner.
   The expression language remains constrained and still avoids arbitrary
@@ -6398,7 +6425,7 @@ Quoted comma `contains` argument slice record:
 TDD note:
 
 - The runner test first added an `if_else` condition using
-  `contains($.input.note, "red, blue")` and input text containing that exact
+  `contains($.workflowTrigger.input.note, "red, blue")` and input text containing that exact
   phrase.
 - Before implementation, the focused test failed with run status `failed`
   because the regex-based parser split the quoted comma as if it separated
@@ -6429,7 +6456,7 @@ Deployed server validation:
   - The smoke created workflow `wf_trigger_deployed_ms7evzgt` and ran manual
     trigger run `3b53113f-8858-43ab-bf37-ee4a3395e103`.
   - The workflow included `comma_condition` with
-    `contains($.input.customer.name, "Trigger, Ada")`.
+    `contains($.workflowTrigger.input.customer.name, "Trigger, Ada")`.
   - The smoke verified `comma_match` was skipped and `comma_miss` succeeded,
     proving the quoted comma was parsed as part of the `needle` string and the
     expression evaluated normally instead of failing the run.
@@ -6447,7 +6474,7 @@ Quoted comparison operator slice record:
 - Workflow comparison parsing now treats `==`, `!=`, `>=`, `<=`, `>`, and `<`
   as comparison operators only when they appear outside quoted string literals
   and outside function-call parentheses.
-- This fixes expressions such as `"a >= b" == $.input.note`, where `>=` is
+- This fixes expressions such as `"a >= b" == $.workflowTrigger.input.note`, where `>=` is
   text inside the left operand and `==` is the actual comparison operator.
 - The change is scoped to the workflow runner's comparison parser. The
   expression language remains constrained and still avoids arbitrary
@@ -6456,7 +6483,7 @@ Quoted comparison operator slice record:
 TDD note:
 
 - The runner test first added an `if_else` condition using
-  `"a >= b" == $.input.note` with input note `a >= b`.
+  `"a >= b" == $.workflowTrigger.input.note` with input note `a >= b`.
 - Before implementation, the focused test failed with run status `failed`
   because the regex-based parser treated the quoted `>=` as the top-level
   numeric comparison operator.
@@ -6488,7 +6515,7 @@ Deployed server validation:
   - The smoke created workflow `wf_trigger_deployed_ms7f25po` and ran manual
     trigger run `19b2cae1-bb1d-4c71-a7a6-29679935664d`.
   - The workflow included `comparison_condition` with
-    `"Trigger >= Ada" == $.input.customer.name`.
+    `"Trigger >= Ada" == $.workflowTrigger.input.customer.name`.
   - The smoke verified `comparison_match` was skipped and `comparison_miss`
     succeeded, proving the quoted `>=` text was parsed as part of the left
     string operand and the expression evaluated normally instead of failing the
@@ -6517,7 +6544,7 @@ Parenthesized not condition slice record:
 TDD note:
 
 - The runner test first added an `if_else` condition using
-  `not(contains($.input.note, "blocked"))` with input note `blocked`.
+  `not(contains($.workflowTrigger.input.note, "blocked"))` with input note `blocked`.
 - Before implementation, the focused test failed because the expression fell
   through as a truthy literal string and selected the `then` branch.
 - After adding a quote-aware, parenthesis-depth-aware single-argument call
@@ -6546,7 +6573,7 @@ Deployed server validation:
   - The smoke created workflow `wf_trigger_deployed_ms7fbjau` and ran manual
     trigger run `96d12c1f-897d-4078-8eb7-c884cfe09814`.
   - The workflow included `not_condition` with
-    `not(contains($.input.customer.name, "Trigger Ada"))`.
+    `not(contains($.workflowTrigger.input.customer.name, "Trigger Ada"))`.
   - The smoke verified `not_match` was skipped and `not_miss` succeeded,
     proving the parenthesized `not` condition was evaluated through the
     running HTTP workflow path.
@@ -7240,7 +7267,7 @@ TDD note:
 - The server route test then ran a workflow with large run input and required
   `run.input.artifact`, `workflow_artifacts` metadata, artifact content,
   artifact download, and a `builtin.set` assignment from
-  `$.input.customer.id` to prove the runner still sees real input content.
+  `$.workflowTrigger.input.customer.id` to prove the runner still sees real input content.
 - Before implementation, the route test failed because `run.input.artifact`
   was missing.
 - After the store change, the route test required a fresh `@openacme/db` build
@@ -7283,7 +7310,7 @@ Deployed server validation:
   - The deployed smoke verified the separate input-spill run persisted
     `run.input` as a `run_input` artifact at
     `runs/ca95fc3e-b430-42d0-85aa-c834483aa086/input.json`, executed
-    `builtin.set` from `$.input.customer.id`, served redacted artifact content,
+    `builtin.set` from `$.workflowTrigger.input.customer.id`, served redacted artifact content,
     and downloaded redacted JSON without `raw-deployed-run-input-key`.
   - The same deployed smoke preserved existing trigger coverage:
     authenticated webhook run `3bb91da3-e3dd-419a-93ed-2a674262f188`, public
@@ -8748,7 +8775,7 @@ Branch condition UI schema-bound hardening slice record:
 TDD note:
 
 - The `/workflows` Playwright smoke was tightened first: after setting
-  `if_else_07 branch condition` to valid `$.input.customer.riskScore >= 70`,
+  `if_else_07 branch condition` to valid `$.workflowTrigger.input.customer.riskScore >= 70`,
   it clears the condition field and expects canonical `Nodes JSON` to keep the
   valid condition.
 - `pnpm --dir apps/web exec playwright test workflows.spec.ts -g "runs configured manual workflow triggers from the console"`
@@ -9118,7 +9145,7 @@ Foreach items/item variable UI schema-bound hardening slice record:
 TDD note:
 
 - The `/workflows` Playwright smoke was tightened first: after setting
-  `foreach_09 foreach items` to valid `$.input.customers` and
+  `foreach_09 foreach items` to valid `$.workflowTrigger.input.customers` and
   `foreach_09 foreach item variable` to valid `customer`, it clears each field
   and expects canonical `Nodes JSON` to keep the last valid value.
 - `pnpm --dir apps/web exec playwright test workflows.spec.ts -g "runs configured manual workflow triggers from the console"`

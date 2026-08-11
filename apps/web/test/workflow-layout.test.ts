@@ -3,6 +3,7 @@ import {
   beautifyWorkflowCanvasPositions,
   normalizeWorkflowDefinitionUi,
   parseWorkflowDefinitionUi,
+  updateWorkflowCanvasNodeDetached,
   updateWorkflowCanvasNodePosition,
 } from "@/app/workflows/layout";
 
@@ -30,6 +31,28 @@ describe("workflow canvas layout metadata", () => {
     });
   });
 
+  it("updates a node detached flag without dropping its position", () => {
+    expect(
+      updateWorkflowCanvasNodeDetached(
+        {
+          canvas: {
+            nodes: {
+              loose: { position: { x: 40, y: 60 } },
+            },
+          },
+        },
+        "loose",
+        true,
+      ),
+    ).toEqual({
+      canvas: {
+        nodes: {
+          loose: { position: { x: 40, y: 60 }, detached: true },
+        },
+      },
+    });
+  });
+
   it("normalizes layout to known nodes with finite positions", () => {
     expect(
       normalizeWorkflowDefinitionUi(
@@ -39,15 +62,17 @@ describe("workflow canvas layout metadata", () => {
               keep: { position: { x: 120, y: 80 } },
               drop_missing: { position: { x: 1, y: 2 } },
               drop_invalid: { position: { x: Number.NaN, y: 2 } },
+              detached: { position: { x: 40, y: 60 }, detached: true },
             },
           },
         },
-        [{ id: "keep" }, { id: "drop_invalid" }],
+        [{ id: "keep" }, { id: "drop_invalid" }, { id: "detached" }],
       ),
     ).toEqual({
       canvas: {
         nodes: {
           keep: { position: { x: 120, y: 80 } },
+          detached: { position: { x: 40, y: 60 }, detached: true },
         },
       },
     });
@@ -60,7 +85,7 @@ describe("workflow canvas layout metadata", () => {
           canvas: {
             nodes: {
               stale: { position: { x: 1, y: 2 } },
-              step_a: { position: { x: 10, y: 20 } },
+              step_a: { position: { x: 10, y: 20 }, detached: true },
             },
           },
         },
@@ -96,7 +121,7 @@ describe("workflow canvas layout metadata", () => {
       parseWorkflowDefinitionUi({
         canvas: {
           nodes: {
-            set_customer: { position: { x: 120, y: 80 } },
+            set_customer: { position: { x: 120, y: 80 }, detached: true },
           },
         },
       }),
@@ -105,7 +130,7 @@ describe("workflow canvas layout metadata", () => {
       value: {
         canvas: {
           nodes: {
-            set_customer: { position: { x: 120, y: 80 } },
+            set_customer: { position: { x: 120, y: 80 }, detached: true },
           },
         },
       },

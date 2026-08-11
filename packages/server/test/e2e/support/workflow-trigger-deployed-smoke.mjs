@@ -162,7 +162,7 @@ try {
         id: "exit",
         type: "builtin.exit",
         status: "succeeded",
-        output: "$.input",
+        output: "$.workflowTrigger.input",
       },
     ],
   });
@@ -187,7 +187,7 @@ try {
         id: "exit",
         type: "builtin.exit",
         status: "succeeded",
-        output: "$.input",
+        output: "$.workflowTrigger.input",
       },
     ],
   });
@@ -210,7 +210,7 @@ try {
         id: "exit",
         type: "builtin.exit",
         status: "succeeded",
-        output: "$.input",
+        output: "$.workflowTrigger.input",
       },
     ],
   });
@@ -267,7 +267,7 @@ try {
         id: "exit",
         type: "builtin.exit",
         status: "succeeded",
-        output: "$.input",
+        output: "$.workflowTrigger.input",
       },
     ],
   });
@@ -342,7 +342,7 @@ try {
         {
           id: "set_customer",
           type: "builtin.set",
-          assign: { customer: "$.input.customer" },
+          assign: { customer: "$.workflowTrigger.input.customer" },
         },
         {
           id: "audit_log",
@@ -357,7 +357,7 @@ try {
           id: "quoted_condition",
           type: "builtin.if_else",
           condition:
-            'contains($.input.customer.name, "Trigger or Ada") or contains($.input.customer.name, "Review and Hold")',
+            'contains($.workflowTrigger.input.customer.name, "Trigger or Ada") or contains($.workflowTrigger.input.customer.name, "Review and Hold")',
           then: ["quoted_match"],
           else: ["quoted_miss"],
         },
@@ -374,7 +374,7 @@ try {
         {
           id: "comma_condition",
           type: "builtin.if_else",
-          condition: 'contains($.input.customer.name, "Trigger, Ada")',
+          condition: 'contains($.workflowTrigger.input.customer.name, "Trigger, Ada")',
           then: ["comma_match"],
           else: ["comma_miss"],
         },
@@ -391,7 +391,7 @@ try {
         {
           id: "comparison_condition",
           type: "builtin.if_else",
-          condition: '"Trigger >= Ada" == $.input.customer.name',
+          condition: '"Trigger >= Ada" == $.workflowTrigger.input.customer.name',
           then: ["comparison_match"],
           else: ["comparison_miss"],
         },
@@ -408,7 +408,7 @@ try {
         {
           id: "not_condition",
           type: "builtin.if_else",
-          condition: 'not(contains($.input.customer.name, "Trigger Ada"))',
+          condition: 'not(contains($.workflowTrigger.input.customer.name, "Trigger Ada"))',
           then: ["not_match"],
           else: ["not_miss"],
         },
@@ -586,7 +586,7 @@ try {
           id: "set_customer_id",
           type: "builtin.set",
           assign: {
-            customerId: "$.input.customer.id",
+            customerId: "$.workflowTrigger.input.customer.id",
           },
         },
         {

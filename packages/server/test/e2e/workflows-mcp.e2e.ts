@@ -43,9 +43,9 @@ describe("Workflow MCP steps (e2e)", () => {
           type: "mcp.tool",
           server: "e2e",
           tool: "echo",
-          input: { text: "$.input.text" },
+          input: { text: "$.workflowTrigger.input.text" },
           assign: {
-            echoResult: "$.steps.echo_step.output",
+            echoResult: "$.steps.echo_step.output.result",
           },
         },
       ],
@@ -66,7 +66,11 @@ describe("Workflow MCP steps (e2e)", () => {
     expect(detail.steps[0]).toMatchObject({
       nodeId: "echo_step",
       status: "succeeded",
-      output: "echo: ping",
+      output: {
+        server: "e2e",
+        tool: "echo",
+        result: "echo: ping",
+      },
     });
     expect(
       detail.events.map((event: { kind: string }) => event.kind),

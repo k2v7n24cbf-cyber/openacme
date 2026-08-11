@@ -4,10 +4,17 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type ComponentProps,
   type DragEvent,
+  type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import {
+  createFileRoute,
+  Link,
+  useBlocker,
+  useNavigate,
+} from "@tanstack/react-router";
 import { z } from "zod";
 import {
   AlertCircle,
@@ -36,6 +43,7 @@ import {
   Trash2,
   Upload,
   Workflow,
+  Wrench,
   XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -74,12 +82,17 @@ import {
   cloneWorkflowNodeAfter,
   insertWorkflowNodeAfter,
   insertWorkflowNodeFirst,
+  isWorkflowTransformNodeType,
   isAgentSummary,
   isMcpToolSummary,
   moveWorkflowNode,
+  moveWorkflowNodeAfter,
   removeWorkflowNode,
+  renameWorkflowNodeId,
   setWorkflowForeachBodyFirst,
-  workflowTransformPresetById,
+  uniqueWorkflowNodeIdFromLabel,
+  workflowTransformPresetIdFromNodeType,
+  workflowTransformPresetForNodeType,
   WORKFLOW_TRANSFORM_PRESETS,
   type WorkflowPaletteKind,
 } from "@/app/workflows/authoring";
@@ -91,13 +104,14 @@ import {
 } from "@/app/workflows/canvas";
 import {
   connectWorkflowReferenceEdge,
-  connectWorkflowRouteContinuationEdge,
+  firstWorkflowSequenceTarget,
   firstWorkflowReferenceTarget,
   insertWorkflowReferenceEdgeTarget,
+  insertWorkflowSequenceEdgeTarget,
   overwriteWorkflowReferenceEdge,
-  overwriteWorkflowRouteContinuationEdge,
+  overwriteWorkflowSequenceEdge,
   removeWorkflowReferenceEdge,
-  removeWorkflowRouteContinuationEdge,
+  removeWorkflowSequenceEdge,
   type WorkflowReferenceEdgeKind,
 } from "@/app/workflows/edges";
 import {
@@ -110,6 +124,8 @@ import {
   beautifyWorkflowCanvasPositions,
   normalizeWorkflowDefinitionUi,
   parseWorkflowDefinitionUi,
+  renameWorkflowCanvasNode,
+  updateWorkflowCanvasNodeDetached,
   updateWorkflowCanvasNodePosition,
   type WorkflowDefinitionUi,
   type WorkflowCanvasPosition,
@@ -124,6 +140,25 @@ const RUN_DETAIL_AUTO_REFRESH_MS = 1000;
 const WORKFLOW_SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 const ASSIGNMENT_TARGET_PATTERN =
   /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
+const WORKFLOW_REFERENCE_PATH_SEGMENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const BRANCH_COMPARISON_OPERATORS = [
+  { value: "is_true", label: "Is true", rightDisabled: true },
+  { value: "is_false", label: "Is false", rightDisabled: true },
+  { value: "==", label: "Equal" },
+  { value: "!=", label: "Not equal" },
+  { value: "contains", label: "Contains" },
+  { value: "not_contains", label: "Not contains" },
+  { value: "starts_with", label: "Starts with" },
+  { value: "not_starts_with", label: "Not starts with" },
+  { value: "ends_with", label: "Ends with" },
+  { value: "not_ends_with", label: "Not ends with" },
+  { value: ">", label: "Greater than" },
+  { value: "<", label: "Less than" },
+] as const;
+const TRANSFORM_BOOLEAN_OPTIONS = [
+  { value: "true", label: "Yes" },
+  { value: "false", label: "No" },
+] as const;
 const RUN_STATUSES = [
   "queued",
   "running",
@@ -135,6 +170,9 @@ const RUN_STATUSES = [
 type RunStatus = (typeof RUN_STATUSES)[number];
 type RunMode = "test" | "live";
 type WorkflowDesignerView = "edit" | "runs";
+type WorkflowSavePromptIntent =
+  | { kind: "run-history" }
+  | { kind: "select-workflow"; workflow: WorkflowDefinition; runId?: string };
 
 export const Route = createFileRoute("/workflows")({
   validateSearch: z.object({
@@ -185,6 +223,7 @@ interface WorkflowNode {
   id: string;
   type: string;
   label?: string;
+  next?: string[];
   [key: string]: JsonValue | undefined;
 }
 
@@ -269,6 +308,7 @@ interface WorkflowTriggerSummary {
 
 interface RunDetail {
   run: WorkflowRun;
+  definition?: WorkflowDefinition;
   steps: WorkflowStepAttempt[];
   events: WorkflowRunEvent[];
 }
@@ -323,6 +363,7 @@ interface WorkflowPalettePayload {
   server?: string;
   tool?: string;
   agentId?: string;
+  transformPresetId?: string;
 }
 
 interface WorkflowTriggerPalettePayload {
@@ -337,11 +378,11 @@ const DEFAULT_NODES: WorkflowNode[] = [
   {
     id: "set_customer",
     type: "builtin.set",
-    assign: { customer: "$.input.customer" },
+    assign: { customer: "$.workflowTrigger.input.customer" },
   },
   {
     id: "normalize",
-    type: "builtin.transform",
+    type: "builtin.transform.object_pick",
     input: { customer: "$.context.customer" },
     transform: {
       kind: "object_pick",
@@ -350,7 +391,7 @@ const DEFAULT_NODES: WorkflowNode[] = [
     },
     assign: {
       customer: {
-        from: "$.steps.normalize.output",
+        from: "$.steps.normalize.output.value",
         mode: "replace",
       },
     },
@@ -373,6 +414,38 @@ const DEFAULT_INPUT = {
   },
 };
 
+const WORKFLOW_INPUT_SCHEMA_PLACEHOLDER = JSON.stringify(
+  {
+    type: "object",
+    required: ["assets"],
+    properties: {
+      assets: {
+        type: "array",
+        items: {
+          type: "object",
+          required: ["id", "hostname"],
+          properties: {
+            id: { type: "string" },
+            hostname: { type: "string" },
+            vulnerabilities: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  qid: { type: "string" },
+                  severity: { type: "integer", minimum: 1, maximum: 5 },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  null,
+  2,
+);
+
 function WorkflowsPage() {
   const search = Route.useSearch();
   const navigate = useNavigate({ from: "/workflows" });
@@ -392,9 +465,8 @@ function WorkflowsPage() {
   const [loadingMoreRuns, setLoadingMoreRuns] = useState(false);
   const [hasMoreRuns, setHasMoreRuns] = useState(false);
   const [nextRunOffset, setNextRunOffset] = useState<number | null>(null);
-  const [designerView, setDesignerView] = useState<WorkflowDesignerView>(
-    search.run ? "runs" : "edit",
-  );
+  const [designerView, setDesignerView] =
+    useState<WorkflowDesignerView>("edit");
   const [addStepTargetNodeId, setAddStepTargetNodeId] = useState<
     string | null | undefined
   >(undefined);
@@ -402,14 +474,18 @@ function WorkflowsPage() {
     useState<WorkflowReferenceEdgeKind | null>(null);
   const [addStepPlacement, setAddStepPlacement] =
     useState<WorkflowCanvasAddPlacement | null>(null);
-  const [nameDraft, setNameDraft] = useState("");
-  const [descriptionDraft, setDescriptionDraft] = useState("");
-  const [inputSchemaDraft, setInputSchemaDraft] = useState("null");
-  const [nodesDraft, setNodesDraft] = useState(formatJson(DEFAULT_NODES));
-  const [triggersDraft, setTriggersDraft] = useState(
+  const [savePromptIntent, setSavePromptIntent] =
+    useState<WorkflowSavePromptIntent | null>(null);
+  const [nameDraft, setNameDraftState] = useState("");
+  const [descriptionDraft, setDescriptionDraftState] = useState("");
+  const [inputSchemaDraft, setInputSchemaDraftState] = useState("null");
+  const [nodesDraft, setNodesDraftState] = useState(formatJson(DEFAULT_NODES));
+  const [triggersDraft, setTriggersDraftState] = useState(
     formatJson(DEFAULT_TRIGGERS),
   );
-  const [uiDraft, setUiDraft] = useState<WorkflowDefinitionUi | null>(null);
+  const [uiDraft, setUiDraftState] = useState<WorkflowDefinitionUi | null>(
+    null,
+  );
   const [inputDraft, setInputDraft] = useState(formatJson(DEFAULT_INPUT));
   const [mcpTools, setMcpTools] = useState<McpToolSummary[]>([]);
   const [agents, setAgents] = useState<AgentSummary[]>([]);
@@ -417,11 +493,56 @@ function WorkflowsPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const suppressedRunSearchReload = useRef<string | null>(null);
+  const suppressedWorkflowSelectSearchReload = useRef<string | null>(null);
   const mode = search.mode ?? "all";
   const status = search.status ?? "all";
   const triggerId = search.triggerId ?? "";
   const createdFrom = search.createdFrom ?? "";
   const createdTo = search.createdTo ?? "";
+  const nameDraftRef = useRef(nameDraft);
+  const descriptionDraftRef = useRef(descriptionDraft);
+  const inputSchemaDraftRef = useRef(inputSchemaDraft);
+  const nodesDraftRef = useRef(nodesDraft);
+  const triggersDraftRef = useRef(triggersDraft);
+  const uiDraftRef = useRef(uiDraft);
+  const selectedWorkflowIdRef = useRef<string | null>(selected?.id ?? null);
+
+  function setNameDraft(value: string) {
+    nameDraftRef.current = value;
+    setNameDraftState(value);
+  }
+
+  function setDescriptionDraft(value: string) {
+    descriptionDraftRef.current = value;
+    setDescriptionDraftState(value);
+  }
+
+  function setInputSchemaDraft(value: string) {
+    inputSchemaDraftRef.current = value;
+    setInputSchemaDraftState(value);
+  }
+
+  function setNodesDraft(value: string) {
+    nodesDraftRef.current = value;
+    setNodesDraftState(value);
+  }
+
+  function setTriggersDraft(value: string) {
+    triggersDraftRef.current = value;
+    setTriggersDraftState(value);
+  }
+
+  function setUiDraft(
+    value:
+      | WorkflowDefinitionUi
+      | null
+      | ((current: WorkflowDefinitionUi | null) => WorkflowDefinitionUi | null),
+  ) {
+    const next =
+      typeof value === "function" ? value(uiDraftRef.current) : value;
+    uiDraftRef.current = next;
+    setUiDraftState(next);
+  }
 
   usePublishCurrentView(
     useMemo(
@@ -435,12 +556,44 @@ function WorkflowsPage() {
     ),
   );
 
+  const draftDirty = useMemo(() => {
+    if (!selected) return false;
+    try {
+      return currentDraftHasChanges(selected);
+    } catch {
+      return true;
+    }
+  }, [
+    selected,
+    nameDraft,
+    descriptionDraft,
+    inputSchemaDraft,
+    nodesDraft,
+    triggersDraft,
+    uiDraft,
+  ]);
+
+  const navigationBlocker = useBlocker({
+    shouldBlockFn: ({ current, next }) =>
+      draftDirty &&
+      current.fullPath === "/workflows" &&
+      next.fullPath !== "/workflows",
+    enableBeforeUnload: () => draftDirty,
+    withResolver: true,
+  });
+
   useEffect(() => {
     void loadWorkflows(search.id);
     void loadMcpTools();
     void loadAgents();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (search.run) {
+      setDesignerView("runs");
+    }
+  }, [search.run]);
 
   useEffect(() => {
     if (!search.id) return;
@@ -457,8 +610,24 @@ function WorkflowsPage() {
       suppressedRunSearchReload.current = null;
       return;
     }
+    if (suppressedWorkflowSelectSearchReload.current === searchKey) {
+      suppressedWorkflowSelectSearchReload.current = null;
+      return;
+    }
     const workflow = workflows.find((item) => item.id === search.id);
-    if (workflow) selectWorkflow(workflow, search.run);
+    if (workflow) {
+      if (workflow.id === selected?.id) {
+        if (search.run && search.run !== detail?.run.id) {
+          setDesignerView("runs");
+          void loadRunDetail(search.run, workflow.id);
+        }
+        if (search.run && search.run === detail?.run.id) {
+          setDesignerView("runs");
+        }
+        return;
+      }
+      selectWorkflow(workflow, search.run);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     search.id,
@@ -476,24 +645,39 @@ function WorkflowsPage() {
     const runId = detail.run.id;
     const workflowId = selected.id;
     const timer = window.setInterval(() => {
-      void loadRunDetail(runId, workflowId);
+      void loadRunDetail(runId, workflowId, {
+        syncUrl: designerView === "runs",
+      });
     }, RUN_DETAIL_AUTO_REFRESH_MS);
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detail?.run.id, detail?.run.status, selected?.id]);
+  }, [designerView, detail?.run.id, detail?.run.status, selected?.id]);
 
-  useEffect(() => {
-    if (search.run) setDesignerView("runs");
-  }, [search.run]);
-
-  const parsedNodes = useMemo(() => parseNodesDraft(nodesDraft), [nodesDraft]);
+  const parsedNodes = useMemo(
+    () => parseNodesDraft(nodesDraftRef.current),
+    [nodesDraft],
+  );
+  const referenceSuggestions = useMemo(() => {
+    const inputSchema = parseOptionalJsonDraft(inputSchemaDraftRef.current);
+    return buildWorkflowReferenceSuggestions({
+      nodes: parsedNodes.ok ? parsedNodes.value : [],
+      inputSchema: inputSchema.ok ? inputSchema.value : null,
+    });
+  }, [inputSchemaDraft, parsedNodes]);
+  const runHistoryDefinition =
+    designerView === "runs" ? (detail?.definition ?? null) : null;
   const parsedTriggersForCanvas = useMemo(() => {
-    const parsed = parseTriggersDraft(triggersDraft);
+    const parsed = parseTriggersDraft(triggersDraftRef.current);
     return parsed.ok
       ? (parsed.value.filter(isRecord) as WorkflowGraphTrigger[])
       : [];
   }, [triggersDraft]);
   const effectiveTriggersForCanvas = useMemo(() => {
+    if (runHistoryDefinition) {
+      return runHistoryDefinition.triggers.filter(
+        isRecord,
+      ) as WorkflowGraphTrigger[];
+    }
     if (
       designerView !== "runs" ||
       parsedTriggersForCanvas.length > 0 ||
@@ -502,28 +686,38 @@ function WorkflowsPage() {
       return parsedTriggersForCanvas;
     }
     return runTriggerCanvasFallback(detail.run);
-  }, [designerView, detail, parsedTriggersForCanvas]);
+  }, [designerView, detail, parsedTriggersForCanvas, runHistoryDefinition]);
   const workflowRunOverlay = useMemo<WorkflowRunOverlayInput | null>(
     () =>
-      detail
+      designerView === "runs" && detail
         ? {
             run: { currentNodeId: detail.run.currentNodeId },
             steps: detail.steps,
           }
         : null,
-    [detail],
+    [designerView, detail],
   );
   const workflowGraphProjection = useMemo(
     () =>
       applyWorkflowRunOverlay(
         buildWorkflowGraphProjection({
-          nodes: parsedNodes.ok ? parsedNodes.value : [],
+          nodes: runHistoryDefinition
+            ? runHistoryDefinition.nodes
+            : parsedNodes.ok
+              ? parsedNodes.value
+              : [],
           triggers: effectiveTriggersForCanvas,
-          layout: uiDraft?.canvas,
+          layout: (runHistoryDefinition?.ui ?? uiDraft)?.canvas,
         }),
         workflowRunOverlay,
       ),
-    [parsedNodes, effectiveTriggersForCanvas, uiDraft, workflowRunOverlay],
+    [
+      parsedNodes,
+      effectiveTriggersForCanvas,
+      uiDraft,
+      runHistoryDefinition,
+      workflowRunOverlay,
+    ],
   );
   const workflowBeautifiedGraphProjection = useMemo(
     () =>
@@ -561,11 +755,6 @@ function WorkflowsPage() {
       setSelectedCanvasEdgeId(null);
     }
   }, [selectedCanvasEdgeId, workflowGraphProjection.edges]);
-  const selectedStep =
-    detail?.steps.find((step) => step.id === selectedStepId) ??
-    detail?.steps[0] ??
-    null;
-
   async function loadWorkflows(preferredId?: string) {
     setLoading(true);
     try {
@@ -580,6 +769,7 @@ function WorkflowsPage() {
       if (next)
         selectWorkflow(next, next.id === search.id ? search.run : undefined);
       else {
+        selectedWorkflowIdRef.current = null;
         setSelected(null);
         setRuns([]);
         setDetail(null);
@@ -594,10 +784,23 @@ function WorkflowsPage() {
     }
   }
 
-  async function selectWorkflow(workflow: WorkflowDefinition, runId?: string) {
+  async function requestSelectWorkflow(
+    workflow: WorkflowDefinition,
+    runId?: string,
+  ) {
+    if (workflow.id === selected?.id && !runId) {
+      return;
+    }
+    if (draftDirty) {
+      setSavePromptIntent({ kind: "select-workflow", workflow, runId });
+      return;
+    }
+    await selectWorkflow(workflow, runId);
+  }
+
+  function syncSelectedWorkflowDraft(workflow: WorkflowDefinition) {
+    selectedWorkflowIdRef.current = workflow.id;
     setSelected(workflow);
-    setSelectedCanvasNodeId(null);
-    setSelectedCanvasEdgeId(null);
     setNameDraft(workflow.name);
     setDescriptionDraft(workflow.description ?? "");
     setInputSchemaDraft(formatOptionalJson(workflow.inputSchema));
@@ -605,6 +808,22 @@ function WorkflowsPage() {
     setTriggersDraft(formatJson(workflow.triggers));
     setUiDraft(workflow.ui ?? null);
     setTriggers(deriveTriggerSummaries(workflow.triggers));
+  }
+
+  async function selectWorkflow(workflow: WorkflowDefinition, runId?: string) {
+    syncSelectedWorkflowDraft(workflow);
+    setSelectedCanvasNodeId(null);
+    setSelectedCanvasEdgeId(null);
+    setDesignerView(runId ? "runs" : "edit");
+    suppressedWorkflowSelectSearchReload.current = runSearchKey({
+      workflowId: workflow.id,
+      mode,
+      status,
+      triggerId,
+      createdFrom,
+      createdTo,
+      runId,
+    });
     void navigate({
       search: workflowSearch({ id: workflow.id, run: runId }),
       replace: true,
@@ -620,8 +839,10 @@ function WorkflowsPage() {
       const data = await api<{ triggers: WorkflowTriggerSummary[] }>(
         `/api/workflows/${encodeURIComponent(workflowId)}/triggers`,
       );
+      if (selectedWorkflowIdRef.current !== workflowId) return;
       setTriggers(mergeAuthoringTriggerFields(data.triggers, fallback));
     } catch {
+      if (selectedWorkflowIdRef.current !== workflowId) return;
       setTriggers(deriveTriggerSummaries(fallback));
     }
   }
@@ -629,16 +850,18 @@ function WorkflowsPage() {
   async function loadRuns(workflowId: string, preferredRunId?: string) {
     try {
       const data = await api<RunListPage>(runListPath(workflowId, 0));
+      if (selectedWorkflowIdRef.current !== workflowId) return;
       setRuns(data.runs);
       setHasMoreRuns(data.hasMore);
       setNextRunOffset(data.nextOffset);
       const runId = preferredRunId ?? data.runs[0]?.id;
       if (runId) {
-        const loaded = await loadRunDetail(runId, workflowId);
+        const loaded = await loadRunDetail(runId, workflowId, {
+          syncUrl: Boolean(preferredRunId),
+        });
         if (loaded) return;
       }
       setDetail(null);
-      setSelectedStepId(null);
       void navigate({
         search: workflowSearch({ id: workflowId, run: undefined }),
         replace: true,
@@ -740,20 +963,6 @@ function WorkflowsPage() {
     };
   }
 
-  function updateRunFilters(
-    patch: Partial<{
-      mode: "all" | RunMode;
-      status: "all" | RunStatus;
-      triggerId: string;
-      createdFrom: string;
-      createdTo: string;
-    }>,
-  ) {
-    void navigate({
-      search: workflowSearch({ ...patch, run: undefined }),
-    });
-  }
-
   async function loadAgents() {
     try {
       const data = await api<{ agents: AgentSummary[] }>(
@@ -768,6 +977,7 @@ function WorkflowsPage() {
   async function loadRunDetail(
     runId: string,
     expectedWorkflowId?: string,
+    opts: { syncUrl?: boolean } = {},
   ): Promise<boolean> {
     try {
       const data = await api<RunDetail>(
@@ -776,19 +986,27 @@ function WorkflowsPage() {
       if (expectedWorkflowId && data.run.workflowId !== expectedWorkflowId) {
         return false;
       }
+      if (
+        expectedWorkflowId &&
+        selectedWorkflowIdRef.current !== expectedWorkflowId
+      ) {
+        return false;
+      }
       setDetail(data);
       setPendingRunId(null);
+      setSelectedStepId(null);
       setRuns((current) =>
         reconcileWorkflowRunInLoadedList(current, data.run, {
           ...runFilters(),
           workflowId: data.run.workflowId,
         }),
       );
-      setSelectedStepId((current) => retainedStepId(data.steps, current));
-      void navigate({
-        search: workflowSearch({ id: data.run.workflowId, run: data.run.id }),
-        replace: true,
-      });
+      if (opts.syncUrl !== false) {
+        void navigate({
+          search: workflowSearch({ id: data.run.workflowId, run: data.run.id }),
+          replace: true,
+        });
+      }
       return true;
     } catch (err) {
       toast.error(errorMessage(err));
@@ -842,10 +1060,10 @@ function WorkflowsPage() {
       const remaining = workflows.filter((item) => item.id !== workflow.id);
       const next = remaining.find((item) => item.id !== workflow.id) ?? null;
       if (selected?.id === workflow.id) {
+        selectedWorkflowIdRef.current = next?.id ?? null;
         setSelected(next);
         setDetail(null);
         setRuns([]);
-        setSelectedStepId(null);
         if (next) {
           void navigate({ search: { id: next.id }, replace: true });
           await loadWorkflows(next.id);
@@ -906,65 +1124,14 @@ function WorkflowsPage() {
 
   async function saveDraft() {
     if (!selected) return;
-    const nodes = parseNodesDraft(nodesDraft);
-    if (!nodes.ok) {
-      toast.error(nodes.error);
-      return;
-    }
-    const references = validateNodeReferences(nodes.value);
-    if (!references.ok) {
-      toast.error(references.message);
-      return;
-    }
-    const nodeShape = validateExportedNodeShape(nodes.value);
-    if (!nodeShape.ok) {
-      toast.error(nodeShape.message);
-      return;
-    }
-    const triggerDraft = parseTriggersDraft(triggersDraft);
-    if (!triggerDraft.ok) {
-      toast.error(triggerDraft.error);
-      return;
-    }
-    const triggerShape = validateTriggerShape(triggerDraft.value);
-    if (!triggerShape.ok) {
-      toast.error(triggerShape.message);
-      return;
-    }
-    const triggerIdentity = validateTriggerIdentity(triggerDraft.value);
-    if (!triggerIdentity.ok) {
-      toast.error(triggerIdentity.message);
-      return;
-    }
-    const inputSchema = parseOptionalJsonDraft(inputSchemaDraft);
-    if (!inputSchema.ok) {
-      toast.error(inputSchema.error);
-      return;
-    }
-    const name = nameDraft.trim();
-    if (!name) {
-      toast.error("Workflow needs a name");
-      return;
-    }
     setBusy("save");
     try {
-      const data = await api<{ workflow: WorkflowDefinition }>(
-        `/api/workflows/${encodeURIComponent(selected.id)}`,
-        {
-          method: "PATCH",
-          body: {
-            name,
-            description: descriptionDraft.trim() || null,
-            inputSchema: inputSchema.value,
-            triggers: triggerDraft.value,
-            nodes: nodes.value,
-            ui: normalizeWorkflowDefinitionUi(uiDraft, nodes.value) ?? null,
-          },
-        },
-      );
+      const workflow = await saveCurrentDraft(selected.id);
       toast.success("Draft saved");
-      setSelected(data.workflow);
-      await loadWorkflows(data.workflow.id);
+      syncSelectedWorkflowDraft(workflow);
+      setWorkflows((current) =>
+        current.map((item) => (item.id === workflow.id ? workflow : item)),
+      );
     } catch (err) {
       toast.error(errorMessage(err));
     } finally {
@@ -972,10 +1139,160 @@ function WorkflowsPage() {
     }
   }
 
+  async function saveDraftAndContinue() {
+    if (!selected) return;
+    setBusy("save");
+    try {
+      const workflow = await saveCurrentDraft(selected.id);
+      toast.success("Draft saved");
+      const intent = savePromptIntent;
+      setSavePromptIntent(null);
+      setWorkflows((current) =>
+        current.map((item) => (item.id === workflow.id ? workflow : item)),
+      );
+      if (intent?.kind === "run-history") {
+        syncSelectedWorkflowDraft(workflow);
+        openRunHistoryView();
+      } else if (intent?.kind === "select-workflow") {
+        await selectWorkflow(intent.workflow, intent.runId);
+      } else if (navigationBlocker.status === "blocked") {
+        syncSelectedWorkflowDraft(workflow);
+        navigationBlocker.proceed();
+      }
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function discardDraftAndContinue() {
+    const intent = savePromptIntent;
+    setSavePromptIntent(null);
+    if (intent?.kind === "run-history") {
+      if (selected) syncSelectedWorkflowDraft(selected);
+      openRunHistoryView();
+      return;
+    }
+    if (intent?.kind === "select-workflow") {
+      await selectWorkflow(intent.workflow, intent.runId);
+      return;
+    }
+    if (navigationBlocker.status === "blocked") {
+      if (selected) syncSelectedWorkflowDraft(selected);
+      navigationBlocker.proceed();
+    }
+  }
+
+  function openRunHistoryView() {
+    setDesignerView("runs");
+    if (!detail && runs[0]) {
+      selectRunFromHistory(runs[0].id);
+    }
+  }
+
+  function requestRunHistoryView() {
+    if (!selected) {
+      openRunHistoryView();
+      return;
+    }
+    try {
+      if (draftDirty) {
+        setSavePromptIntent({ kind: "run-history" });
+        return;
+      }
+    } catch (err) {
+      toast.error(errorMessage(err));
+      return;
+    }
+    openRunHistoryView();
+  }
+
+  async function saveCurrentDraft(workflowId: string) {
+    const body = currentDraftUpdateBody();
+    const data = await api<{ workflow: WorkflowDefinition }>(
+      `/api/workflows/${encodeURIComponent(workflowId)}`,
+      {
+        method: "PATCH",
+        body,
+      },
+    );
+    return data.workflow;
+  }
+
+  function currentDraftUpdateBody() {
+    const nodes = parseNodesDraft(nodesDraftRef.current);
+    if (!nodes.ok) {
+      throw new Error(nodes.error);
+    }
+    const references = validateNodeReferences(nodes.value);
+    if (!references.ok) {
+      throw new Error(references.message);
+    }
+    const nodeShape = validateExportedNodeShape(nodes.value);
+    if (!nodeShape.ok) {
+      throw new Error(nodeShape.message);
+    }
+    const canvasCompleteness = validateWorkflowCanvasCompleteness(
+      nodes.value,
+      uiDraftRef.current,
+    );
+    if (!canvasCompleteness.ok) {
+      throw new Error(canvasCompleteness.message);
+    }
+    const triggerDraft = parseTriggersDraft(triggersDraftRef.current);
+    if (!triggerDraft.ok) {
+      throw new Error(triggerDraft.error);
+    }
+    const triggerShape = validateTriggerShape(triggerDraft.value);
+    if (!triggerShape.ok) {
+      throw new Error(triggerShape.message);
+    }
+    const triggerIdentity = validateTriggerIdentity(triggerDraft.value);
+    if (!triggerIdentity.ok) {
+      throw new Error(triggerIdentity.message);
+    }
+    const inputSchema = parseOptionalJsonDraft(inputSchemaDraftRef.current);
+    if (!inputSchema.ok) {
+      throw new Error(inputSchema.error);
+    }
+    const name = nameDraftRef.current.trim();
+    if (!name) {
+      throw new Error("Workflow needs a name");
+    }
+
+    return {
+      name,
+      description: descriptionDraftRef.current.trim() || null,
+      inputSchema: inputSchema.value,
+      triggers: triggerDraft.value,
+      nodes: nodes.value,
+      ui:
+        normalizeWorkflowDefinitionUi(uiDraftRef.current, nodes.value) ?? null,
+    };
+  }
+
+  function currentDraftHasChanges(workflow: WorkflowDefinition) {
+    let body: ReturnType<typeof currentDraftUpdateBody>;
+    try {
+      body = currentDraftUpdateBody();
+    } catch {
+      return true;
+    }
+    return (
+      body.name !== workflow.name ||
+      (body.description ?? "") !== (workflow.description ?? "") ||
+      !jsonEquivalent(body.inputSchema, workflow.inputSchema) ||
+      !jsonEquivalent(body.triggers, workflow.triggers) ||
+      !jsonEquivalent(body.nodes, workflow.nodes) ||
+      !jsonEquivalent(body.ui, workflow.ui ?? null)
+    );
+  }
+
   async function publishWorkflow() {
     if (!selected) return;
     if (!validateCurrentNodeReferences()) return;
-    const triggerDraft = parseTriggersDraft(triggersDraft);
+    const triggerDraft = parseTriggersDraft(triggersDraftRef.current);
     if (!triggerDraft.ok) {
       toast.error(triggerDraft.error);
       return;
@@ -1007,7 +1324,7 @@ function WorkflowsPage() {
 
   function exportWorkflowDefinition() {
     if (!selected) return;
-    const nodes = parseNodesDraft(nodesDraft);
+    const nodes = parseNodesDraft(nodesDraftRef.current);
     if (!nodes.ok) {
       toast.error(nodes.error);
       return;
@@ -1022,7 +1339,15 @@ function WorkflowsPage() {
       toast.error(nodeShape.message);
       return;
     }
-    const triggerDraft = parseTriggersDraft(triggersDraft);
+    const canvasCompleteness = validateWorkflowCanvasCompleteness(
+      nodes.value,
+      uiDraftRef.current,
+    );
+    if (!canvasCompleteness.ok) {
+      toast.error(canvasCompleteness.message);
+      return;
+    }
+    const triggerDraft = parseTriggersDraft(triggersDraftRef.current);
     if (!triggerDraft.ok) {
       toast.error(triggerDraft.error);
       return;
@@ -1037,19 +1362,19 @@ function WorkflowsPage() {
       toast.error(triggerIdentity.message);
       return;
     }
-    const inputSchema = parseOptionalJsonDraft(inputSchemaDraft);
+    const inputSchema = parseOptionalJsonDraft(inputSchemaDraftRef.current);
     if (!inputSchema.ok) {
       toast.error(inputSchema.error);
       return;
     }
-    const name = nameDraft.trim();
+    const name = nameDraftRef.current.trim();
     if (!name) {
       toast.error("Workflow needs a name");
       return;
     }
 
-    const description = descriptionDraft.trim();
-    const ui = normalizeWorkflowDefinitionUi(uiDraft, nodes.value);
+    const description = descriptionDraftRef.current.trim();
+    const ui = normalizeWorkflowDefinitionUi(uiDraftRef.current, nodes.value);
     const payload = {
       format: "openacme.workflow.definition.v1",
       exportedAt: new Date().toISOString(),
@@ -1090,18 +1415,27 @@ function WorkflowsPage() {
     }
     setBusy(mode);
     try {
+      const runWorkflow =
+        mode === "test" && currentDraftHasChanges(selected)
+          ? await saveCurrentDraft(selected.id)
+          : selected;
+      if (runWorkflow !== selected) {
+        setSelected(runWorkflow);
+        setWorkflows((current) =>
+          current.map((workflow) =>
+            workflow.id === runWorkflow.id ? runWorkflow : workflow,
+          ),
+        );
+      }
       const data = await api<RunDetail>(
-        `/api/workflows/${encodeURIComponent(selected.id)}/runs/${mode}`,
+        `/api/workflows/${encodeURIComponent(runWorkflow.id)}/runs/${mode}`,
         {
           method: "POST",
-          body: { input: input.value },
+          body: { input: input.value, async: true },
         },
       );
-      toast.success(
-        mode === "test" ? "Test run complete" : "Live run complete",
-      );
+      toast.success(mode === "test" ? "Test run started" : "Live run started");
       setDetail(data);
-      setSelectedStepId((current) => retainedStepId(data.steps, current));
       setRuns((current) =>
         reconcileWorkflowRunInLoadedList(current, data.run, runFilters()),
       );
@@ -1110,7 +1444,7 @@ function WorkflowsPage() {
         runId: data.run.id,
       });
       void navigate({
-        search: workflowSearch({ id: selected.id, run: data.run.id }),
+        search: workflowSearch({ id: runWorkflow.id, run: data.run.id }),
         replace: true,
       });
     } catch (err) {
@@ -1131,16 +1465,26 @@ function WorkflowsPage() {
     const busyKey = `trigger:${trigger.id}`;
     setBusy(busyKey);
     try {
+      const runWorkflow = currentDraftHasChanges(selected)
+        ? await saveCurrentDraft(selected.id)
+        : selected;
+      if (runWorkflow !== selected) {
+        setSelected(runWorkflow);
+        setWorkflows((current) =>
+          current.map((workflow) =>
+            workflow.id === runWorkflow.id ? runWorkflow : workflow,
+          ),
+        );
+      }
       const data = await api<RunDetail>(
-        `/api/workflows/${encodeURIComponent(selected.id)}/triggers/${encodeURIComponent(trigger.id)}/runs`,
+        `/api/workflows/${encodeURIComponent(runWorkflow.id)}/triggers/${encodeURIComponent(trigger.id)}/runs`,
         {
           method: "POST",
-          body: { input: input.value },
+          body: { input: input.value, async: true },
         },
       );
-      toast.success("Trigger run complete");
+      toast.success("Trigger run started");
       setDetail(data);
-      setSelectedStepId((current) => retainedStepId(data.steps, current));
       setRuns((current) =>
         reconcileWorkflowRunInLoadedList(current, data.run, runFilters()),
       );
@@ -1149,7 +1493,7 @@ function WorkflowsPage() {
         runId: data.run.id,
       });
       void navigate({
-        search: workflowSearch({ id: selected.id, run: data.run.id }),
+        search: workflowSearch({ id: runWorkflow.id, run: data.run.id }),
         replace: true,
       });
     } catch (err) {
@@ -1169,7 +1513,6 @@ function WorkflowsPage() {
       );
       toast.success("Run queued from prior input");
       setDetail(data);
-      setSelectedStepId((current) => retainedStepId(data.steps, current));
       const selectedWorkflowId = selected?.id ?? detail.run.workflowId;
       setRuns((current) =>
         reconcileWorkflowRunInLoadedList(current, data.run, {
@@ -1203,7 +1546,6 @@ function WorkflowsPage() {
       );
       toast.success("Run canceled");
       setDetail(data);
-      setSelectedStepId((current) => retainedStepId(data.steps, current));
       const selectedWorkflowId = selected?.id ?? detail.run.workflowId;
       setRuns((current) =>
         reconcileWorkflowRunInLoadedList(current, data.run, {
@@ -1227,9 +1569,10 @@ function WorkflowsPage() {
     afterNodeId: string | null,
     sourceHandle?: WorkflowReferenceEdgeKind | null,
     tool?: McpToolSummary | AgentSummary,
+    transformPresetId?: string,
     placement?: WorkflowCanvasAddPlacement | null,
   ) {
-    const parsed = parseNodesDraft(nodesDraft);
+    const parsed = parseNodesDraft(nodesDraftRef.current);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;
@@ -1250,11 +1593,24 @@ function WorkflowsPage() {
             kind: sourceHandle,
           }) !== null
         : false;
+    const hasSequenceTarget =
+      afterNodeId && !isTriggerCanvasNodeId(afterNodeId) && !sourceHandle
+        ? firstWorkflowSequenceTarget(parsed.value, afterNodeId) !== null
+        : false;
     const insertionAnchor =
-      sourceHandle && !hasReferenceTarget ? null : afterNodeId;
+      (sourceHandle && !hasReferenceTarget) ||
+      (!sourceHandle && !hasSequenceTarget)
+        ? null
+        : afterNodeId;
     const inserted = isTriggerCanvasNodeId(afterNodeId)
-      ? insertWorkflowNodeFirst(parsed.value, kind, tool)
-      : insertWorkflowNodeAfter(parsed.value, insertionAnchor, kind, tool);
+      ? insertWorkflowNodeFirst(parsed.value, kind, tool, transformPresetId)
+      : insertWorkflowNodeAfter(
+          parsed.value,
+          insertionAnchor,
+          kind,
+          tool,
+          transformPresetId,
+        );
     const addedNode = inserted.find((node) => !existingIds.has(node.id));
     let next = inserted;
     if (
@@ -1278,16 +1634,13 @@ function WorkflowsPage() {
       !isTriggerCanvasNodeId(afterNodeId) &&
       addedNode
     ) {
-      const connected = connectWorkflowRouteContinuationEdge(inserted, {
+      const connected = insertWorkflowSequenceEdgeTarget(inserted, {
         sourceId: afterNodeId,
         targetId: addedNode.id,
       });
       if (connected.ok) {
         next = connected.nodes as WorkflowNode[];
-      } else if (
-        connected.reason !== "route_source_not_found" &&
-        connected.reason !== "ambiguous_route_source"
-      ) {
+      } else {
         toast.error(referenceMutationMessage(connected.reason));
       }
     }
@@ -1298,6 +1651,7 @@ function WorkflowsPage() {
           current,
           addedNode.id,
           placement.position,
+          { detached: afterNodeId === null },
         ),
       );
     }
@@ -1324,7 +1678,7 @@ function WorkflowsPage() {
   }
 
   function addManualTriggerFromPalette() {
-    const parsed = parseTriggersDraft(triggersDraft);
+    const parsed = parseTriggersDraft(triggersDraftRef.current);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;
@@ -1354,6 +1708,7 @@ function WorkflowsPage() {
       targetNodeId,
       addStepTargetSourceHandle,
       toolForPalettePayload(payload),
+      payload.transformPresetId,
       addStepPlacement,
     );
     closeAddStepDialog();
@@ -1370,6 +1725,7 @@ function WorkflowsPage() {
       selectedCanvasNodeId,
       null,
       toolForPalettePayload(payload),
+      payload.transformPresetId,
     );
   }
 
@@ -1395,7 +1751,7 @@ function WorkflowsPage() {
   }
 
   function moveNode(index: number, direction: -1 | 1) {
-    const parsed = parseNodesDraft(nodesDraft);
+    const parsed = parseNodesDraft(nodesDraftRef.current);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;
@@ -1407,7 +1763,7 @@ function WorkflowsPage() {
 
   function moveSelectedCanvasNode(direction: -1 | 1) {
     if (!selectedCanvasNodeId) return;
-    const parsed = parseNodesDraft(nodesDraft);
+    const parsed = parseNodesDraft(nodesDraftRef.current);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;
@@ -1420,7 +1776,7 @@ function WorkflowsPage() {
   }
 
   function cloneSelectedCanvasNode(nodeId: string) {
-    const parsed = parseNodesDraft(nodesDraft);
+    const parsed = parseNodesDraft(nodesDraftRef.current);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;
@@ -1433,7 +1789,7 @@ function WorkflowsPage() {
   }
 
   function makeForeachBodyFirst(foreachNodeId: string, bodyNodeId: string) {
-    const parsed = parseNodesDraft(nodesDraft);
+    const parsed = parseNodesDraft(nodesDraftRef.current);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;
@@ -1452,7 +1808,7 @@ function WorkflowsPage() {
 
   function connectCanvasReferenceEdge(connection: WorkflowCanvasConnection) {
     const kind = referenceEdgeKind(connection.sourceHandle);
-    const parsed = parseNodesDraft(nodesDraft);
+    const parsed = parseNodesDraft(nodesDraftRef.current);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;
@@ -1462,8 +1818,12 @@ function WorkflowsPage() {
           sourceId: connection.sourceId,
           targetId: connection.targetId,
           kind,
+          preserveTargets: preservedCanvasContinuationTargets(
+            workflowGraphProjection,
+            connection.targetId,
+          ),
         })
-      : overwriteWorkflowRouteContinuationEdge(parsed.value, {
+      : overwriteWorkflowSequenceEdge(parsed.value, {
           sourceId: connection.sourceId,
           targetId: connection.targetId,
         });
@@ -1472,11 +1832,14 @@ function WorkflowsPage() {
       return;
     }
     setNodesDraft(formatJson(result.nodes));
+    setUiDraft((current) =>
+      updateWorkflowCanvasNodeDetached(current, connection.targetId, false),
+    );
     setSelectedCanvasNodeId(connection.sourceId);
     setSelectedCanvasEdgeId(
       kind
         ? `edge:${kind}:${connection.sourceId}:${connection.targetId}`
-        : null,
+        : `edge:sequence:${connection.sourceId}:${connection.targetId}`,
     );
   }
 
@@ -1485,13 +1848,13 @@ function WorkflowsPage() {
   ) {
     const kind = referenceEdgeKind(edge.kind);
     const targetId = edge.targetRef ?? edge.targetId;
-    const parsed = parseNodesDraft(nodesDraft);
-    if (!parsed.ok) {
-      toast.error(parsed.error);
-      return;
-    }
-    if (!kind) {
-      const result = removeWorkflowRouteContinuationEdge(parsed.value, {
+    if (edge.kind === "sequence") {
+      const parsed = parseNodesDraft(nodesDraftRef.current);
+      if (!parsed.ok) {
+        toast.error(parsed.error);
+        return;
+      }
+      const result = removeWorkflowSequenceEdge(parsed.value, {
         sourceId: edge.sourceId,
         targetId,
       });
@@ -1502,6 +1865,15 @@ function WorkflowsPage() {
       setNodesDraft(formatJson(result.nodes));
       setSelectedCanvasEdgeId(null);
       setSelectedCanvasNodeId(edge.sourceId);
+      return;
+    }
+    const parsed = parseNodesDraft(nodesDraftRef.current);
+    if (!parsed.ok) {
+      toast.error(parsed.error);
+      return;
+    }
+    if (!kind) {
+      toast.error(referenceMutationMessage("edge_kind_not_supported"));
       return;
     }
     const result = removeWorkflowReferenceEdge(parsed.value, {
@@ -1518,12 +1890,14 @@ function WorkflowsPage() {
     setSelectedCanvasNodeId(edge.sourceId);
   }
 
-  function selectCanvasNode(nodeId: string) {
+  function selectCanvasNode(nodeId: string | null) {
     setSelectedCanvasNodeId(nodeId);
     setSelectedCanvasEdgeId(null);
-    if (!detail) return;
-    const stepId = latestWorkflowRunStepIdForNode(detail.steps, nodeId);
-    if (stepId) setSelectedStepId(stepId);
+    if (designerView !== "runs" || !detail || nodeId === null) {
+      setSelectedStepId(null);
+      return;
+    }
+    setSelectedStepId(latestWorkflowRunStepIdForNode(detail.steps, nodeId));
   }
 
   function updateCanvasNodePosition(
@@ -1549,14 +1923,6 @@ function WorkflowsPage() {
     toast.success("Canvas layout refreshed");
   }
 
-  function selectRunConsoleStep(stepId: string) {
-    setSelectedStepId(stepId);
-    const step = detail?.steps.find((item) => item.id === stepId);
-    if (!step) return;
-    setSelectedCanvasNodeId(step.nodeId);
-    setSelectedCanvasEdgeId(null);
-  }
-
   function selectRunFromHistory(runId: string) {
     if (detail?.run.id === runId && pendingRunId === null) return;
     setPendingRunId(runId);
@@ -1564,7 +1930,7 @@ function WorkflowsPage() {
   }
 
   function deleteNode(index: number) {
-    const parsed = parseNodesDraft(nodesDraft);
+    const parsed = parseNodesDraft(nodesDraftRef.current);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;
@@ -1575,7 +1941,7 @@ function WorkflowsPage() {
   }
 
   function deleteWorkflowNode(nodeId: string) {
-    const parsed = parseNodesDraft(nodesDraft);
+    const parsed = parseNodesDraft(nodesDraftRef.current);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;
@@ -1586,7 +1952,7 @@ function WorkflowsPage() {
   }
 
   function validateCurrentNodeReferences() {
-    const nodes = parseNodesDraft(nodesDraft);
+    const nodes = parseNodesDraft(nodesDraftRef.current);
     if (!nodes.ok) {
       toast.error(nodes.error);
       return false;
@@ -1601,11 +1967,19 @@ function WorkflowsPage() {
       toast.error(nodeShape.message);
       return false;
     }
+    const canvasCompleteness = validateWorkflowCanvasCompleteness(
+      nodes.value,
+      uiDraftRef.current,
+    );
+    if (!canvasCompleteness.ok) {
+      toast.error(canvasCompleteness.message);
+      return false;
+    }
     return true;
   }
 
   function validateCurrentTriggerDraft() {
-    const triggers = parseTriggersDraft(triggersDraft);
+    const triggers = parseTriggersDraft(triggersDraftRef.current);
     if (!triggers.ok) {
       toast.error(triggers.error);
       return false;
@@ -1627,7 +2001,7 @@ function WorkflowsPage() {
     index: number,
     updater: (node: WorkflowNode) => WorkflowNode,
   ) {
-    const parsed = parseNodesDraft(nodesDraft);
+    const parsed = parseNodesDraft(nodesDraftRef.current);
     if (!parsed.ok) {
       toast.error(parsed.error);
       return;
@@ -1642,10 +2016,68 @@ function WorkflowsPage() {
   }
 
   function updateNodeLabel(index: number, value: string) {
-    const label = value.trim();
-    updateNode(index, (node) =>
-      label ? { ...node, label } : omitNodeKey(node, "label"),
+    const hasLabel = value.trim().length > 0;
+    const parsed = parseNodesDraft(nodesDraftRef.current);
+    if (!parsed.ok) {
+      toast.error(parsed.error);
+      return;
+    }
+    const node = parsed.value[index];
+    if (!node) return;
+    const labeledNodes = parsed.value.map((item, itemIndex) =>
+      itemIndex === index
+        ? hasLabel
+          ? { ...item, label: value }
+          : omitNodeKey(item, "label")
+        : item,
     );
+    const nextId = hasLabel
+      ? uniqueWorkflowNodeIdFromLabel(labeledNodes, node.id, value)
+      : null;
+    if (!nextId || nextId === node.id) {
+      setNodesDraft(formatJson(labeledNodes));
+      return;
+    }
+    const nextNodes = renameWorkflowNodeId(labeledNodes, node.id, nextId);
+    if (!nextNodes) {
+      toast.error("Step ID could not be updated from label");
+      setNodesDraft(formatJson(labeledNodes));
+      return;
+    }
+    setNodesDraft(formatJson(nextNodes));
+    setUiDraft((current) => renameWorkflowCanvasNode(current, node.id, nextId));
+    setSelectedCanvasNodeId(nextId);
+    setSelectedCanvasEdgeId(null);
+  }
+
+  function updateNodeId(index: number, value: string): boolean {
+    const nextId = value.trim();
+    const parsed = parseNodesDraft(nodesDraftRef.current);
+    if (!parsed.ok) {
+      toast.error(parsed.error);
+      return false;
+    }
+    const node = parsed.value[index];
+    if (!node) return false;
+    if (nextId === node.id) return true;
+    if (!WORKFLOW_SAFE_ID.test(nextId)) {
+      toast.error("Step ID must match [A-Za-z0-9][A-Za-z0-9_.-]*");
+      return false;
+    }
+    if (parsed.value.some((item) => item.id === nextId)) {
+      toast.error(`Step ID already exists: ${nextId}`);
+      return false;
+    }
+    const nextNodes = renameWorkflowNodeId(parsed.value, node.id, nextId);
+    if (!nextNodes) {
+      toast.error("Step ID could not be updated");
+      return false;
+    }
+    setNodesDraft(formatJson(nextNodes));
+    setUiDraft((current) => renameWorkflowCanvasNode(current, node.id, nextId));
+    setSelectedCanvasNodeId(nextId);
+    setSelectedCanvasEdgeId(null);
+    return true;
   }
 
   function updateAssignmentTarget(
@@ -1712,7 +2144,7 @@ function WorkflowsPage() {
     value: string,
   ) {
     updateNode(index, (node) => {
-      if (node.type !== "builtin.transform") return node;
+      if (!isWorkflowTransformNodeType(node.type)) return node;
       if (field === "input") {
         const parsed = parseJsonObjectDraft(value);
         if (!parsed.ok) return node;
@@ -1748,8 +2180,6 @@ function WorkflowsPage() {
       | "caseId"
       | "caseLabel"
       | "caseValue"
-      | "caseNodes"
-      | "defaultNodes"
       | "addCase"
       | "removeCase",
     value: string,
@@ -1761,9 +2191,6 @@ function WorkflowsPage() {
       if (field === "value") {
         const parsed = parseJsonDraft(value);
         return parsed.ok ? { ...node, value: parsed.value } : node;
-      }
-      if (field === "defaultNodes") {
-        return { ...node, default: parseNodeIdList(value) };
       }
       if (field === "addCase") {
         const nextIndex = cases.length + 1;
@@ -1802,7 +2229,7 @@ function WorkflowsPage() {
           const parsed = parseJsonDraft(value);
           return parsed.ok ? { ...item, value: parsed.value } : item;
         }
-        return { ...item, nodes: parseNodeIdList(value) };
+        return item;
       });
       return { ...node, cases: nextCases };
     });
@@ -1860,8 +2287,9 @@ function WorkflowsPage() {
         }
         return { ...node, delayMs };
       }
-      const reason = value.trim();
-      return reason ? { ...node, reason } : omitNodeKey(node, "reason");
+      return value.trim()
+        ? { ...node, reason: value }
+        : omitNodeKey(node, "reason");
     });
   }
 
@@ -2078,132 +2506,6 @@ function WorkflowsPage() {
     });
   }
 
-  function updateTriggerInputSchema(triggerId: string, value: string) {
-    updateTrigger(triggerId, (trigger) => {
-      const schema = parseOptionalJsonDraft(value);
-      if (!schema.ok) return trigger;
-      if (schema.value === null) {
-        const nextTrigger = { ...trigger };
-        delete nextTrigger.inputSchema;
-        return nextTrigger;
-      }
-      return { ...trigger, inputSchema: schema.value };
-    });
-  }
-
-  function updateScheduledTrigger(
-    triggerId: string,
-    field: "expr" | "tz",
-    value: string,
-  ) {
-    updateTrigger(triggerId, (trigger) => {
-      if (trigger["kind"] !== "scheduled") return trigger;
-      const currentSchedule = isRecord(trigger["schedule"])
-        ? trigger["schedule"]
-        : {};
-      const schedule: Record<string, JsonValue> = {
-        kind: "cron",
-        expr:
-          typeof currentSchedule["expr"] === "string"
-            ? currentSchedule["expr"]
-            : "",
-        ...(typeof currentSchedule["tz"] === "string"
-          ? { tz: currentSchedule["tz"] }
-          : {}),
-      };
-      if (field === "expr") {
-        if (!value) return trigger;
-        schedule.expr = value;
-      } else if (value.trim()) {
-        schedule.tz = value.trim();
-      } else {
-        delete schedule.tz;
-      }
-      return { ...trigger, schedule };
-    });
-  }
-
-  function updateScheduledTriggerInput(triggerId: string, value: string) {
-    updateTrigger(triggerId, (trigger) => {
-      if (trigger["kind"] !== "scheduled") return trigger;
-      const parsed = parseOptionalJsonDraft(value);
-      if (!parsed.ok) return trigger;
-      const nextTrigger: { [key: string]: JsonValue } = { ...trigger };
-      if (parsed.value === null) delete nextTrigger.input;
-      else nextTrigger.input = parsed.value;
-      return nextTrigger;
-    });
-  }
-
-  function updateTriggerEnabled(triggerId: string, enabled: boolean) {
-    updateTrigger(triggerId, (trigger) => {
-      if (trigger["kind"] === "manual") return { ...trigger, enabled: true };
-      if (trigger["kind"] === "task") return { ...trigger, enabled: false };
-      if (trigger["kind"] === "scheduled" || trigger["kind"] === "webhook") {
-        return { ...trigger, enabled };
-      }
-      return trigger;
-    });
-  }
-
-  function updateWebhookTriggerPath(triggerId: string, value: string) {
-    updateTrigger(triggerId, (trigger) => {
-      if (trigger["kind"] !== "webhook") return trigger;
-      const nextTrigger: { [key: string]: JsonValue } = {
-        ...trigger,
-      };
-      const path = value.trim();
-      if (path) nextTrigger.path = path;
-      else delete nextTrigger.path;
-      return nextTrigger;
-    });
-  }
-
-  function updateWebhookTriggerSecretSha256(triggerId: string, value: string) {
-    updateTrigger(triggerId, (trigger) => {
-      if (trigger["kind"] !== "webhook") return trigger;
-      const nextTrigger: { [key: string]: JsonValue } = {
-        ...trigger,
-      };
-      const secretSha256 = value.trim();
-      if (!secretSha256) delete nextTrigger.secretSha256;
-      else if (/^[a-f0-9]{64}$/i.test(secretSha256)) {
-        nextTrigger.secretSha256 = secretSha256;
-      } else {
-        return trigger;
-      }
-      return nextTrigger;
-    });
-  }
-
-  function updateTaskTriggerFilter(triggerId: string, value: string) {
-    updateTrigger(triggerId, (trigger) => {
-      if (trigger["kind"] !== "task") return trigger;
-      const parsed = parseJsonDraft(value);
-      if (!parsed.ok) return trigger;
-      return { ...trigger, enabled: false, filter: parsed.value };
-    });
-  }
-
-  function updateTrigger(
-    triggerId: string,
-    updater: (trigger: { [key: string]: JsonValue }) => {
-      [key: string]: JsonValue;
-    },
-  ) {
-    const parsed = parseTriggersDraft(triggersDraft);
-    if (!parsed.ok) {
-      toast.error(parsed.error);
-      return;
-    }
-    const next = parsed.value.map((trigger) => {
-      if (!isRecord(trigger) || trigger["id"] !== triggerId) return trigger;
-      return updater(trigger as { [key: string]: JsonValue });
-    });
-    setTriggersDraft(formatJson(next));
-    setTriggers(deriveTriggerSummaries(next));
-  }
-
   function nodeCardProps(
     node: WorkflowNode,
     index: number,
@@ -2212,11 +2514,13 @@ function WorkflowsPage() {
     return {
       node,
       index,
+      referenceSuggestions,
       canMoveUp: index > 0,
       canMoveDown: index < nodeCount - 1,
       onMoveUp: () => moveNode(index, -1),
       onMoveDown: () => moveNode(index, 1),
       onDelete: () => deleteNode(index),
+      onNodeIdChange: (value) => updateNodeId(index, value),
       onLabelChange: (value) => updateNodeLabel(index, value),
       onAssignmentTargetChange: (target, value) =>
         updateAssignmentTarget(index, target, value),
@@ -2303,7 +2607,7 @@ function WorkflowsPage() {
                   const workflow = workflows.find(
                     (item) => item.id === workflowId,
                   );
-                  if (workflow) void selectWorkflow(workflow);
+                  if (workflow) void requestSelectWorkflow(workflow);
                 }}
               >
                 <SelectTrigger
@@ -2427,12 +2731,12 @@ function WorkflowsPage() {
           </div>
         </header>
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[260px_minmax(0,1fr)_420px]">
+        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[250px_minmax(0,1fr)_360px]">
           <WorkflowList
             workflows={workflows}
             selectedId={selected?.id ?? null}
             onCreate={createWorkflow}
-            onSelect={(workflow) => void selectWorkflow(workflow)}
+            onSelect={(workflow) => void requestSelectWorkflow(workflow)}
             onDelete={(workflow) => void deleteWorkflow(workflow)}
             busy={busy}
           />
@@ -2468,7 +2772,7 @@ function WorkflowsPage() {
                       ? "bg-paper text-signal-blue"
                       : "text-ink-faint hover:text-ink",
                   )}
-                  onClick={() => setDesignerView("runs")}
+                  onClick={requestRunHistoryView}
                 >
                   <Clock3 className="size-4" />
                   Run History
@@ -2499,11 +2803,13 @@ function WorkflowsPage() {
                 aria-label="Workflow Canvas"
                 className="workflow-designer-grid relative min-h-0 flex-1 overflow-hidden bg-paper-sunk"
                 onDragOver={(event) => event.preventDefault()}
-                onDrop={handlePaletteDrop}
+                onDrop={designerView === "edit" ? handlePaletteDrop : undefined}
               >
                 {parsedNodes.ok ? (
                   <WorkflowCanvas
                     projection={workflowGraphProjection}
+                    readOnly={designerView === "runs"}
+                    allowNodeRelocation
                     selectedNodeId={selectedCanvasNodeId}
                     selectedEdgeId={selectedCanvasEdgeId}
                     onSelectNode={selectCanvasNode}
@@ -2550,24 +2856,13 @@ function WorkflowsPage() {
                 descriptionDraft={descriptionDraft}
                 inputSchemaDraft={inputSchemaDraft}
                 inputDraft={inputDraft}
-                triggers={triggers}
                 onNameChange={setNameDraft}
                 onDescriptionChange={setDescriptionDraft}
                 onInputSchemaChange={setInputSchemaDraft}
                 onInputDraftChange={setInputDraft}
+                onSelectNode={selectCanvasNode}
                 onRunTest={() => void runWorkflow("test")}
-                onRunTrigger={(trigger) => void runTrigger(trigger)}
                 triggerBusy={busy}
-                selectedStatus={selected?.status ?? null}
-                updateTriggerEnabled={updateTriggerEnabled}
-                updateTriggerInputSchema={updateTriggerInputSchema}
-                updateScheduledTrigger={updateScheduledTrigger}
-                updateScheduledTriggerInput={updateScheduledTriggerInput}
-                updateWebhookTriggerPath={updateWebhookTriggerPath}
-                updateWebhookTriggerSecretSha256={
-                  updateWebhookTriggerSecretSha256
-                }
-                updateTaskTriggerFilter={updateTaskTriggerFilter}
               />
             ) : (
               <>
@@ -2586,26 +2881,23 @@ function WorkflowsPage() {
                   workflowName={selected?.name ?? null}
                   detail={detail}
                   runs={runs}
-                  selectedStep={selectedStep}
+                  selectedStep={
+                    detail?.steps.find((step) => step.id === selectedStepId) ??
+                    null
+                  }
+                  referenceSuggestions={referenceSuggestions}
+                  mcpTools={mcpTools}
+                  agents={agents}
                   pendingRunId={pendingRunId}
                   busy={busy}
                   hasMoreRuns={hasMoreRuns}
                   loadingMoreRuns={loadingMoreRuns}
-                  filters={{
-                    mode,
-                    status,
-                    triggerId,
-                    createdFrom,
-                    createdTo,
-                  }}
-                  onFiltersChange={updateRunFilters}
                   onSelectRun={selectRunFromHistory}
                   onLoadMoreRuns={() => void loadMoreRuns()}
                   onRefresh={() => {
                     if (!detail) return;
                     void loadRunDetail(detail.run.id, selected?.id);
                   }}
-                  onSelectStep={selectRunConsoleStep}
                   onRerun={() => void rerun()}
                   onCancel={() => void cancelRun()}
                 />
@@ -2630,6 +2922,69 @@ function WorkflowsPage() {
           }}
           onAdd={insertNodeFromPalette}
         />
+        <Dialog
+          open={
+            savePromptIntent !== null || navigationBlocker.status === "blocked"
+          }
+          onOpenChange={(open) => {
+            if (open) return;
+            setSavePromptIntent(null);
+            if (navigationBlocker.status === "blocked") {
+              navigationBlocker.reset();
+            }
+          }}
+        >
+          <DialogContent className="sm:max-w-[420px]">
+            <DialogHeader>
+              <DialogTitle>Save changes first?</DialogTitle>
+              <DialogDescription>
+                {savePromptIntent?.kind === "run-history"
+                  ? "Run History uses the saved workflow definition. Save your current canvas changes before inspecting executions."
+                  : savePromptIntent?.kind === "select-workflow"
+                    ? `Save your current workflow changes before opening ${savePromptIntent.workflow.name}.`
+                    : "This workflow has unsaved changes. Save your current canvas changes before leaving this page."}
+              </DialogDescription>
+            </DialogHeader>
+            <DialogBody>
+              <div className="flex items-center justify-between gap-3">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => void discardDraftAndContinue()}
+                  disabled={busy === "save"}
+                >
+                  Discard changes
+                </Button>
+                <div className="flex justify-end gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      setSavePromptIntent(null);
+                      if (navigationBlocker.status === "blocked") {
+                        navigationBlocker.reset();
+                      }
+                      setDesignerView("edit");
+                    }}
+                    disabled={busy === "save"}
+                  >
+                    Continue to edit
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={() => void saveDraftAndContinue()}
+                    disabled={busy === "save"}
+                  >
+                    {busy === "save" && (
+                      <Loader2 className="size-4 animate-spin" />
+                    )}
+                    Save
+                  </Button>
+                </div>
+              </div>
+            </DialogBody>
+          </DialogContent>
+        </Dialog>
       </main>
     </div>
   );
@@ -2758,22 +3113,13 @@ function WorkflowInspector({
   descriptionDraft,
   inputSchemaDraft,
   inputDraft,
-  triggers,
   onNameChange,
   onDescriptionChange,
   onInputSchemaChange,
   onInputDraftChange,
+  onSelectNode,
   onRunTest,
-  onRunTrigger,
   triggerBusy,
-  selectedStatus,
-  updateTriggerEnabled,
-  updateTriggerInputSchema,
-  updateScheduledTrigger,
-  updateScheduledTriggerInput,
-  updateWebhookTriggerPath,
-  updateWebhookTriggerSecretSha256,
-  updateTaskTriggerFilter,
 }: {
   workflow: WorkflowDefinition | null;
   projection: WorkflowGraphProjection;
@@ -2789,26 +3135,13 @@ function WorkflowInspector({
   descriptionDraft: string;
   inputSchemaDraft: string;
   inputDraft: string;
-  triggers: WorkflowTriggerSummary[];
   onNameChange: (value: string) => void;
   onDescriptionChange: (value: string) => void;
   onInputSchemaChange: (value: string) => void;
   onInputDraftChange: (value: string) => void;
+  onSelectNode: (nodeId: string | null) => void;
   onRunTest: () => void;
-  onRunTrigger: (trigger: WorkflowTriggerSummary) => void;
   triggerBusy: string | null;
-  selectedStatus: WorkflowDefinition["status"] | null;
-  updateTriggerEnabled: (triggerId: string, enabled: boolean) => void;
-  updateTriggerInputSchema: (triggerId: string, value: string) => void;
-  updateScheduledTrigger: (
-    triggerId: string,
-    field: "expr" | "tz",
-    value: string,
-  ) => void;
-  updateScheduledTriggerInput: (triggerId: string, value: string) => void;
-  updateWebhookTriggerPath: (triggerId: string, value: string) => void;
-  updateWebhookTriggerSecretSha256: (triggerId: string, value: string) => void;
-  updateTaskTriggerFilter: (triggerId: string, value: string) => void;
 }) {
   const selectedNode = selectedNodeId
     ? (projection.nodes.find((node) => node.id === selectedNodeId) ?? null)
@@ -2818,13 +3151,29 @@ function WorkflowInspector({
     data?.kind === "step" ? nodes.findIndex((node) => node.id === data.id) : -1;
   const inspectedNode =
     inspectedNodeIndex >= 0 ? (nodes[inspectedNodeIndex] ?? null) : null;
+  const inspectedNodeCardProps = inspectedNode
+    ? nodeCardProps(inspectedNode, inspectedNodeIndex, nodes.length)
+    : null;
   const [workflowInspectorTab, setWorkflowInspectorTab] = useState<
     "workflow" | "test"
-  >("test");
+  >("workflow");
   const visibleCanvasNodeCount = projection.nodes.filter((node) => {
     const nodeData = node.data as WorkflowCanvasNodeData | undefined;
     return nodeData?.kind !== "group";
   }).length;
+  const sampleInput = useMemo(() => {
+    const parsed = parseOptionalJsonDraft(inputSchemaDraft);
+    if (!parsed.ok || parsed.value === null) return null;
+    const sample = sampleJsonFromSchema(parsed.value);
+    return sample === undefined ? null : formatJson(sample);
+  }, [inputSchemaDraft]);
+
+  function openTestConfiguration() {
+    if (sampleInput && shouldAutofillTestInput(inputDraft)) {
+      onInputDraftChange(sampleInput);
+    }
+    setWorkflowInspectorTab("test");
+  }
 
   return (
     <aside
@@ -2832,44 +3181,55 @@ function WorkflowInspector({
       className="min-h-0 flex-1 overflow-y-auto bg-paper px-4 py-4"
     >
       <div className="flex items-center justify-between gap-2">
-        <SectionEyebrow>Inspector</SectionEyebrow>
-        <Badge variant={nodeReferences.ok ? "healthy" : "destructive"}>
-          {nodeReferences.ok ? "refs ok" : "refs issue"}
-        </Badge>
+        <h2 className="text-xl font-semibold text-ink">
+          {data ? "Step Configuration" : "Configuration"}
+        </h2>
+        <div className="flex items-center gap-1.5">
+          {inspectedNodeCardProps && (
+            <>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Select previous step"
+                disabled={inspectedNodeIndex <= 0}
+                onClick={() =>
+                  onSelectNode(nodes[inspectedNodeIndex - 1]?.id ?? null)
+                }
+              >
+                <ArrowUp className="size-3" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Select next step"
+                disabled={inspectedNodeIndex >= nodes.length - 1}
+                onClick={() =>
+                  onSelectNode(nodes[inspectedNodeIndex + 1]?.id ?? null)
+                }
+              >
+                <ArrowDown className="size-3" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label={`Delete ${inspectedNodeCardProps.node.label ?? inspectedNodeCardProps.node.id}`}
+                onClick={inspectedNodeCardProps.onDelete}
+              >
+                <Trash2 className="size-3" />
+              </Button>
+            </>
+          )}
+          {!nodeReferences.ok && (
+            <Badge variant="destructive">refs issue</Badge>
+          )}
+        </div>
       </div>
 
       {data ? (
         <div className="mt-3 space-y-3">
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold">{data.label}</div>
-            <div className="mt-1 truncate font-mono text-[11px] text-ink-faint">
-              {data.id}
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            <Badge
-              variant={data.kind === "missing" ? "destructive" : "outline"}
-            >
-              {data.kind}
-            </Badge>
-            {data.badges.map((badge) => (
-              <Badge key={badge} variant="secondary">
-                {badge}
-              </Badge>
-            ))}
-          </div>
-          <dl className="grid gap-2 text-xs">
-            <div className="grid grid-cols-[96px_minmax(0,1fr)] gap-2">
-              <dt className="font-mono uppercase text-ink-faint">Type</dt>
-              <dd className="min-w-0 truncate text-ink-soft">{data.type}</dd>
-            </div>
-            {typeof data.index === "number" && (
-              <div className="grid grid-cols-[96px_minmax(0,1fr)] gap-2">
-                <dt className="font-mono uppercase text-ink-faint">Order</dt>
-                <dd className="text-ink-soft">{data.index + 1}</dd>
-              </div>
-            )}
-          </dl>
           {data.warning && (
             <div className="border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
               {data.warning}
@@ -2880,13 +3240,16 @@ function WorkflowInspector({
               aria-label={`Inspector settings ${inspectedNode.id}`}
               className="pt-1"
             >
-              <NodeCard
-                {...nodeCardProps(
-                  inspectedNode,
-                  inspectedNodeIndex,
-                  nodes.length,
-                )}
-              />
+              {inspectedNodeCardProps && (
+                <NodeCard {...inspectedNodeCardProps} />
+              )}
+            </div>
+          )}
+          {!inspectedNode && (
+            <div className="border border-paper-rule bg-paper-sunk px-3 py-4 text-sm text-ink-soft">
+              {data.kind === "trigger"
+                ? "Trigger settings are managed from Workflow Configuration."
+                : "This step is not available in the current workflow draft."}
             </div>
           )}
         </div>
@@ -2940,7 +3303,7 @@ function WorkflowInspector({
                       ? "border-signal-blue text-signal-blue"
                       : "border-transparent text-ink-soft hover:text-ink",
                   )}
-                  onClick={() => setWorkflowInspectorTab("test")}
+                  onClick={openTestConfiguration}
                 >
                   Test Configuration
                 </button>
@@ -2975,11 +3338,12 @@ function WorkflowInspector({
                   <InspectorSection title="Input Contract">
                     <label className="grid gap-1">
                       <span className="text-sm font-medium text-ink-soft">
-                        Input Schema JSON
+                        Input JSON Schema
                       </span>
                       <Textarea
                         aria-label="Input Schema JSON"
                         value={inputSchemaDraft}
+                        placeholder={WORKFLOW_INPUT_SCHEMA_PLACEHOLDER}
                         rows={9}
                         spellCheck={false}
                         onChange={(event) =>
@@ -2989,217 +3353,13 @@ function WorkflowInspector({
                       />
                     </label>
                   </InspectorSection>
-                  <InspectorSection
-                    title="Triggers"
-                    badge={`${triggers.length}`}
-                    defaultOpen
-                  >
-                    <div className="text-xs text-ink-faint">
-                      Manual now; scheduled/webhook/task ready for later.
-                    </div>
-                    <div className="grid gap-2">
-                      {triggers.map((trigger) => {
-                        const busyKey = `trigger:${trigger.id}`;
-                        const canRun =
-                          trigger.runnable &&
-                          selectedStatus === "published" &&
-                          triggerBusy === null;
-                        return (
-                          <div
-                            key={trigger.id}
-                            role="group"
-                            aria-label={`Trigger ${trigger.id}`}
-                            className="grid gap-2 border border-paper-rule bg-paper-sunk px-3 py-2"
-                          >
-                            <div className="flex min-w-0 items-center gap-2">
-                              <label className="flex shrink-0 items-center gap-1 text-xs text-ink-soft">
-                                <input
-                                  aria-label={`${trigger.id} trigger enabled`}
-                                  type="checkbox"
-                                  checked={triggerEnabledChecked(trigger)}
-                                  disabled={!triggerEnabledEditable(trigger)}
-                                  onChange={(event) =>
-                                    updateTriggerEnabled(
-                                      trigger.id,
-                                      event.target.checked,
-                                    )
-                                  }
-                                />
-                                On
-                              </label>
-                              <Badge
-                                variant={
-                                  trigger.runnable ? "healthy" : "outline"
-                                }
-                              >
-                                {trigger.kind}
-                              </Badge>
-                              <span className="min-w-0 flex-1 truncate font-mono text-xs text-ink-soft">
-                                {trigger.id}
-                              </span>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="xs"
-                                onClick={() => onRunTrigger(trigger)}
-                                disabled={!canRun}
-                                title={
-                                  selectedStatus === "published"
-                                    ? undefined
-                                    : "Publish before running a trigger"
-                                }
-                              >
-                                {triggerBusy === busyKey ? (
-                                  <Loader2 className="size-3 animate-spin" />
-                                ) : (
-                                  <Play className="size-3" />
-                                )}
-                                Run
-                              </Button>
-                            </div>
-                            {(trigger.kind === "manual" ||
-                              trigger.kind === "webhook") && (
-                              <label className="grid gap-1 text-xs text-ink-soft">
-                                Input Schema JSON
-                                <Textarea
-                                  aria-label={`${trigger.id} trigger input schema`}
-                                  value={formatOptionalJson(
-                                    trigger.inputSchema,
-                                  )}
-                                  onChange={(event) =>
-                                    updateTriggerInputSchema(
-                                      trigger.id,
-                                      event.target.value,
-                                    )
-                                  }
-                                  className="min-h-32 font-mono text-xs leading-relaxed"
-                                />
-                              </label>
-                            )}
-                            {trigger.kind === "scheduled" && (
-                              <div className="grid gap-2">
-                                <div className="grid gap-2 sm:grid-cols-2">
-                                  <label className="grid gap-1 text-xs text-ink-soft">
-                                    Cron
-                                    <Input
-                                      aria-label={`${trigger.id} scheduled cron`}
-                                      value={scheduledTriggerExpr(trigger)}
-                                      onChange={(event) =>
-                                        updateScheduledTrigger(
-                                          trigger.id,
-                                          "expr",
-                                          event.target.value,
-                                        )
-                                      }
-                                      className="font-mono text-xs"
-                                    />
-                                  </label>
-                                  <label className="grid gap-1 text-xs text-ink-soft">
-                                    TZ
-                                    <Input
-                                      aria-label={`${trigger.id} scheduled timezone`}
-                                      value={scheduledTriggerTz(trigger)}
-                                      onChange={(event) =>
-                                        updateScheduledTrigger(
-                                          trigger.id,
-                                          "tz",
-                                          event.target.value,
-                                        )
-                                      }
-                                      className="font-mono text-xs"
-                                    />
-                                  </label>
-                                </div>
-                                <label className="grid gap-1 text-xs text-ink-soft">
-                                  Input JSON
-                                  <Textarea
-                                    aria-label={`${trigger.id} scheduled input`}
-                                    value={formatOptionalJson(trigger.input)}
-                                    onChange={(event) =>
-                                      updateScheduledTriggerInput(
-                                        trigger.id,
-                                        event.target.value,
-                                      )
-                                    }
-                                    className="min-h-32 font-mono text-xs leading-relaxed"
-                                  />
-                                </label>
-                              </div>
-                            )}
-                            {trigger.kind === "webhook" && (
-                              <div className="grid gap-2">
-                                <label className="grid gap-1 text-xs text-ink-soft">
-                                  Path
-                                  <Input
-                                    aria-label={`${trigger.id} webhook path`}
-                                    value={
-                                      typeof trigger.path === "string"
-                                        ? trigger.path
-                                        : ""
-                                    }
-                                    onChange={(event) =>
-                                      updateWebhookTriggerPath(
-                                        trigger.id,
-                                        event.target.value,
-                                      )
-                                    }
-                                    className="font-mono text-xs"
-                                  />
-                                </label>
-                                <label className="grid gap-1 text-xs text-ink-soft">
-                                  Secret SHA-256
-                                  <Input
-                                    aria-label={`${trigger.id} webhook secret sha-256`}
-                                    value={
-                                      typeof trigger.secretSha256 === "string"
-                                        ? trigger.secretSha256
-                                        : ""
-                                    }
-                                    onChange={(event) =>
-                                      updateWebhookTriggerSecretSha256(
-                                        trigger.id,
-                                        event.target.value,
-                                      )
-                                    }
-                                    className="font-mono text-xs"
-                                  />
-                                </label>
-                              </div>
-                            )}
-                            {trigger.kind === "task" && (
-                              <label className="grid gap-1 text-xs text-ink-soft">
-                                Filter JSON
-                                <Textarea
-                                  aria-label={`${trigger.id} task filter`}
-                                  value={
-                                    trigger.filter === undefined
-                                      ? "null"
-                                      : formatJson(trigger.filter)
-                                  }
-                                  onChange={(event) =>
-                                    updateTaskTriggerFilter(
-                                      trigger.id,
-                                      event.target.value,
-                                    )
-                                  }
-                                  className="min-h-32 font-mono text-xs leading-relaxed"
-                                />
-                              </label>
-                            )}
-                          </div>
-                        );
-                      })}
-                      {triggers.length === 0 && (
-                        <div className="text-sm text-ink-soft">No triggers</div>
-                      )}
-                    </div>
-                  </InspectorSection>
                 </div>
               ) : (
                 <section className="grid gap-3">
                   <InspectorSection title="Test Input" defaultOpen>
                     <div className="text-sm text-ink-faint">
-                      Set the payload used by the next test run.
+                      Set the payload used by the next test run. Empty test
+                      input is prefilled from the workflow JSON Schema.
                     </div>
                     <label className="grid gap-1">
                       <span className="text-sm font-medium text-ink-soft">
@@ -3250,7 +3410,13 @@ function WorkflowInspector({
   );
 }
 
-type AddStepCategory = "Trigger" | "Built-in" | "Logic" | "AI" | "Tools";
+type AddStepCategory =
+  | "Trigger"
+  | "Built-in"
+  | "Transformers"
+  | "Logic"
+  | "AI"
+  | "Tools";
 
 interface AddStepCatalogItem {
   id: string;
@@ -3322,11 +3488,12 @@ function AddStepDialog({
   };
   const categories = useMemo(
     () =>
-      (["Trigger", "Built-in", "Logic", "AI", "Tools"] as const).filter(
-        (item) =>
-          catalog.some(
-            (step) => step.category === item && matchesCatalogQuery(step),
-          ),
+      (
+        ["Trigger", "Built-in", "Transformers", "Logic", "AI", "Tools"] as const
+      ).filter((item) =>
+        catalog.some(
+          (step) => step.category === item && matchesCatalogQuery(step),
+        ),
       ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [catalog, normalizedQuery],
@@ -3501,7 +3668,12 @@ function PaletteButton({
         );
       }}
     >
-      <span className="flex size-7 shrink-0 items-center justify-center border border-paper-rule bg-paper">
+      <span
+        className={cn(
+          "flex size-7 shrink-0 items-center justify-center rounded border bg-paper-sunk",
+          stepKindIconClass(item.payload.kind),
+        )}
+      >
         <StepKindIcon kind={item.payload.kind} />
       </span>
       <span className="min-w-0 truncate font-medium text-ink">
@@ -3515,7 +3687,12 @@ function StepPreview({ item }: { item: AddStepCatalogItem }) {
   return (
     <section aria-label="Selected workflow step preview">
       <div className="flex items-start gap-3">
-        <span className="flex size-10 shrink-0 items-center justify-center border border-paper-rule bg-paper-sunk text-signal-blue">
+        <span
+          className={cn(
+            "flex size-10 shrink-0 items-center justify-center rounded border bg-paper-sunk",
+            stepKindIconClass(item.payload.kind),
+          )}
+        >
           <StepKindIcon kind={item.payload.kind} />
         </span>
         <div className="min-w-0">
@@ -3555,21 +3732,56 @@ function StepFieldList({ title, fields }: { title: string; fields: string[] }) {
 function StepCategoryIcon({ category }: { category: AddStepCategory }) {
   if (category === "Trigger") return <Play className="size-4" />;
   if (category === "Built-in") return <Braces className="size-4" />;
+  if (category === "Transformers") return <Code2 className="size-4" />;
   if (category === "AI") return <Bot className="size-4" />;
   if (category === "Tools") return <Workflow className="size-4" />;
   return <GitBranch className="size-4" />;
 }
 
 function StepKindIcon({ kind }: { kind: WorkflowAddPayload["kind"] }) {
-  if (kind === "manual_trigger") return <Play className="size-4" />;
+  if (kind === "manual_trigger") return <Workflow className="size-4" />;
   if (kind === "agent") return <Bot className="size-4" />;
   if (kind === "python") return <Code2 className="size-4" />;
-  if (kind === "mcp") return <Workflow className="size-4" />;
-  if (kind === "set" || kind === "transform")
-    return <Braces className="size-4" />;
+  if (kind === "mcp") return <Wrench className="size-4" />;
+  if (kind === "set") return <Braces className="size-4" />;
+  if (kind === "transform") return <Code2 className="size-4" />;
   if (kind === "log") return <ScrollText className="size-4" />;
-  if (kind === "exit") return <Square className="size-4" />;
+  if (kind === "sleep") return <Clock3 className="size-4" />;
+  if (kind === "throw_error") return <XCircle className="size-4" />;
+  if (kind === "exit") return <CheckCircle2 className="size-4" />;
+  if (kind === "foreach") return <RefreshCw className="size-4" />;
+  if (kind === "parallel") return <ListRestart className="size-4" />;
   return <GitBranch className="size-4" />;
+}
+
+function stepKindIconClass(kind: WorkflowAddPayload["kind"]): string {
+  if (kind === "manual_trigger") {
+    return "border-signal-green/30 bg-signal-green/10 text-signal-green";
+  }
+  if (
+    kind === "if" ||
+    kind === "switch" ||
+    kind === "foreach" ||
+    kind === "parallel"
+  ) {
+    return "border-plot-red/35 bg-plot-red/10 text-plot-red";
+  }
+  if (kind === "agent" || kind === "mcp" || kind === "python") {
+    return "border-signal-blue/30 bg-signal-blue/10 text-signal-blue";
+  }
+  if (kind === "log") {
+    return "border-signal-green/30 bg-signal-green/10 text-signal-green";
+  }
+  if (kind === "throw_error") {
+    return "border-destructive/40 bg-destructive/10 text-destructive";
+  }
+  if (kind === "sleep") {
+    return "border-signal-amber/35 bg-signal-amber/10 text-signal-amber";
+  }
+  if (kind === "exit") {
+    return "border-signal-green/30 bg-signal-green/10 text-signal-green";
+  }
+  return "border-paper-rule text-ink-muted";
 }
 
 function workflowStepCatalog({
@@ -3603,22 +3815,13 @@ function workflowStepCatalog({
       outputs: ["context.<variable>"],
     },
     {
-      id: "transform",
-      label: "Transform",
-      category: "Built-in",
-      description: "Transform input and optionally write it back to context.",
-      payload: { kind: "transform" },
-      inputs: ["input", "transform", "assign"],
-      outputs: ["steps.<id>.output", "context.<variable>"],
-    },
-    {
       id: "python",
       label: "Python",
       category: "Built-in",
       description: "Execute a constrained Python step for data shaping.",
       payload: { kind: "python" },
       inputs: ["input", "code", "timeoutMs"],
-      outputs: ["steps.<id>.output"],
+      outputs: ["steps.<id>.output.value", "steps.<id>.output.stdout"],
     },
     {
       id: "log",
@@ -3636,7 +3839,7 @@ function workflowStepCatalog({
       description: "Pause the workflow briefly before continuing.",
       payload: { kind: "sleep" },
       inputs: ["delayMs", "reason"],
-      outputs: ["steps.<id>.output"],
+      outputs: ["steps.<id>.output.delayMs"],
     },
     {
       id: "throw_error",
@@ -3654,9 +3857,24 @@ function workflowStepCatalog({
       description: "Stop the workflow with a final status and output.",
       payload: { kind: "exit" },
       inputs: ["status", "output"],
-      outputs: ["run.status", "run.output"],
+      outputs: ["steps.<id>.output.status", "steps.<id>.output.output"],
     },
   ];
+  const transformerItems: AddStepCatalogItem[] =
+    WORKFLOW_TRANSFORM_PRESETS.filter(
+      (preset) => preset.id !== "value.resolve",
+    ).map((preset) => ({
+      id: `transform:${preset.id}`,
+      label: preset.label,
+      category: "Transformers",
+      description: preset.description,
+      payload: {
+        kind: "transform",
+        transformPresetId: preset.id,
+      },
+      inputs: transformerCatalogInputs(preset.id),
+      outputs: ["steps.<id>.output.value"],
+    }));
   const flowControlItems: AddStepCatalogItem[] = [
     {
       id: "if",
@@ -3665,7 +3883,7 @@ function workflowStepCatalog({
       description: "Split the flow into true and false routes.",
       payload: { kind: "if" },
       inputs: ["condition"],
-      outputs: ["true", "false"],
+      outputs: ["steps.<id>.output.result", "true", "false"],
     },
     {
       id: "foreach",
@@ -3674,7 +3892,7 @@ function workflowStepCatalog({
       description: "Iterate over a list with a body flow.",
       payload: { kind: "foreach" },
       inputs: ["items", "itemVar", "concurrency"],
-      outputs: ["body"],
+      outputs: ["steps.<id>.output.items", "body"],
     },
     {
       id: "switch",
@@ -3683,7 +3901,7 @@ function workflowStepCatalog({
       description: "Route the flow by matching a value against cases.",
       payload: { kind: "switch" },
       inputs: ["value", "cases", "default"],
-      outputs: ["cases", "default"],
+      outputs: ["steps.<id>.output.case", "cases", "default"],
     },
     {
       id: "parallel",
@@ -3692,7 +3910,11 @@ function workflowStepCatalog({
       description: "Run independent branches with isolated context.",
       payload: { kind: "parallel" },
       inputs: ["branches", "concurrency", "failFast"],
-      outputs: ["branches", "succeededCount", "failedCount"],
+      outputs: [
+        "steps.<id>.output.branches",
+        "steps.<id>.output.succeededCount",
+        "steps.<id>.output.failedCount",
+      ],
     },
   ];
   const agentItems: AddStepCatalogItem[] =
@@ -3714,7 +3936,7 @@ function workflowStepCatalog({
               ? undefined
               : "This agent is not enabled for workflow calls",
             inputs: ["agentId", "prompt", "input"],
-            outputs: ["steps.<id>.output"],
+            outputs: ["steps.<id>.output.response"],
           } satisfies AddStepCatalogItem;
         })
       : [
@@ -3727,7 +3949,7 @@ function workflowStepCatalog({
             disabled: true,
             title: "No enabled agents are available for workflows",
             inputs: ["agentId", "prompt", "input"],
-            outputs: ["steps.<id>.output"],
+            outputs: ["steps.<id>.output.response"],
           },
         ];
   const mcpItems: AddStepCatalogItem[] =
@@ -3744,7 +3966,7 @@ function workflowStepCatalog({
             tool: tool.tool,
           },
           inputs: ["server", "tool", "input"],
-          outputs: ["steps.<id>.output"],
+          outputs: ["steps.<id>.output.result"],
         }))
       : [
           {
@@ -3756,10 +3978,44 @@ function workflowStepCatalog({
             disabled: true,
             title: "No MCP tools are available for workflows",
             inputs: ["server", "tool", "input"],
-            outputs: ["steps.<id>.output"],
+            outputs: ["steps.<id>.output.result"],
           },
         ];
-  return [...builtInItems, ...flowControlItems, ...agentItems, ...mcpItems];
+  return [
+    ...builtInItems,
+    ...transformerItems,
+    ...flowControlItems,
+    ...agentItems,
+    ...mcpItems,
+  ];
+}
+
+function transformerCatalogInputs(presetId: string): string[] {
+  if (presetId === "string.replace") return ["text", "search", "replacement"];
+  if (presetId === "string.regex_replace") {
+    return ["text", "pattern", "replacement", "flags"];
+  }
+  if (presetId === "string.regex_match") return ["text", "pattern", "flags"];
+  if (presetId === "json.parse") return ["jsonText"];
+  if (presetId === "json.stringify") return ["value", "pretty"];
+  if (presetId === "csv.parse") {
+    return ["csvText", "delimiter", "headers", "maxRows"];
+  }
+  if (presetId === "csv.stringify") {
+    return ["rows", "delimiter", "headers", "includeHeaders", "maxRows"];
+  }
+  if (
+    presetId === "ip.parse" ||
+    presetId === "ip.is_ipv4" ||
+    presetId === "ip.is_ipv6"
+  ) {
+    return ["ip"];
+  }
+  if (presetId === "ip.in_subnet") return ["ip", "cidr"];
+  if (presetId === "ip.netmask") return ["prefix", "version"];
+  if (presetId === "ip.network") return ["cidr"];
+  if (presetId === "uri.parse") return ["url", "base"];
+  return ["value"];
 }
 
 function parseWorkflowPalettePayload(
@@ -3779,6 +4035,9 @@ function parseWorkflowPalettePayload(
       ...(typeof parsed["tool"] === "string" ? { tool: parsed["tool"] } : {}),
       ...(typeof parsed["agentId"] === "string"
         ? { agentId: parsed["agentId"] }
+        : {}),
+      ...(typeof parsed["transformPresetId"] === "string"
+        ? { transformPresetId: parsed["transformPresetId"] }
         : {}),
     };
   } catch {
@@ -3855,11 +4114,13 @@ function referenceMutationMessage(reason: string): string {
 type NodeCardProps = {
   node: WorkflowNode;
   index: number;
+  referenceSuggestions: WorkflowReferenceSuggestion[];
   canMoveUp: boolean;
   canMoveDown: boolean;
   onMoveUp: () => void;
   onMoveDown: () => void;
   onDelete: () => void;
+  onNodeIdChange: (value: string) => boolean;
   onLabelChange: (value: string) => void;
   onAssignmentTargetChange: (target: string, value: string) => void;
   onAssignmentSourceChange: (target: string, value: string) => void;
@@ -3878,8 +4139,6 @@ type NodeCardProps = {
       | "caseId"
       | "caseLabel"
       | "caseValue"
-      | "caseNodes"
-      | "defaultNodes"
       | "addCase"
       | "removeCase",
     value: string,
@@ -3927,7 +4186,17 @@ type NodeCardProps = {
     field: "agentId" | "prompt" | "input" | "timeoutMs",
     value: string,
   ) => void;
+  readOnly?: boolean;
+  showMetadata?: boolean;
 };
+
+interface WorkflowReferenceSuggestion {
+  value: string;
+  label: string;
+  detail: string;
+}
+
+const WORKFLOW_REFERENCE_SUGGESTION_LIMIT = 12;
 
 function InspectorSection({
   title,
@@ -3971,14 +4240,900 @@ function InspectorSection({
   );
 }
 
+function ReferenceInput({
+  value,
+  onChange,
+  suggestions,
+  className,
+  ...props
+}: ComponentProps<"input"> & {
+  value: string;
+  onChange: (event: ChangeEvent<HTMLInputElement>) => void;
+  suggestions: WorkflowReferenceSuggestion[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const filtered = referenceSuggestionsForValue(value, suggestions);
+  const visibleSuggestions = filtered.slice(
+    0,
+    WORKFLOW_REFERENCE_SUGGESTION_LIMIT,
+  );
+  const visible = open && visibleSuggestions.length > 0;
+
+  function applySuggestion(suggestion: WorkflowReferenceSuggestion) {
+    onChange({
+      target: { value: replaceActiveReferenceToken(value, suggestion.value) },
+    } as ChangeEvent<HTMLInputElement>);
+    setOpen(false);
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (!visible) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((current) =>
+        Math.min(current + 1, visibleSuggestions.length - 1),
+      );
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex((current) => Math.max(current - 1, 0));
+    } else if (event.key === "Enter" || event.key === "Tab") {
+      const suggestion = visibleSuggestions[activeIndex];
+      if (!suggestion) return;
+      event.preventDefault();
+      applySuggestion(suggestion);
+    } else if (event.key === "Escape") {
+      setOpen(false);
+    }
+  }
+
+  return (
+    <div className="relative">
+      <Input
+        {...props}
+        value={value}
+        onChange={(event) => {
+          onChange(event);
+          setOpen(true);
+          setActiveIndex(0);
+        }}
+        onFocus={(event) => {
+          props.onFocus?.(event);
+          setOpen(true);
+        }}
+        onBlur={(event) => {
+          props.onBlur?.(event);
+          window.setTimeout(() => setOpen(false), 120);
+        }}
+        onKeyDown={handleKeyDown}
+        className={cn("font-mono", className)}
+      />
+      {visible && (
+        <ReferenceSuggestionList
+          suggestions={visibleSuggestions}
+          activeIndex={activeIndex}
+          onActiveIndexChange={setActiveIndex}
+          onApply={applySuggestion}
+        />
+      )}
+    </div>
+  );
+}
+
+function ReferenceTextarea({
+  value,
+  onChange,
+  suggestions,
+  className,
+  ...props
+}: ComponentProps<"textarea"> & {
+  value: string;
+  onChange: (event: ChangeEvent<HTMLTextAreaElement>) => void;
+  suggestions: WorkflowReferenceSuggestion[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const filtered = referenceSuggestionsForValue(value, suggestions);
+  const visibleSuggestions = filtered.slice(
+    0,
+    WORKFLOW_REFERENCE_SUGGESTION_LIMIT,
+  );
+  const visible = open && visibleSuggestions.length > 0;
+
+  function applySuggestion(suggestion: WorkflowReferenceSuggestion) {
+    onChange({
+      target: { value: replaceActiveReferenceToken(value, suggestion.value) },
+    } as ChangeEvent<HTMLTextAreaElement>);
+    setOpen(false);
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (!visible) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((current) =>
+        Math.min(current + 1, visibleSuggestions.length - 1),
+      );
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex((current) => Math.max(current - 1, 0));
+    } else if (event.key === "Enter") {
+      const suggestion = visibleSuggestions[activeIndex];
+      if (!suggestion) return;
+      event.preventDefault();
+      applySuggestion(suggestion);
+    } else if (event.key === "Tab") {
+      const suggestion = visibleSuggestions[activeIndex];
+      if (!suggestion) return;
+      event.preventDefault();
+      applySuggestion(suggestion);
+    } else if (event.key === "Escape") {
+      setOpen(false);
+    }
+  }
+
+  return (
+    <div className="relative">
+      <Textarea
+        {...props}
+        value={value}
+        onChange={(event) => {
+          onChange(event);
+          setOpen(true);
+          setActiveIndex(0);
+        }}
+        onFocus={(event) => {
+          props.onFocus?.(event);
+          setOpen(true);
+        }}
+        onBlur={(event) => {
+          props.onBlur?.(event);
+          window.setTimeout(() => setOpen(false), 120);
+        }}
+        onKeyDown={handleKeyDown}
+        className={className}
+      />
+      {visible && (
+        <ReferenceSuggestionList
+          suggestions={visibleSuggestions}
+          activeIndex={activeIndex}
+          onActiveIndexChange={setActiveIndex}
+          onApply={applySuggestion}
+        />
+      )}
+    </div>
+  );
+}
+
+type BranchComparisonOperator =
+  (typeof BRANCH_COMPARISON_OPERATORS)[number]["value"];
+type TransformOperationKind = (typeof WORKFLOW_TRANSFORM_PRESETS)[number]["id"];
+
+type BranchConditionDraft =
+  | {
+      mode: "comparison";
+      left: string;
+      operator: BranchComparisonOperator;
+      right: string;
+    }
+  | { mode: "advanced"; expression: string };
+
+function BranchConditionEditor({
+  label,
+  condition,
+  suggestions,
+  onChange,
+}: {
+  label: string;
+  condition: string;
+  suggestions: WorkflowReferenceSuggestion[];
+  onChange: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState<BranchConditionDraft>(() =>
+    parseBranchConditionDraft(condition),
+  );
+
+  useEffect(() => {
+    setDraft(parseBranchConditionDraft(condition));
+  }, [condition]);
+
+  function updateComparison(
+    patch: Partial<Extract<BranchConditionDraft, { mode: "comparison" }>>,
+  ) {
+    const current =
+      draft.mode === "comparison"
+        ? draft
+        : {
+            mode: "comparison" as const,
+            left: draft.expression,
+            operator: "==" as BranchComparisonOperator,
+            right: "",
+          };
+    const next = { ...current, ...patch };
+    if (isUnaryBranchComparisonOperator(next.operator)) next.right = "";
+    if (
+      isNumericBranchComparisonOperator(next.operator) &&
+      next.right.trim() &&
+      !isFiniteNumericLiteral(next.right)
+    ) {
+      next.right = "";
+    }
+    setDraft(next);
+    const nextCondition = formatBranchComparisonCondition(next);
+    if (nextCondition) onChange(nextCondition);
+  }
+
+  if (draft.mode === "advanced") {
+    return (
+      <label className="grid gap-1">
+        <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+          Condition
+        </span>
+        <ReferenceTextarea
+          aria-label={`${label} branch condition`}
+          value={draft.expression}
+          suggestions={suggestions}
+          rows={3}
+          onChange={(event) => {
+            const next = event.target.value;
+            setDraft({ mode: "advanced", expression: next });
+            if (next.trim()) onChange(next);
+          }}
+          className="min-h-20 font-mono text-xs leading-relaxed"
+        />
+      </label>
+    );
+  }
+
+  const rightDisabled = isUnaryBranchComparisonOperator(draft.operator);
+  const rightNumeric = isNumericBranchComparisonOperator(draft.operator);
+
+  return (
+    <div className="grid gap-1">
+      <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+        Condition
+      </span>
+      <div className="grid gap-2">
+        <ReferenceInput
+          aria-label={`${label} branch condition left value`}
+          value={draft.left}
+          suggestions={suggestions}
+          onChange={(event) => updateComparison({ left: event.target.value })}
+        />
+        <div className="flex items-center gap-2">
+          <span className="h-px flex-1 bg-paper-rule/70" aria-hidden="true" />
+          <div className="w-1/2 min-w-24 max-w-40">
+            <Select
+              value={draft.operator}
+              onValueChange={(value) =>
+                updateComparison({
+                  operator: value as BranchComparisonOperator,
+                })
+              }
+            >
+              <SelectTrigger
+                aria-label={`${label} branch condition operator`}
+                className="w-full px-2"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {BRANCH_COMPARISON_OPERATORS.map((operator) => (
+                  <SelectItem key={operator.value} value={operator.value}>
+                    {operator.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <span className="h-px flex-1 bg-paper-rule/70" aria-hidden="true" />
+        </div>
+        <ReferenceInput
+          aria-label={`${label} branch condition right value`}
+          type={rightNumeric ? "number" : "text"}
+          inputMode={rightNumeric ? "decimal" : undefined}
+          step={rightNumeric ? "any" : undefined}
+          value={draft.right}
+          suggestions={rightNumeric ? [] : suggestions}
+          disabled={rightDisabled}
+          placeholder={
+            rightDisabled ? "Not used" : rightNumeric ? "Number" : undefined
+          }
+          onChange={(event) => {
+            const next = event.target.value;
+            if (rightNumeric && next && !isPartialNumericLiteral(next)) return;
+            updateComparison({ right: next });
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function TransformOperationEditor({
+  label,
+  transform,
+  suggestions,
+  onChange,
+}: {
+  label: string;
+  transform: TransformControl;
+  suggestions: WorkflowReferenceSuggestion[];
+  onChange: (value: string) => void;
+}) {
+  const operation = transform.operation;
+  const operationKind = transform.operationKind;
+
+  function setField(field: string, value: JsonValue | undefined) {
+    if (!operation) return;
+    const next: Record<string, JsonValue> = { ...operation };
+    if (value === undefined || value === "") {
+      delete next[field];
+    } else {
+      next[field] = value;
+    }
+    next.kind = operationKind;
+    onChange(formatJson(next));
+  }
+
+  function fieldString(field: string): string {
+    const value = operation?.[field];
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
+    return "";
+  }
+
+  function fieldBoolean(field: string, fallback = false): boolean {
+    const value = operation?.[field];
+    return typeof value === "boolean" ? value : fallback;
+  }
+
+  const inputField = (
+    field: string,
+    title: string,
+    options?: { multiline?: boolean; placeholder?: string },
+  ) => (
+    <label className="grid gap-1">
+      <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+        {title}
+      </span>
+      {options?.multiline ? (
+        <ReferenceTextarea
+          aria-label={`${label} transform ${title}`}
+          value={fieldString(field)}
+          suggestions={suggestions}
+          rows={3}
+          placeholder={options.placeholder}
+          onChange={(event) => setField(field, event.target.value)}
+          className="min-h-20 font-mono text-xs leading-relaxed"
+        />
+      ) : (
+        <ReferenceInput
+          aria-label={`${label} transform ${title}`}
+          value={fieldString(field)}
+          suggestions={suggestions}
+          placeholder={options?.placeholder}
+          onChange={(event) => setField(field, event.target.value)}
+        />
+      )}
+    </label>
+  );
+
+  const plainInputField = (
+    field: string,
+    title: string,
+    options?: { type?: "text" | "number"; placeholder?: string },
+  ) => (
+    <label className="grid gap-1">
+      <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+        {title}
+      </span>
+      <Input
+        aria-label={`${label} transform ${title}`}
+        type={options?.type ?? "text"}
+        value={fieldString(field)}
+        placeholder={options?.placeholder}
+        onChange={(event) => {
+          const next = event.target.value;
+          if (options?.type === "number") {
+            if (next && !isPartialNumericLiteral(next)) return;
+            setField(field, next === "" ? undefined : Number(next));
+            return;
+          }
+          setField(field, next);
+        }}
+        className="font-mono"
+      />
+    </label>
+  );
+
+  const booleanField = (field: string, title: string, fallback = false) => (
+    <label className="grid gap-1">
+      <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+        {title}
+      </span>
+      <Select
+        value={String(fieldBoolean(field, fallback))}
+        onValueChange={(value) => setField(field, value === "true")}
+      >
+        <SelectTrigger aria-label={`${label} transform ${title}`}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {TRANSFORM_BOOLEAN_OPTIONS.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </label>
+  );
+
+  const headersField = () => (
+    <label className="grid gap-1">
+      <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+        Headers
+      </span>
+      <Input
+        aria-label={`${label} transform headers`}
+        value={csvHeadersDraft(operation?.headers)}
+        placeholder="id, name, status"
+        onChange={(event) =>
+          setField(
+            "headers",
+            event.target.value
+              .split(",")
+              .map((item) => item.trim())
+              .filter(Boolean),
+          )
+        }
+        className="font-mono"
+      />
+    </label>
+  );
+
+  const fieldListInput = (
+    field: string,
+    title: string,
+    options?: { placeholder?: string },
+  ) => (
+    <label className="grid gap-1">
+      <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+        {title}
+      </span>
+      <Input
+        aria-label={`${label} transform ${title}`}
+        value={csvHeadersDraft(operation?.[field])}
+        placeholder={options?.placeholder ?? "id, name"}
+        onChange={(event) =>
+          setField(
+            field,
+            event.target.value
+              .split(",")
+              .map((item) => item.trim())
+              .filter(Boolean),
+          )
+        }
+        className="font-mono"
+      />
+    </label>
+  );
+
+  const operationFields = (() => {
+    if (!operation) {
+      return (
+        <div className="border border-paper-rule bg-paper-sunk px-3 py-3 text-sm text-ink-soft">
+          Select a transformer operation to configure this card.
+        </div>
+      );
+    }
+    switch (operationKind) {
+      case "value.resolve":
+        return inputField("value", "Value");
+      case "object_pick":
+        return (
+          <>
+            {inputField("source", "Source object")}
+            {fieldListInput("fields", "Fields", { placeholder: "id, name" })}
+          </>
+        );
+      case "string.replace":
+        return (
+          <>
+            {inputField("value", "Text")}
+            {plainInputField("search", "Search")}
+            {plainInputField("replacement", "Replacement")}
+            {booleanField("all", "Replace all", true)}
+          </>
+        );
+      case "string.regex_replace":
+        return (
+          <>
+            {inputField("value", "Text")}
+            {plainInputField("pattern", "Pattern")}
+            {plainInputField("replacement", "Replacement")}
+            {plainInputField("flags", "Flags", { placeholder: "gim" })}
+          </>
+        );
+      case "string.regex_match":
+        return (
+          <>
+            {inputField("value", "Text")}
+            {plainInputField("pattern", "Pattern")}
+            {plainInputField("flags", "Flags", { placeholder: "gim" })}
+          </>
+        );
+      case "json.parse":
+        return inputField("value", "JSON text", { multiline: true });
+      case "json.stringify":
+        return (
+          <>
+            {inputField("value", "Value")}
+            {booleanField("pretty", "Pretty print", true)}
+          </>
+        );
+      case "csv.parse":
+        return (
+          <>
+            {inputField("value", "CSV text", { multiline: true })}
+            {plainInputField("delimiter", "Delimiter", { placeholder: "," })}
+            {booleanField("headers", "Has headers", true)}
+            {plainInputField("maxRows", "Max rows", { type: "number" })}
+          </>
+        );
+      case "csv.stringify":
+        return (
+          <>
+            {inputField("value", "Rows")}
+            {plainInputField("delimiter", "Delimiter", { placeholder: "," })}
+            {headersField()}
+            {booleanField("includeHeaders", "Include headers", true)}
+            {plainInputField("maxRows", "Max rows", { type: "number" })}
+          </>
+        );
+      case "ip.parse":
+      case "ip.is_ipv4":
+      case "ip.is_ipv6":
+        return inputField("value", "IP address");
+      case "ip.in_subnet":
+        return (
+          <>
+            {inputField("value", "IP address")}
+            {inputField("cidr", "CIDR")}
+          </>
+        );
+      case "ip.netmask":
+        return (
+          <>
+            {plainInputField("prefix", "Prefix", { type: "number" })}
+            <label className="grid gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                Version
+              </span>
+              <Select
+                value={fieldString("version") || "4"}
+                onValueChange={(value) => setField("version", Number(value))}
+              >
+                <SelectTrigger aria-label={`${label} transform IP version`}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="4">IPv4</SelectItem>
+                  <SelectItem value="6">IPv6</SelectItem>
+                </SelectContent>
+              </Select>
+            </label>
+          </>
+        );
+      case "ip.network":
+        return inputField("cidr", "CIDR");
+      case "uri.parse":
+        return (
+          <>
+            {inputField("value", "URL")}
+            {inputField("base", "Base URL", { placeholder: "Optional" })}
+          </>
+        );
+      default:
+        return (
+          <div className="border border-paper-rule bg-paper-sunk px-3 py-3 text-sm text-ink-soft">
+            This transformer operation is not configurable from the form yet.
+          </div>
+        );
+    }
+  })();
+
+  return <div className="grid gap-3">{operationFields}</div>;
+}
+
+function ReferenceSuggestionList({
+  suggestions,
+  activeIndex,
+  onActiveIndexChange,
+  onApply,
+}: {
+  suggestions: WorkflowReferenceSuggestion[];
+  activeIndex: number;
+  onActiveIndexChange: (index: number) => void;
+  onApply: (suggestion: WorkflowReferenceSuggestion) => void;
+}) {
+  return (
+    <div className="absolute left-0 top-[calc(100%+4px)] z-30 max-h-48 w-max min-w-full max-w-[min(36rem,calc(100vw-2rem))] overflow-y-auto rounded-md border border-paper-rule bg-paper/95 p-1 shadow-xl backdrop-blur">
+      {suggestions.map((suggestion, index) => (
+        <button
+          key={suggestion.value}
+          type="button"
+          className={cn(
+            "flex w-full min-w-0 items-center justify-between gap-4 rounded px-2.5 py-1.5 text-left",
+            index === activeIndex
+              ? "bg-signal-blue/10 text-ink"
+              : "text-ink-soft hover:bg-paper-sunk hover:text-ink",
+          )}
+          onMouseEnter={() => onActiveIndexChange(index)}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => onApply(suggestion)}
+        >
+          <span className="min-w-0 truncate font-mono text-[12px] text-signal-blue">
+            {suggestion.label}
+          </span>
+          <span className="shrink-0 text-[11px] text-ink-faint">
+            {suggestion.detail}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function parseBranchConditionDraft(condition: string): BranchConditionDraft {
+  if (!condition.trim()) {
+    return { mode: "comparison", left: "", operator: "==", right: "" };
+  }
+  const comparison = parseBranchComparison(condition);
+  if (!comparison) {
+    return { mode: "advanced", expression: condition };
+  }
+  return {
+    mode: "comparison",
+    left: comparison.left,
+    operator: comparison.operator,
+    right: comparison.right,
+  };
+}
+
+function formatBranchComparisonCondition(
+  draft: Extract<BranchConditionDraft, { mode: "comparison" }>,
+): string {
+  const left = draft.left.trim();
+  const right = draft.right.trim();
+  if (!left) return "";
+  if (draft.operator === "is_true") return `${left} == true`;
+  if (draft.operator === "is_false") return `${left} == false`;
+  if (!right) return "";
+  if (
+    isNumericBranchComparisonOperator(draft.operator) &&
+    !isFiniteNumericLiteral(right)
+  ) {
+    return "";
+  }
+  if (draft.operator === "contains") return `contains(${left}, ${right})`;
+  if (draft.operator === "not_contains") {
+    return `not(contains(${left}, ${right}))`;
+  }
+  if (draft.operator === "starts_with") return `startsWith(${left}, ${right})`;
+  if (draft.operator === "not_starts_with") {
+    return `not(startsWith(${left}, ${right}))`;
+  }
+  if (draft.operator === "ends_with") return `endsWith(${left}, ${right})`;
+  if (draft.operator === "not_ends_with") {
+    return `not(endsWith(${left}, ${right}))`;
+  }
+  return `${left} ${draft.operator} ${right}`;
+}
+
+function parseBranchComparison(expression: string): {
+  left: string;
+  operator: BranchComparisonOperator;
+  right: string;
+} | null {
+  const trimmed = expression.trim();
+  const containsCall = parseTwoArgConditionCall(trimmed, "contains");
+  if (containsCall) {
+    return {
+      left: containsCall.left,
+      operator: "contains",
+      right: containsCall.right,
+    };
+  }
+  const notContainsCall = parseNotTwoArgConditionCall(trimmed, "contains");
+  if (notContainsCall) {
+    return {
+      left: notContainsCall.left,
+      operator: "not_contains",
+      right: notContainsCall.right,
+    };
+  }
+  const startsWithCall = parseTwoArgConditionCall(trimmed, "startsWith");
+  if (startsWithCall) {
+    return {
+      left: startsWithCall.left,
+      operator: "starts_with",
+      right: startsWithCall.right,
+    };
+  }
+  const notStartsWithCall = parseNotTwoArgConditionCall(trimmed, "startsWith");
+  if (notStartsWithCall) {
+    return {
+      left: notStartsWithCall.left,
+      operator: "not_starts_with",
+      right: notStartsWithCall.right,
+    };
+  }
+  const endsWithCall = parseTwoArgConditionCall(trimmed, "endsWith");
+  if (endsWithCall) {
+    return {
+      left: endsWithCall.left,
+      operator: "ends_with",
+      right: endsWithCall.right,
+    };
+  }
+  const notEndsWithCall = parseNotTwoArgConditionCall(trimmed, "endsWith");
+  if (notEndsWithCall) {
+    return {
+      left: notEndsWithCall.left,
+      operator: "not_ends_with",
+      right: notEndsWithCall.right,
+    };
+  }
+  let quote: '"' | "'" | null = null;
+  let depth = 0;
+  for (let index = 0; index < trimmed.length; index += 1) {
+    const char = trimmed[index];
+    if (quote) {
+      if (char === quote && trimmed[index - 1] !== "\\") quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "(") {
+      depth += 1;
+      continue;
+    }
+    if (char === ")" && depth > 0) {
+      depth -= 1;
+      continue;
+    }
+    if (depth !== 0) continue;
+    const operator = BRANCH_COMPARISON_OPERATORS.find((candidate) =>
+      trimmed.startsWith(candidate.value, index),
+    )?.value;
+    if (!operator) continue;
+    const left = trimmed.slice(0, index).trim();
+    const right = trimmed.slice(index + operator.length).trim();
+    if (!left || !right) return null;
+    if (operator === "==" && right === "true") {
+      return { left, operator: "is_true", right: "" };
+    }
+    if (operator === "==" && right === "false") {
+      return { left, operator: "is_false", right: "" };
+    }
+    return { left, operator, right };
+  }
+  return null;
+}
+
+function isUnaryBranchComparisonOperator(
+  operator: BranchComparisonOperator,
+): boolean {
+  return operator === "is_true" || operator === "is_false";
+}
+
+function isNumericBranchComparisonOperator(
+  operator: BranchComparisonOperator,
+): boolean {
+  return operator === ">" || operator === "<";
+}
+
+function isPartialNumericLiteral(value: string): boolean {
+  return /^-?(?:\d+\.?\d*|\.\d*)?(?:e-?\d*)?$/i.test(value.trim());
+}
+
+function isFiniteNumericLiteral(value: string): boolean {
+  if (!/^-?(?:\d+\.?\d*|\.\d+)(?:e-?\d+)?$/i.test(value.trim())) {
+    return false;
+  }
+  return Number.isFinite(Number(value));
+}
+
+function parseTwoArgConditionCall(
+  expression: string,
+  name: "contains" | "startsWith" | "endsWith",
+): { left: string; right: string } | null {
+  const prefix = `${name}(`;
+  if (!expression.startsWith(prefix) || !expression.endsWith(")")) return null;
+  const args = splitBranchConditionArgs(
+    expression.slice(prefix.length, expression.length - 1),
+  );
+  if (args.length !== 2 || !args[0] || !args[1]) return null;
+  return { left: args[0], right: args[1] };
+}
+
+function parseNotTwoArgConditionCall(
+  expression: string,
+  name: "contains" | "startsWith" | "endsWith",
+): { left: string; right: string } | null {
+  if (!expression.startsWith("not(") || !expression.endsWith(")")) return null;
+  return parseTwoArgConditionCall(expression.slice(4, -1).trim(), name);
+}
+
+function splitBranchConditionArgs(expression: string): string[] {
+  const parts: string[] = [];
+  let quote: '"' | "'" | null = null;
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < expression.length; index += 1) {
+    const char = expression[index];
+    if (quote) {
+      if (char === quote && expression[index - 1] !== "\\") quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "(") {
+      depth += 1;
+      continue;
+    }
+    if (char === ")" && depth > 0) {
+      depth -= 1;
+      continue;
+    }
+    if (char === "," && depth === 0) {
+      parts.push(expression.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+  parts.push(expression.slice(start).trim());
+  return parts;
+}
+
+function isJsonStringDraft(value: string): boolean {
+  return value.length >= 2 && value.startsWith('"') && value.endsWith('"');
+}
+
+function isOuterQuoteEditAttempt(
+  event: KeyboardEvent<HTMLInputElement>,
+): boolean {
+  if (event.metaKey || event.ctrlKey || event.altKey) return false;
+  const value = event.currentTarget.value;
+  const start = event.currentTarget.selectionStart ?? 0;
+  const end = event.currentTarget.selectionEnd ?? start;
+  if (start === 0 && end === value.length) return false;
+
+  if (event.key === "Backspace") {
+    return start === end ? start === 1 : start === 0 || end === value.length;
+  }
+  if (event.key === "Delete") {
+    return start === end
+      ? start === 0 || start === value.length - 1
+      : start === 0 || end === value.length;
+  }
+  if (event.key.length === 1) {
+    return start === 0 || end === value.length;
+  }
+  return false;
+}
+
 function NodeCard({
   node,
-  index,
-  canMoveUp,
-  canMoveDown,
-  onMoveUp,
-  onMoveDown,
-  onDelete,
+  referenceSuggestions,
+  onNodeIdChange,
   onLabelChange,
   onAssignmentTargetChange,
   onAssignmentSourceChange,
@@ -3999,10 +5154,12 @@ function NodeCard({
   onMcpToolSelect,
   onMcpSchemaInputChange,
   onAgentConfigChange,
+  readOnly = false,
+  showMetadata = true,
 }: NodeCardProps) {
-  const Icon = iconForNode(node.type);
   const assignments = assignmentSummaries(node.assign);
   const primaryAssignment = primaryAssignmentControl(node.assign);
+  const showContextStore = isContextStoreNode(node);
   const transform = transformControl(node);
   const branch = branchControl(node);
   const switchCase = switchControl(node);
@@ -4024,77 +5181,98 @@ function NodeCard({
         );
   const mcpSchemaFields = mcpSchemaInputFields(selectedMcpTool?.inputSchema);
   const label = node.label ?? node.id;
+  const [nodeIdDraft, setNodeIdDraft] = useState(node.id);
+  const [switchValueQuoteWarning, setSwitchValueQuoteWarning] = useState<
+    string | null
+  >(null);
+  useEffect(() => {
+    setNodeIdDraft(node.id);
+  }, [node.id]);
+
+  function commitNodeIdDraft() {
+    const nextId = nodeIdDraft.trim();
+    if (nextId === node.id) {
+      setNodeIdDraft(node.id);
+      return;
+    }
+    if (!onNodeIdChange(nextId)) {
+      setNodeIdDraft(node.id);
+    }
+  }
+
+  function warnSwitchCaseQuoteEdit(caseKey: string) {
+    setSwitchValueQuoteWarning(caseKey);
+    toast.warning("String değerini dış tırnakların içine yaz");
+  }
+
+  function handleSwitchCaseValueKeyDown(
+    event: KeyboardEvent<HTMLInputElement>,
+    caseKey: string,
+  ) {
+    if (!isJsonStringDraft(event.currentTarget.value)) return;
+    if (!isOuterQuoteEditAttempt(event)) return;
+    event.preventDefault();
+    warnSwitchCaseQuoteEdit(caseKey);
+  }
+
   return (
-    <section className="grid gap-3">
-      <div className="border border-paper-rule bg-paper px-3 py-3">
-        <div className="flex min-w-0 items-start gap-3">
-          <div className="flex size-8 shrink-0 items-center justify-center border border-paper-rule bg-paper-sunk">
-            <Icon className="size-4 text-ink-soft" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="font-mono text-[11px] text-ink-faint">
-                {String(index + 1).padStart(2, "0")}
-              </span>
-              <span className="truncate text-sm font-medium">{label}</span>
-            </div>
-            <div className="mt-1 flex flex-wrap gap-1.5">
-              {node.label && <Badge variant="outline">{node.id}</Badge>}
-              <Badge variant="secondary">{node.type}</Badge>
-              {isRecord(node.assign) && <Badge variant="outline">assign</Badge>}
-              {node.type.includes("log") && (
-                <Badge variant="outline">log</Badge>
-              )}
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label={`Move ${label} up`}
-              disabled={!canMoveUp}
-              onClick={onMoveUp}
-            >
-              <ArrowUp className="size-3" />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label={`Move ${label} down`}
-              disabled={!canMoveDown}
-              onClick={onMoveDown}
-            >
-              <ArrowDown className="size-3" />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label={`Delete ${label}`}
-              onClick={onDelete}
-            >
-              <Trash2 className="size-3" />
-            </Button>
-          </div>
-        </div>
-        <InspectorSection title="Basics" defaultOpen>
+    <fieldset
+      disabled={readOnly}
+      aria-disabled={readOnly}
+      className={cn("grid gap-3", readOnly && "opacity-90")}
+    >
+      {showMetadata && (
+        <InspectorSection
+          title="Step Metadata"
+          defaultOpen
+          badge={nodeTypeDisplayName(node)}
+        >
           <label className="grid gap-1">
             <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-              Label
+              Name
             </span>
             <Input
               aria-label={`${node.id} card label`}
               value={typeof node.label === "string" ? node.label : ""}
+              placeholder={node.id}
               onChange={(event) => onLabelChange(event.target.value)}
             />
           </label>
+          <label className="grid gap-1">
+            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+              Step ID
+            </span>
+            <Input
+              aria-label={`${node.id} step id`}
+              value={nodeIdDraft}
+              onChange={(event) => setNodeIdDraft(event.target.value)}
+              onBlur={commitNodeIdDraft}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.currentTarget.blur();
+                  return;
+                }
+                if (event.key === "Escape") {
+                  setNodeIdDraft(node.id);
+                  event.currentTarget.blur();
+                }
+              }}
+              className="font-mono"
+            />
+          </label>
+          <div className="grid gap-1">
+            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+              Type
+            </span>
+            <span className="break-all font-mono text-[11px] text-ink-soft">
+              {node.type}
+            </span>
+          </div>
         </InspectorSection>
-      </div>
-      {assignments.length > 0 && (
+      )}
+      {showContextStore && assignments.length > 0 && (
         <InspectorSection
-          title="Assignments"
+          title="Store in context"
           badge={`${assignments.length}`}
           defaultOpen
         >
@@ -4136,9 +5314,10 @@ function NodeCard({
                 <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                   Source
                 </span>
-                <Input
+                <ReferenceInput
                   aria-label={`${label} assignment source`}
                   value={primaryAssignment.source}
+                  suggestions={referenceSuggestions}
                   onChange={(event) =>
                     onAssignmentSourceChange(
                       primaryAssignment.target,
@@ -4176,108 +5355,23 @@ function NodeCard({
       )}
       {transform && (
         <InspectorSection title="Transform" defaultOpen>
-          <div className="grid gap-3">
-            <label className="grid gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                Preset
-              </span>
-              <Select
-                onValueChange={(presetId) => {
-                  const preset = workflowTransformPresetById(presetId);
-                  if (!preset) return;
-                  onTransformConfigChange(
-                    "transform",
-                    formatJson(preset.transform),
-                  );
-                }}
-              >
-                <SelectTrigger
-                  size="sm"
-                  aria-label={`${label} transform preset`}
-                >
-                  <SelectValue placeholder="Select transform" />
-                </SelectTrigger>
-                <SelectContent>
-                  {WORKFLOW_TRANSFORM_PRESETS.map((preset) => (
-                    <SelectItem key={preset.id} value={preset.id}>
-                      {preset.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </label>
-            <label className="grid gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                Input JSON
-              </span>
-              <Textarea
-                aria-label={`${label} transform input JSON`}
-                value={transform.input}
-                rows={7}
-                onChange={(event) =>
-                  onTransformConfigChange("input", event.target.value)
-                }
-                className="min-h-36 font-mono text-xs leading-relaxed"
-              />
-            </label>
-            <label className="grid gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                Transform JSON
-              </span>
-              <Textarea
-                aria-label={`${label} transform JSON`}
-                value={transform.transform}
-                rows={7}
-                onChange={(event) =>
-                  onTransformConfigChange("transform", event.target.value)
-                }
-                className="min-h-36 font-mono text-xs leading-relaxed"
-              />
-            </label>
-          </div>
+          <TransformOperationEditor
+            label={label}
+            transform={transform}
+            suggestions={referenceSuggestions}
+            onChange={(value) => onTransformConfigChange("transform", value)}
+          />
         </InspectorSection>
       )}
       {branch && (
-        <InspectorSection title="Branch" defaultOpen>
+        <InspectorSection title="If" defaultOpen>
           <div className="grid gap-3">
-            <label className="grid gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                Condition
-              </span>
-              <Input
-                aria-label={`${label} branch condition`}
-                value={branch.condition}
-                onChange={(event) =>
-                  onBranchConfigChange("condition", event.target.value)
-                }
-              />
-            </label>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="grid gap-1">
-                <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                  True
-                </span>
-                <Input
-                  aria-label={`${label} then nodes`}
-                  value={branch.then}
-                  onChange={(event) =>
-                    onBranchConfigChange("then", event.target.value)
-                  }
-                />
-              </label>
-              <label className="grid gap-1">
-                <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                  False
-                </span>
-                <Input
-                  aria-label={`${label} else nodes`}
-                  value={branch.else}
-                  onChange={(event) =>
-                    onBranchConfigChange("else", event.target.value)
-                  }
-                />
-              </label>
-            </div>
+            <BranchConditionEditor
+              label={label}
+              condition={branch.condition}
+              suggestions={referenceSuggestions}
+              onChange={(value) => onBranchConfigChange("condition", value)}
+            />
           </div>
         </InspectorSection>
       )}
@@ -4292,9 +5386,10 @@ function NodeCard({
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Value
               </span>
-              <Input
+              <ReferenceInput
                 aria-label={`${label} switch value`}
                 value={switchCase.value}
+                suggestions={referenceSuggestions}
                 onChange={(event) =>
                   onSwitchConfigChange("value", event.target.value)
                 }
@@ -4364,6 +5459,10 @@ function NodeCard({
                     <Input
                       aria-label={`${label} switch case ${caseIndex + 1} value`}
                       value={item.value}
+                      onKeyDown={(event) =>
+                        handleSwitchCaseValueKeyDown(event, item.id)
+                      }
+                      onFocus={() => setSwitchValueQuoteWarning(null)}
                       onChange={(event) =>
                         onSwitchConfigChange(
                           "caseValue",
@@ -4372,22 +5471,12 @@ function NodeCard({
                         )
                       }
                     />
-                  </label>
-                  <label className="grid gap-1">
-                    <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                      Nodes
-                    </span>
-                    <Input
-                      aria-label={`${label} switch case ${caseIndex + 1} nodes`}
-                      value={item.nodes}
-                      onChange={(event) =>
-                        onSwitchConfigChange(
-                          "caseNodes",
-                          event.target.value,
-                          caseIndex,
-                        )
-                      }
-                    />
+                    {switchValueQuoteWarning === item.id && (
+                      <span className="text-[11px] text-signal-amber">
+                        String match value icin dis tirnaklari silme; degeri
+                        tirnaklarin icine yaz.
+                      </span>
+                    )}
                   </label>
                 </div>
               ))}
@@ -4401,18 +5490,6 @@ function NodeCard({
                 Add Case
               </Button>
             </div>
-            <label className="grid gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                Default Nodes
-              </span>
-              <Input
-                aria-label={`${label} switch default nodes`}
-                value={switchCase.defaultNodes}
-                onChange={(event) =>
-                  onSwitchConfigChange("defaultNodes", event.target.value)
-                }
-              />
-            </label>
           </div>
         </InspectorSection>
       )}
@@ -4444,24 +5521,30 @@ function NodeCard({
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Message
               </span>
-              <Input
+              <ReferenceTextarea
                 aria-label={`${label} log message`}
                 value={log.message}
+                suggestions={referenceSuggestions}
+                rows={3}
                 onChange={(event) =>
                   onLogConfigChange("message", event.target.value)
                 }
+                className="min-h-20 text-sm leading-relaxed"
               />
             </label>
             <label className="grid gap-1">
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Payload
               </span>
-              <Input
+              <ReferenceTextarea
                 aria-label={`${label} log payload`}
                 value={log.payload}
+                suggestions={referenceSuggestions}
+                rows={4}
                 onChange={(event) =>
                   onLogConfigChange("payload", event.target.value)
                 }
+                className="min-h-24 text-xs leading-relaxed"
               />
             </label>
           </div>
@@ -4474,12 +5557,15 @@ function NodeCard({
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Message
               </span>
-              <Input
+              <ReferenceTextarea
                 aria-label={`${label} throw error message`}
                 value={throwError.message}
+                suggestions={referenceSuggestions}
+                rows={3}
                 onChange={(event) =>
                   onThrowErrorConfigChange("message", event.target.value)
                 }
+                className="min-h-20 text-sm leading-relaxed"
               />
             </label>
             <label className="grid gap-1">
@@ -4498,12 +5584,15 @@ function NodeCard({
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Details
               </span>
-              <Input
+              <ReferenceTextarea
                 aria-label={`${label} throw error details`}
                 value={throwError.details}
+                suggestions={referenceSuggestions}
+                rows={4}
                 onChange={(event) =>
                   onThrowErrorConfigChange("details", event.target.value)
                 }
+                className="min-h-24 text-xs leading-relaxed"
               />
             </label>
           </div>
@@ -4567,12 +5656,15 @@ function NodeCard({
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Output
               </span>
-              <Input
+              <ReferenceTextarea
                 aria-label={`${label} exit output`}
                 value={exit.output}
+                suggestions={referenceSuggestions}
+                rows={4}
                 onChange={(event) =>
                   onExitConfigChange("output", event.target.value)
                 }
+                className="min-h-24 text-xs leading-relaxed"
               />
             </label>
           </div>
@@ -4585,9 +5677,10 @@ function NodeCard({
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Items
               </span>
-              <Input
+              <ReferenceInput
                 aria-label={`${label} foreach items`}
                 value={foreach.items}
+                suggestions={referenceSuggestions}
                 onChange={(event) =>
                   onForeachConfigChange("items", event.target.value)
                 }
@@ -4783,9 +5876,10 @@ function NodeCard({
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Input
               </span>
-              <Textarea
+              <ReferenceTextarea
                 aria-label={`${label} python input`}
                 value={python.input}
+                suggestions={referenceSuggestions}
                 rows={4}
                 onChange={(event) =>
                   onPythonConfigChange("input", event.target.value)
@@ -4928,9 +6022,10 @@ function NodeCard({
                         <Badge variant="outline">{field.type}</Badge>
                       )}
                     </span>
-                    <Input
+                    <ReferenceInput
                       aria-label={`${label} MCP schema ${field.name}`}
                       value={mcpTool.inputValues[field.name] ?? ""}
+                      suggestions={referenceSuggestions}
                       onChange={(event) =>
                         onMcpSchemaInputChange(field.name, event.target.value)
                       }
@@ -4944,9 +6039,10 @@ function NodeCard({
             <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
               Input JSON
             </span>
-            <Textarea
+            <ReferenceTextarea
               aria-label={`${label} MCP input JSON`}
               value={mcpTool.input}
+              suggestions={referenceSuggestions}
               rows={8}
               onChange={(event) =>
                 onMcpToolConfigChange("input", event.target.value)
@@ -5006,12 +6102,15 @@ function NodeCard({
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Prompt
               </span>
-              <Input
+              <ReferenceTextarea
                 aria-label={`${label} agent prompt`}
                 value={agentCall.prompt}
+                suggestions={referenceSuggestions}
+                rows={5}
                 onChange={(event) =>
                   onAgentConfigChange("prompt", event.target.value)
                 }
+                className="min-h-28 text-sm leading-relaxed"
               />
             </label>
             <label className="grid gap-1">
@@ -5032,9 +6131,10 @@ function NodeCard({
             <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
               Input JSON
             </span>
-            <Textarea
+            <ReferenceTextarea
               aria-label={`${label} agent input JSON`}
               value={agentCall.input}
+              suggestions={referenceSuggestions}
               rows={8}
               onChange={(event) =>
                 onAgentConfigChange("input", event.target.value)
@@ -5044,8 +6144,50 @@ function NodeCard({
           </label>
         </InspectorSection>
       )}
-    </section>
+    </fieldset>
   );
+}
+
+function readonlyNodeCardProps(
+  node: WorkflowNode,
+  referenceSuggestions: WorkflowReferenceSuggestion[],
+  mcpTools: McpToolSummary[],
+  agents: AgentSummary[],
+): NodeCardProps {
+  const noop = () => undefined;
+  return {
+    node,
+    index: 0,
+    referenceSuggestions,
+    canMoveUp: false,
+    canMoveDown: false,
+    onMoveUp: noop,
+    onMoveDown: noop,
+    onDelete: noop,
+    onNodeIdChange: () => false,
+    onLabelChange: noop,
+    onAssignmentTargetChange: noop,
+    onAssignmentSourceChange: noop,
+    onAssignmentModeChange: noop,
+    onTransformConfigChange: noop,
+    onBranchConfigChange: noop,
+    onSwitchConfigChange: noop,
+    onLogConfigChange: noop,
+    onThrowErrorConfigChange: noop,
+    onSleepConfigChange: noop,
+    onExitConfigChange: noop,
+    onForeachConfigChange: noop,
+    onParallelConfigChange: noop,
+    onPythonConfigChange: noop,
+    mcpTools,
+    agents,
+    onMcpToolConfigChange: noop,
+    onMcpToolSelect: noop,
+    onMcpSchemaInputChange: noop,
+    onAgentConfigChange: noop,
+    readOnly: true,
+    showMetadata: false,
+  };
 }
 
 function RunConsole({
@@ -5053,16 +6195,16 @@ function RunConsole({
   detail,
   runs,
   selectedStep,
+  referenceSuggestions,
+  mcpTools,
+  agents,
   pendingRunId,
   busy,
   hasMoreRuns,
   loadingMoreRuns,
-  filters,
-  onFiltersChange,
   onSelectRun,
   onLoadMoreRuns,
   onRefresh,
-  onSelectStep,
   onRerun,
   onCancel,
 }: {
@@ -5070,71 +6212,57 @@ function RunConsole({
   detail: RunDetail | null;
   runs: WorkflowRun[];
   selectedStep: WorkflowStepAttempt | null;
+  referenceSuggestions: WorkflowReferenceSuggestion[];
+  mcpTools: McpToolSummary[];
+  agents: AgentSummary[];
   pendingRunId: string | null;
   busy: string | null;
   hasMoreRuns: boolean;
   loadingMoreRuns: boolean;
-  filters: Omit<ScopedRunFilters, "workflowId">;
-  onFiltersChange: (
-    patch: Partial<Omit<ScopedRunFilters, "workflowId">>,
-  ) => void;
   onSelectRun: (runId: string) => void;
   onLoadMoreRuns: () => void;
   onRefresh: () => void;
-  onSelectStep: (stepId: string) => void;
   onRerun: () => void;
   onCancel: () => void;
 }) {
-  const [eventLevel, setEventLevel] = useState<EventLevelFilter>("all");
   const canCancel =
     detail !== null &&
     !["succeeded", "failed", "canceled"].includes(detail.run.status);
-  const filteredEvents =
-    detail?.events.filter(
-      (event) => eventLevel === "all" || event.level === eventLevel,
-    ) ?? [];
   const selectedRunId = pendingRunId ?? detail?.run.id ?? null;
   return (
     <aside
-      aria-label="Run Console"
+      aria-label="Run History"
       className="min-h-0 flex-1 overflow-y-auto bg-paper"
     >
-      <div className="sticky top-0 z-10 border-b border-paper-rule bg-paper px-4 py-3">
+      <div className="sticky top-0 z-10 border-b border-paper-rule bg-paper px-3 py-2">
         <div className="flex items-center justify-between gap-3">
-          <div>
-            <SectionEyebrow>Run Console</SectionEyebrow>
-            <div className="mt-1 flex items-center gap-2">
-              {pendingRunId ? (
-                <Loader2 className="size-4 animate-spin text-ink-faint" />
-              ) : detail ? (
-                statusIcon(detail.run.status)
-              ) : (
-                <ScrollText className="size-4" />
-              )}
-              <span className="text-sm font-medium">
-                {pendingRunId
-                  ? "Loading selected run"
-                  : detail
-                    ? `Selected run ${detail.run.id.slice(0, 8)} · ${detail.run.status}`
-                    : "No run selected"}
-              </span>
-            </div>
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold text-ink">Run History</h2>
+            <p className="mt-0.5 text-xs text-ink-faint">
+              Displaying run history for the last 30 days
+            </p>
+            {workflowName && (
+              <p className="mt-1 truncate text-xs text-ink-faint">
+                {workflowName}
+              </p>
+            )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             <Button
               type="button"
               variant="ghost"
-              size="sm"
+              size="icon-sm"
+              aria-label="Refresh run history"
               onClick={onRefresh}
               disabled={!detail || busy !== null}
             >
               <RefreshCw className="size-4" />
-              Refresh
             </Button>
             <Button
               type="button"
               variant="ghost"
-              size="sm"
+              size="icon-sm"
+              aria-label="Cancel selected run"
               onClick={onCancel}
               disabled={!canCancel || busy !== null}
             >
@@ -5143,80 +6271,56 @@ function RunConsole({
               ) : (
                 <XCircle className="size-4" />
               )}
-              Cancel
             </Button>
             <Button
               type="button"
               variant="ghost"
-              size="sm"
+              size="icon-sm"
+              aria-label="Rerun selected workflow run"
               onClick={onRerun}
               disabled={!detail || busy !== null}
             >
               <ListRestart className="size-4" />
-              Rerun
             </Button>
           </div>
         </div>
       </div>
 
-      <div className="grid gap-5 p-4">
-        {detail && <RunOverview workflowName={workflowName} run={detail.run} />}
-        <RunHistoryPanel
-          detail={detail}
-          runs={runs}
-          selectedRunId={selectedRunId}
-          pendingRunId={pendingRunId}
-          hasMoreRuns={hasMoreRuns}
-          loadingMoreRuns={loadingMoreRuns}
-          filters={filters}
-          onFiltersChange={onFiltersChange}
-          onSelectRun={onSelectRun}
-          onLoadMoreRuns={onLoadMoreRuns}
-        />
-        {detail && (
-          <>
-            <RunPaneSection
-              title="Steps"
-              badge={`${detail.steps.length}`}
-              description="Select a step to inspect the data it received and produced."
-            >
-              <StepList
-                detail={detail}
-                selectedStep={selectedStep}
-                onSelectStep={onSelectStep}
-              />
-            </RunPaneSection>
-            <RunPaneSection
-              title="Step Detail"
-              badge={selectedStep?.status}
-              description="Focused view for the selected step."
-            >
-              {selectedStep ? (
-                <StepDetailPanel
-                  detail={detail}
-                  step={selectedStep}
-                  runId={detail.run.id}
-                />
-              ) : (
-                <div className="border border-paper-rule p-3 text-sm text-ink-soft">
-                  Select a step to inspect input, output, logs, error, and
-                  context.
-                </div>
-              )}
-            </RunPaneSection>
-            <InspectorSection
-              title="Advanced"
-              badge={`${filteredEvents.length} events`}
-            >
-              <AdvancedRunDetails
-                detail={detail}
-                workflowName={workflowName}
-                eventLevel={eventLevel}
-                filteredEvents={filteredEvents}
-                onEventLevelChange={setEventLevel}
-              />
-            </InspectorSection>
-          </>
+      <div className="p-3">
+        {detail && selectedStep ? (
+          <section
+            aria-label="Selected step execution detail"
+            className="grid gap-3"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <SectionEyebrow>Step Execution</SectionEyebrow>
+                <p className="mt-1 truncate text-sm text-ink-faint">
+                  {detail.run.id}
+                </p>
+              </div>
+              {statusIcon(selectedStep.status)}
+            </div>
+            <StepDetailPanel
+              detail={detail}
+              step={selectedStep}
+              runId={detail.run.id}
+              referenceSuggestions={referenceSuggestions}
+              mcpTools={mcpTools}
+              agents={agents}
+            />
+          </section>
+        ) : (
+          <RunHistoryPanel
+            detail={detail}
+            runs={runs}
+            selectedRunId={selectedRunId}
+            pendingRunId={pendingRunId}
+            hasMoreRuns={hasMoreRuns}
+            loadingMoreRuns={loadingMoreRuns}
+            onSelectRun={onSelectRun}
+            onLoadMoreRuns={onLoadMoreRuns}
+          />
         )}
       </div>
     </aside>
@@ -5303,8 +6407,6 @@ function RunHistoryPanel({
   pendingRunId,
   hasMoreRuns,
   loadingMoreRuns,
-  filters,
-  onFiltersChange,
   onSelectRun,
   onLoadMoreRuns,
 }: {
@@ -5314,154 +6416,110 @@ function RunHistoryPanel({
   pendingRunId: string | null;
   hasMoreRuns: boolean;
   loadingMoreRuns: boolean;
-  filters: Omit<ScopedRunFilters, "workflowId">;
-  onFiltersChange: (
-    patch: Partial<Omit<ScopedRunFilters, "workflowId">>,
-  ) => void;
   onSelectRun: (runId: string) => void;
   onLoadMoreRuns: () => void;
 }) {
+  const summary = runHistorySummary(runs);
   return (
-    <RunPaneSection
-      title="Recent Runs"
-      badge={hasMoreRuns ? `${runs.length}+` : `${runs.length}`}
-    >
-      <details className="border border-paper-rule bg-paper">
-        <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-ink-soft hover:bg-paper-sunk">
-          Filters
-        </summary>
-        <div className="grid grid-cols-2 gap-2 border-t border-paper-rule p-3">
-          <label className="grid gap-1">
-            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-              Mode
-            </span>
-            <Select
-              value={filters.mode}
-              onValueChange={(value) =>
-                onFiltersChange({ mode: value as "all" | RunMode })
-              }
-            >
-              <SelectTrigger size="sm" aria-label="Mode">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All modes</SelectItem>
-                <SelectItem value="test">Test</SelectItem>
-                <SelectItem value="live">Live</SelectItem>
-              </SelectContent>
-            </Select>
-          </label>
-          <label className="grid gap-1">
-            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-              Status
-            </span>
-            <Select
-              value={filters.status}
-              onValueChange={(value) =>
-                onFiltersChange({ status: value as "all" | RunStatus })
-              }
-            >
-              <SelectTrigger size="sm" aria-label="Status">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All statuses</SelectItem>
-                {RUN_STATUSES.map((item) => (
-                  <SelectItem key={item} value={item}>
-                    {item}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </label>
-          <label className="grid gap-1">
-            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-              Trigger
-            </span>
-            <Input
-              aria-label="Trigger"
-              value={filters.triggerId}
-              onChange={(event) =>
-                onFiltersChange({ triggerId: event.target.value })
-              }
-              placeholder="manual"
-              className="h-8 font-mono text-xs"
-            />
-          </label>
-          <label className="grid gap-1">
-            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-              Created from
-            </span>
-            <Input
-              aria-label="Created from"
-              type="date"
-              value={filters.createdFrom}
-              onChange={(event) =>
-                onFiltersChange({ createdFrom: event.target.value })
-              }
-              className="h-8 font-mono text-xs"
-            />
-          </label>
-          <label className="grid gap-1">
-            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-              Created to
-            </span>
-            <Input
-              aria-label="Created to"
-              type="date"
-              value={filters.createdTo}
-              onChange={(event) =>
-                onFiltersChange({ createdTo: event.target.value })
-              }
-              className="h-8 font-mono text-xs"
-            />
-          </label>
+    <section className="grid gap-3">
+      <div
+        aria-label="Run status summary"
+        className="grid grid-cols-5 overflow-hidden rounded-md border border-paper-rule bg-paper-sunk"
+      >
+        <RunHistoryStatusCount
+          label="failed"
+          count={summary.failed}
+          icon={<XCircle className="size-3.5 text-destructive" />}
+        />
+        <RunHistoryStatusCount
+          label="completed"
+          count={summary.succeeded}
+          icon={<CheckCircle2 className="size-3.5 text-signal-green" />}
+        />
+        <RunHistoryStatusCount
+          label="queued"
+          count={summary.queued}
+          icon={<Circle className="size-3.5 stroke-dashed text-ink-faint" />}
+        />
+        <RunHistoryStatusCount
+          label="running"
+          count={summary.running}
+          icon={<RunProgressDot className="size-3.5" />}
+        />
+        <RunHistoryStatusCount
+          label="canceled"
+          count={summary.canceled}
+          icon={<Circle className="size-3.5 text-ink-faint" />}
+        />
+      </div>
+
+      <div className="border-t border-paper-rule pt-3">
+        <div className="grid gap-2">
+          {runs.map((run) => {
+            const isPending =
+              pendingRunId === run.id && detail?.run.id !== run.id;
+            const isSelected = selectedRunId === run.id;
+            return (
+              <button
+                type="button"
+                key={run.id}
+                aria-current={isSelected ? "true" : undefined}
+                onClick={() => onSelectRun(run.id)}
+                className="grid w-full grid-cols-[64px_16px_minmax(0,1fr)] gap-2 text-left"
+              >
+                <span className="pt-1.5 text-right">
+                  <span className="block text-[11px] font-semibold text-ink">
+                    {formatRunHistoryTime(run.createdAt)}
+                  </span>
+                  <span className="mt-0.5 block text-[10px] text-ink-faint">
+                    {formatRunHistoryDate(run.createdAt)}
+                  </span>
+                </span>
+                <span className="relative flex justify-center">
+                  <span className="absolute bottom-0 top-0 w-px bg-paper-rule" />
+                  <span className="relative mt-5 size-1.5 rounded-full bg-ink-faint" />
+                </span>
+                <span
+                  className={cn(
+                    "grid min-w-0 gap-1 rounded-md border px-2.5 py-2 transition-colors hover:border-ink-faint hover:bg-paper-sunk",
+                    isSelected
+                      ? "border-signal-blue bg-signal-blue/15 text-signal-blue ring-1 ring-signal-blue/40"
+                      : "border-paper-rule bg-paper",
+                  )}
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    {isPending ? (
+                      <Loader2 className="size-4 shrink-0 animate-spin text-ink-faint" />
+                    ) : (
+                      statusTimelineIcon(run.status)
+                    )}
+                    <span className="min-w-0">
+                      <span className="block text-xs font-semibold capitalize text-ink">
+                        {run.status === "succeeded" ? "Completed" : run.status}
+                      </span>
+                      <span className="mt-0.5 block truncate text-[10px] text-ink-soft">
+                        {run.mode === "test" ? "Test run" : "Automatically"} via{" "}
+                        <span className="text-signal-blue">
+                          {runTriggerLabel(run)}
+                        </span>
+                      </span>
+                    </span>
+                  </span>
+                  <span className="truncate font-mono text-[10px] leading-tight text-ink-faint">
+                    {run.id} · {formatDuration(runDurationMs(run))}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
         </div>
-      </details>
-      <div className="max-h-36 space-y-1 overflow-y-auto border border-paper-rule p-1">
-        {runs.map((run) => {
-          const isPending =
-            pendingRunId === run.id && detail?.run.id !== run.id;
-          const isSelected = selectedRunId === run.id;
-          return (
-            <button
-              type="button"
-              key={run.id}
-              aria-current={isSelected ? "true" : undefined}
-              onClick={() => onSelectRun(run.id)}
-              className={cn(
-                "grid w-full grid-cols-[auto_1fr_auto] items-center gap-2 border border-transparent px-3 py-2 text-left hover:bg-paper-sunk",
-                isSelected &&
-                  "border-paper-rule bg-paper-sunk ring-1 ring-ink/25",
-              )}
-            >
-              {isPending ? (
-                <Loader2 className="size-4 animate-spin text-ink-faint" />
-              ) : (
-                statusIcon(run.status)
-              )}
-              <span className="min-w-0">
-                <span className="block truncate font-mono text-[11px] text-ink-soft">
-                  {run.id}
-                </span>
-                <span className="block truncate font-mono text-[10px] text-ink-faint">
-                  {run.mode} · {runTriggerLabel(run)} · v{run.workflowVersion}
-                </span>
-              </span>
-              <span className="flex items-center gap-2">
-                {isSelected && <Badge variant="healthy">selected</Badge>}
-                <span className="font-mono text-[10px] text-ink-faint">
-                  {shortDate(run.createdAt)}
-                </span>
-              </span>
-            </button>
-          );
-        })}
         {runs.length === 0 && (
-          <div className="px-3 py-2 text-sm text-ink-soft">No runs</div>
+          <div className="py-10 text-center text-sm text-ink-soft">
+            No runs recorded yet.
+          </div>
         )}
         {hasMoreRuns && (
-          <div className="px-2 py-2">
+          <div className="pt-5">
             <Button
               type="button"
               variant="outline"
@@ -5480,7 +6538,62 @@ function RunHistoryPanel({
           </div>
         )}
       </div>
-    </RunPaneSection>
+    </section>
+  );
+}
+
+function RunHistoryStatusCount({
+  label,
+  count,
+  icon,
+}: {
+  label: string;
+  count: number;
+  icon: ReactNode;
+}) {
+  return (
+    <div
+      title={label}
+      className="flex min-w-0 items-center justify-center gap-1.5 border-r border-paper-rule px-2 py-2 last:border-r-0"
+    >
+      {icon}
+      <span className="text-sm font-semibold text-ink">{count}</span>
+    </div>
+  );
+}
+
+function RunProgressDot({ className }: { className?: string }) {
+  return (
+    <span
+      className={cn(
+        "relative inline-flex rounded-full border-2 border-signal-blue bg-paper",
+        className,
+      )}
+      aria-hidden
+    >
+      <span className="absolute inset-y-0 left-0 w-1/2 rounded-l-full bg-signal-blue" />
+    </span>
+  );
+}
+
+function statusTimelineIcon(status: WorkflowRun["status"]) {
+  if (status === "running" || status === "waiting" || status === "queued")
+    return <RunProgressDot className="size-5 shrink-0" />;
+  return statusIcon(status);
+}
+
+function runHistorySummary(runs: WorkflowRun[]) {
+  return runs.reduce(
+    (acc, run) => {
+      if (run.status === "failed") acc.failed += 1;
+      else if (run.status === "succeeded") acc.succeeded += 1;
+      else if (run.status === "running") acc.running += 1;
+      else if (run.status === "queued" || run.status === "waiting")
+        acc.queued += 1;
+      else if (run.status === "canceled") acc.canceled += 1;
+      return acc;
+    },
+    { failed: 0, succeeded: 0, queued: 0, running: 0, canceled: 0 },
   );
 }
 
@@ -5695,15 +6808,31 @@ function StepDetailPanel({
   detail,
   step,
   runId,
+  referenceSuggestions,
+  mcpTools,
+  agents,
 }: {
   detail: RunDetail;
   step: WorkflowStepAttempt;
   runId: string;
+  referenceSuggestions: WorkflowReferenceSuggestion[];
+  mcpTools: McpToolSummary[];
+  agents: AgentSummary[];
 }) {
   const nodeType = stepNodeType(detail, step);
   const nodeLabel = stepNodeLabel(detail, step);
   const branchState = stepBranchState(detail, step);
   const stepIndex = detail.steps.findIndex((item) => item.id === step.id);
+  const runSnapshotNode =
+    detail.definition?.nodes.find((node) => node.id === step.nodeId) ?? null;
+  const runSnapshotNodeProps = runSnapshotNode
+    ? readonlyNodeCardProps(
+        runSnapshotNode,
+        referenceSuggestions,
+        mcpTools,
+        agents,
+      )
+    : null;
   return (
     <div className="grid gap-3">
       <div className="grid gap-3 border border-paper-rule bg-paper p-3">
@@ -5730,14 +6859,20 @@ function StepDetailPanel({
             <span>attempt {step.attempt}</span>
           </div>
         </div>
-        <StepMetadata
-          step={step}
-          nodeType={nodeType}
-          nodeLabel={nodeLabel}
-          branchState={branchState}
-        />
       </div>
-      <Tabs defaultValue="output" className="border border-paper-rule bg-paper">
+      <section
+        aria-label="Run step configuration snapshot"
+        className="grid gap-3"
+      >
+        {runSnapshotNodeProps ? (
+          <NodeCard {...runSnapshotNodeProps} />
+        ) : (
+          <div className="border border-paper-rule bg-paper-sunk px-3 py-4 text-sm text-ink-soft">
+            This run does not include a saved step configuration snapshot.
+          </div>
+        )}
+      </section>
+      <Tabs defaultValue="input" className="border border-paper-rule bg-paper">
         <TabsList className="overflow-x-auto">
           <TabsTrigger value="input">Input</TabsTrigger>
           <TabsTrigger value="output">Output</TabsTrigger>
@@ -5746,22 +6881,42 @@ function StepDetailPanel({
           <TabsTrigger value="context">Context</TabsTrigger>
         </TabsList>
         <TabsContent value="input" className="p-3 pt-3">
-          <JsonBlock label="Step input" value={step.input} runId={runId} />
+          <JsonBlock
+            label="Input"
+            value={step.input}
+            runId={runId}
+            framed={false}
+          />
         </TabsContent>
         <TabsContent value="output" className="p-3 pt-3">
-          <JsonBlock label="Step output" value={step.output} runId={runId} />
+          <StepOutputFieldView
+            node={runSnapshotNode}
+            output={step.output}
+            runId={runId}
+          />
         </TabsContent>
         <TabsContent value="logs" className="p-3 pt-3">
-          <JsonBlock label="Step logs" value={step.logsSummary} runId={runId} />
+          <JsonBlock
+            label="Logs"
+            value={step.logsSummary}
+            runId={runId}
+            framed={false}
+          />
         </TabsContent>
         <TabsContent value="error" className="p-3 pt-3">
-          <JsonBlock label="Step error" value={step.error} runId={runId} />
+          <JsonBlock
+            label="Error"
+            value={step.error}
+            runId={runId}
+            framed={false}
+          />
         </TabsContent>
         <TabsContent value="context" className="p-3 pt-3">
           <JsonBlock
-            label="Context diff"
+            label="Context"
             value={step.contextDiff}
             runId={runId}
+            framed={false}
           />
         </TabsContent>
       </Tabs>
@@ -5801,14 +6956,351 @@ function StepMetadata({
   );
 }
 
+type OutputFieldSpec = {
+  path: string;
+  label: string;
+  type: string;
+  enumValues?: string[];
+};
+
+function StepOutputFieldView({
+  node,
+  output,
+  runId,
+}: {
+  node: WorkflowNode | null;
+  output: JsonValue | undefined;
+  runId: string;
+}) {
+  if (output === undefined) {
+    return (
+      <ReadonlyOutputField label="Output" type="undefined" value={undefined} />
+    );
+  }
+  if (artifactReference(output)) {
+    return (
+      <JsonBlock label="Output" value={output} runId={runId} framed={false} />
+    );
+  }
+
+  const specs = node ? outputFieldSpecsForNode(node) : [];
+  const fields =
+    specs.length > 0
+      ? specs.map((spec) => ({
+          ...spec,
+          value: getPathValue(output, spec.path),
+        }))
+      : [
+          {
+            path: "",
+            label: "Output",
+            type: inferOutputValueType(output),
+            value: output,
+          },
+        ];
+  const knownPaths = new Set(specs.map((spec) => spec.path));
+  const extraFields =
+    isRecord(output) && specs.length > 0
+      ? Object.keys(output)
+          .filter((key) => !knownPaths.has(key))
+          .map((key) => ({
+            path: key,
+            label: humanizeOutputFieldLabel(key),
+            type: inferOutputValueType(output[key]),
+            value: output[key],
+          }))
+      : [];
+
+  return (
+    <div className="grid gap-3">
+      {[...fields, ...extraFields].map((field) => (
+        <ReadonlyOutputField
+          key={field.path || field.label}
+          label={field.label}
+          type={field.type}
+          enumValues={"enumValues" in field ? field.enumValues : undefined}
+          value={field.value}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ReadonlyOutputField({
+  label,
+  type,
+  enumValues,
+  value,
+}: {
+  label: string;
+  type: string;
+  enumValues?: string[];
+  value: unknown;
+}) {
+  const display = formatOutputFieldValue(value);
+  const multiline = shouldUseOutputTextarea(value, display);
+  return (
+    <label className="grid gap-1.5">
+      <span className="flex min-w-0 items-center justify-between gap-2">
+        <span className="truncate text-xs font-medium text-ink">{label}</span>
+        <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+          {enumValues ? `enum ${enumValues.join(" | ")}` : type}
+        </span>
+      </span>
+      {multiline ? (
+        <Textarea
+          readOnly
+          aria-label={`${label} output`}
+          value={display}
+          rows={Math.min(12, Math.max(3, display.split("\n").length))}
+          className="resize-y font-mono text-[11px] leading-relaxed"
+        />
+      ) : (
+        <Input
+          readOnly
+          aria-label={`${label} output`}
+          value={display}
+          className="font-mono text-[11px]"
+        />
+      )}
+    </label>
+  );
+}
+
+function outputFieldSpecsForNode(node: WorkflowNode): OutputFieldSpec[] {
+  if (isWorkflowTransformNodeType(node.type)) {
+    return transformOutputFieldSpecs(node);
+  }
+  switch (node.type) {
+    case "builtin.python":
+      return [
+        { path: "value", label: "Value", type: "json" },
+        { path: "stdout", label: "Stdout", type: "string" },
+        { path: "stderr", label: "Stderr", type: "string" },
+      ];
+    case "mcp.tool":
+      return [
+        { path: "server", label: "Server", type: "string" },
+        { path: "tool", label: "Tool", type: "string" },
+        { path: "result", label: "Result", type: "json" },
+      ];
+    case "agent.call":
+      return [
+        { path: "response", label: "Response", type: "string" },
+        { path: "sessionId", label: "Session ID", type: "string" },
+        {
+          path: "assistantMessageId",
+          label: "Assistant Message ID",
+          type: "string",
+        },
+      ];
+    case "builtin.set":
+      return [{ path: "assigned", label: "Assigned", type: "object" }];
+    case "builtin.if":
+    case "builtin.if_else":
+      return [
+        { path: "result", label: "Result", type: "boolean" },
+        { path: "selected", label: "Selected", type: "string[]" },
+        { path: "skipped", label: "Skipped", type: "string[]" },
+      ];
+    case "builtin.switch":
+      return [
+        { path: "value", label: "Value", type: "json" },
+        { path: "case", label: "Case", type: "string" },
+        { path: "matched", label: "Matched", type: "boolean" },
+        { path: "selected", label: "Selected", type: "string[]" },
+        { path: "skipped", label: "Skipped", type: "string[]" },
+      ];
+    case "builtin.foreach":
+      return [
+        { path: "count", label: "Count", type: "number" },
+        { path: "succeededCount", label: "Succeeded Count", type: "number" },
+        { path: "failedCount", label: "Failed Count", type: "number" },
+        { path: "items", label: "Items", type: "array" },
+      ];
+    case "builtin.parallel":
+      return [
+        { path: "count", label: "Count", type: "number" },
+        { path: "succeededCount", label: "Succeeded Count", type: "number" },
+        { path: "failedCount", label: "Failed Count", type: "number" },
+        { path: "canceledCount", label: "Canceled Count", type: "number" },
+        { path: "failFast", label: "Fail Fast", type: "boolean" },
+        { path: "branchOrder", label: "Branch Order", type: "string[]" },
+        { path: "branches", label: "Branches", type: "object" },
+      ];
+    case "builtin.log.info":
+    case "builtin.log.debug":
+    case "builtin.log.warn":
+    case "builtin.log.error":
+      return [
+        { path: "message", label: "Message", type: "string" },
+        { path: "payload", label: "Payload", type: "json" },
+      ];
+    case "builtin.sleep":
+      return [
+        { path: "delayMs", label: "Delay", type: "number" },
+        { path: "reason", label: "Reason", type: "string" },
+      ];
+    case "builtin.exit":
+      return [
+        {
+          path: "status",
+          label: "Status",
+          type: "string",
+          enumValues: ["succeeded", "failed", "canceled"],
+        },
+        { path: "output", label: "Output", type: "json" },
+      ];
+    case "builtin.throw_error":
+      return [];
+  }
+  return [];
+}
+
+function transformOutputFieldSpecs(node: WorkflowNode): OutputFieldSpec[] {
+  const kind = transformOperationKindForNode(node);
+  switch (kind) {
+    case "value.resolve":
+    case "object_pick":
+    case "json.parse":
+    case "csv.parse":
+      return [{ path: "value", label: "Value", type: "json" }];
+    case "string.replace":
+    case "string.regex_replace":
+    case "json.stringify":
+    case "csv.stringify":
+    case "ip.netmask":
+      return [{ path: "value", label: "Value", type: "string" }];
+    case "ip.is_ipv4":
+    case "ip.is_ipv6":
+    case "ip.in_subnet":
+      return [{ path: "value", label: "Value", type: "boolean" }];
+    case "string.regex_match":
+      return [
+        { path: "value.matched", label: "Matched", type: "boolean" },
+        { path: "value.match", label: "Match", type: "string" },
+        { path: "value.index", label: "Index", type: "number" },
+        { path: "value.groups", label: "Groups", type: "string[]" },
+        { path: "value.namedGroups", label: "Named Groups", type: "object" },
+      ];
+    case "ip.parse":
+      return [
+        {
+          path: "value.version",
+          label: "Version",
+          type: "number",
+          enumValues: ["4", "6"],
+        },
+        { path: "value.address", label: "Address", type: "string" },
+        { path: "value.normalized", label: "Normalized", type: "string" },
+        { path: "value.integer", label: "Integer", type: "string" },
+        { path: "value.octets", label: "Octets", type: "number[]" },
+        { path: "value.hextets", label: "Hextets", type: "string[]" },
+      ];
+    case "ip.network":
+      return [
+        {
+          path: "value.version",
+          label: "Version",
+          type: "number",
+          enumValues: ["4", "6"],
+        },
+        { path: "value.address", label: "Address", type: "string" },
+        { path: "value.prefix", label: "Prefix", type: "number" },
+        { path: "value.cidr", label: "CIDR", type: "string" },
+      ];
+    case "uri.parse":
+      return [
+        { path: "value.href", label: "Href", type: "string" },
+        { path: "value.protocol", label: "Protocol", type: "string" },
+        { path: "value.scheme", label: "Scheme", type: "string" },
+        { path: "value.origin", label: "Origin", type: "string" },
+        { path: "value.host", label: "Host", type: "string" },
+        { path: "value.hostname", label: "Hostname", type: "string" },
+        { path: "value.port", label: "Port", type: "string" },
+        { path: "value.pathname", label: "Pathname", type: "string" },
+        { path: "value.path", label: "Path", type: "string" },
+        { path: "value.search", label: "Search", type: "string" },
+        { path: "value.query", label: "Query", type: "object" },
+        { path: "value.queryList", label: "Query List", type: "array" },
+        { path: "value.hash", label: "Hash", type: "string" },
+        { path: "value.fragment", label: "Fragment", type: "string" },
+        { path: "value.username", label: "Username", type: "null" },
+        { path: "value.password", label: "Password", type: "null" },
+        {
+          path: "value.hasCredentials",
+          label: "Has Credentials",
+          type: "boolean",
+        },
+      ];
+  }
+  return [{ path: "value", label: "Value", type: "json" }];
+}
+
+function transformOperationKindForNode(node: WorkflowNode): string | null {
+  const transform = node.transform;
+  if (!isRecord(transform)) return null;
+  const kind = transform.kind;
+  return typeof kind === "string" ? kind : null;
+}
+
+function getPathValue(value: unknown, path: string): unknown {
+  if (!path) return value;
+  let current = value;
+  for (const part of path.split(".")) {
+    if (!isRecord(current)) return undefined;
+    current = current[part];
+  }
+  return current;
+}
+
+function formatOutputFieldValue(value: unknown): string {
+  if (value === undefined) return "undefined";
+  if (typeof value === "string") return value;
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    value === null
+  ) {
+    return String(value);
+  }
+  return JSON.stringify(value, null, 2);
+}
+
+function shouldUseOutputTextarea(value: unknown, display: string): boolean {
+  return (
+    Array.isArray(value) ||
+    isRecord(value) ||
+    display.length > 96 ||
+    display.includes("\n")
+  );
+}
+
+function inferOutputValueType(value: unknown): string {
+  if (Array.isArray(value)) return "array";
+  if (value === null) return "null";
+  return typeof value === "object" ? "object" : typeof value;
+}
+
+function humanizeOutputFieldLabel(value: string): string {
+  return (
+    value
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .replace(/[._-]+/g, " ")
+      .replace(/\b\w/g, (item) => item.toUpperCase()) || value
+  );
+}
+
 function JsonBlock({
   label,
   value,
   runId,
+  framed = true,
 }: {
   label: string;
   value: unknown;
   runId?: string;
+  framed?: boolean;
 }) {
   const [open, setOpen] = useState(true);
   const artifact = artifactReference(value);
@@ -5856,6 +7348,63 @@ function JsonBlock({
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
+  }
+
+  const controls =
+    artifact || redacted ? (
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        {artifact && (
+          <>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              className="h-6 px-1.5 font-mono text-[9px] uppercase tracking-[0.08em]"
+              disabled={artifactLoading || !runId}
+              onClick={() => void loadArtifact()}
+            >
+              {artifactLoading ? (
+                <Loader2 className="size-3 animate-spin" />
+              ) : (
+                <ScrollText className="size-3" />
+              )}
+              Load artifact
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              className="h-6 px-1.5 font-mono text-[9px] uppercase tracking-[0.08em]"
+              disabled={!runId}
+              onClick={downloadArtifact}
+            >
+              <Download className="size-3" />
+              Download artifact
+            </Button>
+          </>
+        )}
+        {redacted && (
+          <span className="border border-paper-rule px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-ink-soft">
+            redacted
+          </span>
+        )}
+      </div>
+    ) : null;
+
+  if (!framed) {
+    return (
+      <div aria-label={`${label} JSON`}>
+        {controls}
+        <pre className="max-h-64 overflow-auto font-mono text-[11px] leading-relaxed text-ink-soft">
+          {displayValue === undefined
+            ? "undefined"
+            : JSON.stringify(displayValue, null, 2)}
+        </pre>
+        {artifactError && (
+          <div className="mt-2 text-xs text-plot-red">{artifactError}</div>
+        )}
+      </div>
+    );
   }
 
   return (
@@ -6057,14 +7606,6 @@ function isTerminalRunStatus(status: WorkflowRun["status"]): boolean {
   return status === "succeeded" || status === "failed" || status === "canceled";
 }
 
-function retainedStepId(
-  steps: WorkflowStepAttempt[],
-  current: string | null,
-): string | null {
-  if (current && steps.some((step) => step.id === current)) return current;
-  return steps[0]?.id ?? null;
-}
-
 function reconcileWorkflowRunInLoadedList(
   current: WorkflowRun[],
   run: WorkflowRun,
@@ -6126,7 +7667,17 @@ async function api<T>(
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
   const text = await res.text();
-  const body = text ? (JSON.parse(text) as unknown) : null;
+  let body: unknown = null;
+  if (text) {
+    try {
+      body = JSON.parse(text) as unknown;
+    } catch {
+      if (!res.ok) {
+        throw new Error(text.trim() || `${res.status} ${res.statusText}`);
+      }
+      throw new Error("Server returned an invalid JSON response");
+    }
+  }
   if (!res.ok) {
     const message =
       isRecord(body) && typeof body["error"] === "string"
@@ -6170,6 +7721,7 @@ function validateNodeReferences(
   }
 
   for (const node of nodes) {
+    collectMissingNodeReferences(errors, node, "next", nodeIds);
     if (node.type === "builtin.if") {
       collectMissingNodeReferences(errors, node, "then", nodeIds);
       collectMissingNodeReferences(errors, node, "else", nodeIds);
@@ -6178,6 +7730,30 @@ function validateNodeReferences(
       collectMissingNodeReferences(errors, node, "else", nodeIds);
     } else if (node.type === "builtin.foreach") {
       collectMissingNodeReferences(errors, node, "body", nodeIds);
+    } else if (node.type === "builtin.switch" && Array.isArray(node.cases)) {
+      for (const item of node.cases) {
+        if (!isRecord(item) || typeof item.id !== "string") continue;
+        collectMissingNodeReferences(
+          errors,
+          { ...node, [`case:${item.id}`]: item.nodes },
+          `case:${item.id}`,
+          nodeIds,
+        );
+      }
+      collectMissingNodeReferences(errors, node, "default", nodeIds);
+    } else if (
+      node.type === "builtin.parallel" &&
+      Array.isArray(node.branches)
+    ) {
+      for (const branch of node.branches) {
+        if (!isRecord(branch) || typeof branch.id !== "string") continue;
+        collectMissingNodeReferences(
+          errors,
+          { ...node, [`branch:${branch.id}`]: branch.nodes },
+          `branch:${branch.id}`,
+          nodeIds,
+        );
+      }
     }
   }
 
@@ -6185,13 +7761,90 @@ function validateNodeReferences(
   return { ok: false, message: errors.join("; ") };
 }
 
+function validateWorkflowCanvasCompleteness(
+  nodes: WorkflowNode[],
+  _ui: WorkflowDefinitionUi | null,
+): NodeReferenceValidation {
+  const executableNodes = nodes.filter((node) => node.type !== "builtin.exit");
+  const entry = executableNodes[0];
+  if (!entry) return { ok: true, message: "" };
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const reachable = new Set<string>();
+  const visit = (nodeId: string) => {
+    if (reachable.has(nodeId)) return;
+    const node = nodeById.get(nodeId);
+    if (!node) return;
+    reachable.add(nodeId);
+    for (const targetId of node.next ?? []) visit(targetId);
+    if (node.type === "builtin.if" || node.type === "builtin.if_else") {
+      for (const targetId of nodeIdArray(node.then)) visit(targetId);
+      for (const targetId of nodeIdArray(node.else)) visit(targetId);
+    } else if (node.type === "builtin.foreach") {
+      for (const targetId of nodeIdArray(node.body)) visit(targetId);
+    } else if (node.type === "builtin.switch" && Array.isArray(node.cases)) {
+      for (const item of node.cases) {
+        if (!isRecord(item) || !Array.isArray(item.nodes)) continue;
+        for (const targetId of item.nodes) visit(String(targetId));
+      }
+      for (const targetId of nodeIdArray(node.default)) visit(targetId);
+    } else if (
+      node.type === "builtin.parallel" &&
+      Array.isArray(node.branches)
+    ) {
+      for (const branch of node.branches) {
+        if (!isRecord(branch) || !Array.isArray(branch.nodes)) continue;
+        for (const targetId of branch.nodes) visit(String(targetId));
+      }
+    }
+  };
+  visit(entry.id);
+  const unreachableNodeIds = executableNodes
+    .map((node) => node.id)
+    .filter((nodeId) => !reachable.has(nodeId));
+  if (unreachableNodeIds.length === 0) return { ok: true, message: "" };
+  return {
+    ok: false,
+    message: `Workflow flow is incomplete. Connect or remove unreachable card(s): ${unreachableNodeIds.join(
+      ", ",
+    )}`,
+  };
+}
+
+function nodeIdArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && !!item)
+    : [];
+}
+
+function preservedCanvasContinuationTargets(
+  projection: WorkflowGraphProjection,
+  sourceId: string,
+): Record<string, string[]> | undefined {
+  const targets = projection.edges
+    .filter((edge) => edge.source === sourceId)
+    .filter((edge) => {
+      const kind = isRecord(edge.data) ? edge.data["kind"] : null;
+      return (
+        kind === "sequence" ||
+        (typeof kind === "string" && kind.startsWith("route:"))
+      );
+    })
+    .map((edge) =>
+      isRecord(edge.data) && typeof edge.data["targetRef"] === "string"
+        ? edge.data["targetRef"]
+        : edge.target,
+    )
+    .filter((targetId, index, all) => all.indexOf(targetId) === index);
+  return targets.length > 0 ? { [sourceId]: targets } : undefined;
+}
+
 function collectMissingNodeReferences(
   errors: string[],
-  node: WorkflowNode,
-  field: "then" | "else" | "body",
+  node: WorkflowNode | (WorkflowNode & Record<string, unknown>),
+  field: string,
   nodeIds: Set<string>,
 ) {
-  const targets = node[field];
+  const targets = (node as Record<string, unknown>)[field];
   if (!Array.isArray(targets)) return;
   for (const targetId of targets) {
     if (typeof targetId !== "string" || nodeIds.has(targetId)) continue;
@@ -6337,7 +7990,7 @@ function validateImportedNodeShape(
       validateAssignmentMap(errors, node, displayId, true);
       continue;
     }
-    if (type === "builtin.transform") {
+    if (isWorkflowTransformNodeType(type)) {
       validateInputMap(errors, node, displayId);
       validateAssignmentMap(errors, node, displayId, false);
       if (node.transform === undefined) {
@@ -6351,6 +8004,57 @@ function validateImportedNodeShape(
       }
       validateNodeIdArray(errors, node, displayId, "then");
       validateNodeIdArray(errors, node, displayId, "else");
+      continue;
+    }
+    if (type === "builtin.switch") {
+      if (node.value === undefined) {
+        errors.push(`Imported workflow node ${displayId} needs a switch value`);
+      }
+      if (!Array.isArray(node.cases) || node.cases.length === 0) {
+        errors.push(`Imported workflow node ${displayId} needs switch cases`);
+      } else {
+        const seenCaseIds = new Set<string>();
+        for (const item of node.cases) {
+          if (
+            !isRecord(item) ||
+            typeof item.id !== "string" ||
+            !item.id.trim()
+          ) {
+            errors.push(
+              `Imported workflow node ${displayId} switch case id is required`,
+            );
+            continue;
+          }
+          if (seenCaseIds.has(item.id)) {
+            errors.push(
+              `Imported workflow node ${displayId} has duplicate switch case ${item.id}`,
+            );
+          }
+          seenCaseIds.add(item.id);
+          if (
+            item.label !== undefined &&
+            (typeof item.label !== "string" || !item.label.trim())
+          ) {
+            errors.push(
+              `Imported workflow node ${displayId} switch case ${item.id} label must be a string`,
+            );
+          }
+          if (item.value === undefined) {
+            errors.push(
+              `Imported workflow node ${displayId} switch case ${item.id} needs a value`,
+            );
+          }
+          if (
+            !Array.isArray(item.nodes) ||
+            !item.nodes.every((nodeId) => typeof nodeId === "string")
+          ) {
+            errors.push(
+              `Imported workflow node ${displayId} switch case ${item.id} nodes must be node ids`,
+            );
+          }
+        }
+      }
+      validateNodeIdArray(errors, node, displayId, "default");
       continue;
     }
     if (type === "builtin.foreach") {
@@ -6375,9 +8079,84 @@ function validateImportedNodeShape(
       }
       continue;
     }
+    if (type === "builtin.parallel") {
+      validateInputMap(errors, node, displayId);
+      validateAssignmentMap(errors, node, displayId, false);
+      if (!Array.isArray(node.branches) || node.branches.length === 0) {
+        errors.push(`Imported workflow node ${displayId} needs branches`);
+      } else {
+        for (const branch of node.branches) {
+          if (
+            !isRecord(branch) ||
+            typeof branch.id !== "string" ||
+            !branch.id.trim()
+          ) {
+            errors.push(
+              `Imported workflow node ${displayId} branch id is required`,
+            );
+            continue;
+          }
+          if (
+            branch.label !== undefined &&
+            (typeof branch.label !== "string" || !branch.label.trim())
+          ) {
+            errors.push(
+              `Imported workflow node ${displayId} branch ${branch.id} label must be a string`,
+            );
+          }
+          if (
+            !Array.isArray(branch.nodes) ||
+            !branch.nodes.every((item) => typeof item === "string")
+          ) {
+            errors.push(
+              `Imported workflow node ${displayId} branch ${branch.id} nodes must be node ids`,
+            );
+          }
+        }
+      }
+      continue;
+    }
     if (type === "builtin.exit") {
       if (!isExitStatus(typeof node.status === "string" ? node.status : "")) {
         errors.push(`Imported workflow node ${displayId} needs an exit status`);
+      }
+      continue;
+    }
+    if (type === "builtin.throw_error") {
+      if (typeof node.message !== "string" || !node.message.trim()) {
+        errors.push(
+          `Imported workflow node ${displayId} needs an error message`,
+        );
+      }
+      if (
+        node.code !== undefined &&
+        (typeof node.code !== "string" || !WORKFLOW_SAFE_ID.test(node.code))
+      ) {
+        errors.push(
+          `Imported workflow node ${displayId} error code is invalid`,
+        );
+      }
+      continue;
+    }
+    if (type === "builtin.sleep") {
+      const delayMs = node.delayMs;
+      if (
+        typeof delayMs !== "number" ||
+        !Number.isInteger(delayMs) ||
+        delayMs < 1 ||
+        delayMs > 300_000
+      ) {
+        errors.push(
+          `Imported workflow node ${displayId} delayMs must be an integer between 1 and 300000`,
+        );
+      }
+      if (
+        node.reason !== undefined &&
+        (typeof node.reason !== "string" || !node.reason.trim())
+      ) {
+        errors.push(
+          `Imported workflow node ${displayId} reason must be a string`,
+        );
       }
       continue;
     }
@@ -6526,7 +8305,7 @@ function validateNodeIdArray(
   errors: string[],
   node: WorkflowNode,
   displayId: string,
-  field: "then" | "else" | "body",
+  field: "then" | "else" | "body" | "default",
 ) {
   const value = node[field];
   if (
@@ -6723,32 +8502,40 @@ function mergeAuthoringTriggerFields(
   });
 }
 
-function scheduledTriggerExpr(trigger: WorkflowTriggerSummary): string {
-  const schedule = isRecord(trigger.schedule) ? trigger.schedule : {};
-  return typeof schedule["expr"] === "string" ? schedule["expr"] : "";
-}
-
-function scheduledTriggerTz(trigger: WorkflowTriggerSummary): string {
-  const schedule = isRecord(trigger.schedule) ? trigger.schedule : {};
-  return typeof schedule["tz"] === "string" ? schedule["tz"] : "";
-}
-
-function triggerEnabledChecked(trigger: WorkflowTriggerSummary): boolean {
-  if (trigger.kind === "manual") return true;
-  if (trigger.kind === "task") return false;
-  return trigger.enabled !== false;
-}
-
-function triggerEnabledEditable(trigger: WorkflowTriggerSummary): boolean {
-  return trigger.kind === "scheduled" || trigger.kind === "webhook";
-}
-
 function iconForNode(type: string) {
   if (type.includes("if")) return GitBranch;
   if (type.includes("log")) return ScrollText;
   if (type.includes("exit")) return Square;
   if (type.includes("transform")) return Braces;
   return Workflow;
+}
+
+function nodeTypeDisplayName(node: WorkflowNode): string {
+  if (node.type === "builtin.set") return "Set variable";
+  if (isWorkflowTransformNodeType(node.type)) {
+    return (
+      workflowTransformPresetForNodeType(node.type)?.label ?? "Transformer"
+    );
+  }
+  if (node.type === "builtin.if" || node.type === "builtin.if_else")
+    return "If";
+  if (node.type === "builtin.switch") return "Switch";
+  if (node.type === "builtin.foreach") return "For each";
+  if (node.type === "builtin.parallel") return "Parallel";
+  if (node.type === "builtin.throw_error") return "Throw error";
+  if (node.type === "builtin.sleep") return "Sleep";
+  if (node.type === "builtin.python") return "Python";
+  if (node.type === "mcp.tool") return "MCP tool";
+  if (node.type === "agent.call") return "Agent call";
+  if (node.type.startsWith("builtin.log.")) {
+    return `${capitalizeWord(node.type.slice("builtin.log.".length))} log`;
+  }
+  return node.type.replace(/^builtin\./, "").replace(/[._-]+/g, " ");
+}
+
+function capitalizeWord(value: string): string {
+  if (!value) return value;
+  return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
 }
 
 function assignmentSummaries(assign: unknown): Array<{
@@ -6795,16 +8582,361 @@ function primaryAssignmentControl(assign: unknown): {
   return { target, source: formatJson(value), mode: "replace" };
 }
 
-function transformControl(node: WorkflowNode): {
+function isContextStoreNode(node: WorkflowNode): boolean {
+  return node.type === "builtin.set";
+}
+
+function buildWorkflowReferenceSuggestions({
+  nodes,
+  inputSchema,
+}: {
+  nodes: WorkflowNode[];
+  inputSchema: JsonValue | null;
+}): WorkflowReferenceSuggestion[] {
+  const suggestions = new Map<string, WorkflowReferenceSuggestion>();
+  const add = (value: string, label: string, detail: string) => {
+    if (suggestions.has(value)) return;
+    suggestions.set(value, { value, label, detail });
+  };
+
+  add("$.workflowTrigger", "workflowTrigger", "Workflow trigger");
+  add("$.workflowTrigger.input", "Workflow input", "Trigger payload");
+  add("$.workflowTrigger.meta", "Trigger metadata", "Trigger provenance");
+  add("$.context", "Context", "Variables saved by workflow steps");
+  add("$.steps", "Steps", "Per-step input, output, status, and error");
+
+  for (const path of jsonSchemaPropertyPaths(inputSchema)) {
+    add(
+      `$.workflowTrigger.input.${path}`,
+      path,
+      "Workflow trigger input field",
+    );
+  }
+
+  for (const node of nodes) {
+    add(`$.steps.${node.id}`, node.id, node.type);
+    add(`$.steps.${node.id}.input`, node.id, "Step input");
+    add(`$.steps.${node.id}.output`, node.id, "Step output");
+    for (const output of workflowNodeOutputReferenceSuggestions(node)) {
+      add(
+        `$.steps.${node.id}.output.${output.path}`,
+        output.path,
+        output.detail,
+      );
+    }
+    add(`$.steps.${node.id}.status`, node.id, "Step status");
+    add(`$.steps.${node.id}.error`, node.id, "Step error");
+    if (node.type === "builtin.set" && isRecord(node.assign)) {
+      for (const target of Object.keys(node.assign)) {
+        add(`$.context.${target}`, target, "Context variable");
+      }
+    }
+    if (
+      node.type === "builtin.foreach" &&
+      typeof node.itemVar === "string" &&
+      node.itemVar.trim()
+    ) {
+      add(node.itemVar.trim(), node.itemVar.trim(), "Foreach item");
+    }
+  }
+
+  add("item", "item", "Default foreach item");
+  return Array.from(suggestions.values());
+}
+
+function workflowNodeOutputReferenceSuggestions(
+  node: WorkflowNode,
+): Array<{ path: string; detail: string }> {
+  if (isWorkflowTransformNodeType(node.type)) {
+    return transformOutputReferenceSuggestions(node);
+  }
+  switch (node.type) {
+    case "builtin.python":
+      return [{ path: "value", detail: "Step output value" }];
+    case "mcp.tool":
+      return [{ path: "result", detail: "MCP raw tool result" }];
+    case "agent.call":
+      return [
+        { path: "response", detail: "Agent text response" },
+        { path: "sessionId", detail: "Agent session id" },
+        { path: "assistantMessageId", detail: "Agent message id" },
+      ];
+    case "builtin.set":
+      return [{ path: "assigned", detail: "Assigned context values" }];
+    case "builtin.if":
+    case "builtin.if_else":
+      return [
+        { path: "result", detail: "Condition result" },
+        { path: "selected", detail: "Selected route node ids" },
+        { path: "skipped", detail: "Skipped route node ids" },
+      ];
+    case "builtin.switch":
+      return [
+        { path: "value", detail: "Switch input value" },
+        { path: "case", detail: "Matched case id" },
+        { path: "matched", detail: "Whether a case matched" },
+        { path: "selected", detail: "Selected route node ids" },
+        { path: "skipped", detail: "Skipped route node ids" },
+      ];
+    case "builtin.foreach":
+      return [
+        { path: "count", detail: "Foreach item count" },
+        { path: "succeededCount", detail: "Succeeded item count" },
+        { path: "failedCount", detail: "Failed item count" },
+        { path: "items", detail: "Per-item execution outputs" },
+      ];
+    case "builtin.parallel":
+      return [
+        { path: "count", detail: "Parallel branch count" },
+        { path: "succeededCount", detail: "Succeeded branch count" },
+        { path: "failedCount", detail: "Failed branch count" },
+        { path: "canceledCount", detail: "Canceled branch count" },
+        { path: "branches", detail: "Branch execution outputs" },
+        { path: "branchOrder", detail: "Branch execution order" },
+      ];
+    case "builtin.log.info":
+    case "builtin.log.debug":
+    case "builtin.log.warn":
+    case "builtin.log.error":
+      return [
+        { path: "message", detail: "Log message" },
+        { path: "payload", detail: "Log payload" },
+      ];
+    case "builtin.sleep":
+      return [
+        { path: "delayMs", detail: "Sleep delay in milliseconds" },
+        { path: "reason", detail: "Sleep reason" },
+      ];
+    case "builtin.exit":
+      return [
+        { path: "status", detail: "Terminal workflow status" },
+        { path: "output", detail: "Terminal workflow output" },
+      ];
+    case "builtin.throw_error":
+      return [];
+  }
+  return [];
+}
+
+function transformOutputReferenceSuggestions(
+  node: WorkflowNode,
+): Array<{ path: string; detail: string }> {
+  const kind = transformOperationKindForNode(node);
+  switch (kind) {
+    case "value.resolve":
+      return [{ path: "value", detail: "Resolved value" }];
+    case "string.regex_match":
+      return [
+        { path: "value.matched", detail: "Whether the regex matched" },
+        { path: "value.match", detail: "Matched text" },
+        { path: "value.index", detail: "Match start index" },
+        { path: "value.groups", detail: "Regex capture groups" },
+        { path: "value.namedGroups", detail: "Regex named capture groups" },
+      ];
+    case "ip.parse":
+      return [
+        { path: "value.version", detail: "IP version" },
+        { path: "value.address", detail: "Original IP address" },
+        { path: "value.normalized", detail: "Normalized IP address" },
+        { path: "value.integer", detail: "Integer IP representation" },
+        { path: "value.octets", detail: "IPv4 octets when applicable" },
+        { path: "value.hextets", detail: "IPv6 hextets when applicable" },
+      ];
+    case "ip.network":
+      return [
+        { path: "value.version", detail: "IP version" },
+        { path: "value.address", detail: "Network address" },
+        { path: "value.prefix", detail: "CIDR prefix length" },
+        { path: "value.cidr", detail: "Canonical CIDR" },
+      ];
+    case "uri.parse":
+      return [
+        { path: "value.href", detail: "Redacted absolute URI" },
+        { path: "value.protocol", detail: "URI protocol including colon" },
+        { path: "value.scheme", detail: "URI scheme without colon" },
+        { path: "value.origin", detail: "URI origin" },
+        { path: "value.host", detail: "Host and port" },
+        { path: "value.hostname", detail: "Hostname" },
+        { path: "value.port", detail: "Port" },
+        { path: "value.pathname", detail: "Pathname" },
+        { path: "value.path", detail: "Path and query string" },
+        { path: "value.search", detail: "Query string" },
+        { path: "value.query", detail: "Query parameters object" },
+        { path: "value.queryList", detail: "Ordered query parameters" },
+        { path: "value.hash", detail: "Hash including #" },
+        { path: "value.fragment", detail: "Hash without #" },
+        {
+          path: "value.username",
+          detail: "Always null; credentials are redacted",
+        },
+        {
+          path: "value.password",
+          detail: "Always null; credentials are redacted",
+        },
+        {
+          path: "value.hasCredentials",
+          detail: "Whether credentials were present",
+        },
+      ];
+    case "string.replace":
+    case "string.regex_replace":
+    case "json.stringify":
+    case "csv.stringify":
+    case "ip.netmask":
+      return [{ path: "value", detail: "String transform output" }];
+    case "ip.is_ipv4":
+    case "ip.is_ipv6":
+    case "ip.in_subnet":
+      return [{ path: "value", detail: "Boolean transform output" }];
+  }
+  return [{ path: "value", detail: "Step output value" }];
+}
+
+function jsonSchemaPropertyPaths(schema: JsonValue | null): string[] {
+  const out: string[] = [];
+  collectJsonSchemaPropertyPaths(schema, "", out, 0);
+  return out;
+}
+
+function collectJsonSchemaPropertyPaths(
+  schema: unknown,
+  prefix: string,
+  out: string[],
+  depth: number,
+) {
+  if (!isRecord(schema) || depth > 4) return;
+  const properties = schema["properties"];
+  if (!isRecord(properties)) return;
+  for (const [key, value] of Object.entries(properties)) {
+    if (!WORKFLOW_REFERENCE_PATH_SEGMENT.test(key)) continue;
+    const path = prefix ? `${prefix}.${key}` : key;
+    out.push(path);
+    collectJsonSchemaPropertyPaths(value, path, out, depth + 1);
+  }
+}
+
+function referenceSuggestionsForValue(
+  value: string,
+  suggestions: WorkflowReferenceSuggestion[],
+): WorkflowReferenceSuggestion[] {
+  const token = activeReferenceToken(value);
+  if (!token) return [];
+  const scope = referenceCompletionScope(token);
+  if (!scope) return [];
+  const partial = scope.partial.toLowerCase();
+  const bySegment = new Map<string, WorkflowReferenceSuggestion>();
+
+  for (const suggestion of suggestions) {
+    if (!suggestion.value.startsWith(scope.base)) continue;
+    const remainder = suggestion.value.slice(scope.base.length);
+    if (!remainder) continue;
+    const segment = remainder.split(".")[0];
+    if (!segment || !segment.toLowerCase().includes(partial)) continue;
+    const candidate = `${scope.base}${segment}`;
+    const hasChildren = suggestions.some(
+      (item) =>
+        item.value !== candidate && item.value.startsWith(`${candidate}.`),
+    );
+    if (bySegment.has(segment)) continue;
+    bySegment.set(segment, {
+      value: hasChildren ? `${candidate}.` : candidate,
+      label: segment,
+      detail: suggestionDetailForSegment(scope.base, segment, suggestion),
+    });
+  }
+
+  return Array.from(bySegment.values()).sort((left, right) => {
+    const leftStarts = left.label.toLowerCase().startsWith(partial);
+    const rightStarts = right.label.toLowerCase().startsWith(partial);
+    if (leftStarts !== rightStarts) return leftStarts ? -1 : 1;
+    return left.label.localeCompare(right.label);
+  });
+}
+
+function activeReferenceToken(value: string): string | null {
+  const match = value.match(/(?:^|[\s"'`{[(,:])(\$[A-Za-z0-9_.-]*)$/);
+  return match?.[1] ?? null;
+}
+
+function referenceCompletionScope(
+  token: string,
+): { base: string; partial: string } | null {
+  if (token === "$" || token === "$.") return { base: "$.", partial: "" };
+  if (!token.startsWith("$.")) return null;
+  if (token.endsWith(".")) return { base: token, partial: "" };
+  const lastDot = token.lastIndexOf(".");
+  if (lastDot < 1) return null;
+  return {
+    base: token.slice(0, lastDot + 1),
+    partial: token.slice(lastDot + 1),
+  };
+}
+
+function suggestionDetailForSegment(
+  base: string,
+  segment: string,
+  suggestion: WorkflowReferenceSuggestion,
+): string {
+  if (base === "$.") {
+    if (segment === "workflowTrigger") return "Trigger data";
+    if (segment === "context") return "Variables";
+    if (segment === "steps") return "Step data";
+  }
+  if (base === "$.workflowTrigger.") {
+    if (segment === "input") return "Payload";
+    if (segment === "meta") return "Provenance";
+  }
+  if (base === "$.steps.") return "Step id";
+  if (/^\$\.steps\.[^.]+\.$/.test(base)) return "Step field";
+  if (base === "$.context.") return "Context";
+  return suggestion.detail;
+}
+
+function replaceActiveReferenceToken(value: string, reference: string): string {
+  const match = value.match(/(?:^|[\s"'`{[(,:])(\$[A-Za-z0-9_.-]*)$/);
+  if (!match || match.index === undefined) return reference;
+  const token = match[1] ?? "";
+  const tokenStart = match.index + match[0].length - token.length;
+  return `${value.slice(0, tokenStart)}${reference}`;
+}
+
+interface TransformControl {
   input: string;
   transform: string;
-} | null {
-  if (node.type !== "builtin.transform") return null;
+  operationKind: string;
+  operation: Record<string, JsonValue> | null;
+}
+
+function transformControl(node: WorkflowNode): TransformControl | null {
+  if (!isWorkflowTransformNodeType(node.type)) return null;
+  const operation = transformOperationRecord(node.transform);
+  const operationKind = workflowTransformPresetIdFromNodeType(node.type) ?? "";
   return {
     input: formatJsonObjectInput(node.input),
     transform:
       node.transform === undefined ? "null" : formatJson(node.transform),
+    operationKind,
+    operation,
   };
+}
+
+function transformOperationRecord(
+  value: unknown,
+): Record<string, JsonValue> | null {
+  if (!isRecord(value)) return null;
+  const kind = value["kind"];
+  if (typeof kind !== "string") return null;
+  const out: Record<string, JsonValue> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (isJsonValue(item)) out[key] = item;
+  }
+  return out;
+}
+
+function csvHeadersDraft(value: unknown): string {
+  return Array.isArray(value)
+    ? value.filter((item) => typeof item === "string").join(", ")
+    : "";
 }
 
 function branchControl(node: WorkflowNode): {
@@ -6826,20 +8958,17 @@ function branchControl(node: WorkflowNode): {
 
 function switchControl(node: WorkflowNode): {
   value: string;
-  cases: Array<{ id: string; label: string; value: string; nodes: string }>;
-  defaultNodes: string;
+  cases: Array<{ id: string; label: string; value: string }>;
 } | null {
   if (node.type !== "builtin.switch") return null;
   const cases = normalizeSwitchCaseDrafts(node.cases);
   return {
-    value: formatJson(node.value ?? "$.input.kind"),
+    value: formatJson(node.value ?? ""),
     cases: cases.map((item) => ({
       id: item.id,
       label: item.label ?? "",
       value: formatJson(item.value),
-      nodes: formatNodeIdList(item.nodes),
     })),
-    defaultNodes: formatNodeIdList(node.default),
   };
 }
 
@@ -7201,6 +9330,26 @@ function shortDate(value: string): string {
   return d.toISOString().slice(5, 16).replace("T", " ");
 }
 
+function formatRunHistoryTime(value: string): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function formatRunHistoryDate(value: string): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 function formatDateTime(value: string | null): string {
   if (!value) return "—";
   const d = new Date(value);
@@ -7237,6 +9386,106 @@ function timelineEmptyMessage(level: EventLevelFilter): string {
 
 function formatJson(value: unknown): string {
   return JSON.stringify(value, null, 2);
+}
+
+function jsonEquivalent(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
+
+function shouldAutofillTestInput(value: string): boolean {
+  const parsed = parseJsonDraft(value);
+  if (!parsed.ok) return false;
+  return (
+    jsonEquivalent(parsed.value, null) ||
+    jsonEquivalent(parsed.value, {}) ||
+    jsonEquivalent(parsed.value, DEFAULT_INPUT)
+  );
+}
+
+function sampleJsonFromSchema(
+  schema: JsonValue,
+  depth = 0,
+): JsonValue | undefined {
+  if (depth > 6) return undefined;
+  if (typeof schema === "boolean") return schema ? {} : undefined;
+  if (!isRecord(schema)) return undefined;
+  if (isJsonValue(schema.default)) return schema.default;
+  const examples = schema.examples;
+  if (
+    Array.isArray(examples) &&
+    examples.length > 0 &&
+    isJsonValue(examples[0])
+  ) {
+    return examples[0];
+  }
+  if ("const" in schema && isJsonValue(schema.const)) return schema.const;
+  const enumValues = schema.enum;
+  if (Array.isArray(enumValues)) {
+    const first = enumValues.find(isJsonValue);
+    if (first !== undefined) return first;
+  }
+
+  const type = firstJsonSchemaType(schema.type, schema);
+  if (type === "object") {
+    const properties = isRecord(schema.properties) ? schema.properties : {};
+    const required = stringArray(schema.required);
+    const keys = new Set([...required, ...Object.keys(properties)]);
+    const out: Record<string, JsonValue> = {};
+    for (const key of keys) {
+      const childSchema = properties[key];
+      const childSample =
+        childSchema === undefined
+          ? ""
+          : sampleJsonFromSchema(childSchema as JsonValue, depth + 1);
+      out[key] = childSample === undefined ? "" : childSample;
+    }
+    return out;
+  }
+  if (type === "array") {
+    if (schema.items === false) return [];
+    const itemSample = isJsonValue(schema.items)
+      ? sampleJsonFromSchema(schema.items, depth + 1)
+      : undefined;
+    return itemSample === undefined ? [] : [itemSample];
+  }
+  if (type === "integer" || type === "number") {
+    return typeof schema.minimum === "number" ? schema.minimum : 0;
+  }
+  if (type === "boolean") return false;
+  if (type === "null") return null;
+  if (type === "string") return sampleStringFromSchema(schema);
+  return undefined;
+}
+
+function firstJsonSchemaType(
+  type: unknown,
+  schema: Record<string, unknown>,
+): string | null {
+  const raw = Array.isArray(type) ? type.find((item) => item !== "null") : type;
+  if (typeof raw === "string") return raw;
+  if (isRecord(schema.properties) || Array.isArray(schema.required)) {
+    return "object";
+  }
+  if ("items" in schema) return "array";
+  if ("minimum" in schema || "maximum" in schema) return "number";
+  if ("pattern" in schema || "minLength" in schema || "maxLength" in schema) {
+    return "string";
+  }
+  return null;
+}
+
+function sampleStringFromSchema(schema: Record<string, unknown>): string {
+  if (typeof schema.format === "string") {
+    if (schema.format === "email") return "user@example.com";
+    if (schema.format === "uri" || schema.format === "url")
+      return "https://example.com";
+    if (schema.format === "date-time") return "2026-08-11T00:00:00.000Z";
+    if (schema.format === "date") return "2026-08-11";
+    if (schema.format === "ipv4") return "192.0.2.1";
+    if (schema.format === "ipv6") return "2001:db8::1";
+  }
+  if (typeof schema.pattern === "string") return "";
+  return "";
 }
 
 function formatOptionalJson(value: unknown): string {

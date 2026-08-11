@@ -336,7 +336,7 @@ describe("Dispatcher spawn rule", () => {
     expect(calls).toEqual([{ agentId: "a1", sessionId: session.id }]);
   });
 
-  it("does not autonomously wake a taskless chat session with system inbox", async () => {
+  it("wakes a taskless chat session with targeted system inbox", async () => {
     const { manager, calls } = fakeManager(["a1"]);
     const session = sessionStore.create("a1");
     expect(session.kind).toBe("chat");
@@ -352,7 +352,7 @@ describe("Dispatcher spawn rule", () => {
     await d.start();
     await d.drain(5_000);
 
-    expect(calls).toEqual([]);
+    expect(calls).toEqual([{ agentId: "a1", sessionId: session.id }]);
   });
 
   it("wakes a taskless chat session with targeted objective closeout inbox", async () => {

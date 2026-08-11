@@ -1,10 +1,18 @@
-import type { WorkflowNode, WorkflowTrigger } from "./schemas.js";
+import type { JsonValue, WorkflowNode, WorkflowTrigger } from "./schemas.js";
 
 const WORKFLOW_SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 
 export interface WorkflowNodeReferenceIssue {
   nodeId: string;
-  field: "id" | "then" | "else" | "body" | "branches" | "cases" | "default";
+  field:
+    | "id"
+    | "next"
+    | "then"
+    | "else"
+    | "body"
+    | "branches"
+    | "cases"
+    | "default";
   targetId?: string;
   message: string;
 }
@@ -22,6 +30,19 @@ export interface WorkflowTriggerIssue {
 export type WorkflowTriggerValidation =
   | { ok: true; issues: [] }
   | { ok: false; issues: WorkflowTriggerIssue[]; message: string };
+
+export interface WorkflowJsonSchemaIssue {
+  path: string;
+  message: string;
+}
+
+export type WorkflowJsonSchemaValidation =
+  | { ok: true; issues: [] }
+  | { ok: false; issues: WorkflowJsonSchemaIssue[]; message: string };
+
+export type WorkflowInputSchemaValidation =
+  | { ok: true }
+  | { ok: false; error: string };
 
 export function validateWorkflowNodeReferences(
   nodes: WorkflowNode[],
@@ -51,6 +72,7 @@ export function validateWorkflowNodeReferences(
   }
 
   for (const node of nodes) {
+    collectMissingTargets(issues, node.id, "next", node.next, nodeIds);
     switch (node.type) {
       case "builtin.if":
         collectMissingTargets(issues, node.id, "then", node.then, nodeIds);
@@ -128,10 +150,54 @@ export function validateWorkflowTriggers(
   };
 }
 
+export function validateWorkflowJsonSchema(
+  schema: JsonValue | undefined,
+  label = "Input schema",
+): WorkflowJsonSchemaValidation {
+  const issues: WorkflowJsonSchemaIssue[] = [];
+  collectJsonSchemaIssues(schema, "$", issues);
+  if (issues.length === 0) return { ok: true, issues: [] };
+  return {
+    ok: false,
+    issues,
+    message: `${label} is invalid: ${issues
+      .map((issue) => `${issue.path} ${issue.message}`)
+      .join("; ")}`,
+  };
+}
+
+export function validateWorkflowInputSchema(
+  schema: JsonValue | undefined,
+  input: JsonValue,
+  label = "Input",
+): WorkflowInputSchemaValidation {
+  const schemaValidation = validateWorkflowJsonSchema(
+    schema,
+    `${label} schema`,
+  );
+  if (!schemaValidation.ok) {
+    return { ok: false, error: schemaValidation.message };
+  }
+  if (schema === undefined || schema === null || schema === true) {
+    return { ok: true };
+  }
+  if (schema === false) {
+    return {
+      ok: false,
+      error: `${label} does not match schema: $ is disallowed`,
+    };
+  }
+  if (!isRecord(schema)) return { ok: true };
+  const issue = validateJsonSchemaValue(schema, input, "$");
+  return issue
+    ? { ok: false, error: `${label} does not match schema: ${issue}` }
+    : { ok: true };
+}
+
 function collectMissingTargets(
   issues: WorkflowNodeReferenceIssue[],
   nodeId: string,
-  field: "then" | "else" | "body" | "branches" | "cases" | "default",
+  field: "next" | "then" | "else" | "body" | "branches" | "cases" | "default",
   targets: string[],
   nodeIds: Set<string>,
 ) {
@@ -217,15 +283,309 @@ function collectParallelIssues(
         });
         continue;
       }
-      collectMissingTargets(
+      collectMissingTargets(issues, node.id, "branches", [targetId], nodeIds);
+    }
+  }
+}
+
+function collectJsonSchemaIssues(
+  schema: JsonValue | undefined,
+  path: string,
+  issues: WorkflowJsonSchemaIssue[],
+): void {
+  if (schema === undefined || schema === null) return;
+  if (typeof schema === "boolean") return;
+  if (!isRecord(schema)) {
+    issues.push({ path, message: "must be a JSON Schema object or boolean" });
+    return;
+  }
+
+  const type = schema.type;
+  if (
+    type !== undefined &&
+    !isJsonSchemaType(type) &&
+    !(
+      Array.isArray(type) &&
+      type.length > 0 &&
+      type.every((item) => isJsonSchemaType(item))
+    )
+  ) {
+    issues.push({
+      path: `${path}.type`,
+      message:
+        'must be one of "object", "array", "string", "number", "integer", "boolean", or "null"',
+    });
+  }
+
+  if ("properties" in schema && !isRecord(schema.properties)) {
+    issues.push({ path: `${path}.properties`, message: "must be an object" });
+  }
+  if (isRecord(schema.properties)) {
+    for (const [key, childSchema] of Object.entries(schema.properties)) {
+      collectJsonSchemaIssues(
+        childSchema as JsonValue,
+        `${path}.properties.${key}`,
         issues,
-        node.id,
-        "branches",
-        [targetId],
-        nodeIds,
       );
     }
   }
+
+  if (
+    "required" in schema &&
+    !(
+      Array.isArray(schema.required) &&
+      schema.required.every((item) => typeof item === "string")
+    )
+  ) {
+    issues.push({
+      path: `${path}.required`,
+      message: "must be an array of property names",
+    });
+  }
+
+  if ("items" in schema) {
+    if (typeof schema.items !== "boolean" && !isRecord(schema.items)) {
+      issues.push({
+        path: `${path}.items`,
+        message: "must be a JSON Schema object or boolean",
+      });
+    } else {
+      collectJsonSchemaIssues(
+        schema.items as JsonValue,
+        `${path}.items`,
+        issues,
+      );
+    }
+  }
+
+  if (
+    "additionalProperties" in schema &&
+    typeof schema.additionalProperties !== "boolean" &&
+    !isRecord(schema.additionalProperties)
+  ) {
+    issues.push({
+      path: `${path}.additionalProperties`,
+      message: "must be a boolean or JSON Schema object",
+    });
+  }
+  if (isRecord(schema.additionalProperties)) {
+    collectJsonSchemaIssues(
+      schema.additionalProperties as JsonValue,
+      `${path}.additionalProperties`,
+      issues,
+    );
+  }
+
+  if (
+    "enum" in schema &&
+    !(Array.isArray(schema.enum) && schema.enum.length > 0)
+  ) {
+    issues.push({ path: `${path}.enum`, message: "must be a non-empty array" });
+  }
+
+  for (const [key, value] of Object.entries(schema)) {
+    if (!NUMERIC_KEYWORDS.has(key)) continue;
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      issues.push({ path: `${path}.${key}`, message: "must be a number" });
+    }
+  }
+
+  for (const [key, value] of Object.entries(schema)) {
+    if (!INTEGER_KEYWORDS.has(key)) continue;
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+      issues.push({
+        path: `${path}.${key}`,
+        message: "must be a non-negative integer",
+      });
+    }
+  }
+
+  if ("pattern" in schema && typeof schema.pattern !== "string") {
+    issues.push({ path: `${path}.pattern`, message: "must be a string" });
+  }
+  if (typeof schema.pattern === "string") {
+    try {
+      new RegExp(schema.pattern);
+    } catch {
+      issues.push({
+        path: `${path}.pattern`,
+        message: "must be a valid regular expression",
+      });
+    }
+  }
+}
+
+function validateJsonSchemaValue(
+  schema: Record<string, unknown>,
+  value: JsonValue,
+  path: string,
+): string | null {
+  if ("const" in schema && !jsonEquals(value, schema.const)) {
+    return `${path} must equal ${JSON.stringify(schema.const)}`;
+  }
+  if (
+    Array.isArray(schema.enum) &&
+    !schema.enum.some((item) => jsonEquals(value, item))
+  ) {
+    return `${path} must be one of ${JSON.stringify(schema.enum)}`;
+  }
+  const typeIssue = validateJsonSchemaType(schema.type, value, path);
+  if (typeIssue) return typeIssue;
+
+  if (typeof value === "string") {
+    if (
+      typeof schema.minLength === "number" &&
+      value.length < schema.minLength
+    ) {
+      return `${path} must have length >= ${schema.minLength}`;
+    }
+    if (
+      typeof schema.maxLength === "number" &&
+      value.length > schema.maxLength
+    ) {
+      return `${path} must have length <= ${schema.maxLength}`;
+    }
+    if (
+      typeof schema.pattern === "string" &&
+      !new RegExp(schema.pattern).test(value)
+    ) {
+      return `${path} must match pattern ${JSON.stringify(schema.pattern)}`;
+    }
+  }
+
+  if (typeof value === "number") {
+    if (typeof schema.minimum === "number" && value < schema.minimum) {
+      return `${path} must be >= ${schema.minimum}`;
+    }
+    if (typeof schema.maximum === "number" && value > schema.maximum) {
+      return `${path} must be <= ${schema.maximum}`;
+    }
+  }
+
+  if (isRecord(value)) {
+    const required = Array.isArray(schema.required)
+      ? schema.required.filter(
+          (item): item is string => typeof item === "string",
+        )
+      : [];
+    for (const key of required) {
+      if (!(key in value)) return `${path}.${key} is required`;
+    }
+    const properties = isRecord(schema.properties) ? schema.properties : {};
+    for (const [key, childSchema] of Object.entries(properties)) {
+      if (!(key in value) || !isJsonSchemaObject(childSchema)) continue;
+      const issue = validateJsonSchemaValue(
+        childSchema,
+        value[key] as JsonValue,
+        `${path}.${key}`,
+      );
+      if (issue) return issue;
+    }
+    if (schema.additionalProperties === false) {
+      const allowed = new Set(Object.keys(properties));
+      const extra = Object.keys(value).find((key) => !allowed.has(key));
+      if (extra) return `${path}.${extra} is not allowed`;
+    } else if (isJsonSchemaObject(schema.additionalProperties)) {
+      const allowed = new Set(Object.keys(properties));
+      for (const [key, childValue] of Object.entries(value)) {
+        if (allowed.has(key)) continue;
+        const issue = validateJsonSchemaValue(
+          schema.additionalProperties,
+          childValue as JsonValue,
+          `${path}.${key}`,
+        );
+        if (issue) return issue;
+      }
+    }
+  }
+
+  if (Array.isArray(value)) {
+    if (typeof schema.minItems === "number" && value.length < schema.minItems) {
+      return `${path} must contain at least ${schema.minItems} items`;
+    }
+    if (typeof schema.maxItems === "number" && value.length > schema.maxItems) {
+      return `${path} must contain at most ${schema.maxItems} items`;
+    }
+    if (schema.items === false && value.length > 0) {
+      return `${path} must not contain items`;
+    }
+    if (isJsonSchemaObject(schema.items)) {
+      for (let index = 0; index < value.length; index += 1) {
+        const issue = validateJsonSchemaValue(
+          schema.items,
+          value[index] as JsonValue,
+          `${path}[${index}]`,
+        );
+        if (issue) return issue;
+      }
+    }
+  }
+
+  return null;
+}
+
+function validateJsonSchemaType(
+  type: unknown,
+  value: JsonValue,
+  path: string,
+): string | null {
+  if (type === undefined) return null;
+  const allowed = Array.isArray(type)
+    ? type.filter(isJsonSchemaType)
+    : isJsonSchemaType(type)
+      ? [type]
+      : [];
+  if (allowed.length === 0) return null;
+  return allowed.some((item) => jsonSchemaTypeMatches(item, value))
+    ? null
+    : `${path} must be ${allowed.join("|")}`;
+}
+
+const JSON_SCHEMA_TYPES = new Set([
+  "null",
+  "array",
+  "object",
+  "string",
+  "boolean",
+  "number",
+  "integer",
+]);
+
+const NUMERIC_KEYWORDS = new Set(["minimum", "maximum"]);
+const INTEGER_KEYWORDS = new Set([
+  "minLength",
+  "maxLength",
+  "minItems",
+  "maxItems",
+]);
+
+function isJsonSchemaType(value: unknown): value is string {
+  return typeof value === "string" && JSON_SCHEMA_TYPES.has(value);
+}
+
+function isJsonSchemaObject(value: unknown): value is Record<string, unknown> {
+  return isRecord(value);
+}
+
+function jsonSchemaTypeMatches(type: string, value: JsonValue): boolean {
+  if (type === "null") return value === null;
+  if (type === "array") return Array.isArray(value);
+  if (type === "object") return isRecord(value);
+  if (type === "string") return typeof value === "string";
+  if (type === "boolean") return typeof value === "boolean";
+  if (type === "number")
+    return typeof value === "number" && Number.isFinite(value);
+  if (type === "integer")
+    return typeof value === "number" && Number.isInteger(value);
+  return true;
+}
+
+function jsonEquals(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function normalizeWebhookPath(value: string | undefined): string | null {

@@ -55,6 +55,7 @@ import {
   Compressor,
   canCompressHistory,
   resolveThreshold,
+  withSummaryPrefix,
 } from "./compression.js";
 import { findRelevantMemories, type RelevantMemory } from "./selector.js";
 import { collectSurfacedMemories } from "./surfaced.js";
@@ -66,7 +67,11 @@ import {
   ensureStepBoundaries,
   finalizeOrphanToolParts,
 } from "./messages.js";
-import { extractErrorText, extractStatusCode } from "./error-classifier.js";
+import {
+  classifyError,
+  extractErrorText,
+  extractStatusCode,
+} from "./error-classifier.js";
 import type {
   AgentConfig,
   MessageMetadata,
@@ -310,6 +315,20 @@ function lastAssistantId(messages: readonly UIMessage[]): string | undefined {
 }
 
 export const __test = { countMessagesAfter, lastAssistantId };
+
+function isUIMessageArray(value: unknown): value is UIMessage[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (message) =>
+        message &&
+        typeof message === "object" &&
+        typeof (message as { id?: unknown }).id === "string" &&
+        typeof (message as { role?: unknown }).role === "string" &&
+        Array.isArray((message as { parts?: unknown }).parts),
+    )
+  );
+}
 
 function extractTriggerText(history: UIMessage[]): string | null {
   for (let i = history.length - 1; i >= 0; i--) {
@@ -555,6 +574,119 @@ export class Agent {
     }
   }
 
+  private createContextSnapshot(args: {
+    sessionId: string;
+    reason: ContextSnapshotReason;
+    modelHistory: UIMessage[];
+    canonicalHistory: UIMessage[];
+    sourceLastMessageId?: string | null;
+    summaryText?: string | null;
+  }): string | undefined {
+    const snapshot = this.contextSnapshotStore?.create({
+      sessionId: args.sessionId,
+      reason: args.reason,
+      compressed: true,
+      modelMessages: args.modelHistory,
+      canonicalMessageCount: args.canonicalHistory.length,
+      sourceLastMessageId:
+        args.sourceLastMessageId ??
+        args.canonicalHistory[args.canonicalHistory.length - 1]?.id ??
+        null,
+      summaryText: args.summaryText ?? null,
+      summarySha256: args.summaryText ? sha256Text(args.summaryText) : null,
+    });
+    return snapshot?.id;
+  }
+
+  private latestSnapshotTailHistory(
+    sessionId: string,
+    canonicalHistory: UIMessage[],
+  ): UIMessage[] | null {
+    if (!this.contextSnapshotStore) return null;
+    for (const snapshot of this.contextSnapshotStore.listForSession(
+      sessionId,
+    )) {
+      if (!snapshot.compressed) continue;
+      if (!snapshot.sourceLastMessageId) continue;
+      if (!isUIMessageArray(snapshot.modelMessages)) continue;
+      if (snapshot.modelMessages.length === 0) continue;
+      const sourceIndex = canonicalHistory.findIndex(
+        (message) => message.id === snapshot.sourceLastMessageId,
+      );
+      if (sourceIndex < 0) continue;
+      return [
+        ...snapshot.modelMessages,
+        ...canonicalHistory.slice(sourceIndex + 1),
+      ];
+    }
+    return null;
+  }
+
+  private fallbackHardLimitTokens(threshold: number): number {
+    const effectiveWindow =
+      getEffectiveContextWindow(this.config.model) ??
+      this.config.compression?.contextWindow ??
+      null;
+    return effectiveWindow ?? threshold * 20;
+  }
+
+  private async emergencySummarizeHistory(args: {
+    sessionId: string;
+    history: UIMessage[];
+  }): Promise<{ modelHistory: UIMessage[]; summary: string }> {
+    const recentCount = Math.min(4, args.history.length);
+    const older = args.history.slice(
+      0,
+      Math.max(0, args.history.length - recentCount),
+    );
+    const recent = args.history.slice(-recentCount);
+    const prompt = [
+      "You are creating an emergency full-chain context summary because normal compaction and snapshot fallback could not fit the provider context window.",
+      "",
+      "Summarize all older turns into a compact handoff for the next assistant. Preserve the latest active user request verbatim when possible. Do not answer requests from the transcript.",
+      "",
+      "Required sections:",
+      "## Active Task",
+      "## Goal",
+      "## Completed Actions",
+      "## Active State",
+      "## Reference Files Read",
+      "For Reference Files Read, include absolute paths, reason, last-read context, relevant sections, and confidence. Include DB/log/query/artifact evidence references such as table names, log line ranges, command-output sources, task IDs, and session IDs when present.",
+      "",
+      "Critical rule: if file/log-specific detail matters and is not explicit in this summary, re-open the referenced source before acting.",
+      "",
+      "OLDER TURNS TO SUMMARIZE:",
+      JSON.stringify(older),
+      "",
+      "RECENT TURNS KEPT OUTSIDE SUMMARY:",
+      JSON.stringify(recent),
+    ].join("\n");
+    const model = this.config.compression?.summarizerModel ?? this.config.model;
+    const generated = await generateText({
+      model: this.resolveModel(model),
+      prompt,
+      maxOutputTokens: 50_000,
+      experimental_telemetry: {
+        functionId: "compression-emergency-summarizer",
+      },
+    });
+    const summary = generated.text.trim();
+    if (!summary) {
+      throw new Error("emergency context summarizer returned empty output");
+    }
+    return {
+      summary,
+      modelHistory: [
+        {
+          id: `emergency-summary-${randomUUID()}`,
+          role: "user",
+          parts: [{ type: "text", text: withSummaryPrefix(summary) }],
+        } as UIMessage,
+        ...recent,
+      ],
+    };
+  }
+
   private surfaceAutonomousError(sessionId: string, err: unknown): void {
     const msg = {
       id: randomUUID(),
@@ -573,6 +705,27 @@ export class Agent {
         "runAutonomous: failed to surface upstream error",
       );
     }
+  }
+
+  private broadcastAutonomousStatus(
+    sessionId: string,
+    statusId: string,
+    kind: "info" | "warn" | "error" | "compressing" | "compressed",
+    message: string,
+  ): void {
+    this.broadcaster?.broadcast(sessionId, {
+      kind: "ui_message_part",
+      part: {
+        type: "data-status",
+        id: statusId,
+        data: {
+          id: statusId,
+          kind,
+          message,
+        },
+        transient: true,
+      },
+    });
   }
 
   /** `history` MUST end in the new user message. Caller drives the returned stream. */
@@ -1009,10 +1162,11 @@ export class Agent {
       }
     };
 
-    try {
+    const runProviderOnce = async (historyForRun: UIMessage[]) => {
+      capturedError = null;
       const result = await this.runStream({
         sessionId,
-        history: modelHistory,
+        history: historyForRun,
         signal: timeoutAbort.signal,
         prepareStep,
         onError: ({ error }) => {
@@ -1147,21 +1301,64 @@ export class Agent {
           totalTokens: u?.totalTokens,
         };
       }
+    };
+
+    let recoveredFromOverflow = false;
+    try {
+      await runProviderOnce(modelHistory);
     } catch (e) {
       if (timeoutAbort.signal.aborted) {
         timedOut = true;
       } else {
-        // No cursor to advance — the inbox rows that were drained at
-        // turn start are already deleted, and their content is in the
-        // persisted chat row above (so the agent's history still
-        // reflects what we tried to deliver). New signals arriving
-        // post-failure will be in the inbox for the next turn.
-        clearTimeout(timer);
-        if (externalAbort) {
-          externalAbort.removeEventListener("abort", onExternalAbort);
+        const classification = classifyError(capturedError ?? e);
+        if (classification.compressionReason) {
+          const retryStatusId = `retry-${randomUUID()}`;
+          this.broadcastAutonomousStatus(
+            sessionId,
+            retryStatusId,
+            "compressing",
+            classification.compressionReason === "payload_too_large"
+              ? "Request too large. Compacting and retrying..."
+              : "Context limit hit. Compacting and retrying...",
+          );
+          try {
+            const prepared = await this.prepareModelHistory(
+              sessionId,
+              history,
+              classification.compressionReason,
+            );
+            if (prepared.compressed) {
+              modelHistory = prepared.modelHistory;
+              contextSnapshotId = prepared.snapshotId;
+              try {
+                await runProviderOnce(modelHistory);
+                recoveredFromOverflow = true;
+              } catch (retryErr) {
+                e = retryErr;
+              }
+            }
+          } finally {
+            this.broadcastAutonomousStatus(
+              sessionId,
+              retryStatusId,
+              "info",
+              "",
+            );
+          }
         }
-        this.surfaceAutonomousError(sessionId, capturedError ?? e);
-        throw e;
+        if (!recoveredFromOverflow) {
+          // No cursor to advance — the inbox rows that were drained at
+          // turn start are already deleted, and their content is in the
+          // persisted chat row above (so the agent's history still
+          // reflects what we tried to deliver). New signals arriving
+          // post-failure will be in the inbox for the next turn.
+          clearTimeout(timer);
+          if (externalAbort) {
+            externalAbort.removeEventListener("abort", onExternalAbort);
+          }
+          this.surfaceAutonomousError(sessionId, capturedError ?? e);
+          throw e;
+        }
       }
     } finally {
       clearTimeout(timer);
@@ -1175,7 +1372,8 @@ export class Agent {
         `Autonomous turn timed out after ${timeoutMs}ms in session ${sessionId}`,
       );
     }
-    if (!assistantMessage) {
+    const finalAssistantMessage = assistantMessage as UIMessage | null;
+    if (!finalAssistantMessage) {
       this.surfaceAutonomousError(
         sessionId,
         capturedError ??
@@ -1192,19 +1390,22 @@ export class Agent {
     // `ping_user` events fired during the turn aren't auto-resolved.
     const assistantParts = capturedError
       ? [
-          ...(assistantMessage.parts as UIMessage["parts"]),
+          ...(finalAssistantMessage.parts as UIMessage["parts"]),
           buildUpstreamErrorPart(capturedError, this.config.model.provider),
         ]
-      : (assistantMessage.parts as UIMessage["parts"]);
+      : (finalAssistantMessage.parts as UIMessage["parts"]);
     if (assistantParts.length > 0) {
       const sanitized = ensureStepBoundaries(
         finalizeOrphanToolParts(assistantParts),
       );
-      const assistantId = assistantMessage.id ?? randomUUID();
+      const assistantId = finalAssistantMessage.id ?? randomUUID();
       const responseMetadata =
-        contextSnapshotId || assistantMessage.metadata
+        contextSnapshotId || finalAssistantMessage.metadata
           ? {
-              ...(assistantMessage.metadata as Record<string, unknown> | null),
+              ...(finalAssistantMessage.metadata as Record<
+                string,
+                unknown
+              > | null),
               ...(contextSnapshotId
                 ? { contextSnapshotId, contextCompressed: true }
                 : {}),
@@ -1252,7 +1453,7 @@ export class Agent {
     // turn) are already gone from the inbox; what remains is fresh
     // for the next turn.
 
-    return { assistant: assistantMessage, usage };
+    return { assistant: finalAssistantMessage, usage };
   }
 
   /**
@@ -1495,16 +1696,17 @@ export class Agent {
     }
 
     const effectiveWindow = getEffectiveContextWindow(this.config.model);
-    const threshold = resolveThreshold(
-      this.config.compression,
-      effectiveWindow,
-    );
+    let threshold = resolveThreshold(this.config.compression, effectiveWindow);
     if (threshold === null) {
-      return {
-        modelHistory: history,
-        compressed: false,
-        compressionRequired: false,
-      };
+      if (reason !== "proactive") {
+        threshold = 0;
+      } else {
+        return {
+          modelHistory: history,
+          compressed: false,
+          compressionRequired: false,
+        };
+      }
     }
 
     let currentHistory = history;
@@ -1516,7 +1718,10 @@ export class Agent {
     for (let pass = 0; pass < 3; pass++) {
       const tokens = this.estimateRequestTokens(sessionId, currentHistory);
       lastEstimatedTokens = tokens;
-      if (!this.compressor.shouldCompress(sessionId, tokens, threshold)) {
+      if (
+        reason === "proactive" &&
+        !this.compressor.shouldCompress(sessionId, tokens, threshold)
+      ) {
         break;
       }
       if (!canCompressHistory(currentHistory, this.config.compression)) {
@@ -1660,6 +1865,73 @@ export class Agent {
     }
 
     if (!lastResult) {
+      if (compressionRequired) {
+        const fallbackHistory = this.latestSnapshotTailHistory(
+          sessionId,
+          history,
+        );
+        if (fallbackHistory) {
+          const fallbackTokens = this.estimateRequestTokens(
+            sessionId,
+            fallbackHistory,
+          );
+          if (fallbackTokens <= this.fallbackHardLimitTokens(threshold)) {
+            const snapshotId = this.createContextSnapshot({
+              sessionId,
+              reason,
+              modelHistory: fallbackHistory,
+              canonicalHistory: history,
+              summaryText: null,
+            });
+            return {
+              modelHistory: fallbackHistory,
+              compressed: true,
+              snapshotId,
+              compressionRequired,
+              estimatedTokens: fallbackTokens,
+              compressionThreshold: threshold,
+            };
+          }
+
+          try {
+            const emergency = await this.emergencySummarizeHistory({
+              sessionId,
+              history: fallbackHistory,
+            });
+            const snapshotId = this.createContextSnapshot({
+              sessionId,
+              reason,
+              modelHistory: emergency.modelHistory,
+              canonicalHistory: history,
+              summaryText: emergency.summary,
+            });
+            return {
+              modelHistory: emergency.modelHistory,
+              compressed: true,
+              snapshotId,
+              compressionRequired,
+              estimatedTokens: this.estimateRequestTokens(
+                sessionId,
+                emergency.modelHistory,
+              ),
+              compressionThreshold: threshold,
+            };
+          } catch (e) {
+            this.reportTimelineEvent({
+              sessionId,
+              agentId: this.config.id,
+              eventType: "session.compression.emergency.failed",
+              source: "agent",
+              status: "error",
+              payload: {
+                reason,
+                mode: "model_context",
+                error: extractErrorText(e),
+              },
+            });
+          }
+        }
+      }
       return {
         modelHistory: history,
         compressed: false,
@@ -1670,22 +1942,18 @@ export class Agent {
       };
     }
 
-    const sourceLastMessageId = history[history.length - 1]?.id ?? null;
-    const snapshot = this.contextSnapshotStore?.create({
+    const snapshotId = this.createContextSnapshot({
       sessionId,
       reason,
-      compressed: true,
-      modelMessages: currentHistory,
-      canonicalMessageCount: history.length,
-      sourceLastMessageId,
+      modelHistory: currentHistory,
+      canonicalHistory: history,
       summaryText: lastResult.summary,
-      summarySha256: lastResult.summary ? sha256Text(lastResult.summary) : null,
     });
 
     return {
       modelHistory: currentHistory,
       compressed: true,
-      snapshotId: snapshot?.id,
+      snapshotId,
       compressionRequired,
       estimatedTokens: lastEstimatedTokens,
       compressionThreshold: threshold,

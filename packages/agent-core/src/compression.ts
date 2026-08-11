@@ -8,7 +8,7 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { getModel } from "@openacme/llm-provider";
 import type { ModelConfig } from "@openacme/config";
-import { extractErrorText } from "./error-classifier.js";
+import { extractErrorText, extractStatusCode } from "./error-classifier.js";
 import type { CompressionConfig } from "./types.js";
 import { createAiHelperObservation } from "./helper-observation.js";
 
@@ -184,6 +184,7 @@ const MESSAGE_OVERHEAD_CHARS = MESSAGE_OVERHEAD_TOKENS * CHARS_PER_TOKEN;
  *  config fixes (rotated key, switched model) are picked up the same session. */
 export const SUMMARY_FAILURE_COOLDOWN_MS = 600_000;
 const EMPTY_SUMMARY_ERROR = "compression summarizer returned empty output";
+const SUMMARIZER_MAX_ATTEMPTS = 2;
 
 /** Substantial-enough threshold for a tool result to be worth pruning/dedup. */
 const SIGNIFICANT_TOOL_RESULT_CHARS = 200;
@@ -1011,6 +1012,52 @@ function errorMessage(e: unknown): string {
   return extractErrorText(e);
 }
 
+function isRetryableSummarizerError(err: unknown): boolean {
+  const status = extractStatusCode(err);
+  if (status === 429 || (status != null && status >= 500 && status < 600)) {
+    return true;
+  }
+  if (status != null && status >= 400 && status < 500) return false;
+
+  const text = errorMessage(err).toLowerCase();
+  if (text.includes(EMPTY_SUMMARY_ERROR)) return false;
+  if (
+    text.includes("context_length_exceeded") ||
+    text.includes("context length") ||
+    text.includes("context window") ||
+    text.includes("too many tokens") ||
+    text.includes("maximum context") ||
+    text.includes("prompt is too long")
+  ) {
+    return false;
+  }
+  if (
+    text.includes("api key") ||
+    text.includes("unauthorized") ||
+    text.includes("forbidden") ||
+    text.includes("invalid request") ||
+    text.includes("bad request") ||
+    text.includes("malformed") ||
+    text.includes("schema")
+  ) {
+    return false;
+  }
+
+  return [
+    "other side closed",
+    "econnreset",
+    "etimedout",
+    "socket hang up",
+    "stream disconnected",
+    "stream closed",
+    "connection closed",
+    "connection reset",
+    "timeout",
+    "temporarily unavailable",
+    "overloaded",
+  ].some((pattern) => text.includes(pattern));
+}
+
 function requiresStreamingGenerate(m: ModelConfig): boolean {
   return m.provider === "openai" && m.auth === "oauth";
 }
@@ -1604,9 +1651,38 @@ export class Compressor {
       return summary;
     };
 
+    const tryGenWithRetries = async (m: ModelConfig): Promise<string> => {
+      let lastErr: unknown;
+      for (let attempt = 1; attempt <= SUMMARIZER_MAX_ATTEMPTS; attempt++) {
+        try {
+          return await tryGen(m);
+        } catch (err) {
+          lastErr = err;
+          if (
+            attempt >= SUMMARIZER_MAX_ATTEMPTS ||
+            !isRetryableSummarizerError(err)
+          ) {
+            throw err;
+          }
+          reportCompressionTimeline(opts, {
+            eventType: "session.compression.summarizer.retrying",
+            status: "running",
+            payload: {
+              provider: m.provider,
+              model: m.model,
+              attempt,
+              maxAttempts: SUMMARIZER_MAX_ATTEMPTS,
+              error: errorMessage(err),
+            },
+          });
+        }
+      }
+      throw lastErr;
+    };
+
     const modelToUse = useAux ? opts.primaryModel : opts.fallbackModel;
     try {
-      const summary = await tryGen(modelToUse);
+      const summary = await tryGenWithRetries(modelToUse);
       // Reset transient cooldown on success; keep auxFallenBack sticky.
       state.failure = {
         ...state.failure,
@@ -1627,7 +1703,7 @@ export class Compressor {
         state.failure.lastAuxFailureModel = modelLabel(opts.primaryModel);
         state.failure.lastAuxFailureError = errStr.slice(0, 220);
         try {
-          const summary = await tryGen(opts.fallbackModel);
+          const summary = await tryGenWithRetries(opts.fallbackModel);
           state.failure.cooldownUntil = 0;
           return { kind: "ok", summary, usedFallback: true };
         } catch (err2) {

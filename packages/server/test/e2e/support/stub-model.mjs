@@ -15,6 +15,9 @@
 //   [[mock:error:boom]]                  -> emits a stream error
 //   [[mock:error-anywhere:boom]]         -> emits a stream error if found anywhere
 //                                            in the prompt
+//   [[mock:summarizer-empty]]            -> non-JSON generateText returns empty
+//                                            content; stream turns still use other
+//                                            directives
 import { MockLanguageModelV3, simulateReadableStream } from "ai/test";
 
 const DIRECTIVE = /\[\[mock:(text|tool|error):([\s\S]*?)\]\]/;
@@ -169,6 +172,8 @@ export function createStubModel(modelId = "stub-1") {
         } else {
           text = JSON.stringify({ title: "Mock session" });
         }
+      } else if (allText(prompt).includes("[[mock:summarizer-empty]]")) {
+        text = "";
       } else {
         text = plan(prompt).kind === "text" ? plan(prompt).text : "";
       }

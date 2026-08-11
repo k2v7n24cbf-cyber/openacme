@@ -13,8 +13,8 @@ import {
 import { MemoryStore } from "@openacme/memory";
 import { TaskStore } from "@openacme/tasks";
 import type { ToolRegistry } from "@openacme/tools";
-import type { UIMessage } from "ai";
-import { Agent } from "../src/agent.js";
+import type { UIMessage, UIMessageChunk } from "ai";
+import { Agent, type AutonomousBroadcaster } from "../src/agent.js";
 import type { AgentConfig } from "../src/types.js";
 
 const {
@@ -103,6 +103,7 @@ function makeAgent(opts: {
   contextWindow?: number | null;
   protectFirstN?: number;
   tailTokenBudget?: number;
+  broadcaster?: AutonomousBroadcaster;
 }): Agent {
   const sessionStore = createSessionStore(opts.db);
   const messageStore = createMessageStore(opts.db);
@@ -143,6 +144,7 @@ function makeAgent(opts: {
     taskStore: new TaskStore(path.join(tmpRoot, "tasks")),
     inboxStore: createInboxStore(opts.db),
     contextSnapshotStore,
+    broadcaster: opts.broadcaster,
   });
 }
 
@@ -160,6 +162,57 @@ function bigAssistantMsg(id: string, charCount: number): UIMessage {
     role: "assistant",
     parts: [{ type: "text", text: "y".repeat(charCount) }],
   } as UIMessage;
+}
+
+function messageText(message: UIMessage): string {
+  return (message.parts ?? [])
+    .map((part) =>
+      part && typeof part === "object" && "text" in part
+        ? String(part.text ?? "")
+        : "",
+    )
+    .join("\n");
+}
+
+function successfulAssistantStream(
+  text: string,
+): Awaited<ReturnType<Agent["runStream"]>> {
+  return {
+    toUIMessageStream: () =>
+      new ReadableStream<UIMessageChunk>({
+        start(controller) {
+          controller.enqueue({ type: "start", messageId: "assistant-ok" });
+          controller.enqueue({ type: "text-start", id: "text-1" });
+          controller.enqueue({
+            type: "text-delta",
+            id: "text-1",
+            delta: text,
+          });
+          controller.enqueue({ type: "text-end", id: "text-1" });
+          controller.enqueue({ type: "finish", finishReason: "stop" });
+          controller.close();
+        },
+      }),
+    usage: Promise.resolve({
+      inputTokens: 10,
+      outputTokens: 2,
+      totalTokens: 12,
+    }),
+  } as unknown as Awaited<ReturnType<Agent["runStream"]>>;
+}
+
+function contextLengthExceededError() {
+  return {
+    type: "error",
+    sequence_number: 2,
+    error: {
+      type: "invalid_request_error",
+      code: "context_length_exceeded",
+      message:
+        "Your input exceeds the context window of this model. Please adjust your input and try again.",
+      param: "input",
+    },
+  };
 }
 
 describe("Agent.preflightCompress", () => {
@@ -334,6 +387,305 @@ describe("Agent.preflightCompress", () => {
     expect(sessions.get(parent.id)?.parentSessionId).toBeNull();
     expect(messages.getHistory(parent.id).map((m) => m.id)).toEqual(
       seed.map((m) => m.id),
+    );
+  });
+
+  it("retries a transient main-model summarizer failure before giving up", async () => {
+    const db = freshDb();
+    const sessions = createSessionStore(db);
+    const parent = sessions.create("a1", { id: "preflight-retry-transient" });
+
+    const seed: UIMessage[] = [];
+    for (let i = 0; i < 20; i++) {
+      seed.push(bigUserMsg(`u${i}`, 500));
+      seed.push(bigAssistantMsg(`a${i}`, 500));
+    }
+
+    generateTextMock
+      .mockResolvedValueOnce({ text: "## Active Task\nNone." })
+      .mockRejectedValueOnce(new Error("other side closed"))
+      .mockResolvedValueOnce({ text: "## Active Task\nRecovered summary." });
+
+    const agent = makeAgent({
+      db,
+      thresholdTokens: 1000,
+      protectFirstN: 1,
+      tailTokenBudget: 200,
+    });
+    const prepared = await agent.prepareModelHistory(
+      parent.id,
+      seed,
+      "proactive",
+    );
+
+    expect(prepared.compressionRequired).toBe(true);
+    expect(prepared.compressed).toBe(true);
+    expect(prepared.compressionFailureReason).toBeUndefined();
+    expect(prepared.modelHistory).not.toBe(seed);
+    expect(
+      generateTextMock.mock.calls.filter(
+        ([arg]) =>
+          arg?.experimental_telemetry?.functionId === "compression-summarizer",
+      ),
+    ).toHaveLength(2);
+    expect(
+      prepared.modelHistory.some((message) =>
+        messageText(message).includes("Recovered summary."),
+      ),
+    ).toBe(true);
+  });
+
+  it("uses the latest successful snapshot plus canonical tail after retry exhaustion", async () => {
+    const db = freshDb();
+    const sessions = createSessionStore(db);
+    const snapshots = createContextSnapshotStore(db);
+    const parent = sessions.create("a1", {
+      id: "preflight-snapshot-tail-fallback",
+    });
+
+    const seed: UIMessage[] = [];
+    for (let i = 0; i < 20; i++) {
+      seed.push(bigUserMsg(`u${i}`, 500));
+      seed.push(bigAssistantMsg(`a${i}`, 500));
+    }
+    const snapshotModelHistory: UIMessage[] = [
+      {
+        id: "snapshot-summary",
+        role: "user",
+        parts: [
+          {
+            type: "text",
+            text: "[CONTEXT COMPACTION] Existing successful summary",
+          },
+        ],
+      } as UIMessage,
+      bigAssistantMsg("snapshot-tail-assistant", 20),
+    ];
+    const sourceLastMessageId = seed[5]!.id;
+    snapshots.create({
+      id: "snapshot-ok",
+      sessionId: parent.id,
+      reason: "proactive",
+      compressed: true,
+      modelMessages: snapshotModelHistory,
+      canonicalMessageCount: 6,
+      sourceLastMessageId,
+      summaryText: "Existing successful summary",
+    });
+
+    generateTextMock
+      .mockResolvedValueOnce({ text: "## Active Task\nNone." })
+      .mockRejectedValue(new Error("other side closed"));
+
+    const agent = makeAgent({
+      db,
+      thresholdTokens: 1000,
+      protectFirstN: 1,
+      tailTokenBudget: 200,
+    });
+    const prepared = await agent.prepareModelHistory(
+      parent.id,
+      seed,
+      "proactive",
+    );
+
+    const fallbackIds = prepared.modelHistory.map((message) => message.id);
+    expect(prepared.compressionRequired).toBe(true);
+    expect(prepared.compressed).toBe(true);
+    expect(prepared.compressionFailureReason).toBeUndefined();
+    expect(fallbackIds).toEqual([
+      ...snapshotModelHistory.map((message) => message.id),
+      ...seed.slice(6).map((message) => message.id),
+    ]);
+    expect(fallbackIds).not.toEqual(seed.map((message) => message.id));
+  });
+
+  it("emergency-summarizes snapshot plus tail when fallback history still exceeds budget", async () => {
+    const db = freshDb();
+    const sessions = createSessionStore(db);
+    const snapshots = createContextSnapshotStore(db);
+    const parent = sessions.create("a1", {
+      id: "preflight-emergency-summary",
+    });
+
+    const seed: UIMessage[] = [];
+    for (let i = 0; i < 30; i++) {
+      seed.push(bigUserMsg(`u${i}`, 2_000));
+      seed.push(bigAssistantMsg(`a${i}`, 2_000));
+    }
+    snapshots.create({
+      id: "snapshot-still-too-large",
+      sessionId: parent.id,
+      reason: "proactive",
+      compressed: true,
+      modelMessages: [
+        {
+          id: "snapshot-summary",
+          role: "user",
+          parts: [
+            {
+              type: "text",
+              text: "[CONTEXT COMPACTION] Existing successful summary",
+            },
+          ],
+        } as UIMessage,
+      ],
+      canonicalMessageCount: 2,
+      sourceLastMessageId: seed[1]!.id,
+      summaryText: "Existing successful summary",
+    });
+
+    generateTextMock.mockImplementation(
+      async (arg: {
+        prompt?: string;
+        experimental_telemetry?: { functionId?: string };
+      }) => {
+        if (arg.experimental_telemetry?.functionId === "a1:memory-flush") {
+          return { text: "## Active Task\nNone." };
+        }
+        const prompt = arg.prompt ?? "";
+        if (
+          prompt.includes("Reference Files Read") &&
+          prompt.includes("re-open the referenced source")
+        ) {
+          return {
+            text:
+              "## Active Task\nContinue.\n\n" +
+              "## Reference Files Read\n- /tmp/example.ts — reason: test fixture\n\n" +
+              "If file/log-specific detail matters and is not explicit here, re-open the referenced source before acting.",
+          };
+        }
+        throw new Error("other side closed");
+      },
+    );
+
+    const agent = makeAgent({
+      db,
+      thresholdTokens: 1000,
+      protectFirstN: 1,
+      tailTokenBudget: 200,
+    });
+    const prepared = await agent.prepareModelHistory(
+      parent.id,
+      seed,
+      "proactive",
+    );
+
+    const prompts = generateTextMock.mock.calls.map(
+      ([arg]) => arg?.prompt ?? "",
+    );
+    const emergencyPrompt = prompts.find(
+      (prompt) =>
+        prompt.includes("Reference Files Read") &&
+        prompt.includes("re-open the referenced source"),
+    );
+    expect(prepared.compressionRequired).toBe(true);
+    expect(prepared.compressed).toBe(true);
+    expect(prepared.compressionFailureReason).toBeUndefined();
+    expect(emergencyPrompt).toBeDefined();
+    expect(prepared.modelHistory.map((message) => message.id)).not.toEqual(
+      seed.map((message) => message.id),
+    );
+    expect(
+      prepared.modelHistory.some((message) =>
+        messageText(message).includes("Reference Files Read"),
+      ),
+    ).toBe(true);
+  });
+
+  it("recovers from provider context_length_exceeded with reactive compression instead of resending raw history", async () => {
+    const db = freshDb();
+    const sessions = createSessionStore(db);
+    const messages = createMessageStore(db);
+    const parent = sessions.create("a1", {
+      id: "provider-overflow-reactive-recovery",
+    });
+
+    const seed: UIMessage[] = [];
+    for (let i = 0; i < 20; i++) {
+      seed.push(bigUserMsg(`u${i}`, 500));
+      seed.push(bigAssistantMsg(`a${i}`, 500));
+    }
+    messages.appendMany(
+      parent.id,
+      seed.map((m) => ({
+        id: m.id,
+        role: m.role as "user" | "assistant",
+        parts: m.parts,
+      })),
+    );
+
+    generateTextMock.mockResolvedValue({ text: "## Active Task\nRecovered." });
+    streamTextMock
+      .mockImplementationOnce(() => {
+        throw contextLengthExceededError();
+      })
+      .mockReturnValueOnce(successfulAssistantStream("recovered"));
+    const broadcasts: Array<{
+      sessionId: string;
+      event: Parameters<AutonomousBroadcaster["broadcast"]>[1];
+    }> = [];
+    const broadcaster: AutonomousBroadcaster = {
+      broadcast(sessionId, event) {
+        broadcasts.push({ sessionId, event });
+      },
+    };
+
+    const agent = makeAgent({
+      db,
+      // Keep proactive preflight off so the test exercises actual
+      // provider-side overflow and the reactive recovery path.
+      thresholdTokens: 10_000,
+      protectFirstN: 1,
+      tailTokenBudget: 200,
+      broadcaster,
+    });
+
+    await expect(
+      agent.runAutonomous({ sessionId: parent.id }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        assistant: expect.objectContaining({ id: "assistant-ok" }),
+      }),
+    );
+
+    expect(streamTextMock).toHaveBeenCalledTimes(2);
+    const firstMessages = streamTextMock.mock.calls[0]![0]!
+      .messages as unknown[];
+    const secondMessages = streamTextMock.mock.calls[1]![0]!
+      .messages as unknown[];
+    expect(JSON.stringify(firstMessages)).not.toContain("[CONTEXT COMPACTION");
+    expect(JSON.stringify(secondMessages)).toContain("[CONTEXT COMPACTION");
+    expect(JSON.stringify(secondMessages)).not.toEqual(
+      JSON.stringify(firstMessages),
+    );
+    const statusEvents = broadcasts
+      .map((broadcast) => broadcast.event)
+      .filter(
+        (event): event is {
+          kind: "ui_message_part";
+          part: {
+            type?: string;
+            data?: { id?: string; kind?: string; message?: string };
+          };
+        } =>
+          event.kind === "ui_message_part" &&
+          typeof event.part === "object" &&
+          event.part !== null &&
+          (event.part as { type?: unknown }).type === "data-status",
+      )
+      .map((event) => event.part.data);
+    expect(statusEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "compressing",
+          message: "Context limit hit. Compacting and retrying...",
+        }),
+        expect.objectContaining({
+          kind: "info",
+          message: "",
+        }),
+      ]),
     );
   });
 

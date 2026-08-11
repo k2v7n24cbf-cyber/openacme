@@ -84,6 +84,7 @@ export function useChatSession(opts: {
   const fileInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     sessionIdRef.current = sessionId;
+    setStatusBoard({});
   }, [sessionId]);
   useEffect(() => {
     agentIdRef.current = agentId;

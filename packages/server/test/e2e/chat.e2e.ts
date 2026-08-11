@@ -51,15 +51,22 @@ async function postChat(sessionId: string, text: string): Promise<void> {
 }
 
 function postChatResponse(sessionId: string, text: string): Promise<Response> {
+  return postChatMessages(sessionId, [
+    { id: randomUUID(), role: "user", parts: [{ type: "text", text }] },
+  ]);
+}
+
+function postChatMessages(
+  sessionId: string,
+  messages: Array<{ id: string; role: string; parts: Array<unknown> }>,
+): Promise<Response> {
   return req("/api/chat", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       agentId: "helper",
       sessionId,
-      messages: [
-        { id: randomUUID(), role: "user", parts: [{ type: "text", text }] },
-      ],
+      messages,
     }),
   });
 }
@@ -323,6 +330,105 @@ describe("chat turn (e2e)", () => {
       expect(sessionRes.status).toBe(200);
       const session = await sessionRes.json();
       expect(session.turnsBlockedReason).toBeNull();
+      sse.close();
+    } finally {
+      await lowThreshold.close();
+    }
+  });
+
+  it("does not call the provider when required proactive compression fails", async () => {
+    const lowThreshold = await startE2EServer({
+      behavior: {
+        compressionThresholdTokens: 1,
+        compressionThresholdPercent: null,
+        compressionProtectFirstN: 1,
+        compressionTailTokenBudget: 200,
+      },
+    });
+    const authHeaders = {
+      authorization: `Bearer ${lowThreshold.authToken}`,
+      host: "127.0.0.1",
+    };
+    try {
+      const create = await fetch(`${lowThreshold.baseUrl}/api/agents`, {
+        method: "POST",
+        headers: { ...authHeaders, "content-type": "application/json" },
+        body: JSON.stringify({ id: "helper", name: "Helper" }),
+      });
+      expect(create.status).toBe(201);
+
+      const sessionId = randomUUID();
+      const sse = await openSSE(
+        `${lowThreshold.baseUrl}/api/sessions/${sessionId}/stream`,
+      );
+      const history = Array.from({ length: 9 }, (_, i) => ({
+        id: randomUUID(),
+        role: i % 2 === 0 ? "user" : "assistant",
+        parts: [
+          {
+            type: "text",
+            text:
+              i === 8
+                ? "final turn [[mock:error:PROVIDER_CALLED_AFTER_COMPRESSION_FAILURE]]"
+                : `older turn ${i} ${i === 2 ? "[[mock:summarizer-empty]] " : ""}${"x".repeat(200)}`,
+          },
+        ],
+      }));
+
+      const chat = await fetch(`${lowThreshold.baseUrl}/api/chat`, {
+        method: "POST",
+        headers: { ...authHeaders, "content-type": "application/json" },
+        body: JSON.stringify({
+          agentId: "helper",
+          sessionId,
+          messages: history,
+        }),
+      });
+      expect(chat.status).toBe(200);
+      await sse.waitFor(isState("idle"), 15_000);
+
+      const messagesRes = await fetch(
+        `${lowThreshold.baseUrl}/api/sessions/${sessionId}/messages`,
+        { headers: authHeaders },
+      );
+      expect(messagesRes.status).toBe(200);
+      const messages = (await messagesRes.json()) as Array<{
+        role: string;
+        parts: any[];
+      }>;
+      const assistant = messages.find(
+        (message) => message.role === "assistant",
+      );
+      expect(assistant).toBeTruthy();
+      const errorText = JSON.stringify(assistant!.parts);
+      expect(errorText).toContain("Context compaction was required");
+      expect(errorText).toContain("proactive_summarizer_failed");
+      expect(errorText).not.toContain(
+        "PROVIDER_CALLED_AFTER_COMPRESSION_FAILURE",
+      );
+
+      const timeline = await fetch(
+        `${lowThreshold.baseUrl}/api/sessions/${sessionId}/timeline?limit=100`,
+        { headers: authHeaders },
+      );
+      expect(timeline.status).toBe(200);
+      const timelineJson = (await timeline.json()) as {
+        events: Array<{
+          eventType: string;
+          status?: string | null;
+          payload?: unknown;
+        }>;
+      };
+      expect(
+        timelineJson.events.some(
+          (event) =>
+            event.eventType === "session.compression.noop" &&
+            event.status === "skipped" &&
+            (event.payload as { noOpReason?: string } | null)?.noOpReason ===
+              "proactive_summarizer_failed",
+        ),
+      ).toBe(true);
+
       sse.close();
     } finally {
       await lowThreshold.close();

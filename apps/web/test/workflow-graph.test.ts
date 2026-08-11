@@ -7,8 +7,8 @@ describe("buildWorkflowGraphProjection", () => {
     const graph = buildWorkflowGraphProjection({
       triggers: [{ id: "manual_review", kind: "manual", enabled: true }],
       nodes: [
-        { id: "set_customer", type: "builtin.set" },
-        { id: "normalize", type: "builtin.transform" },
+        { id: "set_customer", type: "builtin.set", next: ["normalize"] },
+        { id: "normalize", type: "builtin.transform.object_pick" },
         { id: "exit", type: "builtin.exit" },
       ],
     });
@@ -23,6 +23,92 @@ describe("buildWorkflowGraphProjection", () => {
       "edge:trigger:manual_review:set_customer",
       "edge:sequence:set_customer:normalize",
     ]);
+  });
+
+  it("does not create implicit sequence edges for detached canvas cards", () => {
+    const graph = buildWorkflowGraphProjection({
+      triggers: [{ id: "manual_review", kind: "manual", enabled: true }],
+      nodes: [
+        { id: "set_customer", type: "builtin.set" },
+        { id: "loose_log", type: "builtin.log.info" },
+      ],
+      layout: {
+        nodes: {
+          loose_log: { position: { x: 120, y: 220 }, detached: true },
+        },
+      },
+    });
+
+    expect(graph.edges.map((edge) => edge.id)).toEqual([
+      "edge:trigger:manual_review:set_customer",
+    ]);
+  });
+
+  it("keeps the downstream sequence after detaching a card from its previous card", () => {
+    const graph = buildWorkflowGraphProjection({
+      triggers: [{ id: "manual_review", kind: "manual", enabled: true }],
+      nodes: [
+        { id: "a", type: "builtin.log.info" },
+        { id: "b", type: "builtin.log.info", next: ["c"] },
+        { id: "c", type: "builtin.log.info", next: ["d"] },
+        { id: "d", type: "builtin.log.info" },
+      ],
+      layout: {
+        nodes: {
+          b: { position: { x: 120, y: 220 }, detached: true },
+        },
+      },
+    });
+
+    expect(graph.edges.map((edge) => edge.id)).toEqual([
+      "edge:trigger:manual_review:a",
+      "edge:sequence:b:c",
+      "edge:sequence:c:d",
+    ]);
+  });
+
+  it("keeps branch-local route continuations when a card is shared by two if routes", () => {
+    const graph = buildWorkflowGraphProjection({
+      triggers: [],
+      nodes: [
+        {
+          id: "a",
+          type: "builtin.if",
+          condition: "$.workflowTrigger.input.enabled == true",
+          then: ["b"],
+          else: ["c"],
+        },
+        { id: "b", type: "builtin.log.info", next: ["c"] },
+        { id: "c", type: "builtin.log.info", next: ["d"] },
+        { id: "d", type: "builtin.log.info" },
+      ],
+    });
+
+    expect(graph.edges.map((edge) => edge.id)).toEqual(
+      expect.arrayContaining(["edge:sequence:b:c", "edge:sequence:c:d"]),
+    );
+  });
+
+  it("keeps both if route continuations when two branches merge into one card", () => {
+    const graph = buildWorkflowGraphProjection({
+      triggers: [],
+      nodes: [
+        {
+          id: "a",
+          type: "builtin.if",
+          condition: "$.workflowTrigger.input.enabled == true",
+          then: ["b"],
+          else: ["c"],
+        },
+        { id: "b", type: "builtin.log.info", next: ["d"] },
+        { id: "c", type: "builtin.log.info", next: ["d"] },
+        { id: "d", type: "builtin.log.info" },
+      ],
+    });
+
+    expect(graph.edges.map((edge) => edge.id)).toEqual(
+      expect.arrayContaining(["edge:sequence:b:d", "edge:sequence:c:d"]),
+    );
   });
 
   it("uses persisted canvas layout positions for workflow step nodes", () => {
@@ -54,7 +140,7 @@ describe("buildWorkflowGraphProjection", () => {
         {
           id: "branch",
           type: "builtin.if",
-          condition: "$.input.enabled",
+          condition: "$.workflowTrigger.input.enabled",
           then: ["notify"],
           else: ["skip"],
         },
@@ -85,20 +171,24 @@ describe("buildWorkflowGraphProjection", () => {
     );
   });
 
-  it("connects if routes only to their first visible card and sequences route bodies", () => {
+  it("connects if routes only to their entry cards and uses explicit next for route bodies", () => {
     const graph = buildWorkflowGraphProjection({
       triggers: [],
       nodes: [
         {
           id: "branch",
           type: "builtin.if",
-          condition: "$.input.enabled",
-          then: ["normalize", "notify"],
-          else: ["skip", "audit"],
+          condition: "$.workflowTrigger.input.enabled",
+          then: ["normalize"],
+          else: ["skip"],
         },
-        { id: "normalize", type: "builtin.transform" },
+        {
+          id: "normalize",
+          type: "builtin.transform.object_pick",
+          next: ["notify"],
+        },
         { id: "notify", type: "builtin.log.info" },
-        { id: "skip", type: "builtin.log.info" },
+        { id: "skip", type: "builtin.log.info", next: ["audit"] },
         { id: "audit", type: "builtin.log.info" },
         { id: "done", type: "builtin.log.info" },
       ],
@@ -108,8 +198,8 @@ describe("buildWorkflowGraphProjection", () => {
       expect.arrayContaining([
         "edge:then:branch:normalize",
         "edge:else:branch:skip",
-        "edge:route:branch:then:normalize:notify",
-        "edge:route:branch:else:skip:audit",
+        "edge:sequence:normalize:notify",
+        "edge:sequence:skip:audit",
       ]),
     );
     expect(graph.edges.map((edge) => edge.id)).not.toEqual(
@@ -134,12 +224,21 @@ describe("buildWorkflowGraphProjection", () => {
         {
           id: "risk_gate",
           type: "builtin.if",
-          condition: "$.input.risky",
-          then: ["warn_operator", "wait_for_index"],
-          else: ["throw_controlled", "wait_for_index"],
+          condition: "$.workflowTrigger.input.risky",
+          then: ["warn_operator"],
+          else: ["throw_controlled"],
         },
-        { id: "warn_operator", type: "builtin.log.info" },
-        { id: "throw_controlled", type: "builtin.throw_error", message: "No" },
+        {
+          id: "warn_operator",
+          type: "builtin.log.info",
+          next: ["wait_for_index"],
+        },
+        {
+          id: "throw_controlled",
+          type: "builtin.throw_error",
+          message: "No",
+          next: ["wait_for_index"],
+        },
         { id: "wait_for_index", type: "builtin.sleep", delayMs: 1000 },
       ],
     });
@@ -175,7 +274,7 @@ describe("buildWorkflowGraphProjection", () => {
         {
           id: "risk_gate",
           type: "builtin.if",
-          condition: "$.input.risky",
+          condition: "$.workflowTrigger.input.risky",
           then: ["warn_operator"],
           else: ["throw_controlled"],
         },
@@ -209,7 +308,7 @@ describe("buildWorkflowGraphProjection", () => {
         {
           id: "branch",
           type: "builtin.if_else",
-          condition: "$.input.risky",
+          condition: "$.workflowTrigger.input.risky",
           then: ["manual_review"],
           else: ["auto_approve"],
         },
@@ -239,11 +338,11 @@ describe("buildWorkflowGraphProjection", () => {
         {
           id: "branch",
           type: "builtin.if",
-          condition: "$.input.risky",
+          condition: "$.workflowTrigger.input.risky",
           then: [],
           else: [],
         },
-        { id: "normalize", type: "builtin.transform" },
+        { id: "normalize", type: "builtin.transform.object_pick" },
       ],
     });
 
@@ -252,18 +351,22 @@ describe("buildWorkflowGraphProjection", () => {
     );
   });
 
-  it("creates a single foreach body entry edge and sequences body nodes", () => {
+  it("creates a single foreach body entry edge and uses explicit next in body nodes", () => {
     const graph = buildWorkflowGraphProjection({
       triggers: [],
       nodes: [
         {
           id: "each_customer",
           type: "builtin.foreach",
-          items: "$.input.customers",
+          items: "$.workflowTrigger.input.customers",
           itemVar: "customer",
-          body: ["score_customer", "log_customer"],
+          body: ["score_customer"],
         },
-        { id: "score_customer", type: "builtin.python" },
+        {
+          id: "score_customer",
+          type: "builtin.python",
+          next: ["log_customer"],
+        },
         { id: "log_customer", type: "builtin.log.info" },
       ],
     });
@@ -272,7 +375,7 @@ describe("buildWorkflowGraphProjection", () => {
     expect(graph.edges.map((edge) => edge.id)).toEqual(
       expect.arrayContaining([
         "edge:body:each_customer:group:each_customer:body",
-        "edge:route:each_customer:body:score_customer:log_customer",
+        "edge:sequence:score_customer:log_customer",
       ]),
     );
     expect(graph.edges).toEqual(
@@ -282,7 +385,7 @@ describe("buildWorkflowGraphProjection", () => {
           label: undefined,
         }),
         expect.objectContaining({
-          id: "edge:route:each_customer:body:score_customer:log_customer",
+          id: "edge:sequence:score_customer:log_customer",
           label: undefined,
         }),
       ]),
@@ -294,7 +397,7 @@ describe("buildWorkflowGraphProjection", () => {
       graph.nodes.find((node) => node.id === "each_customer")?.data,
     ).toEqual(
       expect.objectContaining({
-        summary: "Loop over input.customers as customer",
+        summary: "Loop over workflowTrigger.input.customers as customer",
       }),
     );
   });
@@ -306,11 +409,16 @@ describe("buildWorkflowGraphProjection", () => {
         {
           id: "each_customer",
           type: "builtin.foreach",
-          items: "$.input.customers",
+          items: "$.workflowTrigger.input.customers",
           itemVar: "customer",
-          body: ["score_customer", "log_customer"],
+          body: ["score_customer"],
+          next: ["after_loop"],
         },
-        { id: "score_customer", type: "builtin.transform" },
+        {
+          id: "score_customer",
+          type: "builtin.transform.object_pick",
+          next: ["log_customer"],
+        },
         { id: "log_customer", type: "builtin.log.info" },
         { id: "after_loop", type: "builtin.log.info" },
       ],
@@ -327,7 +435,7 @@ describe("buildWorkflowGraphProjection", () => {
     expect(graph.edges.map((edge) => edge.id)).toEqual(
       expect.arrayContaining([
         "edge:body:each_customer:group:each_customer:body",
-        "edge:route:each_customer:body:score_customer:log_customer",
+        "edge:sequence:score_customer:log_customer",
         "edge:sequence:each_customer:after_loop",
       ]),
     );
@@ -354,9 +462,9 @@ describe("buildWorkflowGraphProjection", () => {
     expect(firstBody!.position.x).toBeGreaterThan(parent!.position.x);
     expect(secondBody!.position.x).toBe(firstBody!.position.x);
     expect(secondBody!.position.y).toBeGreaterThan(firstBody!.position.y);
-    expect(secondBody!.position.y - firstBody!.position.y).toBeGreaterThanOrEqual(
-      208,
-    );
+    expect(
+      secondBody!.position.y - firstBody!.position.y,
+    ).toBeGreaterThanOrEqual(208);
     expect(bodyGroup!.position.x).toBeLessThan(firstBody!.position.x);
     expect(bodyGroup!.position.y).toBeLessThan(firstBody!.position.y);
     expect(firstBody!.position.x - bodyGroup!.position.x).toBeLessThan(72);
@@ -399,9 +507,21 @@ describe("buildWorkflowGraphProjection", () => {
       triggers: [],
       nodes: [
         {
+          id: "kind_switch",
+          type: "builtin.switch",
+          value: "$.workflowTrigger.input.kind",
+          cases: [{ id: "audit", label: "Audit", nodes: ["log_audit"] }],
+          default: ["each_asset"],
+        },
+        {
+          id: "log_audit",
+          type: "builtin.log.info",
+          next: ["each_asset"],
+        },
+        {
           id: "each_asset",
           type: "builtin.foreach",
-          items: "$.input.assets",
+          items: "$.workflowTrigger.input.assets",
           itemVar: "asset",
           body: ["route_asset", "mark_true", "mark_false", "record_asset"],
         },
@@ -452,7 +572,7 @@ describe("buildWorkflowGraphProjection", () => {
         {
           id: "route_by_kind",
           type: "builtin.switch",
-          value: "$.input.kind",
+          value: "$.workflowTrigger.input.kind",
           cases: [
             {
               id: "asset",
@@ -505,7 +625,7 @@ describe("buildWorkflowGraphProjection", () => {
         {
           id: "route_by_kind",
           type: "builtin.switch",
-          value: "$.input.kind",
+          value: "$.workflowTrigger.input.kind",
           cases: [
             { id: "asset", value: "asset", nodes: [] },
             { id: "owner", value: "owner", nodes: ["owner_log"] },
@@ -536,8 +656,8 @@ describe("buildWorkflowGraphProjection", () => {
             { id: "uri", label: "URI", nodes: ["parse_uri"] },
           ],
         },
-        { id: "copy_asset", type: "builtin.transform" },
-        { id: "parse_uri", type: "builtin.transform" },
+        { id: "copy_asset", type: "builtin.transform.object_pick" },
+        { id: "parse_uri", type: "builtin.transform.object_pick" },
       ],
     });
 
@@ -606,8 +726,8 @@ describe("buildWorkflowGraphProjection", () => {
             { id: "uri", label: "URI", nodes: ["parse_uri"] },
           ],
         },
-        { id: "copy_asset", type: "builtin.transform" },
-        { id: "parse_uri", type: "builtin.transform" },
+        { id: "copy_asset", type: "builtin.transform.object_pick" },
+        { id: "parse_uri", type: "builtin.transform.object_pick" },
       ],
     });
 
@@ -651,8 +771,8 @@ describe("buildWorkflowGraphProjection", () => {
             { id: "uri", label: "URI", nodes: ["parse_uri"] },
           ],
         },
-        { id: "copy_asset", type: "builtin.transform" },
-        { id: "parse_uri", type: "builtin.transform" },
+        { id: "copy_asset", type: "builtin.transform.object_pick" },
+        { id: "parse_uri", type: "builtin.transform.object_pick" },
       ],
       layout: {
         nodes: {
@@ -710,8 +830,8 @@ describe("buildWorkflowGraphProjection", () => {
             { id: "uri", label: "URI", nodes: ["parse_uri"] },
           ],
         },
-        { id: "copy_asset", type: "builtin.transform" },
-        { id: "parse_uri", type: "builtin.transform" },
+        { id: "copy_asset", type: "builtin.transform.object_pick" },
+        { id: "parse_uri", type: "builtin.transform.object_pick" },
         { id: "notify", type: "builtin.log.info" },
       ],
     });
@@ -731,7 +851,7 @@ describe("buildWorkflowGraphProjection", () => {
     expect(graph.edges.map((edge) => edge.target)).not.toContain("notify");
   });
 
-  it("draws explicit route continuation edges when a branch list includes a merge card", () => {
+  it("draws explicit next continuation edges from parallel branch cards", () => {
     const graph = buildWorkflowGraphProjection({
       triggers: [],
       nodes: [
@@ -739,12 +859,16 @@ describe("buildWorkflowGraphProjection", () => {
           id: "parallel_enrichment",
           type: "builtin.parallel",
           branches: [
-            { id: "asset", label: "Asset", nodes: ["copy_asset", "notify"] },
+            { id: "asset", label: "Asset", nodes: ["copy_asset"] },
             { id: "uri", label: "URI", nodes: ["parse_uri"] },
           ],
         },
-        { id: "copy_asset", type: "builtin.transform" },
-        { id: "parse_uri", type: "builtin.transform" },
+        {
+          id: "copy_asset",
+          type: "builtin.transform.object_pick",
+          next: ["notify"],
+        },
+        { id: "parse_uri", type: "builtin.transform.object_pick" },
         { id: "notify", type: "builtin.log.info" },
       ],
     });
@@ -752,7 +876,7 @@ describe("buildWorkflowGraphProjection", () => {
     expect(graph.edges).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: "edge:route:parallel_enrichment:branch:asset:copy_asset:notify",
+          id: "edge:sequence:copy_asset:notify",
           source: "copy_asset",
           target: "notify",
           label: undefined,
@@ -768,14 +892,15 @@ describe("buildWorkflowGraphProjection", () => {
         {
           id: "parallel_enrichment",
           type: "builtin.parallel",
+          next: ["notify"],
           branches: [
             { id: "asset", label: "Asset", nodes: ["copy_asset"] },
             { id: "uri", label: "URI", nodes: ["parse_uri"] },
           ],
         },
         { id: "notify", type: "builtin.log.info" },
-        { id: "copy_asset", type: "builtin.transform" },
-        { id: "parse_uri", type: "builtin.transform" },
+        { id: "copy_asset", type: "builtin.transform.object_pick" },
+        { id: "parse_uri", type: "builtin.transform.object_pick" },
       ],
     });
 
@@ -797,7 +922,7 @@ describe("buildWorkflowGraphProjection", () => {
         {
           id: "route_by_kind",
           type: "builtin.switch",
-          value: "$.input.kind",
+          value: "$.workflowTrigger.input.kind",
           cases: [
             {
               id: "asset",
@@ -839,6 +964,61 @@ describe("buildWorkflowGraphProjection", () => {
     );
   });
 
+  it("does not connect switch default foreach routes to case routes", () => {
+    const graph = buildWorkflowGraphProjection({
+      triggers: [],
+      nodes: [
+        {
+          id: "route_by_kind",
+          type: "builtin.switch",
+          value: "$.workflowTrigger.input.kind",
+          cases: [
+            {
+              id: "asset",
+              label: "Asset",
+              value: "asset",
+              nodes: ["parallel_enrichment"],
+            },
+          ],
+          default: ["each_asset"],
+        },
+        {
+          id: "each_asset",
+          type: "builtin.foreach",
+          items: "$.workflowTrigger.input.assets",
+          itemVar: "asset",
+          body: [],
+        },
+        {
+          id: "parallel_enrichment",
+          type: "builtin.parallel",
+          branches: [
+            { id: "branch_a", label: "Branch A", nodes: [] },
+            { id: "branch_b", label: "Branch B", nodes: [] },
+          ],
+        },
+      ],
+    });
+
+    expect(graph.edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "edge:case:asset:route_by_kind:parallel_enrichment",
+          source: "route_by_kind",
+          target: "parallel_enrichment",
+        }),
+        expect.objectContaining({
+          id: "edge:default:route_by_kind:each_asset",
+          source: "route_by_kind",
+          target: "each_asset",
+        }),
+      ]),
+    );
+    expect(graph.edges.map((edge) => edge.id)).not.toContain(
+      "edge:sequence:each_asset:parallel_enrichment",
+    );
+  });
+
   it("connects parallel branches only to their first visible cards and sequences branch bodies", () => {
     const graph = buildWorkflowGraphProjection({
       triggers: [],
@@ -850,19 +1030,27 @@ describe("buildWorkflowGraphProjection", () => {
             {
               id: "asset",
               label: "Asset",
-              nodes: ["copy_asset", "score_asset"],
+              nodes: ["copy_asset"],
             },
             {
               id: "uri",
               label: "URI",
-              nodes: ["parse_uri", "score_uri"],
+              nodes: ["parse_uri"],
             },
           ],
         },
-        { id: "copy_asset", type: "builtin.transform" },
-        { id: "score_asset", type: "builtin.transform" },
-        { id: "parse_uri", type: "builtin.transform" },
-        { id: "score_uri", type: "builtin.transform" },
+        {
+          id: "copy_asset",
+          type: "builtin.transform.object_pick",
+          next: ["score_asset"],
+        },
+        { id: "score_asset", type: "builtin.transform.object_pick" },
+        {
+          id: "parse_uri",
+          type: "builtin.transform.object_pick",
+          next: ["score_uri"],
+        },
+        { id: "score_uri", type: "builtin.transform.object_pick" },
         { id: "notify", type: "builtin.log.info" },
       ],
     });
@@ -871,8 +1059,8 @@ describe("buildWorkflowGraphProjection", () => {
       expect.arrayContaining([
         "edge:branch:asset:parallel_enrichment:copy_asset",
         "edge:branch:uri:parallel_enrichment:parse_uri",
-        "edge:route:parallel_enrichment:branch:asset:copy_asset:score_asset",
-        "edge:route:parallel_enrichment:branch:uri:parse_uri:score_uri",
+        "edge:sequence:copy_asset:score_asset",
+        "edge:sequence:parse_uri:score_uri",
       ]),
     );
     expect(graph.edges.map((edge) => edge.id)).not.toEqual(
@@ -897,7 +1085,7 @@ describe("buildWorkflowGraphProjection", () => {
         {
           id: "branch",
           type: "builtin.if_else",
-          condition: "$.input.risky",
+          condition: "$.workflowTrigger.input.risky",
           then: ["missing_step"],
           else: ["exit"],
         },
@@ -929,5 +1117,79 @@ describe("buildWorkflowGraphProjection", () => {
         }),
       ]),
     );
+  });
+
+  it("places parallel branch tracks to the right of nearby foreach body groups", () => {
+    const graph = buildWorkflowGraphProjection({
+      triggers: [],
+      nodes: [
+        {
+          id: "each_asset",
+          type: "builtin.foreach",
+          items: "$.workflowTrigger.input.assets",
+          itemVar: "asset",
+          body: ["pick_asset"],
+          next: ["parallel_enrichment"],
+        },
+        {
+          id: "pick_asset",
+          type: "builtin.transform.object_pick",
+          next: ["log_asset"],
+        },
+        { id: "log_asset", type: "builtin.log.debug" },
+        {
+          id: "parallel_enrichment",
+          type: "builtin.parallel",
+          branches: [
+            {
+              id: "asset",
+              label: "Asset Parse",
+              nodes: ["parallel_asset_pick"],
+            },
+            { id: "uri", label: "URI Parse", nodes: ["parallel_uri_parse"] },
+            { id: "csv", label: "CSV Parse", nodes: ["parallel_csv_parse"] },
+          ],
+          next: ["wait_short"],
+        },
+        { id: "parallel_asset_pick", type: "builtin.transform.object_pick" },
+        { id: "parallel_uri_parse", type: "builtin.transform.uri_parse" },
+        { id: "parallel_csv_parse", type: "builtin.transform.csv_parse" },
+        {
+          id: "wait_short",
+          type: "builtin.sleep",
+          delayMs: 25,
+          next: ["done"],
+        },
+        { id: "done", type: "builtin.log.info" },
+      ],
+    });
+    const foreachGroup = graph.nodes.find(
+      (node) => node.id === "group:each_asset:body",
+    );
+    const firstParallelBranch = graph.nodes.find(
+      (node) => node.id === "parallel_asset_pick",
+    );
+    const parallelBranches = [
+      "parallel_asset_pick",
+      "parallel_uri_parse",
+      "parallel_csv_parse",
+    ]
+      .map((id) => graph.nodes.find((node) => node.id === id))
+      .filter((node): node is (typeof graph.nodes)[number] => Boolean(node));
+    const waitShort = graph.nodes.find((node) => node.id === "wait_short");
+    const done = graph.nodes.find((node) => node.id === "done");
+    expect(foreachGroup).toBeTruthy();
+    expect(firstParallelBranch).toBeTruthy();
+    expect(waitShort).toBeTruthy();
+    expect(done).toBeTruthy();
+    expect(firstParallelBranch!.position.x).toBeGreaterThan(
+      foreachGroup!.position.x + Number(foreachGroup!.style?.width ?? 0),
+    );
+    const branchBottom = Math.max(
+      ...parallelBranches.map((node) => node.position.y + 120),
+    );
+    expect(waitShort!.position.y).toBeGreaterThan(branchBottom);
+    expect(done!.position.y).toBeGreaterThan(waitShort!.position.y);
+    expect(done!.position.x).toBe(waitShort!.position.x);
   });
 });

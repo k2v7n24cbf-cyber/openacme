@@ -23,10 +23,11 @@ describe("Workflow foreach and Python steps (e2e)", () => {
         {
           id: "py_value",
           type: "builtin.python",
-          input: { value: "$.input.value" },
+          input: { value: "$.workflowTrigger.input.value" },
           code: "x = input['value'] * 2\nprint('value ready')\noutput = x",
           reset: true,
           timeoutMs: 5000,
+          next: ["py_isolated"],
           assign: {
             doubled: "$.steps.py_value.output.value",
           },
@@ -36,6 +37,7 @@ describe("Workflow foreach and Python steps (e2e)", () => {
           type: "builtin.python",
           code: "output = 'x' in globals()",
           timeoutMs: 5000,
+          next: ["each_value"],
           assign: {
             isolated: "$.steps.py_isolated.output.value",
           },
@@ -43,7 +45,7 @@ describe("Workflow foreach and Python steps (e2e)", () => {
         {
           id: "each_value",
           type: "builtin.foreach",
-          items: "$.input.values",
+          items: "$.workflowTrigger.input.values",
           body: ["py_each"],
           concurrency: 1,
         },

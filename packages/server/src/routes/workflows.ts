@@ -8,6 +8,8 @@ import {
   WorkflowNodeSchema,
   WorkflowRunner,
   WorkflowTriggerSchema,
+  validateWorkflowInputSchema,
+  validateWorkflowJsonSchema,
   validateWorkflowNodeReferences,
   validateWorkflowTriggers,
   type JsonValue,
@@ -155,6 +157,11 @@ export function registerWorkflowRoutes(
     if (!references.ok) return c.json({ error: references.message }, 400);
     const triggers = validateTriggers(body.value.triggers ?? []);
     if (!triggers.ok) return c.json({ error: triggers.message }, 400);
+    const schemas = validateInputSchemas(
+      body.value.inputSchema,
+      body.value.triggers ?? [],
+    );
+    if (!schemas.ok) return c.json({ error: schemas.message }, 400);
     try {
       const workflow = store.createDraft(body.value);
       return c.json({ workflow }, 201);
@@ -200,6 +207,15 @@ export function registerWorkflowRoutes(
       const triggers = validateTriggers(body.value.triggers);
       if (!triggers.ok) return c.json({ error: triggers.message }, 400);
     }
+    const current = store.getDefinition(id);
+    if (!current) return c.json({ error: "not_found" }, 404);
+    const schemas = validateInputSchemas(
+      body.value.inputSchema === null
+        ? undefined
+        : (body.value.inputSchema ?? current.inputSchema),
+      body.value.triggers ?? current.triggers,
+    );
+    if (!schemas.ok) return c.json({ error: schemas.message }, 400);
     try {
       return c.json({ workflow: store.updateDraft(id, body.value) });
     } catch (err) {
@@ -226,6 +242,11 @@ export function registerWorkflowRoutes(
     if (!references.ok) return c.json({ error: references.message }, 400);
     const triggers = validateTriggers(workflow.triggers);
     if (!triggers.ok) return c.json({ error: triggers.message }, 400);
+    const schemas = validateInputSchemas(
+      workflow.inputSchema,
+      workflow.triggers,
+    );
+    if (!schemas.ok) return c.json({ error: schemas.message }, 400);
     try {
       return c.json({ workflow: store.publish(id) });
     } catch (err) {
@@ -565,6 +586,7 @@ async function executeWorkflowRun(
     workflowId: args.definition.id,
     workflowVersion: args.definition.version,
     definitionSource: args.definitionSource,
+    definitionSnapshot: args.definition,
     mode: args.mode,
     trigger: args.trigger,
     input: args.input,
@@ -622,6 +644,7 @@ async function finishWorkflowRunExecution(
       runId: args.run.id,
       definition: args.definition,
       input: executionInputForRun(store, args.run),
+      trigger: args.run.trigger,
       signal: args.abortController.signal,
     });
   } catch (err) {
@@ -902,124 +925,37 @@ function validateTriggers(triggers: WorkflowDefinition["triggers"]) {
   return validateWorkflowTriggers(triggers);
 }
 
-function validateWorkflowInputSchema(
-  schema: JsonValue | undefined,
-  input: JsonValue,
-  label = "Input",
-): { ok: true } | { ok: false; error: string } {
-  if (schema === undefined || schema === null || schema === true) {
-    return { ok: true };
-  }
-  if (schema === false) {
-    return {
-      ok: false,
-      error: `${label} does not match schema: $ is disallowed`,
-    };
-  }
-  if (!isRecord(schema)) return { ok: true };
-  const issue = validateJsonSchemaValue(schema, input, "$");
-  return issue
-    ? { ok: false, error: `${label} does not match schema: ${issue}` }
-    : { ok: true };
-}
+function validateInputSchemas(
+  inputSchema: JsonValue | undefined,
+  triggers: WorkflowDefinition["triggers"],
+): { ok: true } | { ok: false; message: string } {
+  const workflowSchema = validateWorkflowJsonSchema(inputSchema);
+  if (!workflowSchema.ok) return { ok: false, message: workflowSchema.message };
 
-function validateJsonSchemaValue(
-  schema: Record<string, unknown>,
-  value: JsonValue,
-  path: string,
-): string | null {
-  if ("const" in schema && !jsonEquals(value, schema.const)) {
-    return `${path} must equal ${JSON.stringify(schema.const)}`;
-  }
-  if (
-    Array.isArray(schema.enum) &&
-    !schema.enum.some((item) => jsonEquals(value, item))
-  ) {
-    return `${path} must be one of ${JSON.stringify(schema.enum)}`;
-  }
-  const typeIssue = validateJsonSchemaType(schema.type, value, path);
-  if (typeIssue) return typeIssue;
-
-  if (isRecord(value)) {
-    const required = Array.isArray(schema.required)
-      ? schema.required.filter(
-          (item): item is string => typeof item === "string",
-        )
-      : [];
-    for (const key of required) {
-      if (!(key in value)) return `${path}.${key} is required`;
-    }
-    const properties = isRecord(schema.properties) ? schema.properties : {};
-    for (const [key, childSchema] of Object.entries(properties)) {
-      if (!(key in value) || !isRecord(childSchema)) continue;
-      const issue = validateJsonSchemaValue(
-        childSchema,
-        value[key] as JsonValue,
-        `${path}.${key}`,
-      );
-      if (issue) return issue;
-    }
-    if (schema.additionalProperties === false) {
-      const allowed = new Set(Object.keys(properties));
-      const extra = Object.keys(value).find((key) => !allowed.has(key));
-      if (extra) return `${path}.${extra} is not allowed`;
+  for (const trigger of triggers) {
+    const triggerSchema = validateWorkflowJsonSchema(
+      triggerInputSchema(trigger),
+      `Trigger ${trigger.id} input schema`,
+    );
+    if (!triggerSchema.ok) {
+      return { ok: false, message: triggerSchema.message };
     }
   }
-
-  if (Array.isArray(value) && isRecord(schema.items)) {
-    for (let index = 0; index < value.length; index += 1) {
-      const issue = validateJsonSchemaValue(
-        schema.items,
-        value[index] as JsonValue,
-        `${path}[${index}]`,
-      );
-      if (issue) return issue;
-    }
-  }
-
-  return null;
-}
-
-function validateJsonSchemaType(
-  type: unknown,
-  value: JsonValue,
-  path: string,
-): string | null {
-  if (type === undefined) return null;
-  const allowed = Array.isArray(type)
-    ? type.filter((item): item is string => typeof item === "string")
-    : typeof type === "string"
-      ? [type]
-      : [];
-  if (allowed.length === 0) return null;
-  return allowed.some((item) => jsonSchemaTypeMatches(item, value))
-    ? null
-    : `${path} must be ${allowed.join("|")}`;
-}
-
-function jsonSchemaTypeMatches(type: string, value: JsonValue): boolean {
-  if (type === "null") return value === null;
-  if (type === "array") return Array.isArray(value);
-  if (type === "object") return isRecord(value);
-  if (type === "string") return typeof value === "string";
-  if (type === "boolean") return typeof value === "boolean";
-  if (type === "number")
-    return typeof value === "number" && Number.isFinite(value);
-  if (type === "integer")
-    return typeof value === "number" && Number.isInteger(value);
-  return true;
-}
-
-function jsonEquals(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  return { ok: true };
 }
 
 function getRunDetail(store: WorkflowStore, id: string) {
   const run = store.getRun(id);
   if (!run) return null;
   healTerminalRunStepAttemptsFromEvents(store, run);
+  const definition =
+    run.definitionSnapshot ??
+    (run.definitionSource === "published"
+      ? store.getVersion(run.workflowId, run.workflowVersion)
+      : store.getDefinition(run.workflowId));
   return {
     run,
+    ...(definition ? { definition } : {}),
     steps: store.listStepAttempts(id),
     events: store.listRunEvents(id),
     artifacts: store.listArtifacts(id),

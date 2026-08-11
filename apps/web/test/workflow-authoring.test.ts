@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { WorkflowNodeSchema } from "../../../packages/workflows/src/schemas";
 import {
   appendWorkflowNode,
   cloneWorkflowNodeAfter,
@@ -6,30 +8,100 @@ import {
   insertWorkflowNodeAfter,
   insertWorkflowNodeFirst,
   moveWorkflowNode,
+  moveWorkflowNodeAfter,
   removeWorkflowNode,
+  renameWorkflowNodeId,
   setWorkflowForeachBodyFirst,
+  uniqueWorkflowNodeIdFromLabel,
+  workflowNodeIdFromLabel,
   workflowTransformPresetById,
   WORKFLOW_TRANSFORM_PRESETS,
+  type WorkflowPaletteKind,
 } from "@/app/workflows/authoring";
 
 describe("workflow authoring helpers", () => {
+  it("keeps the workflow route node-shape validator aligned with supported node types", () => {
+    const routeSource = readFileSync(
+      new URL("../app/routes/workflows.tsx", import.meta.url),
+      "utf8",
+    );
+    const schemaSource = readFileSync(
+      new URL("../../../packages/workflows/src/schemas.ts", import.meta.url),
+      "utf8",
+    );
+    const validatorSource = routeSource.slice(
+      routeSource.indexOf("function validateImportedNodeShape"),
+      routeSource.indexOf("function validateExportedNodeShape"),
+    );
+    const schemaTypes = workflowNodeTypesFromSchemaSource(schemaSource);
+    const validatorTypes = workflowNodeTypesFromValidatorSource(validatorSource);
+
+    expect(validatorTypes).toEqual(schemaTypes);
+  });
+
+  it("creates schema-compatible node defaults for every palette kind", () => {
+    const kinds: WorkflowPaletteKind[] = [
+      "set",
+      "transform",
+      "if",
+      "switch",
+      "log",
+      "throw_error",
+      "sleep",
+      "exit",
+      "foreach",
+      "parallel",
+      "python",
+      "mcp",
+      "agent",
+    ];
+
+    for (const [index, kind] of kinds.entries()) {
+      const transformPresetId = kind === "transform" ? "value.resolve" : undefined;
+      const node = createWorkflowNodeTemplate(kind, index + 1, {
+        server: "demo/server",
+        tool: "echo",
+        id: "demo-agent",
+      }, transformPresetId);
+      if (kind === "if") {
+        expect(node).toMatchObject({
+          type: "builtin.if",
+          condition: "",
+        });
+        continue;
+      }
+      if (kind === "foreach") {
+        expect(node).toMatchObject({
+          type: "builtin.foreach",
+          items: "",
+        });
+        continue;
+      }
+      const parsed = WorkflowNodeSchema.safeParse(node);
+      expect(
+        parsed.success,
+        `${kind} template should satisfy WorkflowNodeSchema`,
+      ).toBe(true);
+    }
+  });
+
   it("creates representative node defaults", () => {
     expect(createWorkflowNodeTemplate("set", 1)).toEqual({
       id: "set_01",
       type: "builtin.set",
-      assign: { value: "$.input.value" },
+      assign: { value: "$.workflowTrigger.input.value" },
     });
     expect(createWorkflowNodeTemplate("if", 2)).toEqual({
       id: "if_02",
       type: "builtin.if",
-      condition: "$.input.enabled == true",
+      condition: "",
       then: [],
       else: [],
     });
     expect(createWorkflowNodeTemplate("foreach", 3)).toEqual({
       id: "foreach_03",
       type: "builtin.foreach",
-      items: "$.input.items",
+      items: "",
       itemVar: "item",
       body: [],
       concurrency: 1,
@@ -123,7 +195,7 @@ describe("workflow authoring helpers", () => {
 
   it("inserts a selected trigger child as the first workflow node", () => {
     const nodes = [
-      { id: "normalize", type: "builtin.transform" },
+      { id: "normalize", type: "builtin.transform.object_pick" },
       { id: "exit", type: "builtin.exit" },
     ];
 
@@ -154,8 +226,8 @@ describe("workflow authoring helpers", () => {
       [
         {
           id: "transform_02",
-          type: "builtin.transform",
-          transform: "$.steps.transform_02.output",
+          type: "builtin.transform.object_pick",
+          transform: "$.steps.transform_02.output.value",
           assign: {
             value: {
               from: "$.steps.transform_02.output.value",
@@ -163,7 +235,7 @@ describe("workflow authoring helpers", () => {
             },
           },
         },
-        { id: "transform_02_copy", type: "builtin.transform" },
+        { id: "transform_02_copy", type: "builtin.transform.object_pick" },
       ],
       "transform_02",
     );
@@ -176,7 +248,7 @@ describe("workflow authoring helpers", () => {
     ]);
     expect(result?.nodes[1]).toMatchObject({
       id: "transform_02_copy_2",
-      transform: "$.steps.transform_02_copy_2.output",
+      transform: "$.steps.transform_02_copy_2.output.value",
       assign: {
         value: {
           from: "$.steps.transform_02_copy_2.output.value",
@@ -184,6 +256,79 @@ describe("workflow authoring helpers", () => {
         },
       },
     });
+  });
+
+  it("renames a workflow step id and rewrites routes plus step references", () => {
+    const renamed = renameWorkflowNodeId(
+      [
+        {
+          id: "gate",
+          type: "builtin.if",
+          then: ["normalize"],
+          else: ["log_done"],
+        },
+        {
+          id: "normalize",
+          type: "builtin.transform.object_pick",
+          assign: {
+            normalized: "$.steps.normalize.output.value",
+          },
+        },
+        {
+          id: "log_done",
+          type: "builtin.log.info",
+          payload: "$.steps.normalize.output.value.id",
+        },
+      ],
+      "normalize",
+      "normalize_customer",
+    );
+
+    expect(renamed).not.toBeNull();
+    expect(renamed?.[0]).toMatchObject({
+      then: ["normalize_customer"],
+      else: ["log_done"],
+    });
+    expect(renamed?.[1]).toMatchObject({
+      id: "normalize_customer",
+      assign: {
+        normalized: "$.steps.normalize_customer.output.value",
+      },
+    });
+    expect(renamed?.[2]).toMatchObject({
+      payload: "$.steps.normalize_customer.output.value.id",
+    });
+  });
+
+  it("derives human-readable unique step ids from labels", () => {
+    expect(workflowNodeIdFromLabel("Fetch Qualys Assets")).toBe(
+      "fetch_qualys_assets",
+    );
+    expect(workflowNodeIdFromLabel("  Fetch Qualys Assets  ")).toBe(
+      "fetch_qualys_assets",
+    );
+    expect(workflowNodeIdFromLabel("Normalize: Customer #1")).toBe(
+      "normalize_customer_1",
+    );
+    expect(workflowNodeIdFromLabel("  --!!!  ")).toBe("");
+    expect(
+      uniqueWorkflowNodeIdFromLabel(
+        [
+          { id: "fetch_qualys_assets", type: "builtin.log.info" },
+          { id: "fetch_qualys_assets_2", type: "builtin.log.info" },
+          { id: "current", type: "builtin.log.info" },
+        ],
+        "current",
+        "Fetch Qualys Assets",
+      ),
+    ).toBe("fetch_qualys_assets_3");
+    expect(
+      uniqueWorkflowNodeIdFromLabel(
+        [{ id: "fetch_qualys_assets", type: "builtin.log.info" }],
+        "fetch_qualys_assets",
+        "Fetch Qualys Assets",
+      ),
+    ).toBe("fetch_qualys_assets");
   });
 
   it("removes a node and prunes branch references to it", () => {
@@ -273,7 +418,7 @@ describe("workflow authoring helpers", () => {
           type: "builtin.foreach",
           body: ["normalize", "score", "log"],
         },
-        { id: "normalize", type: "builtin.transform" },
+        { id: "normalize", type: "builtin.transform.object_pick" },
         { id: "score", type: "agent.call" },
         { id: "log", type: "builtin.log.info" },
       ],
@@ -288,8 +433,31 @@ describe("workflow authoring helpers", () => {
     });
   });
 
+  it("moves a node after another node for explicit sequence connections", () => {
+    expect(
+      moveWorkflowNodeAfter(
+        [
+          { id: "start", type: "builtin.log.info", message: "start" },
+          {
+            id: "branch",
+            type: "builtin.if_else",
+            condition: "$.workflowTrigger.input.enabled",
+            then: ["then_log"],
+            else: [],
+          },
+          { id: "target", type: "builtin.log.info", message: "target" },
+          { id: "then_log", type: "builtin.log.info", message: "then" },
+        ],
+        "target",
+        "start",
+      )?.map((node) => node.id),
+    ).toEqual(["start", "target", "branch", "then_log"]);
+  });
+
   it("exposes transform operation presets with runnable default payloads", () => {
     expect(WORKFLOW_TRANSFORM_PRESETS.map((preset) => preset.id)).toEqual([
+      "value.resolve",
+      "object_pick",
       "string.replace",
       "string.regex_replace",
       "string.regex_match",
@@ -305,28 +473,79 @@ describe("workflow authoring helpers", () => {
       "ip.network",
       "uri.parse",
     ]);
+    expect(workflowTransformPresetById("value.resolve")?.transform).toEqual({
+      kind: "value.resolve",
+      value: "$.workflowTrigger.input.value",
+    });
+    expect(workflowTransformPresetById("object_pick")?.transform).toEqual({
+      kind: "object_pick",
+      source: "value",
+      fields: ["id", "name"],
+    });
     expect(workflowTransformPresetById("string.replace")?.transform).toEqual({
       kind: "string.replace",
-      value: "$.input.value",
+      value: "$.workflowTrigger.input.value",
       search: "old",
       replacement: "new",
       all: true,
     });
     expect(workflowTransformPresetById("csv.parse")?.transform).toEqual({
       kind: "csv.parse",
-      value: "$.input.csv",
+      value: "$.workflowTrigger.input.csv",
       headers: true,
       maxRows: 10000,
     });
     expect(workflowTransformPresetById("ip.in_subnet")?.transform).toEqual({
       kind: "ip.in_subnet",
-      value: "$.input.ip",
+      value: "$.workflowTrigger.input.ip",
       cidr: "10.0.0.0/8",
     });
     expect(workflowTransformPresetById("uri.parse")?.transform).toEqual({
       kind: "uri.parse",
-      value: "$.input.url",
+      value: "$.workflowTrigger.input.url",
     });
     expect(workflowTransformPresetById("missing")).toBeUndefined();
   });
 });
+
+function workflowNodeTypesFromSchemaSource(source: string): string[] {
+  const literalTypes = [...source.matchAll(/type:\s*z\.literal\("([^"]+)"\)/g)]
+    .map((match) => match[1])
+    .filter(isWorkflowNodeType);
+  const enumTypes = [
+    ...source.matchAll(/type:\s*z\.enum\(\[([\s\S]*?)\]\)/g),
+  ].flatMap((match) =>
+    [...(match[1] ?? "").matchAll(/"([^"]+)"/g)]
+      .map((enumMatch) => enumMatch[1])
+      .filter(isWorkflowNodeType),
+  );
+  return uniqueSorted([...literalTypes, ...enumTypes]);
+}
+
+function workflowNodeTypesFromValidatorSource(source: string): string[] {
+  const directTypes = [...source.matchAll(/type\s*===\s*"([^"]+)"/g)]
+    .map((match) => match[1])
+    .filter(isWorkflowNodeType);
+  const logTypes = source.includes("isLogNodeType(type)")
+    ? [
+        "builtin.log.debug",
+        "builtin.log.error",
+        "builtin.log.info",
+        "builtin.log.warn",
+      ]
+    : [];
+  return uniqueSorted([...directTypes, ...logTypes]);
+}
+
+function isWorkflowNodeType(value: string | undefined): value is string {
+  return (
+    typeof value === "string" &&
+    (value.startsWith("builtin.") ||
+      value === "mcp.tool" ||
+      value === "agent.call")
+  );
+}
+
+function uniqueSorted(values: string[]): string[] {
+  return [...new Set(values)].sort();
+}

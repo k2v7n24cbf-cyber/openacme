@@ -122,6 +122,7 @@ describe("database clean bootstrap", () => {
           "workflow_id",
           "workflow_version",
           "definition_source",
+          "definition_snapshot_json",
           "mode",
           "trigger_json",
           "status",

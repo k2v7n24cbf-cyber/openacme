@@ -76,7 +76,7 @@ describe("ServerRuntime", () => {
           id: "exit",
           type: "builtin.exit",
           status: "succeeded",
-          output: "$.input.source",
+          output: "$.workflowTrigger.input.source",
         },
       ],
     });

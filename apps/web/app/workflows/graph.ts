@@ -1,5 +1,9 @@
 import dagre from "@dagrejs/dagre";
 import { MarkerType, Position, type Edge, type Node } from "@xyflow/react";
+import {
+  isWorkflowTransformNodeType,
+  workflowTransformPresetForNodeType,
+} from "./authoring";
 
 export interface WorkflowGraphNode {
   id: string;
@@ -59,6 +63,7 @@ export interface WorkflowCanvasLayout {
 
 export interface WorkflowCanvasLayoutNode {
   position?: WorkflowCanvasPosition;
+  detached?: boolean;
 }
 
 export interface WorkflowCanvasPosition {
@@ -196,25 +201,18 @@ export function buildWorkflowGraphProjection({
     });
   });
 
-  for (let index = 0; index < visibleWorkflowNodes.length - 1; index += 1) {
-    const source = visibleWorkflowNodes[index];
-    const target = visibleWorkflowNodes[index + 1];
-    if (!source || !target) continue;
-    if (nodeSourceHandles(source).length > 0) continue;
-    if (
-      isReferenceGroupNode(source.id, referenceGroups) ||
-      isReferenceGroupNode(target.id, referenceGroups)
-    ) {
-      continue;
+  for (const source of visibleWorkflowNodes) {
+    for (const targetId of referenceNodeIds(source.next, hiddenNodeIds)) {
+      if (!visibleNodeIds.has(targetId)) continue;
+      addEdge(projectionEdges, {
+        id: `edge:sequence:${source.id}:${targetId}`,
+        source: source.id,
+        target: targetId,
+        label: "next",
+        kind: "sequence",
+      });
+      graph.setEdge(source.id, targetId);
     }
-    addEdge(projectionEdges, {
-      id: `edge:sequence:${source.id}:${target.id}`,
-      source: source.id,
-      target: target.id,
-      label: "next",
-      kind: "sequence",
-    });
-    graph.setEdge(source.id, target.id);
   }
 
   for (const node of nodes) {
@@ -377,27 +375,6 @@ export function buildWorkflowGraphProjection({
     }
   }
 
-  addParallelJoinEdges({
-    graph,
-    projectionEdges,
-    visibleWorkflowNodes,
-    referenceGroups,
-  });
-
-  addForeachContinuationEdges({
-    graph,
-    projectionEdges,
-    visibleWorkflowNodes,
-    referenceGroups,
-  });
-
-  addReferenceGroupSequenceEdges({
-    graph,
-    projectionEdges,
-    visibleNodeIds,
-    referenceGroups,
-  });
-
   dagre.layout(graph);
 
   const positioned = projectionNodes.map((node) => {
@@ -424,8 +401,8 @@ export function buildWorkflowGraphProjection({
   });
 
   return {
-    nodes: applyForeachBodyPositions({
-      nodes: applyParallelTrackPositions({
+    nodes: applyParallelTrackPositions({
+      nodes: applyForeachBodyPositions({
         nodes: applyRouteAwareDefaultPositions({
           nodes: positioned,
           referenceGroups,
@@ -456,38 +433,61 @@ function workflowReferenceGroups(
   hiddenNodeIds: Set<string>,
 ): WorkflowReferenceGroup[] {
   const groups: WorkflowReferenceGroup[] = [];
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
   for (const node of nodes) {
+    const stopNodeIds = new Set(referenceNodeIds(node.next, hiddenNodeIds));
     if (node.type === "builtin.if" || node.type === "builtin.if_else") {
       groups.push(
-        referenceGroup(node.id, "then", node.then, hiddenNodeIds),
-        referenceGroup(node.id, "else", node.else, hiddenNodeIds),
+        referenceGroup(node.id, "then", node.then, {
+          hiddenNodeIds,
+          nodeById,
+          stopNodeIds,
+        }),
+        referenceGroup(node.id, "else", node.else, {
+          hiddenNodeIds,
+          nodeById,
+          stopNodeIds,
+        }),
       );
       continue;
     }
     if (node.type === "builtin.foreach") {
-      groups.push(referenceGroup(node.id, "body", node.body, hiddenNodeIds));
+      groups.push(
+        referenceGroup(node.id, "body", node.body, {
+          hiddenNodeIds,
+          nodeById,
+          stopNodeIds,
+        }),
+      );
       continue;
     }
     if (node.type === "builtin.switch") {
       for (const item of switchCases(node)) {
         groups.push(
-          referenceGroup(node.id, `case:${item.id}`, item.nodes, hiddenNodeIds),
+          referenceGroup(node.id, `case:${item.id}`, item.nodes, {
+            hiddenNodeIds,
+            nodeById,
+            stopNodeIds,
+          }),
         );
       }
       groups.push(
-        referenceGroup(node.id, "default", node.default, hiddenNodeIds),
+        referenceGroup(node.id, "default", node.default, {
+          hiddenNodeIds,
+          nodeById,
+          stopNodeIds,
+        }),
       );
       continue;
     }
     if (node.type === "builtin.parallel") {
       for (const branch of parallelBranches(node)) {
         groups.push(
-          referenceGroup(
-            node.id,
-            `branch:${branch.id}`,
-            branch.nodes,
+          referenceGroup(node.id, `branch:${branch.id}`, branch.nodes, {
             hiddenNodeIds,
-          ),
+            nodeById,
+            stopNodeIds,
+          }),
         );
       }
     }
@@ -499,13 +499,45 @@ function referenceGroup(
   parentId: string,
   groupId: string,
   targets: unknown,
-  hiddenNodeIds: Set<string>,
+  opts: {
+    hiddenNodeIds: Set<string>;
+    nodeById: Map<string, WorkflowGraphNode>;
+    stopNodeIds: Set<string>;
+  },
 ): WorkflowReferenceGroup {
   return {
     parentId,
     groupId,
-    nodeIds: referenceNodeIds(targets, hiddenNodeIds),
+    nodeIds: expandReferenceGroupNodeIds(targets, opts),
   };
+}
+
+function expandReferenceGroupNodeIds(
+  targets: unknown,
+  opts: {
+    hiddenNodeIds: Set<string>;
+    nodeById: Map<string, WorkflowGraphNode>;
+    stopNodeIds: Set<string>;
+  },
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const visit = (nodeId: string) => {
+    if (seen.has(nodeId)) return;
+    if (opts.hiddenNodeIds.has(nodeId)) return;
+    if (opts.stopNodeIds.has(nodeId)) return;
+    const node = opts.nodeById.get(nodeId);
+    if (!node) return;
+    seen.add(nodeId);
+    out.push(nodeId);
+    for (const nextId of referenceNodeIds(node.next, opts.hiddenNodeIds)) {
+      visit(nextId);
+    }
+  };
+  for (const nodeId of referenceNodeIds(targets, opts.hiddenNodeIds)) {
+    visit(nodeId);
+  }
+  return out;
 }
 
 function referenceNodeIds(
@@ -524,6 +556,13 @@ function isReferenceGroupNode(
   groups: WorkflowReferenceGroup[],
 ): boolean {
   return groups.some((group) => group.nodeIds.includes(nodeId));
+}
+
+function isDetachedCanvasNode(
+  nodeId: string,
+  layout?: WorkflowCanvasLayout | null,
+): boolean {
+  return layout?.nodes?.[nodeId]?.detached === true;
 }
 
 function addReferenceGroupSequenceEdges({
@@ -571,6 +610,7 @@ function addParallelJoinEdges({
 }) {
   for (const node of visibleWorkflowNodes) {
     if (node.type !== "builtin.parallel") continue;
+    if (isReferenceGroupMember(node.id, referenceGroups)) continue;
     const sourceIndex = visibleWorkflowNodes.findIndex(
       (item) => item.id === node.id,
     );
@@ -606,6 +646,7 @@ function addForeachContinuationEdges({
 }) {
   for (const node of visibleWorkflowNodes) {
     if (node.type !== "builtin.foreach") continue;
+    if (isReferenceGroupMember(node.id, referenceGroups)) continue;
     const sourceIndex = visibleWorkflowNodes.findIndex(
       (item) => item.id === node.id,
     );
@@ -662,6 +703,13 @@ function canSequenceAdjacentNodes(
     }
   }
   return true;
+}
+
+function isReferenceGroupMember(
+  nodeId: string,
+  groups: WorkflowReferenceGroup[],
+): boolean {
+  return groups.some((group) => group.nodeIds.includes(nodeId));
 }
 
 function hasEdge(
@@ -758,7 +806,11 @@ function applyParallelTrackPositions({
     const branches = parallelBranches(definition);
     if (branches.length === 0) continue;
     const parentWidth = workflowCanvasNodeWidth(node);
-    const trackX = node.position.x + parentWidth + PARALLEL_TRACK_X_GAP;
+    const trackX = Math.max(
+      node.position.x + parentWidth + PARALLEL_TRACK_X_GAP,
+      protectedLayoutRightForHorizontalTracks(nextById, node) +
+        PARALLEL_TRACK_X_GAP,
+    );
     branches.forEach((branch, branchIndex) => {
       const group = referenceGroups.find(
         (item) =>
@@ -799,31 +851,38 @@ function applyParallelTrackPositions({
         });
       });
     });
-    const sourceIndex = nodes.findIndex((item) => item.id === node.id);
-    const target = parallelContinuationTarget({
-      sourceId: node.id,
-      sourceIndex,
-      visibleWorkflowNodes: nodes.map((item) => ({
-        id: item.id,
-        type: String(item.data.type),
-      })),
-      referenceGroups,
+    const branchNodeIds = branches.flatMap((branch) => {
+      const group = referenceGroups.find(
+        (item) =>
+          item.parentId === node.id && item.groupId === `branch:${branch.id}`,
+      );
+      return group?.nodeIds ?? [];
     });
-    if (target && !persistedNodeIds.has(target.id)) {
-      const current = nextById.get(target.id);
+    const targetId = referenceNodeIds(definition.next, new Set())[0];
+    if (targetId && !persistedNodeIds.has(targetId)) {
+      const current = nextById.get(targetId);
       if (current) {
         const width = workflowCanvasNodeWidth(current);
+        const branchBounds = boundsForNodeIds(nextById, branchNodeIds);
         const position = {
           x: node.position.x + parentWidth / 2 - width / 2,
           y:
-            node.position.y +
-            parallelBranchVisualHeight(branches.length) +
-            PARALLEL_NEXT_Y_GAP,
+            Math.max(
+              node.position.y + parallelBranchVisualHeight(branches.length),
+              branchBounds?.bottom ?? Number.NEGATIVE_INFINITY,
+            ) + PARALLEL_NEXT_Y_GAP,
         };
-        nextById.set(target.id, {
+        nextById.set(targetId, {
           ...current,
           position,
           data: { ...current.data, canvasPosition: position },
+        });
+        applyVerticalContinuationPositions({
+          nodesById: nextById,
+          workflowNodeById,
+          startId: targetId,
+          persistedNodeIds,
+          blockedNodeIds: new Set(branchNodeIds),
         });
       }
     }
@@ -945,18 +1004,9 @@ function applyForeachBodyPositions({
       }
     }
 
-    const sourceIndex = nodes.findIndex((item) => item.id === node.id);
-    const target = foreachContinuationTarget({
-      sourceId: node.id,
-      sourceIndex,
-      visibleWorkflowNodes: nodes.map((item) => ({
-        id: item.id,
-        type: String(item.data.type),
-      })),
-      referenceGroups,
-    });
-    if (target && !persistedNodeIds.has(target.id)) {
-      const current = nextById.get(target.id);
+    const targetId = referenceNodeIds(definition.next, new Set())[0];
+    if (targetId && !persistedNodeIds.has(targetId)) {
+      const current = nextById.get(targetId);
       if (current) {
         const width = workflowCanvasNodeWidth(current);
         const bodyNodes = group.nodeIds
@@ -966,13 +1016,14 @@ function applyForeachBodyPositions({
           bodyNodes.reduce(
             (total, bodyNode) => total + renderedBodyHeight(bodyNode),
             0,
-          ) + Math.max(0, bodyNodes.length - 1) * FOREACH_BODY_NODE_GAP;
+          ) +
+          Math.max(0, bodyNodes.length - 1) * FOREACH_BODY_NODE_GAP;
         const position = {
           x: node.position.x + parentWidth / 2 - width / 2,
           y:
             node.position.y + Math.max(STEP_H, bodyHeight) + FOREACH_NEXT_Y_GAP,
         };
-        nextById.set(target.id, {
+        nextById.set(targetId, {
           ...current,
           position,
           data: { ...current.data, canvasPosition: position },
@@ -1008,6 +1059,105 @@ function parallelContinuationTarget({
       .flatMap((group) => group.nodeIds),
   );
   return branchNodeIds.has(candidate.id) ? undefined : candidate;
+}
+
+function protectedLayoutRightForHorizontalTracks(
+  nodesById: Map<string, WorkflowCanvasNode>,
+  parentNode: WorkflowCanvasNode,
+): number {
+  let right = parentNode.position.x + workflowCanvasNodeWidth(parentNode);
+  const parentTop = parentNode.position.y;
+  const parentBottom = parentTop + workflowCanvasNodeHeight(parentNode);
+  for (const node of nodesById.values()) {
+    if (node.data.kind !== "group") continue;
+    const top = node.position.y;
+    const bottom = top + workflowCanvasNodeHeight(node);
+    if (
+      !rangesOverlap(
+        parentTop - STEP_RENDERED_H,
+        parentBottom + STEP_RENDERED_H,
+        top,
+        bottom,
+      )
+    ) {
+      continue;
+    }
+    right = Math.max(right, node.position.x + workflowCanvasNodeWidth(node));
+  }
+  return right;
+}
+
+function rangesOverlap(
+  firstStart: number,
+  firstEnd: number,
+  secondStart: number,
+  secondEnd: number,
+): boolean {
+  return firstStart <= secondEnd && secondStart <= firstEnd;
+}
+
+function boundsForNodeIds(
+  nodesById: Map<string, WorkflowCanvasNode>,
+  nodeIds: string[],
+): { left: number; top: number; right: number; bottom: number } | null {
+  const nodes = nodeIds
+    .map((nodeId) => nodesById.get(nodeId))
+    .filter((node): node is WorkflowCanvasNode => Boolean(node));
+  if (nodes.length === 0) return null;
+  return {
+    left: Math.min(...nodes.map((node) => node.position.x)),
+    top: Math.min(...nodes.map((node) => node.position.y)),
+    right: Math.max(
+      ...nodes.map((node) => node.position.x + workflowCanvasNodeWidth(node)),
+    ),
+    bottom: Math.max(
+      ...nodes.map((node) => node.position.y + workflowCanvasNodeHeight(node)),
+    ),
+  };
+}
+
+function applyVerticalContinuationPositions({
+  nodesById,
+  workflowNodeById,
+  startId,
+  persistedNodeIds,
+  blockedNodeIds,
+}: {
+  nodesById: Map<string, WorkflowCanvasNode>;
+  workflowNodeById: Map<string, WorkflowGraphNode>;
+  startId: string;
+  persistedNodeIds: Set<string>;
+  blockedNodeIds: Set<string>;
+}) {
+  let sourceId = startId;
+  const seen = new Set<string>([startId]);
+  while (true) {
+    const sourceNode = nodesById.get(sourceId);
+    const sourceDefinition = workflowNodeById.get(sourceId);
+    const targetId = referenceNodeIds(sourceDefinition?.next, new Set())[0];
+    if (!sourceNode || !targetId || seen.has(targetId)) return;
+    if (persistedNodeIds.has(targetId) || blockedNodeIds.has(targetId)) return;
+    const targetNode = nodesById.get(targetId);
+    if (!targetNode) return;
+    const targetWidth = workflowCanvasNodeWidth(targetNode);
+    const position = {
+      x:
+        sourceNode.position.x +
+        workflowCanvasNodeWidth(sourceNode) / 2 -
+        targetWidth / 2,
+      y:
+        sourceNode.position.y +
+        workflowCanvasNodeHeight(sourceNode) +
+        PARALLEL_NEXT_Y_GAP,
+    };
+    nodesById.set(targetId, {
+      ...targetNode,
+      position,
+      data: { ...targetNode.data, canvasPosition: position },
+    });
+    seen.add(targetId);
+    sourceId = targetId;
+  }
 }
 
 function foreachContinuationTarget({
@@ -1252,11 +1402,15 @@ function addEdge(
     style: {
       stroke,
       strokeWidth:
-        input.kind === "sequence" || input.kind.startsWith("route:")
+        input.kind === "sequence" ||
+        input.kind === "trigger" ||
+        input.kind.startsWith("route:")
           ? 1.6
           : 1.8,
       strokeDasharray:
-        input.kind === "sequence" || input.kind.startsWith("route:")
+        input.kind === "sequence" ||
+        input.kind === "trigger" ||
+        input.kind.startsWith("route:")
           ? undefined
           : "4 3",
     },
@@ -1338,7 +1492,9 @@ function nodeBadges(node: WorkflowGraphNode): string[] {
     const cases = switchCases(node);
     badges.push(`${cases.length} ${cases.length === 1 ? "case" : "cases"}`);
   }
-  if (isRecord(node.assign)) badges.push("Stores output");
+  if (node.type === "builtin.set" && isRecord(node.assign)) {
+    badges.push("Stores context");
+  }
   return badges;
 }
 
@@ -1346,8 +1502,8 @@ function nodeSummary(node: WorkflowGraphNode): string | undefined {
   if (node.type === "builtin.set") {
     return assignmentSummary(node.assign, "Save");
   }
-  if (node.type === "builtin.transform") {
-    return assignmentSummary(node.assign, "Transform into");
+  if (isWorkflowTransformNodeType(node.type)) {
+    return `${workflowTransformPresetForNodeType(node.type)?.label ?? "Transformer"} input`;
   }
   if (node.type === "builtin.if" || node.type === "builtin.if_else") {
     const condition =
@@ -1387,9 +1543,7 @@ function nodeSummary(node: WorkflowGraphNode): string | undefined {
       : "Wait before next step";
   }
   if (node.type === "builtin.python") {
-    return (
-      assignmentSummary(node.assign, "Run Python into") ?? "Run Python code"
-    );
+    return "Run Python code";
   }
   if (node.type === "mcp.tool") {
     const server = typeof node["server"] === "string" ? node["server"] : "";
@@ -1422,7 +1576,11 @@ function nodeDisplayLabel(node: WorkflowGraphNode): string {
 
 function nodeTypeLabel(node: WorkflowGraphNode): string {
   if (node.type === "builtin.set") return "Set variable";
-  if (node.type === "builtin.transform") return "Transform";
+  if (isWorkflowTransformNodeType(node.type)) {
+    return (
+      workflowTransformPresetForNodeType(node.type)?.label ?? "Transformer"
+    );
+  }
   if (node.type === "builtin.if" || node.type === "builtin.if_else") {
     return "If";
   }

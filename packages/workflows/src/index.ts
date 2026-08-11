@@ -77,8 +77,17 @@ export {
   type WorkflowRunnerRunResult,
 } from "./runner.js";
 export {
+  normalizeWorkflowDefinitionGraph,
+  normalizeWorkflowNodeGraph,
+} from "./graph-contract.js";
+export {
+  validateWorkflowInputSchema,
+  validateWorkflowJsonSchema,
   validateWorkflowNodeReferences,
   validateWorkflowTriggers,
+  type WorkflowInputSchemaValidation,
+  type WorkflowJsonSchemaIssue,
+  type WorkflowJsonSchemaValidation,
   type WorkflowNodeReferenceIssue,
   type WorkflowNodeReferenceValidation,
   type WorkflowTriggerIssue,

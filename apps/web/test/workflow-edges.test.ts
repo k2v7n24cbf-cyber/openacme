@@ -18,7 +18,7 @@ describe("workflow reference edge mutations", () => {
         {
           id: "branch",
           type: "builtin.if",
-          condition: "$.input.risky",
+          condition: "$.workflowTrigger.input.risky",
           then: [],
           else: [],
         },
@@ -42,7 +42,7 @@ describe("workflow reference edge mutations", () => {
         {
           id: "branch",
           type: "builtin.if",
-          condition: "$.input.risky",
+          condition: "$.workflowTrigger.input.risky",
           then: [],
           else: [],
         },
@@ -70,7 +70,7 @@ describe("workflow reference edge mutations", () => {
         {
           id: "branch",
           type: "builtin.if",
-          condition: "$.input.enabled",
+          condition: "$.workflowTrigger.input.enabled",
           then: ["old_target"],
         },
         { id: "old_target", type: "builtin.log.info" },
@@ -100,7 +100,7 @@ describe("workflow reference edge mutations", () => {
         {
           id: "branch",
           type: "builtin.if",
-          condition: "$.input.risky",
+          condition: "$.workflowTrigger.input.risky",
           then: ["review", "notify"],
           else: ["exit"],
         },
@@ -132,7 +132,7 @@ describe("workflow reference edge mutations", () => {
         {
           id: "each_customer",
           type: "builtin.foreach",
-          items: "$.input.customers",
+          items: "$.workflowTrigger.input.customers",
           itemVar: "customer",
           body: [],
         },
@@ -164,8 +164,8 @@ describe("workflow reference edge mutations", () => {
             { id: "uri", label: "URI", nodes: ["parse_uri"] },
           ],
         },
-        { id: "copy_asset", type: "builtin.transform" },
-        { id: "parse_uri", type: "builtin.transform" },
+        { id: "copy_asset", type: "builtin.transform.object_pick" },
+        { id: "parse_uri", type: "builtin.transform.object_pick" },
       ],
       {
         sourceId: "parallel_enrichment",
@@ -184,13 +184,13 @@ describe("workflow reference edge mutations", () => {
             { id: "uri", label: "URI", nodes: ["parse_uri"] },
           ],
         }),
-        { id: "copy_asset", type: "builtin.transform" },
-        { id: "parse_uri", type: "builtin.transform" },
+        { id: "copy_asset", type: "builtin.transform.object_pick" },
+        { id: "parse_uri", type: "builtin.transform.object_pick" },
       ],
     });
   });
 
-  it("inserts a new reference target before existing route cards", () => {
+  it("inserts a new reference entry before an existing route entry", () => {
     const nodes = [
       {
         id: "parallel_enrichment",
@@ -200,8 +200,8 @@ describe("workflow reference edge mutations", () => {
           { id: "uri", label: "URI", nodes: [] },
         ],
       },
-      { id: "copy_asset", type: "builtin.transform" },
-      { id: "normalize_asset", type: "builtin.transform" },
+      { id: "copy_asset", type: "builtin.transform.object_pick" },
+      { id: "normalize_asset", type: "builtin.transform.object_pick" },
     ];
 
     expect(
@@ -225,13 +225,17 @@ describe("workflow reference edge mutations", () => {
             {
               id: "asset",
               label: "Asset",
-              nodes: ["normalize_asset", "copy_asset"],
+              nodes: ["normalize_asset"],
             },
             { id: "uri", label: "URI", nodes: [] },
           ],
         }),
-        { id: "copy_asset", type: "builtin.transform" },
-        { id: "normalize_asset", type: "builtin.transform" },
+        { id: "copy_asset", type: "builtin.transform.object_pick" },
+        {
+          id: "normalize_asset",
+          type: "builtin.transform.object_pick",
+          next: ["copy_asset"],
+        },
       ],
     });
   });
@@ -242,7 +246,7 @@ describe("workflow reference edge mutations", () => {
         {
           id: "branch",
           type: "builtin.if",
-          condition: "$.input.risky",
+          condition: "$.workflowTrigger.input.risky",
           then: ["old_review", "old_notify"],
           else: [],
         },
@@ -268,6 +272,43 @@ describe("workflow reference edge mutations", () => {
     });
   });
 
+  it("does not infer target card continuation for manually drawn handle flows", () => {
+    const result = overwriteWorkflowReferenceEdge(
+      [
+        {
+          id: "branch",
+          type: "builtin.if",
+          condition: "$.workflowTrigger.input.risky",
+          then: ["old_review"],
+          else: [],
+        },
+        { id: "old_review", type: "agent.call" },
+        { id: "new_review", type: "agent.call" },
+        { id: "notify", type: "builtin.log.info" },
+      ],
+      {
+        sourceId: "branch",
+        targetId: "new_review",
+        kind: "then",
+        preserveTargets: { new_review: ["notify"] },
+      },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      nodes: [
+        expect.objectContaining({
+          id: "branch",
+          then: ["new_review"],
+          else: [],
+        }),
+        { id: "old_review", type: "agent.call" },
+        { id: "new_review", type: "agent.call" },
+        { id: "notify", type: "builtin.log.info" },
+      ],
+    });
+  });
+
   it("reconnects and removes parallel branch references", () => {
     const reconnected = reconnectWorkflowReferenceEdge(
       [
@@ -276,8 +317,8 @@ describe("workflow reference edge mutations", () => {
           type: "builtin.parallel",
           branches: [{ id: "asset", nodes: ["copy_asset"] }],
         },
-        { id: "copy_asset", type: "builtin.transform" },
-        { id: "normalize_asset", type: "builtin.transform" },
+        { id: "copy_asset", type: "builtin.transform.object_pick" },
+        { id: "normalize_asset", type: "builtin.transform.object_pick" },
       ],
       {
         sourceId: "parallel_enrichment",
@@ -293,8 +334,8 @@ describe("workflow reference edge mutations", () => {
         expect.objectContaining({
           branches: [{ id: "asset", nodes: ["normalize_asset"] }],
         }),
-        { id: "copy_asset", type: "builtin.transform" },
-        { id: "normalize_asset", type: "builtin.transform" },
+        { id: "copy_asset", type: "builtin.transform.object_pick" },
+        { id: "normalize_asset", type: "builtin.transform.object_pick" },
       ],
     });
 
@@ -311,8 +352,8 @@ describe("workflow reference edge mutations", () => {
         expect.objectContaining({
           branches: [{ id: "asset", nodes: [] }],
         }),
-        { id: "copy_asset", type: "builtin.transform" },
-        { id: "normalize_asset", type: "builtin.transform" },
+        { id: "copy_asset", type: "builtin.transform.object_pick" },
+        { id: "normalize_asset", type: "builtin.transform.object_pick" },
       ],
     });
   });
@@ -323,7 +364,7 @@ describe("workflow reference edge mutations", () => {
         {
           id: "route_by_kind",
           type: "builtin.switch",
-          value: "$.input.kind",
+          value: "$.workflowTrigger.input.kind",
           cases: [
             { id: "asset", value: "asset", nodes: [] },
             { id: "owner", value: "owner", nodes: ["owner_log"] },
@@ -382,13 +423,13 @@ describe("workflow reference edge mutations", () => {
     });
   });
 
-  it("connects route continuation from a card inside one switch case only", () => {
+  it("connects route continuation as explicit next from a switch case card", () => {
     const result = connectWorkflowRouteContinuationEdge(
       [
         {
           id: "route_by_kind",
           type: "builtin.switch",
-          value: "$.input.kind",
+          value: "$.workflowTrigger.input.kind",
           cases: [{ id: "asset", value: "asset", nodes: ["asset_log"] }],
           default: ["unknown_log"],
         },
@@ -404,24 +445,24 @@ describe("workflow reference edge mutations", () => {
       nodes: [
         expect.objectContaining({
           cases: [
-            { id: "asset", value: "asset", nodes: ["asset_log", "done"] },
+            { id: "asset", value: "asset", nodes: ["asset_log"] },
           ],
           default: ["unknown_log"],
         }),
-        { id: "asset_log", type: "builtin.log.info" },
+        { id: "asset_log", type: "builtin.log.info", next: ["done"] },
         { id: "unknown_log", type: "builtin.log.warn" },
         { id: "done", type: "builtin.log.info" },
       ],
     });
   });
 
-  it("connects a route continuation from a card inside one branch only", () => {
+  it("connects branch continuation as explicit next from the branch card", () => {
     const result = connectWorkflowRouteContinuationEdge(
       [
         {
           id: "branch",
           type: "builtin.if",
-          condition: "$.input.risky",
+          condition: "$.workflowTrigger.input.risky",
           then: ["warn_operator"],
           else: ["throw_controlled"],
         },
@@ -437,23 +478,23 @@ describe("workflow reference edge mutations", () => {
       nodes: [
         expect.objectContaining({
           id: "branch",
-          then: ["warn_operator", "wait_for_index"],
+          then: ["warn_operator"],
           else: ["throw_controlled"],
         }),
-        { id: "warn_operator", type: "builtin.log.info" },
+        { id: "warn_operator", type: "builtin.log.info", next: ["wait_for_index"] },
         { id: "throw_controlled", type: "builtin.throw_error" },
         { id: "wait_for_index", type: "builtin.sleep" },
       ],
     });
   });
 
-  it("overwrites downstream route history for manually drawn continuation flows", () => {
+  it("overwrites downstream next without mutating route history", () => {
     const result = overwriteWorkflowRouteContinuationEdge(
       [
         {
           id: "branch",
           type: "builtin.if",
-          condition: "$.input.risky",
+          condition: "$.workflowTrigger.input.risky",
           then: ["warn_operator", "wait_for_index", "notify_old"],
           else: ["throw_controlled"],
         },
@@ -471,10 +512,10 @@ describe("workflow reference edge mutations", () => {
       nodes: [
         expect.objectContaining({
           id: "branch",
-          then: ["warn_operator", "notify_new"],
+          then: ["warn_operator", "wait_for_index", "notify_old"],
           else: ["throw_controlled"],
         }),
-        { id: "warn_operator", type: "builtin.log.info" },
+        { id: "warn_operator", type: "builtin.log.info", next: ["notify_new"] },
         { id: "wait_for_index", type: "builtin.sleep" },
         { id: "notify_old", type: "builtin.log.info" },
         { id: "notify_new", type: "builtin.log.info" },
@@ -483,17 +524,91 @@ describe("workflow reference edge mutations", () => {
     });
   });
 
-  it("removes a route continuation from its branch list", () => {
+  it("does not copy a target card downstream route when connecting into it", () => {
+    const result = overwriteWorkflowRouteContinuationEdge(
+      [
+        {
+          id: "branch",
+          type: "builtin.if",
+          condition: "$.workflowTrigger.input.risky",
+          then: ["warn_operator"],
+          else: ["throw_controlled", "wait_for_index"],
+        },
+        { id: "warn_operator", type: "builtin.log.info" },
+        { id: "throw_controlled", type: "builtin.throw_error" },
+        { id: "wait_for_index", type: "builtin.sleep" },
+      ],
+      {
+        sourceId: "warn_operator",
+        targetId: "throw_controlled",
+        preserveTargets: { throw_controlled: ["wait_for_index"] },
+      },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      nodes: [
+        expect.objectContaining({
+          then: ["warn_operator"],
+          else: ["throw_controlled", "wait_for_index"],
+        }),
+        { id: "warn_operator", type: "builtin.log.info", next: ["throw_controlled"] },
+        { id: "throw_controlled", type: "builtin.throw_error" },
+        { id: "wait_for_index", type: "builtin.sleep" },
+      ],
+    });
+  });
+
+  it("does not copy target card preserved continuation when connecting into it", () => {
+    const result = overwriteWorkflowRouteContinuationEdge(
+      [
+        {
+          id: "branch",
+          type: "builtin.if",
+          condition: "$.workflowTrigger.input.risky",
+          then: ["warn_operator"],
+          else: ["throw_controlled"],
+        },
+        { id: "warn_operator", type: "builtin.log.info" },
+        { id: "throw_controlled", type: "builtin.throw_error" },
+        { id: "wait_for_index", type: "builtin.sleep" },
+      ],
+      {
+        sourceId: "warn_operator",
+        targetId: "throw_controlled",
+        preserveTargets: { throw_controlled: ["wait_for_index"] },
+      },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      nodes: [
+        expect.objectContaining({
+          then: ["warn_operator"],
+          else: ["throw_controlled"],
+        }),
+        { id: "warn_operator", type: "builtin.log.info", next: ["throw_controlled"] },
+        { id: "throw_controlled", type: "builtin.throw_error" },
+        { id: "wait_for_index", type: "builtin.sleep" },
+      ],
+    });
+  });
+
+  it("removes route continuation from explicit next", () => {
     const result = removeWorkflowRouteContinuationEdge(
       [
         {
           id: "branch",
           type: "builtin.if",
-          condition: "$.input.risky",
-          then: ["warn_operator", "wait_for_index"],
+          condition: "$.workflowTrigger.input.risky",
+          then: ["warn_operator"],
           else: ["throw_controlled"],
         },
-        { id: "warn_operator", type: "builtin.log.info" },
+        {
+          id: "warn_operator",
+          type: "builtin.log.info",
+          next: ["wait_for_index"],
+        },
         { id: "throw_controlled", type: "builtin.throw_error" },
         { id: "wait_for_index", type: "builtin.sleep" },
       ],
@@ -507,32 +622,48 @@ describe("workflow reference edge mutations", () => {
           then: ["warn_operator"],
           else: ["throw_controlled"],
         }),
-        { id: "warn_operator", type: "builtin.log.info" },
+        { id: "warn_operator", type: "builtin.log.info", next: [] },
         { id: "throw_controlled", type: "builtin.throw_error" },
         { id: "wait_for_index", type: "builtin.sleep" },
       ],
     });
   });
 
-  it("rejects route continuations from cards shared by multiple routes", () => {
+  it("updates shared card continuation through explicit next only", () => {
     expect(
-      connectWorkflowRouteContinuationEdge(
+      overwriteWorkflowRouteContinuationEdge(
         [
           {
             id: "branch",
             type: "builtin.if",
-            condition: "$.input.risky",
-            then: ["warn_operator", "wait_for_index"],
-            else: ["throw_controlled", "wait_for_index"],
+            condition: "$.workflowTrigger.input.risky",
+            then: ["warn_operator", "wait_for_index", "old_true"],
+            else: ["throw_controlled", "wait_for_index", "old_false"],
           },
           { id: "warn_operator", type: "builtin.log.info" },
           { id: "throw_controlled", type: "builtin.throw_error" },
           { id: "wait_for_index", type: "builtin.sleep" },
           { id: "done", type: "builtin.log.info" },
+          { id: "old_true", type: "builtin.log.info" },
+          { id: "old_false", type: "builtin.log.info" },
         ],
         { sourceId: "wait_for_index", targetId: "done" },
       ),
-    ).toEqual({ ok: false, reason: "ambiguous_route_source" });
+    ).toEqual({
+      ok: true,
+      nodes: [
+        expect.objectContaining({
+          then: ["warn_operator", "wait_for_index", "old_true"],
+          else: ["throw_controlled", "wait_for_index", "old_false"],
+        }),
+        { id: "warn_operator", type: "builtin.log.info" },
+        { id: "throw_controlled", type: "builtin.throw_error" },
+        { id: "wait_for_index", type: "builtin.sleep", next: ["done"] },
+        { id: "done", type: "builtin.log.info" },
+        { id: "old_true", type: "builtin.log.info" },
+        { id: "old_false", type: "builtin.log.info" },
+      ],
+    });
   });
 
   it("rejects edge kinds that cannot be represented by the canonical schema", () => {

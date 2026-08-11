@@ -36,6 +36,10 @@ this platform reference should know that workflow work routes to
 `$openacme-workflow-author`, not to ad hoc instructions in this general
 platform skill.
 
+Workflow reference syntax, human-editable step ids, run-history inspection, MCP
+tool discovery, and agent-call authoring rules are owned by that workflow skill.
+Do not duplicate or reinterpret those contracts here.
+
 ## Data directory layout
 
 Every install has a single data directory (default `~/.openacme/`). The

@@ -355,7 +355,7 @@ General shape:
   },
   "transform": {
     "kind": "string.replace",
-    "source": "$.input.value",
+    "source": "$.workflowTrigger.input.value",
     "search": "prod-",
     "replace": ""
   },
@@ -1071,7 +1071,7 @@ Validation record - 2026-08-01:
     key names such as `password`.
 - Added UI preset support:
   - `WORKFLOW_TRANSFORM_PRESETS` now includes `uri.parse`.
-  - The preset fills `{ kind: "uri.parse", value: "$.input.url" }` and keeps
+  - The preset fills `{ kind: "uri.parse", value: "$.workflowTrigger.input.url" }` and keeps
     the raw Transform JSON editor available.
 - Added server route coverage:
   - `wf_m11_uri_transform_evidence` persists URI parse output, redacted
@@ -1399,7 +1399,7 @@ Validation record - 2026-08-01:
   - Body-internal node ordering is shown by normal sequence edges, for example
     `normalize_asset -> log_asset`.
   - Foreach cards now show a readable summary such as
-    `For each $.input.assets as asset` instead of repeating only the node id.
+    `For each $.workflowTrigger.input.assets as asset` instead of repeating only the node id.
   - `pnpm --filter web test -- workflow-graph.test.ts workflow-edges.test.ts workflow-authoring.test.ts workflow-run-overlay.test.ts`
     passed: 4 test files, 29 tests.
   - `pnpm --filter web check-types` passed.
@@ -1409,7 +1409,7 @@ Validation record - 2026-08-01:
     `ed30a91c-a1c6-4509-899f-b3b1a9c11769`; the snapshot showed
     `Edge from each_asset to normalize_asset`,
     `Edge from normalize_asset to log_asset`, no `each_asset -> log_asset`
-    body edge, and card summary `For each $.input.assets as asset`.
+    body edge, and card summary `For each $.workflowTrigger.input.assets as asset`.
 
 Status: complete for M11.10 parallel UI.
 

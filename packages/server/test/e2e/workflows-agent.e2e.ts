@@ -34,8 +34,8 @@ describe("Workflow agent calls (e2e)", () => {
           type: "agent.call",
           agentId: "support",
           prompt:
-            "Return [[mock:text:workflow support ok]] for {{$.input.customerId}}",
-          input: { customerId: "$.input.customerId" },
+            "Return [[mock:text:workflow support ok]] for {{$.workflowTrigger.input.customerId}}",
+          input: { customerId: "$.workflowTrigger.input.customerId" },
           assign: {
             support: "$.steps.ask_support.output",
           },

@@ -123,7 +123,7 @@ try {
       {
         id: "set_customer",
         type: "builtin.set",
-        assign: { customer: "$.input.customer" },
+        assign: { customer: "$.workflowTrigger.input.customer" },
       },
     ],
   });
@@ -227,11 +227,11 @@ try {
           server: "crm",
           tool: "lookup",
           input: {
-            id: "$.input.customerId",
-            apiKey: "$.input.apiKey",
+            id: "$.workflowTrigger.input.customerId",
+            apiKey: "$.workflowTrigger.input.apiKey",
           },
           assign: {
-            crm: "$.steps.crm_lookup.output",
+            crm: "$.steps.crm_lookup.output.result",
           },
         },
       ],

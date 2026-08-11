@@ -6,6 +6,8 @@ import {
   WorkflowRunSchema,
   WorkflowRunStatusSchema,
   WorkflowTriggerSchema,
+  validateWorkflowInputSchema,
+  validateWorkflowJsonSchema,
   validateWorkflowNodeReferences,
   validateWorkflowTriggers,
 } from "../src/index.js";
@@ -24,11 +26,11 @@ describe("workflow schemas", () => {
         {
           id: "set_customer",
           type: "builtin.set",
-          assign: { customerId: "$.input.customerId" },
+          assign: { customerId: "$.workflowTrigger.input.customerId" },
         },
         {
           id: "normalize",
-          type: "builtin.transform",
+          type: "builtin.transform.object_pick",
           input: { customer: "$.context.customer" },
           transform: { kind: "object_pick", fields: ["id"] },
           assign: {
@@ -69,7 +71,7 @@ describe("workflow schemas", () => {
         {
           id: "each_customer",
           type: "builtin.foreach",
-          items: "$.input.customers",
+          items: "$.workflowTrigger.input.customers",
           body: ["notify"],
           assign: { foreachSummary: "$.steps.each_customer.output" },
         },
@@ -81,7 +83,7 @@ describe("workflow schemas", () => {
 
     expect(parsed.nodes.map((n) => n.type)).toEqual([
       "builtin.set",
-      "builtin.transform",
+      "builtin.transform.object_pick",
       "builtin.if_else",
       "mcp.tool",
       "agent.call",
@@ -189,7 +191,7 @@ describe("workflow schemas", () => {
       WorkflowNodeSchema.safeParse({
         id: "each_customer",
         type: "builtin.foreach",
-        items: "$.input.customers",
+        items: "$.workflowTrigger.input.customers",
         body: ["normalize"],
         concurrency: 1,
       }).success,
@@ -199,7 +201,7 @@ describe("workflow schemas", () => {
       WorkflowNodeSchema.safeParse({
         id: "each_customer",
         type: "builtin.foreach",
-        items: "$.input.customers",
+        items: "$.workflowTrigger.input.customers",
         body: ["normalize"],
         concurrency: 2,
       }).success,
@@ -253,11 +255,27 @@ describe("workflow schemas", () => {
 
     expect(
       WorkflowNodeSchema.safeParse({
+        id: "parallel_draft",
+        type: "builtin.parallel",
+        branches: [
+          { id: "branch_a", label: "Branch A", nodes: [] },
+          { id: "branch_b", label: "Branch B", nodes: [] },
+        ],
+      }).success,
+    ).toBe(true);
+
+    expect(
+      WorkflowNodeSchema.safeParse({
         id: "route_by_kind",
         type: "builtin.switch",
-        value: "$.input.kind",
+        value: "$.workflowTrigger.input.kind",
         cases: [
-          { id: "asset", label: "Asset", value: "asset", nodes: ["handle_asset"] },
+          {
+            id: "asset",
+            label: "Asset",
+            value: "asset",
+            nodes: ["handle_asset"],
+          },
           { id: "owner", value: "owner", nodes: ["handle_owner"] },
         ],
         default: ["handle_unknown"],
@@ -301,7 +319,7 @@ describe("workflow schemas", () => {
       WorkflowNodeSchema.safeParse({
         id: "switch_empty",
         type: "builtin.switch",
-        value: "$.input.kind",
+        value: "$.workflowTrigger.input.kind",
         cases: [],
       }).success,
     ).toBe(false);
@@ -317,14 +335,14 @@ describe("workflow schemas", () => {
         {
           id: "branch",
           type: "builtin.if",
-          condition: "$.input.ready",
+          condition: "$.workflowTrigger.input.ready",
           then: ["notify"],
           else: ["missing_exit"],
         },
         {
           id: "each_customer",
           type: "builtin.foreach",
-          items: "$.input.customers",
+          items: "$.workflowTrigger.input.customers",
           body: ["notify", "missing_child"],
         },
         {
@@ -401,7 +419,7 @@ describe("workflow schemas", () => {
         {
           id: "route_by_kind",
           type: "builtin.switch",
-          value: "$.input.kind",
+          value: "$.workflowTrigger.input.kind",
           cases: [
             { id: "asset", value: "asset", nodes: ["handle_asset"] },
             { id: "owner", value: "owner", nodes: ["missing_owner"] },
@@ -440,7 +458,7 @@ describe("workflow schemas", () => {
       {
         id: "route_by_kind",
         type: "builtin.switch",
-        value: "$.input.kind",
+        value: "$.workflowTrigger.input.kind",
         cases: [
           { id: "asset", value: "asset", nodes: ["handle_asset"] },
           { id: "asset", value: "asset_2", nodes: ["handle_owner"] },
@@ -473,7 +491,7 @@ describe("workflow schemas", () => {
       {
         id: "route_by_kind",
         type: "builtin.switch",
-        value: "$.input.kind",
+        value: "$.workflowTrigger.input.kind",
         cases: [{ id: "loop", value: "loop", nodes: ["route_by_kind"] }],
       },
     ].map((node) => WorkflowNodeSchema.parse(node));
@@ -704,16 +722,100 @@ describe("workflow schemas", () => {
     });
   });
 
+  it("validates complex workflow trigger input with JSON Schema array items", () => {
+    const schema = {
+      type: "object",
+      required: ["assets"],
+      properties: {
+        assets: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            required: ["id", "hostname", "vulnerabilities"],
+            additionalProperties: false,
+            properties: {
+              id: { type: "string", minLength: 1 },
+              hostname: { type: "string" },
+              vulnerabilities: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: ["qid", "severity"],
+                  properties: {
+                    qid: { type: "string" },
+                    severity: { type: "integer", minimum: 1, maximum: 5 },
+                    title: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    expect(
+      validateWorkflowInputSchema(schema, {
+        assets: [
+          {
+            id: "asset-1",
+            hostname: "edge-01",
+            vulnerabilities: [{ qid: "105170", severity: 5 }],
+          },
+        ],
+      }),
+    ).toEqual({ ok: true });
+
+    expect(
+      validateWorkflowInputSchema(schema, {
+        assets: [
+          {
+            id: "asset-1",
+            hostname: "edge-01",
+            vulnerabilities: [{ qid: "105170", severity: "5" }],
+          },
+        ],
+      }),
+    ).toEqual({
+      ok: false,
+      error:
+        "Input does not match schema: $.assets[0].vulnerabilities[0].severity must be integer",
+    });
+  });
+
+  it("rejects malformed JSON Schema contracts before runtime input checks", () => {
+    expect(
+      validateWorkflowJsonSchema({
+        type: "object",
+        properties: {
+          assets: {
+            type: "array",
+            items: ["object"],
+          },
+        },
+      }),
+    ).toMatchObject({
+      ok: false,
+      issues: [
+        {
+          path: "$.properties.assets.items",
+          message: "must be a JSON Schema object or boolean",
+        },
+      ],
+    });
+  });
+
   it("rejects invalid assignment paths and defaults object assignments to replace", () => {
     expect(
       WorkflowAssignmentMapSchema.safeParse({
-        "customer.id": "$.input.customerId",
+        "customer.id": "$.workflowTrigger.input.customerId",
       }).success,
     ).toBe(true);
 
     expect(
       WorkflowAssignmentMapSchema.safeParse({
-        "customer id": "$.input.customerId",
+        "customer id": "$.workflowTrigger.input.customerId",
       }).success,
     ).toBe(false);
 

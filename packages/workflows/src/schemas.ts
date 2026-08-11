@@ -85,6 +85,76 @@ export const WorkflowRunEventKindSchema = z.enum([
 ]);
 export type WorkflowRunEventKind = z.infer<typeof WorkflowRunEventKindSchema>;
 
+export const WorkflowTransformNodeTypeValues = [
+  "builtin.transform.value_resolve",
+  "builtin.transform.object_pick",
+  "builtin.transform.string_replace",
+  "builtin.transform.string_regex_replace",
+  "builtin.transform.string_regex_match",
+  "builtin.transform.json_parse",
+  "builtin.transform.json_stringify",
+  "builtin.transform.csv_parse",
+  "builtin.transform.csv_stringify",
+  "builtin.transform.ip_parse",
+  "builtin.transform.ip_is_ipv4",
+  "builtin.transform.ip_is_ipv6",
+  "builtin.transform.ip_in_subnet",
+  "builtin.transform.ip_netmask",
+  "builtin.transform.ip_network",
+  "builtin.transform.uri_parse",
+] as const;
+export const WorkflowTransformNodeTypeSchema = z.enum(
+  WorkflowTransformNodeTypeValues,
+);
+export type WorkflowTransformNodeType = z.infer<
+  typeof WorkflowTransformNodeTypeSchema
+>;
+
+export function isWorkflowTransformNodeType(
+  value: string,
+): value is WorkflowTransformNodeType {
+  return WorkflowTransformNodeTypeSchema.safeParse(value).success;
+}
+
+export function workflowTransformKindFromNodeType(
+  value: WorkflowTransformNodeType,
+): string {
+  switch (value) {
+    case "builtin.transform.value_resolve":
+      return "value.resolve";
+    case "builtin.transform.object_pick":
+      return "object_pick";
+    case "builtin.transform.string_replace":
+      return "string.replace";
+    case "builtin.transform.string_regex_replace":
+      return "string.regex_replace";
+    case "builtin.transform.string_regex_match":
+      return "string.regex_match";
+    case "builtin.transform.json_parse":
+      return "json.parse";
+    case "builtin.transform.json_stringify":
+      return "json.stringify";
+    case "builtin.transform.csv_parse":
+      return "csv.parse";
+    case "builtin.transform.csv_stringify":
+      return "csv.stringify";
+    case "builtin.transform.ip_parse":
+      return "ip.parse";
+    case "builtin.transform.ip_is_ipv4":
+      return "ip.is_ipv4";
+    case "builtin.transform.ip_is_ipv6":
+      return "ip.is_ipv6";
+    case "builtin.transform.ip_in_subnet":
+      return "ip.in_subnet";
+    case "builtin.transform.ip_netmask":
+      return "ip.netmask";
+    case "builtin.transform.ip_network":
+      return "ip.network";
+    case "builtin.transform.uri_parse":
+      return "uri.parse";
+  }
+}
+
 export const WorkflowTriggerSchema = z.discriminatedUnion("kind", [
   z
     .object({
@@ -207,6 +277,9 @@ export type WorkflowAssignmentMap = z.infer<typeof WorkflowAssignmentMapSchema>;
 
 const NodeIdSchema = z.string().min(1);
 const InputMapSchema = z.record(z.string(), JsonValueSchema).optional();
+const NodeContinuationSchema = {
+  next: z.array(NodeIdSchema).default([]),
+};
 
 export const WorkflowCanvasPositionSchema = z
   .object({
@@ -240,6 +313,7 @@ export type WorkflowDefinitionUi = z.infer<typeof WorkflowDefinitionUiSchema>;
 const AssignableNodeBase = {
   id: NodeIdSchema,
   label: z.string().min(1).optional(),
+  ...NodeContinuationSchema,
   input: InputMapSchema,
   assign: WorkflowAssignmentMapSchema.optional(),
 };
@@ -248,6 +322,7 @@ export const BuiltinSetNodeSchema = z
   .object({
     id: NodeIdSchema,
     label: z.string().min(1).optional(),
+    ...NodeContinuationSchema,
     type: z.literal("builtin.set"),
     assign: WorkflowAssignmentMapSchema,
   })
@@ -256,8 +331,22 @@ export const BuiltinSetNodeSchema = z
 export const BuiltinTransformNodeSchema = z
   .object({
     ...AssignableNodeBase,
-    type: z.literal("builtin.transform"),
-    transform: JsonValueSchema,
+    type: WorkflowTransformNodeTypeSchema,
+    transform: z
+      .object({
+        kind: z.string().min(1),
+      })
+      .catchall(JsonValueSchema),
+  })
+  .superRefine((node, ctx) => {
+    const expected = workflowTransformKindFromNodeType(node.type);
+    if (node.transform.kind !== expected) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["transform", "kind"],
+        message: `Expected transform kind ${expected} for node type ${node.type}`,
+      });
+    }
   })
   .strict();
 
@@ -265,6 +354,7 @@ export const BuiltinIfNodeSchema = z
   .object({
     id: NodeIdSchema,
     label: z.string().min(1).optional(),
+    ...NodeContinuationSchema,
     type: z.literal("builtin.if"),
     condition: z.string().min(1),
     then: z.array(NodeIdSchema).default([]),
@@ -276,6 +366,7 @@ export const BuiltinIfElseNodeSchema = z
   .object({
     id: NodeIdSchema,
     label: z.string().min(1).optional(),
+    ...NodeContinuationSchema,
     type: z.literal("builtin.if_else"),
     condition: z.string().min(1),
     then: z.array(NodeIdSchema).default([]),
@@ -297,6 +388,7 @@ export const BuiltinSwitchNodeSchema = z
   .object({
     id: NodeIdSchema,
     label: z.string().min(1).optional(),
+    ...NodeContinuationSchema,
     type: z.literal("builtin.switch"),
     value: JsonValueSchema,
     cases: z.array(BuiltinSwitchCaseSchema).min(1),
@@ -319,6 +411,7 @@ export const BuiltinExitNodeSchema = z
   .object({
     id: NodeIdSchema,
     label: z.string().min(1).optional(),
+    ...NodeContinuationSchema,
     type: z.literal("builtin.exit"),
     status: z.enum(["succeeded", "failed", "canceled"]),
     output: JsonValueSchema.optional(),
@@ -329,6 +422,7 @@ export const BuiltinThrowErrorNodeSchema = z
   .object({
     id: NodeIdSchema,
     label: z.string().min(1).optional(),
+    ...NodeContinuationSchema,
     type: z.literal("builtin.throw_error"),
     message: z.string().min(1),
     code: z
@@ -343,6 +437,7 @@ export const BuiltinSleepNodeSchema = z
   .object({
     id: NodeIdSchema,
     label: z.string().min(1).optional(),
+    ...NodeContinuationSchema,
     type: z.literal("builtin.sleep"),
     delayMs: z.number().int().min(1).max(300_000),
     reason: z.string().min(1).optional(),
@@ -367,7 +462,7 @@ export const BuiltinParallelBranchSchema = z
   .object({
     id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/),
     label: z.string().min(1).optional(),
-    nodes: z.array(NodeIdSchema).min(1),
+    nodes: z.array(NodeIdSchema).default([]),
   })
   .strict();
 export type BuiltinParallelBranch = z.infer<typeof BuiltinParallelBranchSchema>;
@@ -455,6 +550,7 @@ export const WorkflowRunSchema = z
     workflowId: z.string().min(1),
     workflowVersion: z.number().int().positive(),
     definitionSource: WorkflowDefinitionSourceSchema,
+    definitionSnapshot: WorkflowDefinitionSchema.optional(),
     mode: WorkflowRunModeSchema,
     trigger: WorkflowRunTriggerSchema,
     status: WorkflowRunStatusSchema,

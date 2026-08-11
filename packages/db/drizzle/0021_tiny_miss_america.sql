@@ -1,0 +1,1 @@
+ALTER TABLE `workflow_runs` ADD `definition_snapshot_json` text;

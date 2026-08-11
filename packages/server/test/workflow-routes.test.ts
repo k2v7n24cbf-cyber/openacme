@@ -167,11 +167,12 @@ function runnableNodes() {
     {
       id: "set_customer",
       type: "builtin.set",
-      assign: { customer: "$.input.customer" },
+      next: ["normalize"],
+      assign: { customer: "$.workflowTrigger.input.customer" },
     },
     {
       id: "normalize",
-      type: "builtin.transform",
+      type: "builtin.transform.object_pick",
       input: { customer: "$.context.customer" },
       transform: {
         kind: "object_pick",
@@ -180,10 +181,11 @@ function runnableNodes() {
       },
       assign: {
         customer: {
-          from: "$.steps.normalize.output",
+          from: "$.steps.normalize.output.value",
           mode: "replace",
         },
       },
+      next: ["exit"],
     },
     {
       id: "exit",
@@ -355,7 +357,7 @@ describe("workflow routes", () => {
         {
           id: "branch",
           type: "builtin.if",
-          condition: "$.input.ready",
+          condition: "$.workflowTrigger.input.ready",
           then: ["missing_node"],
         },
       ],
@@ -388,7 +390,7 @@ describe("workflow routes", () => {
         {
           id: "branch",
           type: "builtin.if",
-          condition: "$.input.ready",
+          condition: "$.workflowTrigger.input.ready",
           then: ["missing_node"],
         },
       ],
@@ -619,6 +621,50 @@ describe("workflow routes", () => {
     expect((await res.json()).runs).toHaveLength(1);
   });
 
+  it("rejects malformed workflow and trigger JSON Schema contracts", async () => {
+    let res = await jsonReq("/api/workflows", {
+      id: "wf_invalid_json_schema",
+      name: "Invalid JSON Schema",
+      inputSchema: {
+        type: "object",
+        properties: {
+          assets: {
+            type: "array",
+            items: ["object"],
+          },
+        },
+      },
+      nodes: runnableNodes(),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error:
+        "Input schema is invalid: $.properties.assets.items must be a JSON Schema object or boolean",
+    });
+
+    res = await jsonReq("/api/workflows", {
+      id: "wf_trigger_invalid_json_schema",
+      name: "Invalid trigger JSON Schema",
+      triggers: [
+        {
+          id: "manual_review",
+          kind: "manual",
+          enabled: true,
+          inputSchema: {
+            type: "object",
+            required: "approvalNote",
+          },
+        },
+      ],
+      nodes: runnableNodes(),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error:
+        "Trigger manual_review input schema is invalid: $.required must be an array of property names",
+    });
+  });
+
   it("runs draft tests and published live runs with inspectable detail", async () => {
     let res = await jsonReq("/api/workflows", {
       id: "wf_run_api",
@@ -729,13 +775,15 @@ describe("workflow routes", () => {
       },
       assign: {
         customer: {
-          from: "$.steps.normalize.output",
+          from: "$.steps.normalize.output.value",
           mode: "replace",
           value: { id: "cust_1", name: "Ada" },
         },
       },
     });
-    expect(normalizeStep?.output).toEqual({ id: "cust_1", name: "Ada" });
+    expect(normalizeStep?.output).toEqual({
+      value: { id: "cust_1", name: "Ada" },
+    });
     expect(normalizeStep?.contextDiff).toEqual({
       customer: {
         before: { id: "cust_1", name: "Ada", secret: "[redacted]" },
@@ -827,9 +875,9 @@ describe("workflow routes", () => {
         nodes: [
           {
             id: "missing",
-            type: "builtin.transform",
+            type: "builtin.transform.value_resolve",
             input: { customer: "$.context.customer.missing" },
-            transform: { kind: "identity" },
+            transform: { kind: "value.resolve", value: "$" },
           },
         ],
       },
@@ -910,7 +958,12 @@ describe("workflow routes", () => {
       name: "Async test run",
       triggers: [{ id: "manual", kind: "manual", enabled: true }],
       nodes: [
-        { id: "wait", type: "builtin.sleep", delayMs: 1000 },
+        {
+          id: "wait",
+          type: "builtin.sleep",
+          delayMs: 1000,
+          next: ["log_done"],
+        },
         {
           id: "log_done",
           type: "builtin.log.info",
@@ -966,7 +1019,12 @@ describe("workflow routes", () => {
         name: workflow.id,
         triggers: [{ id: "manual", kind: "manual", enabled: true }],
         nodes: [
-          { id: "wait", type: "builtin.sleep", delayMs: 250 },
+          {
+            id: "wait",
+            type: "builtin.sleep",
+            delayMs: 250,
+            next: ["log_done"],
+          },
           {
             id: "log_done",
             type: "builtin.log.info",
@@ -1108,9 +1166,9 @@ describe("workflow routes", () => {
           type: "mcp.tool",
           server: "crm",
           tool: "lookup",
-          input: { id: "$.input.customerId" },
+          input: { id: "$.workflowTrigger.input.customerId" },
           assign: {
-            crm: "$.steps.crm_lookup.output",
+            crm: "$.steps.crm_lookup.output.result",
           },
         },
       ],
@@ -1159,7 +1217,11 @@ describe("workflow routes", () => {
     expect(detail.steps[0]).toMatchObject({
       nodeId: "crm_lookup",
       status: "succeeded",
-      output: { id: "cust_1", score: 91 },
+      output: {
+        server: "crm",
+        tool: "lookup",
+        result: { id: "cust_1", score: 91 },
+      },
     });
     expect(detail.events.map((event) => [event.sequence, event.kind])).toEqual([
       [1, "run_started"],
@@ -1466,8 +1528,12 @@ describe("workflow routes", () => {
       path: artifactRef!.path,
     });
     expect(artifactContent.content).toMatchObject({
-      records: expect.stringContaining("xxx"),
-      apiKey: "[redacted]",
+      server: "crm",
+      tool: "large_export",
+      result: {
+        records: expect.stringContaining("xxx"),
+        apiKey: "[redacted]",
+      },
     });
     expect(JSON.stringify(artifactContent)).not.toContain(
       "raw-route-download-key",
@@ -1639,7 +1705,7 @@ describe("workflow routes", () => {
           tool: "large_context",
           input: {},
           assign: {
-            export: "$.steps.large_context.output",
+            export: "$.steps.large_context.output.result",
           },
         },
       ],
@@ -1718,7 +1784,7 @@ describe("workflow routes", () => {
           id: "set_customer_id",
           type: "builtin.set",
           assign: {
-            customerId: "$.input.customer.id",
+            customerId: "$.workflowTrigger.input.customer.id",
           },
         },
         {
@@ -1953,7 +2019,7 @@ describe("workflow routes", () => {
           id: "set_profile",
           type: "builtin.set",
           assign: {
-            profile: "$.input.profile",
+            profile: "$.workflowTrigger.input.profile",
           },
         },
       ],
@@ -2205,7 +2271,8 @@ describe("workflow routes", () => {
           id: "start_log",
           type: "builtin.log.info",
           message: "Starting cancelable workflow",
-          payload: "$.input.customerId",
+          payload: "$.workflowTrigger.input.customerId",
+          next: ["crm_lookup"],
         },
         {
           id: "crm_lookup",
@@ -2213,11 +2280,11 @@ describe("workflow routes", () => {
           server: "crm",
           tool: "lookup",
           input: {
-            id: "$.input.customerId",
-            apiKey: "$.input.apiKey",
+            id: "$.workflowTrigger.input.customerId",
+            apiKey: "$.workflowTrigger.input.apiKey",
           },
           assign: {
-            crm: "$.steps.crm_lookup.output",
+            crm: "$.steps.crm_lookup.output.result",
           },
         },
       ],
@@ -2261,7 +2328,7 @@ describe("workflow routes", () => {
           input: { id: "cust_cancel", apiKey: "[redacted]" },
           assign: {
             crm: {
-              from: "$.steps.crm_lookup.output",
+              from: "$.steps.crm_lookup.output.result",
               mode: "replace",
             },
           },
@@ -2323,7 +2390,7 @@ describe("workflow routes", () => {
           input: { id: "cust_cancel", apiKey: "[redacted]" },
           assign: {
             crm: {
-              from: "$.steps.crm_lookup.output",
+              from: "$.steps.crm_lookup.output.result",
               mode: "replace",
             },
           },
@@ -2374,7 +2441,7 @@ describe("workflow routes", () => {
         {
           id: "set_customer",
           type: "builtin.set",
-          assign: { customer: "$.input.customer" },
+          assign: { customer: "$.workflowTrigger.input.customer" },
         },
       ],
     });
@@ -2428,8 +2495,8 @@ describe("workflow routes", () => {
           id: "ask_support",
           type: "agent.call",
           agentId: "support",
-          prompt: "Review {{$.input.customerId}}",
-          input: { customerId: "$.input.customerId" },
+          prompt: "Review {{$.workflowTrigger.input.customerId}}",
+          input: { customerId: "$.workflowTrigger.input.customerId" },
           assign: {
             support: "$.steps.ask_support.output",
           },
@@ -2597,7 +2664,7 @@ describe("workflow routes", () => {
         {
           id: "each_value",
           type: "builtin.foreach",
-          items: "$.input.values",
+          items: "$.workflowTrigger.input.values",
           body: ["double_value"],
           concurrency: 1,
         },
@@ -3258,7 +3325,10 @@ describe("workflow routes", () => {
       expect.objectContaining({
         nodeId: "exit",
         status: "succeeded",
-        output: { scheduled: true },
+        output: {
+          status: "succeeded",
+          output: { scheduled: true },
+        },
       }),
     ]);
     expect(scheduledDetail.events.map((event) => event.kind)).toEqual(
@@ -3706,7 +3776,10 @@ describe("workflow routes", () => {
       expect.objectContaining({
         nodeId: "exit",
         status: "canceled",
-        output: { reason: "operator-defined stop" },
+        output: {
+          status: "canceled",
+          output: { reason: "operator-defined stop" },
+        },
       }),
     ]);
     expect(detail.events.map((event) => event.kind)).toEqual([
@@ -3769,7 +3842,10 @@ describe("workflow routes", () => {
       expect.objectContaining({
         nodeId: "exit",
         status: "failed",
-        output: { reason: "business rule failed" },
+        output: {
+          status: "failed",
+          output: { reason: "business rule failed" },
+        },
       }),
     ]);
     expect(detail.events.map((event) => event.kind)).toEqual([
@@ -3783,7 +3859,10 @@ describe("workflow routes", () => {
       message: "Step exit failed",
       payload: {
         status: "failed",
-        output: { reason: "business rule failed" },
+        output: {
+          status: "failed",
+          output: { reason: "business rule failed" },
+        },
       },
     });
 
@@ -3813,19 +3892,21 @@ describe("workflow routes", () => {
           type: "builtin.log.warn",
           message: "Asset owner missing",
           payload: { severity: "medium" },
+          next: ["wait_for_index"],
         },
         {
           id: "wait_for_index",
           type: "builtin.sleep",
           delayMs: 1,
           reason: "Wait for external index consistency",
+          next: ["fail_missing_owner"],
         },
         {
           id: "fail_missing_owner",
           type: "builtin.throw_error",
           message: "Asset owner is missing",
           code: "asset_owner_missing",
-          details: { assetId: "$.input.asset.id" },
+          details: { assetId: "$.workflowTrigger.input.asset.id" },
         },
       ],
     });
@@ -3938,9 +4019,10 @@ describe("workflow routes", () => {
         {
           id: "set_initial",
           type: "builtin.set",
+          next: ["partial_failure"],
           assign: {
-            asset: "$.input.asset",
-            notes: "$.input.notes",
+            asset: "$.workflowTrigger.input.asset",
+            notes: "$.workflowTrigger.input.notes",
           },
         },
         {
@@ -3948,11 +4030,11 @@ describe("workflow routes", () => {
           type: "builtin.set",
           assign: {
             notes: {
-              from: "$.input.newNote",
+              from: "$.workflowTrigger.input.newNote",
               mode: "append",
             },
             asset: {
-              from: "$.input.invalidMergeValue",
+              from: "$.workflowTrigger.input.invalidMergeValue",
               mode: "merge",
             },
           },
@@ -4039,9 +4121,9 @@ describe("workflow routes", () => {
       nodes: [
         {
           id: "invalid_transform",
-          type: "builtin.transform",
+          type: "builtin.transform.object_pick",
           input: {
-            customer: "$.input.customer",
+            customer: "$.workflowTrigger.input.customer",
           },
           transform: {
             kind: "object_pick",
@@ -4105,52 +4187,55 @@ describe("workflow routes", () => {
       nodes: [
         {
           id: "replace_text",
-          type: "builtin.transform",
+          type: "builtin.transform.string_replace",
           transform: {
             kind: "string.replace",
-            value: "$.input.text",
+            value: "$.workflowTrigger.input.text",
             search: "risk",
             replacement: "issue",
             all: true,
           },
           assign: {
-            normalizedText: "$.steps.replace_text.output",
+            normalizedText: "$.steps.replace_text.output.value",
           },
+          next: ["parse_json"],
         },
         {
           id: "parse_json",
-          type: "builtin.transform",
+          type: "builtin.transform.json_parse",
           transform: {
             kind: "json.parse",
-            value: "$.input.json",
+            value: "$.workflowTrigger.input.json",
           },
           assign: {
-            parsed: "$.steps.parse_json.output",
+            parsed: "$.steps.parse_json.output.value",
           },
+          next: ["parse_csv"],
         },
         {
           id: "parse_csv",
-          type: "builtin.transform",
+          type: "builtin.transform.csv_parse",
           transform: {
             kind: "csv.parse",
-            value: "$.input.csv",
+            value: "$.workflowTrigger.input.csv",
             headers: true,
             maxRows: 10,
           },
           assign: {
-            rows: "$.steps.parse_csv.output",
+            rows: "$.steps.parse_csv.output.value",
           },
+          next: ["stringify_csv"],
         },
         {
           id: "stringify_csv",
-          type: "builtin.transform",
+          type: "builtin.transform.csv_stringify",
           transform: {
             kind: "csv.stringify",
             value: "$.context.rows",
             headers: ["id", "name"],
           },
           assign: {
-            csv: "$.steps.stringify_csv.output",
+            csv: "$.steps.stringify_csv.output.value",
           },
         },
       ],
@@ -4186,17 +4271,23 @@ describe("workflow routes", () => {
     expect(
       detail.steps.map((step) => [step.nodeId, step.status, step.output]),
     ).toEqual([
-      ["replace_text", "succeeded", "issue accepted, issue tracked"],
-      ["parse_json", "succeeded", { asset: "asset_http_transform_ops_1" }],
+      ["replace_text", "succeeded", { value: "issue accepted, issue tracked" }],
+      [
+        "parse_json",
+        "succeeded",
+        { value: { asset: "asset_http_transform_ops_1" } },
+      ],
       [
         "parse_csv",
         "succeeded",
-        [
-          { id: "1", name: "Ada" },
-          { id: "2", name: "Lin" },
-        ],
+        {
+          value: [
+            { id: "1", name: "Ada" },
+            { id: "2", name: "Lin" },
+          ],
+        },
       ],
-      ["stringify_csv", "succeeded", "id,name\n1,Ada\n2,Lin"],
+      ["stringify_csv", "succeeded", { value: "id,name\n1,Ada\n2,Lin" }],
     ]);
 
     res = await req(`/api/workflow-runs/${detail.run.id}`);
@@ -4215,25 +4306,31 @@ describe("workflow routes", () => {
       nodes: [
         {
           id: "parse_ip",
-          type: "builtin.transform",
-          transform: { kind: "ip.parse", value: "$.input.ip" },
-          assign: { parsedIp: "$.steps.parse_ip.output" },
+          type: "builtin.transform.ip_parse",
+          transform: { kind: "ip.parse", value: "$.workflowTrigger.input.ip" },
+          assign: { parsedIp: "$.steps.parse_ip.output.value" },
+          next: ["check_internal"],
         },
         {
           id: "check_internal",
-          type: "builtin.transform",
+          type: "builtin.transform.ip_in_subnet",
           transform: {
             kind: "ip.in_subnet",
-            value: "$.input.ip",
+            value: "$.workflowTrigger.input.ip",
             cidr: "10.0.0.0/8",
           },
-          assign: { isInternal: "$.steps.check_internal.output" },
+          assign: { isInternal: "$.steps.check_internal.output.value" },
+          next: ["network"],
         },
         {
           id: "network",
-          type: "builtin.transform",
-          transform: { kind: "ip.network", cidr: "$.input.cidr" },
-          assign: { network: "$.steps.network.output" },
+          type: "builtin.transform.ip_network",
+          transform: {
+            kind: "ip.network",
+            cidr: "$.workflowTrigger.input.cidr",
+          },
+          assign: { network: "$.steps.network.output.value" },
+          next: ["route_ip"],
         },
         {
           id: "route_ip",
@@ -4295,28 +4392,36 @@ describe("workflow routes", () => {
         "parse_ip",
         "succeeded",
         {
-          version: 4,
-          address: "10.20.30.40",
-          normalized: "10.20.30.40",
-          integer: "169090600",
-          octets: [10, 20, 30, 40],
+          value: {
+            version: 4,
+            address: "10.20.30.40",
+            normalized: "10.20.30.40",
+            integer: "169090600",
+            octets: [10, 20, 30, 40],
+          },
         },
       ],
-      ["check_internal", "succeeded", true],
+      ["check_internal", "succeeded", { value: true }],
       [
         "network",
         "succeeded",
         {
-          version: 4,
-          address: "10.20.30.0",
-          prefix: 24,
-          cidr: "10.20.30.0/24",
+          value: {
+            version: 4,
+            address: "10.20.30.0",
+            prefix: 24,
+            cidr: "10.20.30.0/24",
+          },
         },
       ],
       [
         "route_ip",
         "succeeded",
-        { selected: ["log_internal"], skipped: ["log_external"] },
+        {
+          result: true,
+          selected: ["log_internal"],
+          skipped: ["log_external"],
+        },
       ],
       [
         "log_internal",
@@ -4348,14 +4453,15 @@ describe("workflow routes", () => {
       nodes: [
         {
           id: "parse_uri",
-          type: "builtin.transform",
+          type: "builtin.transform.uri_parse",
           transform: {
             kind: "uri.parse",
-            value: "$.input.url",
+            value: "$.workflowTrigger.input.url",
           },
           assign: {
-            uri: "$.steps.parse_uri.output",
+            uri: "$.steps.parse_uri.output.value",
           },
+          next: ["log_uri"],
         },
         {
           id: "log_uri",
@@ -4423,7 +4529,7 @@ describe("workflow routes", () => {
     expect(
       detail.steps.map((step) => [step.nodeId, step.status, step.output]),
     ).toEqual([
-      ["parse_uri", "succeeded", parsedUri],
+      ["parse_uri", "succeeded", { value: parsedUri }],
       [
         "log_uri",
         "succeeded",
@@ -4460,6 +4566,7 @@ describe("workflow routes", () => {
           type: "builtin.parallel",
           failFast: false,
           concurrency: 3,
+          next: ["log_parallel_summary"],
           branches: [
             { id: "asset", label: "Asset", nodes: ["parse_asset"] },
             { id: "uri", label: "URI", nodes: ["parse_uri"] },
@@ -4471,21 +4578,24 @@ describe("workflow routes", () => {
         },
         {
           id: "parse_asset",
-          type: "builtin.transform",
-          transform: "$.input.asset",
+          type: "builtin.transform.value_resolve",
+          transform: {
+            kind: "value.resolve",
+            value: "$.workflowTrigger.input.asset",
+          },
           assign: {
-            branchValue: "$.steps.parse_asset.output",
+            branchValue: "$.steps.parse_asset.output.value",
           },
         },
         {
           id: "parse_uri",
-          type: "builtin.transform",
+          type: "builtin.transform.uri_parse",
           transform: {
             kind: "uri.parse",
-            value: "$.input.asset.url",
+            value: "$.workflowTrigger.input.asset.url",
           },
           assign: {
-            branchValue: "$.steps.parse_uri.output.hostname",
+            branchValue: "$.steps.parse_uri.output.value.hostname",
           },
         },
         {
@@ -4572,8 +4682,10 @@ describe("workflow routes", () => {
           durationMs: expect.any(Number),
           steps: {
             parse_asset: {
-              id: "asset_parallel_http_1",
-              url: "https://assets.example.com/v1/assets/asset_parallel_http_1",
+              value: {
+                id: "asset_parallel_http_1",
+                url: "https://assets.example.com/v1/assets/asset_parallel_http_1",
+              },
             },
           },
           context: {
@@ -4588,8 +4700,10 @@ describe("workflow routes", () => {
           durationMs: expect.any(Number),
           steps: {
             parse_uri: expect.objectContaining({
-              hostname: "assets.example.com",
-              pathname: "/v1/assets/asset_parallel_http_1",
+              value: expect.objectContaining({
+                hostname: "assets.example.com",
+                pathname: "/v1/assets/asset_parallel_http_1",
+              }),
             }),
           },
           context: {

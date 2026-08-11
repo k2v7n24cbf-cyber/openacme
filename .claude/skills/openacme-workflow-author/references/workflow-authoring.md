@@ -5,7 +5,7 @@
 - Definition shape
 - Trigger types
 - Node families
-- Variables and assignments
+- References, step ids, and variables
 - Flow control
 - Transform operations
 - Logs and errors
@@ -41,7 +41,35 @@ Minimum workflow definition:
 ```
 
 Ids must match `[A-Za-z0-9][A-Za-z0-9_.-]*`. Use stable ids because branch
-references, assignments, run history, and step output paths depend on them.
+references, variables, run history, and step output paths depend on them.
+
+`nodes[]` is definition inventory/editor order, not an implicit execution
+chain. Add explicit continuation edges with `next`:
+
+```json
+[
+  {
+    "id": "start",
+    "type": "builtin.log.info",
+    "message": "Start",
+    "next": ["normalize"]
+  },
+  {
+    "id": "normalize",
+    "type": "builtin.transform.value_resolve",
+    "transform": { "kind": "value.resolve", "value": "$.workflowTrigger.input" }
+  }
+]
+```
+
+If `start.next` is omitted, `normalize` will not run merely because it appears
+after `start` in `nodes[]`.
+
+Step ids are the keys used in `$.steps.<stepId>.*` references. Human labels may
+contain spaces, but ids must be clean slugs. In the UI, changing a label derives
+a new slug id and rewrites existing `$.steps.<oldId>` references plus route and
+canvas metadata. Agents editing JSON directly must perform the same reference
+rewrite when renaming ids.
 
 Optional visual layout metadata:
 
@@ -59,7 +87,7 @@ Optional visual layout metadata:
 
 Agents should omit `ui` unless they are preserving or intentionally updating
 visual layout. The runner ignores `ui`; execution order, branch/foreach
-references, triggers, assignments, MCP calls, agent calls, and Python execution
+references, triggers, context writes, MCP calls, agent calls, and Python execution
 come only from `triggers` and `nodes`.
 
 ## Trigger Types
@@ -81,6 +109,44 @@ Manual with trigger input schema:
     "type": "object",
     "required": ["approvalNote"],
     "properties": { "approvalNote": { "type": "string" } }
+  }
+}
+```
+
+Use standard JSON Schema for every workflow or trigger `inputSchema`. Do not
+invent custom verification or blueprint objects. Complex arrays must describe
+their item object shape explicitly:
+
+```json
+{
+  "type": "object",
+  "required": ["assets"],
+  "properties": {
+    "assets": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "hostname", "vulnerabilities"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "hostname": { "type": "string" },
+          "vulnerabilities": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["qid", "severity"],
+              "properties": {
+                "qid": { "type": "string" },
+                "severity": { "type": "integer", "minimum": 1, "maximum": 5 },
+                "title": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    }
   }
 }
 ```
@@ -146,31 +212,53 @@ Set context variables directly:
 {
   "id": "set_customer",
   "type": "builtin.set",
-  "assign": { "customer": "$.input.customer" }
+  "assign": { "customer": "$.workflowTrigger.input.customer" }
 }
 ```
 
-### `builtin.transform`
+### Transformer Nodes
 
-Transform input and assign output:
+Use concrete transformer node types; do not use a generic `builtin.transform`
+node. The transformed value is available at `$.steps.<stepId>.output.value`;
+add an explicit `builtin.set` step afterwards when the normalized value should
+become a context variable:
 
 ```json
-{
-  "id": "normalize",
-  "type": "builtin.transform",
-  "input": { "customer": "$.context.customer" },
-  "transform": { "kind": "identity" },
-  "assign": {
-    "customer": {
-      "from": "$.steps.normalize.output",
-      "mode": "replace"
+[
+  {
+    "id": "normalize",
+    "type": "builtin.transform.object_pick",
+    "input": { "customer": "$.context.customer" },
+    "transform": {
+      "kind": "object_pick",
+      "source": "$.steps.normalize.input.customer",
+      "fields": ["id", "name", "riskScore"]
+    }
+  },
+  {
+    "id": "set_normalized_customer",
+    "type": "builtin.set",
+    "assign": {
+      "customer": {
+        "from": "$.steps.normalize.output.value",
+        "mode": "replace"
+      }
     }
   }
-}
+]
 ```
 
-`transform` may be a direct JSON value, a JSONPath-style reference string, or
-one of the supported operation objects listed in Transform Operations.
+`transform` must be an operation object with a `kind` matching the node type.
+For example, `builtin.transform.uri_parse` must use
+`{ "kind": "uri.parse", ... }`.
+
+Human UI authoring exposes transform operations as separate cards under the
+`Transformers` add-step family, such as `String Replace`, `Regex Match`,
+`JSON Parse`, `CSV Parse`, `IP Network`, and `URI Parse`. These save as concrete
+node types such as `builtin.transform.string_replace`,
+`builtin.transform.json_parse`, and `builtin.transform.uri_parse`. The UI should
+use operation-specific inputs, textareas, selects, and toggles instead of
+exposing a raw transform JSON editor.
 
 ### Branching With `builtin.if`
 
@@ -189,8 +277,43 @@ you are preserving an old definition that already uses it.
 ```
 
 On the canvas, the `then` route is the true route and `else` is the false
-route. Add-step actions from the true/false route must append the new node id
-to the matching array.
+route. These arrays are route entry points, not path inventories. Add-step
+actions from the true/false route should set the matching array to the selected
+entry node id, usually a single value. Continue from that entry with
+`entry.next = ["next_step"]`.
+
+Normal continuation after a routed card is still explicit. For example, if
+`risk_gate.then` starts at `log_review` and the flow should continue to
+`notify_owner`, set `log_review.next = ["notify_owner"]` or set
+`risk_gate.next = ["notify_owner"]` when the intended UX is a parent-level join
+after the selected branch completes.
+
+### Switch Case
+
+Use `builtin.switch` when a value can route to multiple named cases plus a
+default route:
+
+```json
+{
+  "id": "route_by_kind",
+  "type": "builtin.switch",
+  "value": "$.workflowTrigger.input.kind",
+  "cases": [
+    { "id": "case_a", "label": "Case A", "value": "a", "nodes": ["log_a"] },
+    { "id": "case_b", "label": "Case B", "value": "b", "nodes": ["log_b"] }
+  ],
+  "default": ["log_default"]
+}
+```
+
+Case `value` is JSON, so strings must stay quoted in raw definitions. Human UI
+forms should make the case id, label, and match value editable. The case
+`nodes` arrays and the `default` array are route entry points, not normal
+switch settings and not path inventories; the UI should not ask the operator to
+type them. Canvas add/connect actions own those arrays. Agents editing JSON
+directly must update the matching case/default route entry when they create,
+remove, or reconnect switch routes, then use explicit `next` edges for any
+continuation.
 
 ### Foreach
 
@@ -198,15 +321,9 @@ to the matching array.
 {
   "id": "each_asset",
   "type": "builtin.foreach",
-  "items": "$.input.assets",
+  "items": "$.workflowTrigger.input.assets",
   "itemVar": "asset",
-  "body": ["score_asset"],
-  "assign": {
-    "assetScores": {
-      "from": "$.steps.each_asset.output",
-      "mode": "replace"
-    }
-  }
+  "body": ["score_asset"]
 }
 ```
 
@@ -231,21 +348,17 @@ the same time.
     { "id": "ip", "label": "IP", "nodes": ["check_internal"] }
   ],
   "concurrency": 3,
-  "failFast": true,
-  "assign": {
-    "parallelSummary": {
-      "from": "$.steps.parallel_enrichment.output",
-      "mode": "replace"
-    }
-  }
+  "failFast": true
 }
 ```
 
 Parallel behavior:
 
 - Each branch starts from a cloned parent context and cloned step-output state.
-- Branch-local assignments stay inside the branch result.
-- Parent context changes only through the parallel node's own `assign`.
+- Branch-local context writes stay inside the branch result.
+- Parent flow continues from the parallel node. If the aggregate should become
+  a reusable context variable, add a `builtin.set` node after the parallel card
+  and read from `$.steps.parallel_enrichment.output`.
 - `concurrency` is optional, defaults to branch count, and must be 1-16.
 - `failFast` defaults to true. When true, the first failed branch fails the
   parallel step and aborts siblings. When false, all branches finish and the
@@ -317,8 +430,9 @@ Valid log types:
 - `builtin.log.warn`
 - `builtin.log.error`
 
-Log nodes can also have `assign` when the structured log payload or output
-needs to be captured into context.
+Log node input, output, and emitted logs are inspectable in run history. If the
+structured log payload or output also needs to become a reusable variable, add a
+following `builtin.set` node.
 
 ### Python
 
@@ -331,10 +445,7 @@ Python steps execute isolated code with JSON `input` and set `output`:
   "input": { "customer": "$.context.customer" },
   "code": "output = {'score': input['customer'].get('riskScore', 0)}",
   "timeoutMs": 45000,
-  "reset": true,
-  "assign": {
-    "score": "$.steps.py_score.output.score"
-  }
+  "reset": true
 }
 ```
 
@@ -348,14 +459,8 @@ Timeout must be an integer from 100 to 300000 ms.
   "type": "mcp.tool",
   "server": "demo",
   "tool": "echo",
-  "input": { "message": "$.input.customer.name" },
-  "timeoutMs": 30000,
-  "assign": {
-    "mcpEcho": {
-      "from": "$.steps.mcp_echo.output",
-      "mode": "replace"
-    }
-  }
+  "input": { "message": "$.workflowTrigger.input.customer.name" },
+  "timeoutMs": 30000
 }
 ```
 
@@ -371,10 +476,7 @@ production workflows.
   "agentId": "agent_demo",
   "prompt": "Review workflow input",
   "input": { "customer": "$.context.customer" },
-  "timeoutMs": 60000,
-  "assign": {
-    "agentReview": "$.steps.agent_review.output"
-  }
+  "timeoutMs": 60000
 }
 ```
 
@@ -385,47 +487,110 @@ Do not author `agent.task` nodes in the first workflow release. Durable
 agent-task creation, waiting, and resume semantics are a follow-up contract;
 the current schema and UI import/export validation reject `agent.task`.
 
-## Variables And Assignments
+## References, Step Ids, And Variables
 
 Workflow variables live in run `context`. Read from:
 
-- `$.input`
+- `$.workflowTrigger.input` for the run-start payload
+- `$.workflowTrigger.meta` for trigger provenance such as kind, trigger id,
+  request id, or schedule time
 - `$.context`
+- `$.steps.<nodeId>.input`
 - `$.steps.<nodeId>.output`
+- `$.steps.<nodeId>.status`
+- `$.steps.<nodeId>.error`
 - `item` inside foreach bodies
 
-Assignment target keys are context paths:
+Workflow trigger input must be read through `$.workflowTrigger.input`.
+Per-card execution input is available separately at `$.steps.<nodeId>.input`.
+
+Canonical reference families:
+
+- `$.workflowTrigger.input.<path>`: run-start payload, no matter whether the
+  workflow was started manually, by a scheduled trigger, or by a future event
+  trigger.
+- `$.workflowTrigger.meta.<path>`: trigger provenance such as kind, trigger id,
+  requested-by, request id, or schedule time.
+- `$.context.<path>`: variables explicitly persisted by previous steps.
+- `$.steps.<stepId>.input.<path>`: the resolved input object sent to that step.
+- `$.steps.<stepId>.output.<path>`: that step's standard JSON output.
+- `$.steps.<stepId>.status`: current or terminal step status.
+- `$.steps.<stepId>.error.<path>`: structured step error when present.
+
+Standard step output contract:
+
+| Node type                           | Output shape                                                                                                                                                     | Common reference                          |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `builtin.transform`                 | `{ "value": <transformedValue> }`                                                                                                                                | `$.steps.<id>.output.value`               |
+| Transformer UI cards                | Same as `builtin.transform`; UI cards save as `builtin.transform`                                                                                                | `$.steps.<id>.output.value`               |
+| `builtin.set`                       | `{ "assigned": { "<context.path>": <writtenValue> } }`                                                                                                           | `$.steps.<id>.output.assigned.<path>`     |
+| `builtin.if`                        | `{ "result": boolean, "selected": string[], "skipped": string[] }`                                                                                               | `$.steps.<id>.output.result`              |
+| `builtin.switch`                    | `{ "value": <switchValue>, "case": string, "matched": boolean, "selected": string[], "skipped": string[] }`                                                      | `$.steps.<id>.output.case`                |
+| `builtin.foreach`                   | `{ "count": number, "succeededCount": number, "failedCount": number, "items": [...] }`                                                                           | `$.steps.<id>.output.items`               |
+| `builtin.parallel`                  | `{ "count": number, "succeededCount": number, "failedCount": number, "canceledCount": number, "failFast": boolean, "branches": {...}, "branchOrder": string[] }` | `$.steps.<id>.output.branches.<branchId>` |
+| `builtin.log.info/debug/warn/error` | `{ "message": string, "payload"?: <resolvedPayload> }`                                                                                                           | `$.steps.<id>.output.payload`             |
+| `builtin.sleep`                     | `{ "delayMs": number, "reason"?: string }`                                                                                                                       | `$.steps.<id>.output.delayMs`             |
+| `builtin.exit`                      | `{ "status": "succeeded" \| "failed" \| "canceled", "output"?: <terminalOutput> }`                                                                               | `$.steps.<id>.output.output`              |
+| `builtin.throw_error`               | No success output; inspect `$.steps.<id>.error`                                                                                                                  | `$.steps.<id>.error.message`              |
+| `builtin.python`                    | `{ "value": <pythonReturn>, "stdout"?: string, "stderr"?: string }`                                                                                              | `$.steps.<id>.output.value`               |
+| `mcp.tool`                          | `{ "server": string, "tool": string, "result": <rawToolOutput> }`                                                                                                | `$.steps.<id>.output.result`              |
+| `agent.call`                        | `{ "response": string, "sessionId"?: string, "assistantMessageId"?: string, ... }` for normal free-text agent replies                                            | `$.steps.<id>.output.response`            |
+
+Type interpretation rules:
+
+- `status` enum values are `succeeded`, `failed`, and `canceled` for
+  `builtin.exit`; step/run status additionally includes `queued`, `running`,
+  `waiting`, and `skipped` where applicable.
+- `selected`, `skipped`, `branchOrder`, and route node lists are string arrays
+  of step ids.
+- `count`, `succeededCount`, `failedCount`, `canceledCount`, and `delayMs` are
+  numbers.
+- `result`, `matched`, and `failFast` are booleans.
+- `value`, `payload`, `result`, `assigned`, `items`, `branches`, and
+  `output` are JSON values whose nested shape depends on the configured
+  transform, tool, agent, Python code, or workflow authoring choice.
+- UI and agent tooling should render known primitive fields as read-only
+  inputs and long strings, arrays, or objects as read-only textareas while
+  retaining raw JSON inspection for debugging and artifacts.
+
+Persist reusable variables with `builtin.set`:
 
 ```json
 {
+  "id": "set_customer",
+  "type": "builtin.set",
   "assign": {
-    "customer.id": "$.input.customer.id",
-    "customer": {
-      "from": "$.steps.normalize.output",
-      "mode": "replace"
-    },
-    "audit.events": {
-      "from": "$.steps.log_event.output",
-      "mode": "append"
-    }
+    "customer.id": "$.workflowTrigger.input.customer.id"
   }
 }
 ```
 
-Modes:
+`builtin.set` target keys are dotted context paths. Supported modes:
 
 - `replace` is the default.
 - `merge` requires object-compatible values.
 - `append` appends to list-like values.
 
-Assignments run only after the step succeeds. Failed steps do not mutate
-context.
+For tool, agent, Python, and transform cards, do not rely on hidden generic
+assignment UI. Use the standard output field for the card type. If a downstream
+workflow needs a stable context variable, add a `builtin.transform` node to
+normalize the result when needed and then a `builtin.set` node to write
+`$.context.<name>`.
+
+Context writes run only after the writing step succeeds. Failed steps do not
+mutate context.
+
+Autocomplete sources for reference fields should come from this same model:
+top-level families, the trigger input schema, known context variables written by
+`builtin.set`, current workflow step ids, known step input/output schemas, MCP
+tool input schemas, and agent-call input/output metadata when available.
 
 ## Flow Control
 
 Use flow-control nodes to make routing explicit and inspectable:
 
 - `builtin.if`: choose `then` for true and `else` for false.
+- `builtin.switch`: choose one case route or the default route.
 - `builtin.foreach`: run a body for every item and assign the aggregate output.
 - `builtin.parallel`: run independent branch bodies with optional concurrency
   and fail-fast control.
@@ -433,39 +598,48 @@ Use flow-control nodes to make routing explicit and inspectable:
   definitions.
 - `builtin.throw_error`: fail intentionally with structured details.
 - `builtin.sleep`: pause briefly for rate limit or eventual consistency.
-- `builtin.set` and assign maps: write values into run context.
-- `builtin.transform`: normalize, parse, convert, or reshape values.
+- `builtin.set`: write values into run context.
+- `builtin.transform.<operation>`: normalize, parse, convert, or reshape values
+  with a concrete transformer node type.
 - `builtin.log.debug/info/warn/error`: write structured timeline logs.
 
 ## Transform Operations
 
-`builtin.transform` operation fields may use literal JSON values or references
-like `$.input`, `$.context`, `$.steps.<nodeId>.output`, and foreach item
-variables. Assign the transform output back to the same context key when you
-want an overwrite:
+Transformer operation fields may use literal JSON values or references like
+`$.workflowTrigger.input`, `$.workflowTrigger.meta`, `$.context`,
+`$.steps.<nodeId>.input`, `$.steps.<nodeId>.output.value`, and foreach item
+variables. Store transform output with a following `builtin.set` node when you
+want a reusable normalized value or an overwrite:
 
 ```json
-{
-  "id": "normalize_customer",
-  "type": "builtin.transform",
-  "transform": {
-    "kind": "string.replace",
-    "value": "$.context.customer.name",
-    "search": "  ",
-    "replacement": " ",
-    "all": true
+[
+  {
+    "id": "normalize_customer_name",
+    "type": "builtin.transform.string_replace",
+    "transform": {
+      "kind": "string.replace",
+      "value": "$.context.customer.name",
+      "search": "  ",
+      "replacement": " ",
+      "all": true
+    }
   },
-  "assign": {
-    "customer.name": {
-      "from": "$.steps.normalize_customer.output",
-      "mode": "replace"
+  {
+    "id": "set_customer_name",
+    "type": "builtin.set",
+    "assign": {
+      "customer.name": {
+        "from": "$.steps.normalize_customer_name.output.value",
+        "mode": "replace"
+      }
     }
   }
-}
+]
 ```
 
 Supported operations:
 
+- `value.resolve`: field `value`; resolves a reference or literal JSON value.
 - `object_pick`: fields `source` and `fields`; returns selected object fields.
 - `string.replace`: fields `value`, `search`, `replacement`, optional `all`.
 - `string.regex_replace`: fields `value`, `pattern`, `replacement`, optional
@@ -490,9 +664,34 @@ Supported operations:
   fragment, username null, password null, and `hasCredentials`. Credentials are
   redacted from `href`.
 
+UI transformer cards map to the same operation kinds:
+
+- `Value Resolve` -> node type `builtin.transform.value_resolve`, kind
+  `value.resolve`
+- `Object Pick` -> node type `builtin.transform.object_pick`, kind
+  `object_pick`
+- `String Replace` -> `string.replace`
+- `Regex Replace` -> `string.regex_replace`
+- `Regex Match` -> `string.regex_match`
+- `JSON Parse` -> `json.parse`
+- `JSON Stringify` -> `json.stringify`
+- `CSV Parse` -> `csv.parse`
+- `CSV Stringify` -> `csv.stringify`
+- `IP Parse` -> `ip.parse`
+- `Is IPv4` -> `ip.is_ipv4`
+- `Is IPv6` -> `ip.is_ipv6`
+- `In Subnet` -> `ip.in_subnet`
+- `IP Netmask` -> `ip.netmask`
+- `IP Network` -> `ip.network`
+- `URI Parse` -> node type `builtin.transform.uri_parse`, kind `uri.parse`
+
+Agents must author the concrete transformer node types directly. Do not create
+generic `builtin.transform` nodes.
+
 Transform guardrails:
 
-- Unsupported `kind` values fail the step with a controlled error.
+- Unsupported transformer node types or node type / `transform.kind` mismatches
+  fail schema validation before the run starts.
 - Invalid regex, JSON, CSV, IP, CIDR, or URI input fails the step with
   operation-specific details.
 - CSV input and transform output have size guardrails; inspect artifacts when a
@@ -507,18 +706,22 @@ path, then use Playwright only when validating UI behavior.
 1. Open `/workflows`.
 2. Create or select a workflow. New workflow creation should first choose a
    trigger. For now, choose a manual trigger.
-3. Use canvas cards and the right inspector for human editing.
+3. Use canvas cards and the right inspector for human editing. The inspector
+   should prefer explicit fields, textareas, selects, and toggles; do not ask
+   human operators to edit raw JSON for transformer operation configuration.
 4. Add steps from the `+` buttons under cards or true/false/branch route
    buttons so the route reference is created with the new node.
-5. Click **Save** to persist draft changes.
-6. Fill **Run input** in Test Configuration.
-7. Click **Test** for draft execution.
-8. Inspect Run History and the selected run detail.
-9. Open each relevant step and inspect input, output, logs, and errors.
-10. Click **Publish** after a passing test.
-11. Click trigger-card **Run** for published runnable triggers.
-12. Use **Export** for `openacme.workflow.definition.v1` snapshots.
-13. Use **Import workflow file** to create a new draft from a snapshot.
+5. For Switch, edit case id/label/match value in the inspector, but manage
+   case/default membership through canvas links and route `+` buttons.
+6. Click **Save** to persist draft changes.
+7. Fill **Run input** in Test Configuration.
+8. Click **Test** for draft execution.
+9. Inspect Run History and the selected run detail.
+10. Open each relevant step and inspect input, output, logs, and errors.
+11. Click **Publish** after a passing test.
+12. Click trigger-card **Run** for published runnable triggers.
+13. Use **Export** for `openacme.workflow.definition.v1` snapshots.
+14. Use **Import workflow file** to create a new draft from a snapshot.
 
 Import is intentionally non-destructive in the first workflow release. Imported
 files always create a new `wf_import_...` draft, even when the exported
@@ -547,7 +750,8 @@ servers and their tool schemas can change between authoring sessions.
 Every human UI operation must have an agent path:
 
 - Human **New**: agent calls `POST /api/workflows`.
-- Human **Edit cards / JSON**: agent edits the workflow definition JSON.
+- Human **Edit cards/forms**: agent edits the workflow definition JSON through
+  the API/import path.
 - Human canvas drag/layout: agent may preserve or update optional
   `ui.canvas.nodes.<nodeId>.position`, but usually omits `ui`.
 - Human MCP tool picker/inventory: agent calls `GET /api/workflows/mcp/tools`.
@@ -629,8 +833,9 @@ The response is:
 
 Use `server` and `tool` exactly in `mcp.tool` nodes. Use `description` to pick
 the intended capability and `inputSchema` to build the node `input` object from
-`$.input`, `$.context`, `$.steps`, or foreach `item` references. If the needed
-tool is absent from the inventory, stop and report the missing capability
+`$.workflowTrigger.input`, `$.workflowTrigger.meta`, `$.context`, `$.steps`, or
+foreach `item` references. If the needed tool is absent from the inventory, stop
+and report the missing capability
 instead of inventing ids or parameters.
 
 An authoring agent does not need prior knowledge of every MCP tool. It should
@@ -740,6 +945,9 @@ In the run detail response:
 - `run.status` is the terminal or current run state.
 - `run.input` is the submitted run input.
 - `run.context` is the final or current workflow context.
+- `definition`, when present, is the workflow definition snapshot that actually
+  executed for this run. Prefer it over the current draft when rendering or
+  auditing historical runs.
 - `steps[]` contains per-step attempts. Find by `nodeId`; foreach body steps
   can have multiple attempts.
 - `steps[].input`, `steps[].output`, `steps[].error`, `steps[].logsSummary`,
@@ -861,7 +1069,7 @@ Before closing a workflow authoring task:
     {
       "id": "set_customer",
       "type": "builtin.set",
-      "assign": { "customer": "$.input.customer" }
+      "assign": { "customer": "$.workflowTrigger.input.customer" }
     },
     {
       "id": "risk_gate",

@@ -944,6 +944,90 @@ describe("hosted integrations invocation routes", () => {
     expect(body.content).not.toContain("super-secret-token");
   });
 
+  it("exposes failure bucket repair routes to the Tool Developer Agent", async () => {
+    writeFamily(
+      "qualys",
+      familyYaml("qualys", "Qualys", "qualys_count_assets"),
+      {
+        "qualys.py": pythonTool("raise ValueError('route-bucket-failure')"),
+      },
+    );
+    const draftId = await createDraft("qualys");
+    await promoteFamily("qualys", draftId);
+    await seedConfigScope("qualys", "qualys-test", "test");
+
+    let res = await req("/api/hosted-integrations/invoke", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(allowedInvokeBody()),
+    });
+    expect(res.status).toBe(500);
+
+    res = await req("/api/hosted-integrations/failure-buckets");
+    expect(res.status).toBe(403);
+
+    res = await req(
+      "/api/hosted-integrations/failure-buckets?roles=tool_developer&familyId=qualys",
+    );
+    expect(res.status).toBe(200);
+    const listed = await res.json();
+    expect(listed).toMatchObject({
+      buckets: [
+        {
+          familyId: "qualys",
+          toolName: "qualys_count_assets",
+          status: "open",
+          count: 1,
+        },
+      ],
+    });
+    const bucketId = listed.buckets[0].id as string;
+
+    res = await req(
+      `/api/hosted-integrations/failure-buckets/${bucketId}?roles=tool_developer`,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      bucket: { id: bucketId, familyId: "qualys" },
+    });
+
+    res = await req(
+      `/api/hosted-integrations/failure-buckets/${bucketId}/assign`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          actor: toolDeveloperActor(),
+          assignedTo: "tool-developer",
+        }),
+      },
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      ok: true,
+      bucket: { id: bucketId, assignedTo: "tool-developer" },
+    });
+
+    await upsertSmokeExample(draftId, undefined, "regression");
+    res = await req(
+      `/api/hosted-integrations/failure-buckets/${bucketId}/close`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          actor: toolDeveloperActor(),
+          draftId,
+          regressionExampleId: "smoke_count",
+        }),
+      },
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      ok: true,
+      bucket: { id: bucketId, status: "closed" },
+    });
+  });
+
   it("debug-runs can target drafts or promoted generations when policy allows", async () => {
     writeFamily(
       "qualys",

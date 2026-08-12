@@ -44,6 +44,19 @@ export interface HostedIntegrationFailureBucketStore {
   ): Promise<RecordHostedIntegrationFailureResult>;
   getBucket(bucketId: string): Promise<HostedIntegrationFailureBucket | null>;
   listBuckets(): Promise<HostedIntegrationFailureBucket[]>;
+  assignBucket(request: {
+    bucketId: string;
+    assignedTo: string;
+  }): Promise<
+    | { ok: true; bucket: HostedIntegrationFailureBucket }
+    | { ok: false; reason: "not_found" }
+  >;
+  closeBucket(request: {
+    bucketId: string;
+  }): Promise<
+    | { ok: true; bucket: HostedIntegrationFailureBucket }
+    | { ok: false; reason: "not_found" }
+  >;
 }
 
 export function createFileHostedIntegrationFailureBucketStore(
@@ -143,6 +156,39 @@ class FileHostedIntegrationFailureBucketStore
     return buckets.sort((left, right) =>
       left.latestSeenAt.localeCompare(right.latestSeenAt),
     );
+  }
+
+  async assignBucket(request: {
+    bucketId: string;
+    assignedTo: string;
+  }): Promise<
+    | { ok: true; bucket: HostedIntegrationFailureBucket }
+    | { ok: false; reason: "not_found" }
+  > {
+    const existing = await this.getBucket(request.bucketId);
+    if (!existing) return { ok: false, reason: "not_found" };
+    const bucket = HostedIntegrationFailureBucketSchema.parse({
+      ...existing,
+      assignedTo: request.assignedTo,
+      latestSeenAt: this.now().toISOString(),
+    });
+    await this.writeBucket(bucket);
+    return { ok: true, bucket };
+  }
+
+  async closeBucket(request: { bucketId: string }): Promise<
+    | { ok: true; bucket: HostedIntegrationFailureBucket }
+    | { ok: false; reason: "not_found" }
+  > {
+    const existing = await this.getBucket(request.bucketId);
+    if (!existing) return { ok: false, reason: "not_found" };
+    const bucket = HostedIntegrationFailureBucketSchema.parse({
+      ...existing,
+      status: "closed",
+      latestSeenAt: this.now().toISOString(),
+    });
+    await this.writeBucket(bucket);
+    return { ok: true, bucket };
   }
 
   private async getBucketByFingerprint(

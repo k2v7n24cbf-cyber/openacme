@@ -31,6 +31,10 @@ import {
   type HostedIntegrationExampleRegistry,
 } from "./examples.js";
 import {
+  createFileHostedIntegrationFailureBucketStore,
+  type HostedIntegrationFailureBucketStore,
+} from "./failure-buckets.js";
+import {
   createFileHostedIntegrationGenerationStore,
   type HostedIntegrationRegistryRefreshEvent,
   type HostedIntegrationGenerationStore,
@@ -79,6 +83,7 @@ export interface HostedIntegrationService {
   readonly disablements: HostedIntegrationDisablementStore;
   readonly generations: HostedIntegrationGenerationStore;
   readonly artifacts: HostedIntegrationArtifactStore;
+  readonly failureBuckets: HostedIntegrationFailureBucketStore;
   readonly gateway: HostedIntegrationGateway;
   listFamilies(): Promise<HostedIntegrationManagementFamilySummary[]>;
   getFamily(
@@ -125,6 +130,8 @@ export function createFileHostedIntegrationService(
   const secrets = createFileHostedIntegrationSecretStore(options);
   const approvals = createFileHostedIntegrationApprovalStore(options);
   const disablements = createFileHostedIntegrationDisablementStore(options);
+  const failureBuckets =
+    createFileHostedIntegrationFailureBucketStore(options);
   const generations = createFileHostedIntegrationGenerationStore({
     ...options,
     draftStore: drafts,
@@ -139,6 +146,7 @@ export function createFileHostedIntegrationService(
     generations,
     artifacts,
     disablements,
+    failureBuckets,
   });
   return new FileHostedIntegrationService({
     catalog,
@@ -154,6 +162,7 @@ export function createFileHostedIntegrationService(
     disablements,
     generations,
     artifacts,
+    failureBuckets,
     gateway,
   });
 }
@@ -171,6 +180,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
   readonly disablements: HostedIntegrationDisablementStore;
   readonly generations: HostedIntegrationGenerationStore;
   readonly artifacts: HostedIntegrationArtifactStore;
+  readonly failureBuckets: HostedIntegrationFailureBucketStore;
   readonly gateway: HostedIntegrationGateway;
 
   private readonly catalog: HostedIntegrationCatalog;
@@ -189,6 +199,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     disablements: HostedIntegrationDisablementStore;
     generations: HostedIntegrationGenerationStore;
     artifacts: HostedIntegrationArtifactStore;
+    failureBuckets: HostedIntegrationFailureBucketStore;
     gateway: HostedIntegrationGateway;
   }) {
     this.catalog = parts.catalog;
@@ -204,6 +215,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     this.disablements = parts.disablements;
     this.generations = parts.generations;
     this.artifacts = parts.artifacts;
+    this.failureBuckets = parts.failureBuckets;
     this.gateway = parts.gateway;
   }
 

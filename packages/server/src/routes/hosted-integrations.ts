@@ -16,6 +16,7 @@ import {
   type HostedIntegrationDraft,
   type HostedIntegrationExample,
   type HostedIntegrationExecutionLogEntry,
+  type HostedIntegrationFailureBucket,
   type HostedIntegrationGatewayError,
   type HostedIntegrationGeneration,
   type HostedIntegrationHumanApprovalRecord,
@@ -638,6 +639,93 @@ export function registerHostedIntegrationRoutes(
     return c.json({ configScope });
   });
 
+  app.get("/api/hosted-integrations/failure-buckets", async (c) => {
+    if (!canManageFailureBuckets(c)) return c.json({ error: "forbidden" }, 403);
+    const familyId = c.req.query("familyId");
+    const buckets = await service.failureBuckets.listBuckets();
+    return c.json({
+      buckets: familyId
+        ? buckets.filter((bucket) => bucket.familyId === familyId)
+        : buckets,
+    });
+  });
+
+  app.get("/api/hosted-integrations/failure-buckets/:bucketId", async (c) => {
+    if (!canManageFailureBuckets(c)) return c.json({ error: "forbidden" }, 403);
+    const bucket = await service.failureBuckets.getBucket(
+      c.req.param("bucketId"),
+    );
+    if (!bucket) return c.json({ error: "not_found" }, 404);
+    return c.json({ bucket });
+  });
+
+  app.post(
+    "/api/hosted-integrations/failure-buckets/:bucketId/assign",
+    async (c) => {
+      try {
+        const body = await readJsonObject(c);
+        if (!actorField(body).roles.includes("tool_developer")) {
+          return c.json({ ok: false, error: { code: "policy_denied" } }, 403);
+        }
+        const result = await service.failureBuckets.assignBucket({
+          bucketId: c.req.param("bucketId"),
+          assignedTo: stringField(body, "assignedTo"),
+        });
+        if (result.ok) return c.json({ ok: true, bucket: result.bucket });
+        return c.json({ ok: false, error: { code: result.reason } }, 404);
+      } catch (error) {
+        return invalidRequest(c, error);
+      }
+    },
+  );
+
+  app.post(
+    "/api/hosted-integrations/failure-buckets/:bucketId/close",
+    async (c) => {
+      try {
+        const body = await readJsonObject(c);
+        if (!actorField(body).roles.includes("tool_developer")) {
+          return c.json({ ok: false, error: { code: "policy_denied" } }, 403);
+        }
+        const bucket = await service.failureBuckets.getBucket(
+          c.req.param("bucketId"),
+        );
+        if (!bucket) return c.json({ ok: false, error: { code: "not_found" } }, 404);
+        const regressionExampleId = optionalStringField(
+          body,
+          "regressionExampleId",
+        );
+        if (regressionExampleId) {
+          const draftId = optionalStringField(body, "draftId");
+          if (!draftId) {
+            return c.json(
+              { ok: false, error: { code: "draft_required" } },
+              400,
+            );
+          }
+          const ok = await hasRegressionExample(service, {
+            bucket,
+            draftId,
+            regressionExampleId,
+          });
+          if (!ok) {
+            return c.json(
+              { ok: false, error: { code: "regression_example_not_found" } },
+              400,
+            );
+          }
+        }
+        const result = await service.failureBuckets.closeBucket({
+          bucketId: bucket.id,
+        });
+        if (result.ok) return c.json({ ok: true, bucket: result.bucket });
+        return c.json({ ok: false, error: { code: result.reason } }, 404);
+      } catch (error) {
+        return invalidRequest(c, error);
+      }
+    },
+  );
+
   app.put("/api/hosted-integrations/config-scopes/:scopeId", async (c) => {
     try {
       const body = await readJsonObject(c);
@@ -896,6 +984,32 @@ function canReadRun(
   return actorId === log.actorId || roles.includes("tool_developer");
 }
 
+function canManageFailureBuckets(c: Context): boolean {
+  const roles = (c.req.query("roles") ?? "")
+    .split(",")
+    .map((role) => role.trim())
+    .filter(Boolean);
+  return roles.includes("tool_developer") || roles.includes("management_tool");
+}
+
+async function hasRegressionExample(
+  service: HostedIntegrationService,
+  input: {
+    bucket: HostedIntegrationFailureBucket;
+    draftId: string;
+    regressionExampleId: string;
+  },
+): Promise<boolean> {
+  const examples = await service.examples.listExamples(input.draftId);
+  return examples.some(
+    (example) =>
+      example.id === input.regressionExampleId &&
+      example.familyId === input.bucket.familyId &&
+      example.toolName === input.bucket.toolName &&
+      example.category === "regression",
+  );
+}
+
 async function hasCurrentDraftLock(
   service: HostedIntegrationService,
   draft: HostedIntegrationDraft,
@@ -944,6 +1058,7 @@ async function runDraftExampleRoute(
       actorId: actor.id,
       configScopeId: "debug",
       configRevision: 1,
+      sanitizedArgs: JsonObjectSchema.parse(example.args),
       status: "running",
       startedAt: run.startedAt,
     });

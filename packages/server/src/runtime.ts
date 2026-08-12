@@ -437,6 +437,38 @@ export class ServerRuntime {
           });
         return { ok: true, runId, name: stringParam(p, "name"), content };
       }
+      case "hosted_integration_failure_bucket_list": {
+        const familyId = optionalStringParam(p, "family_id");
+        const buckets =
+          await this.hostedIntegrationService.failureBuckets.listBuckets();
+        return {
+          ok: true,
+          buckets: familyId
+            ? buckets.filter((bucket) => bucket.familyId === familyId)
+            : buckets,
+        };
+      }
+      case "hosted_integration_failure_bucket_get": {
+        const bucket =
+          await this.hostedIntegrationService.failureBuckets.getBucket(
+            stringParam(p, "bucket_id"),
+          );
+        return bucket
+          ? { ok: true, bucket }
+          : { ok: false, error: { code: "not_found" } };
+      }
+      case "hosted_integration_failure_bucket_assign": {
+        const result =
+          await this.hostedIntegrationService.failureBuckets.assignBucket({
+            bucketId: stringParam(p, "bucket_id"),
+            assignedTo: stringParam(p, "assigned_to"),
+          });
+        return result.ok
+          ? { ok: true, bucket: result.bucket }
+          : { ok: false, error: { code: result.reason } };
+      }
+      case "hosted_integration_failure_bucket_close":
+        return this.closeHostedIntegrationFailureBucket(p);
       default:
         return {
           ok: false,
@@ -563,6 +595,48 @@ export class ServerRuntime {
     });
   }
 
+  private async closeHostedIntegrationFailureBucket(
+    params: Record<string, unknown>,
+  ): Promise<unknown> {
+    const bucket =
+      await this.hostedIntegrationService.failureBuckets.getBucket(
+        stringParam(params, "bucket_id"),
+      );
+    if (!bucket) return { ok: false, error: { code: "not_found" } };
+
+    const regressionExampleId = optionalStringParam(
+      params,
+      "regression_example_id",
+    );
+    if (regressionExampleId) {
+      const draftId = optionalStringParam(params, "draft_id");
+      if (!draftId) return { ok: false, error: { code: "draft_required" } };
+      const examples =
+        await this.hostedIntegrationService.examples.listExamples(draftId);
+      const hasRegression = examples.some(
+        (example) =>
+          example.id === regressionExampleId &&
+          example.familyId === bucket.familyId &&
+          example.toolName === bucket.toolName &&
+          example.category === "regression",
+      );
+      if (!hasRegression) {
+        return {
+          ok: false,
+          error: { code: "regression_example_not_found" },
+        };
+      }
+    }
+
+    const result =
+      await this.hostedIntegrationService.failureBuckets.closeBucket({
+        bucketId: bucket.id,
+      });
+    return result.ok
+      ? { ok: true, bucket: result.bucket }
+      : { ok: false, error: { code: result.reason } };
+  }
+
   private async runHostedIntegrationDraftExample(
     request: HostedIntegrationManagementRequest,
   ): Promise<unknown> {
@@ -598,6 +672,7 @@ export class ServerRuntime {
       actorId: request.actorId,
       configScopeId: "debug",
       configRevision: 1,
+      sanitizedArgs: JsonObjectSchema.parse(example.args),
       status: "running",
       startedAt: run.startedAt,
     });

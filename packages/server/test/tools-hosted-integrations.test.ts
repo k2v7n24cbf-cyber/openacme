@@ -423,6 +423,166 @@ describe("/api/tools hosted integration surfacing", () => {
       generationId: promoted.generation.id,
     });
   });
+
+  it("exposes failure bucket repair lifecycle through management tools", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "openacme-tools-hosted-"));
+    writeFamily(dataDir);
+
+    const config = ConfigSchema.parse({
+      dataDir,
+      model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+    });
+    const { manager, runtime, close } = await createApp(config);
+    closeApp = close;
+    const seeded = await runtime.hostedIntegrationService.failureBuckets.recordFailure({
+      log: {
+        runId: "run_failed_1",
+        familyId: "qualys",
+        toolName: "qualys_count_assets",
+        generationId: "gen_1",
+        actorId: "agent:analyst",
+        configScopeId: "qualys-prod",
+        configRevision: 1,
+        sanitizedArgs: {},
+        status: "failed",
+        startedAt: "2026-08-12T10:00:00.000Z",
+        endedAt: "2026-08-12T10:00:01.000Z",
+        durationMs: 1000,
+        error: { code: "tool_bug", message: "ValueError: boom" },
+      },
+    });
+    if (!seeded.ok) throw new Error("failed to seed bucket");
+
+    const lock = await runtime.hostedIntegrationService.locks.acquireLock({
+      familyId: "qualys",
+      lockedBy: "agent:tool-developer",
+      ttlMs: 60_000,
+    });
+    if (!lock.ok) throw new Error("failed to lock family");
+    const draft = await runtime.hostedIntegrationService.drafts.createDraft({
+      familyId: "qualys",
+      lockId: lock.lock.id,
+      sourceRevisionId: "source_rev_1",
+    });
+    if (!draft.ok) throw new Error("failed to create draft");
+    await runtime.hostedIntegrationService.examples.upsertExample({
+      draftId: draft.draft.id,
+      lockId: lock.lock.id,
+      example: {
+        id: "regression_1",
+        familyId: "qualys",
+        toolName: "qualys_count_assets",
+        category: "regression",
+        args: {},
+        expected: {},
+      },
+    });
+
+    const managementToolNames = [
+      "hosted_integration_failure_bucket_list",
+      "hosted_integration_failure_bucket_get",
+      "hosted_integration_failure_bucket_assign",
+      "hosted_integration_failure_bucket_close",
+    ];
+    await manager.createAgent(
+      AgentDefinitionSchema.parse({
+        id: "tool-developer",
+        name: "Tool Developer",
+        role: "",
+        model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+        persona: "Repair hosted integrations.",
+        tools: managementToolNames,
+      }),
+    );
+    await manager.createAgent(
+      AgentDefinitionSchema.parse({
+        id: "analyst",
+        name: "Analyst",
+        role: "",
+        model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+        persona: "Analyze data.",
+        tools: [],
+      }),
+    );
+
+    const tools = toolRegistry.getVercelTools(
+      new Set(managementToolNames),
+    ) as Record<
+      string,
+      { execute: (args: Record<string, unknown>) => Promise<string> }
+    >;
+    const call = async (
+      name: string,
+      args: Record<string, unknown>,
+      agentId = "tool-developer",
+    ) =>
+      JSON.parse(
+        await toolCallContext.run(
+          {
+            agentId,
+            sessionId: `session_${name}_${agentId}`,
+            workspaceDir: path.join(dataDir!, "agents", agentId, "workspace"),
+          },
+          () => tools[name]!.execute(args),
+        ),
+      );
+
+    await expect(
+      call("hosted_integration_failure_bucket_list", {}, "analyst"),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "policy_denied" },
+    });
+
+    const listed = await call("hosted_integration_failure_bucket_list", {
+      family_id: "qualys",
+    });
+    expect(listed).toMatchObject({
+      ok: true,
+      buckets: [{ id: seeded.bucket.id, count: 1, status: "open" }],
+    });
+
+    await expect(
+      call("hosted_integration_failure_bucket_get", {
+        bucket_id: seeded.bucket.id,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      bucket: { id: seeded.bucket.id, familyId: "qualys" },
+    });
+
+    await expect(
+      call("hosted_integration_failure_bucket_assign", {
+        bucket_id: seeded.bucket.id,
+        assigned_to: "tool-developer",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      bucket: { id: seeded.bucket.id, assignedTo: "tool-developer" },
+    });
+
+    await expect(
+      call("hosted_integration_failure_bucket_close", {
+        bucket_id: seeded.bucket.id,
+        draft_id: draft.draft.id,
+        regression_example_id: "missing_regression",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "regression_example_not_found" },
+    });
+
+    await expect(
+      call("hosted_integration_failure_bucket_close", {
+        bucket_id: seeded.bucket.id,
+        draft_id: draft.draft.id,
+        regression_example_id: "regression_1",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      bucket: { id: seeded.bucket.id, status: "closed" },
+    });
+  });
 });
 
 function writeFamily(root: string): void {

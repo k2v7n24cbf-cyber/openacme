@@ -1745,6 +1745,8 @@ Evidence:
 
 ### Slice 6.3: Failure Bucket Routes And Tools
 
+Status: done.
+
 Goal:
 
 - Expose list/get/assign/close routes.
@@ -1768,6 +1770,26 @@ Validation:
 pnpm --filter @openacme/server test -- hosted-integrations
 pnpm --filter @openacme/tools test -- hosted-integration-management
 ```
+
+Evidence:
+
+- Red validation:
+  `pnpm --filter @openacme/server test -- tools-hosted-integrations` first
+  failed because `HostedIntegrationService.failureBuckets` was not wired.
+  `pnpm --filter @openacme/server test -- hosted-integrations-routes` then
+  caught one 6.1 schema drift in the draft-example route log path
+  (`sanitizedArgs` missing).
+- Green validation:
+  `pnpm --filter @openacme/server test -- tools-hosted-integrations`
+  `pnpm --filter @openacme/server test -- hosted-integrations-routes`
+  `pnpm --filter @openacme/tools test -- hosted-integration-management`
+  `pnpm --filter @openacme/hosted-integrations test -- failure-buckets`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/tools check-types`
+  `pnpm --filter @openacme/tools build`
+  `pnpm --filter @openacme/server check-types`
+  `pnpm --filter @openacme/server build`
 
 ### Slice 6.4: Repair Task Creation
 

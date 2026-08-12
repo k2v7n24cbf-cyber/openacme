@@ -289,6 +289,7 @@ const definitions: Array<{
     parameters: z
       .object({
         bucket_id: BucketId,
+        draft_id: DraftId.optional(),
         regression_example_id: z.string().min(1).optional(),
       })
       .strict(),

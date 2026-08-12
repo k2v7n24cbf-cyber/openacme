@@ -296,3 +296,9 @@ export {
   type HostedIntegrationValidationDiagnostic,
   type HostedIntegrationValidationResult,
 } from "./validation.js";
+export {
+  createNoopHostedIntegrationTelemetry,
+  createOpenTelemetryHostedIntegrationTelemetry,
+  type HostedIntegrationTelemetry,
+  type HostedIntegrationTelemetrySpan,
+} from "./telemetry.js";

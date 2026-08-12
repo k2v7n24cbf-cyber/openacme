@@ -2328,6 +2328,32 @@ Validation:
 pnpm --filter @openacme/hosted-integrations test -- telemetry
 ```
 
+Status: Completed in local commit pending push.
+
+Implemented:
+
+- Added a hosted integration telemetry bridge with a default
+  `@opentelemetry/api` tracer/meter implementation and injectable test sink.
+- Gateway invocations now emit `hosted_integration.invoke` spans with family,
+  tool, environment, actor kind, generation, run id, replay status, and final
+  status attributes.
+- Policy/config denial outcomes add a policy-denied span event without runtime
+  dispatch.
+- Artifact/large responses add a span event and increment
+  `openacme.hosted_integrations.large_responses`.
+- Telemetry attributes intentionally exclude raw args, config values, and
+  secret values.
+
+Green validation:
+
+```text
+pnpm --filter @openacme/hosted-integrations test -- telemetry
+pnpm --filter @openacme/hosted-integrations check-types
+pnpm --filter @openacme/hosted-integrations test -- telemetry gateway artifacts execution-log
+pnpm --filter @openacme/hosted-integrations build
+pnpm --filter @openacme/server check-types
+```
+
 ## Milestone 10: Legacy Integration-Hub Migration
 
 Goal: move from the current external `integration-hub` stdio MCP setup to

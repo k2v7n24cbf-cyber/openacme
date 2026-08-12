@@ -56,6 +56,11 @@ import {
   createFileHostedIntegrationSecretStore,
   type HostedIntegrationSecretStore,
 } from "./secrets.js";
+import {
+  createOpenTelemetryHostedIntegrationTelemetry,
+  type HostedIntegrationTelemetry,
+  type HostedIntegrationTelemetrySpan,
+} from "./telemetry.js";
 
 export interface FileHostedIntegrationGatewayOptions {
   dataDir: string;
@@ -67,6 +72,7 @@ export interface FileHostedIntegrationGatewayOptions {
   artifacts?: HostedIntegrationArtifactStore;
   executionLogs?: HostedIntegrationExecutionLogStore;
   failureBuckets?: HostedIntegrationFailureBucketStore;
+  telemetry?: HostedIntegrationTelemetry;
   onFailureBucketRecorded?: (
     event: HostedIntegrationFailureBucketRecordedEvent,
   ) => void | Promise<void>;
@@ -291,6 +297,8 @@ export function createFileHostedIntegrationGateway(
     artifacts,
     executionLogs,
     failureBuckets,
+    telemetry:
+      options.telemetry ?? createOpenTelemetryHostedIntegrationTelemetry(),
     onFailureBucketRecorded: options.onFailureBucketRecorded,
     idempotency,
     runtime: options.runtime ?? new HostedIntegrationPythonRuntime(),
@@ -316,6 +324,7 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
   private readonly artifacts: HostedIntegrationArtifactStore;
   private readonly idempotency: HostedIntegrationIdempotencyStore;
   private readonly runtime: Pick<HostedIntegrationPythonRuntime, "callTool">;
+  private readonly telemetry: HostedIntegrationTelemetry;
   private readonly now: () => Date;
 
   constructor(parts: {
@@ -328,6 +337,7 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
     artifacts: HostedIntegrationArtifactStore;
     executionLogs: HostedIntegrationExecutionLogStore;
     failureBuckets: HostedIntegrationFailureBucketStore;
+    telemetry: HostedIntegrationTelemetry;
     onFailureBucketRecorded?:
       | ((
           event: HostedIntegrationFailureBucketRecordedEvent,
@@ -346,6 +356,7 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
     this.artifacts = parts.artifacts;
     this.executionLogs = parts.executionLogs;
     this.failureBuckets = parts.failureBuckets;
+    this.telemetry = parts.telemetry;
     this.onFailureBucketRecorded = parts.onFailureBucketRecorded ?? null;
     this.idempotency = parts.idempotency;
     this.runtime = parts.runtime;
@@ -354,6 +365,26 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
 
   async invoke(
     request: InvokeHostedIntegrationRequest,
+  ): Promise<InvokeHostedIntegrationResult> {
+    return this.telemetry.withInvocationSpan(
+      {
+        "openacme.span.type": "hosted_integration_invoke",
+        "openacme.hosted_integration.family_id": request.familyId,
+        "openacme.hosted_integration.tool_name": request.toolName,
+        "openacme.hosted_integration.environment": request.environment,
+        "openacme.hosted_integration.actor_kind": request.actor.kind,
+      },
+      async (span) => {
+        const result = await this.invokeObserved(request, span);
+        observeInvocationResult(this.telemetry, span, request, result);
+        return result;
+      },
+    );
+  }
+
+  private async invokeObserved(
+    request: InvokeHostedIntegrationRequest,
+    span: HostedIntegrationTelemetrySpan,
   ): Promise<InvokeHostedIntegrationResult> {
     const familyId = HostedIntegrationFamilyIdSchema.parse(request.familyId);
     const toolName = HostedIntegrationToolNameSchema.parse(request.toolName);
@@ -412,6 +443,9 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
     const generation = await this.generations.getGeneration(
       lease.lease.generationId,
     );
+    span.setAttributes({
+      "openacme.hosted_integration.generation_id": lease.lease.generationId,
+    });
     if (!generation) {
       await this.generations.completeInvocation({ leaseId: lease.lease.id });
       return failure("generation_not_found", "generation was not found");
@@ -471,6 +505,7 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
       actorId: request.actor.id,
       input: args,
     });
+    span.setAttributes({ "openacme.hosted_integration.run_id": run.id });
     await this.executionLogs.startLog({
       runId: run.id,
       familyId,
@@ -853,6 +888,68 @@ function disabledFailure(
         `hosted integration ${disablement.key} is disabled`,
       details: { target: disablement.target },
     },
+  };
+}
+
+function observeInvocationResult(
+  telemetry: HostedIntegrationTelemetry,
+  span: HostedIntegrationTelemetrySpan,
+  request: InvokeHostedIntegrationRequest,
+  result: InvokeHostedIntegrationResult,
+): void {
+  if (result.ok) {
+    span.setAttributes({
+      "openacme.hosted_integration.status": "succeeded",
+      "openacme.hosted_integration.replayed": result.replayed,
+    });
+    span.setStatusOk();
+    if (!result.replayed) {
+      span.setAttributes({
+        "openacme.hosted_integration.generation_id": result.generationId,
+      });
+      if ("result_ref" in result.envelope) {
+        const attrs = largeResponseAttributes(request, result);
+        span.addEvent("openacme.hosted_integration.large_response", attrs);
+        telemetry.recordLargeResponse(attrs);
+      }
+    }
+    return;
+  }
+
+  span.setAttributes({
+    "openacme.hosted_integration.status": "failed",
+    "openacme.hosted_integration.error_code": result.error.code,
+  });
+  if (result.runId) {
+    span.setAttributes({ "openacme.hosted_integration.run_id": result.runId });
+  }
+  if (
+    result.error.code === "policy_denied" ||
+    result.error.code === "approval_required" ||
+    result.error.code === "config_missing"
+  ) {
+    span.addEvent("openacme.hosted_integration.policy_denied", {
+      "openacme.hosted_integration.error_code": result.error.code,
+    });
+  }
+  span.setStatusError(result.error.code);
+}
+
+function largeResponseAttributes(
+  request: InvokeHostedIntegrationRequest,
+  result: Extract<InvokeHostedIntegrationResult, { ok: true; replayed: false }>,
+): Record<string, string | number | boolean> {
+  const ref = "result_ref" in result.envelope ? result.envelope.result_ref : null;
+  return {
+    "openacme.hosted_integration.family_id": request.familyId,
+    "openacme.hosted_integration.tool_name": request.toolName,
+    "openacme.hosted_integration.actor_kind": request.actor.kind,
+    "openacme.hosted_integration.generation_id": result.generationId,
+    "openacme.hosted_integration.response_mode": "artifact",
+    "openacme.hosted_integration.artifact_size_bytes":
+      ref?.size_bytes ?? 0,
+    "openacme.hosted_integration.artifact_estimated_tokens":
+      ref?.estimated_tokens ?? 0,
   };
 }
 

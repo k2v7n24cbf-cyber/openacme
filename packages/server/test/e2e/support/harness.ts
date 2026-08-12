@@ -48,6 +48,8 @@ export async function startE2EServer(
     dataDir?: string;
     /** Remove the data dir on close. Default true for tmpdirs, false for caller dirs. */
     cleanupDataDir?: boolean;
+    /** Bind a fixed e2e port when a smoke needs a stable local URL. Default 0. */
+    port?: number;
     /** Override root behavior config for tests that need low thresholds. */
     behavior?: Record<string, unknown>;
   } = {},
@@ -88,7 +90,7 @@ export async function startE2EServer(
     port: number;
   }>((resolve) => {
     const s = serve(
-      { fetch: app.fetch, port: 0, hostname: "127.0.0.1" },
+      { fetch: app.fetch, port: opts.port ?? 0, hostname: "127.0.0.1" },
       (info) => resolve({ server: s, port: info.port }),
     );
   });
@@ -96,10 +98,12 @@ export async function startE2EServer(
   if (opts.seedMember === false) {
     e2eAuthToken = "";
   } else {
-    const member = manager.authStore.createMember({
-      email: "e2e@example.com",
-      password: "e2e-password-123",
-    });
+    const member =
+      manager.authStore.getMemberByEmail("e2e@example.com") ??
+      manager.authStore.createMember({
+        email: "e2e@example.com",
+        password: "e2e-password-123",
+      });
     e2eAuthToken = manager.authStore.createSession(member.id).token;
   }
 

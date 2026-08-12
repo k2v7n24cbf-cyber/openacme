@@ -1599,6 +1599,8 @@ Implementation note:
 
 ### Slice 5.6: Local Safe Hosted Tool Smoke
 
+Status: done.
+
 Goal:
 
 - In the isolated local test environment, create or load a safe hosted
@@ -1636,9 +1638,29 @@ TDD / Live Validation:
 Validation:
 
 ```text
-OPENACME_DATA_DIR=~/.openamce-hosted-integrations-test-env pnpm dev
-pnpm --filter @openacme/server test:e2e -- hosted-integrations-safe-tools
+pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/hosted-integrations-safe-tools.e2e.ts
+OPENACME_DATA_DIR=/Users/alenbohcelyan/.openamce-hosted-integrations-test-env OPENACME_E2E_PORT=3466 pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/hosted-integrations-safe-tools.e2e.ts
 ```
+
+Evidence:
+
+- Red validation:
+  targeted e2e first failed because the test helper functions were scoped
+  outside the e2e client/server variables, then failed again because
+  `family_create` already returns the initial lock and draft while the test
+  incorrectly tried to acquire a second lock.
+- Green validation:
+  `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/hosted-integrations-safe-tools.e2e.ts`
+  `pnpm --filter @openacme/server check-types`
+  `OPENACME_DATA_DIR=/Users/alenbohcelyan/.openamce-hosted-integrations-test-env OPENACME_E2E_PORT=3466 pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/hosted-integrations-safe-tools.e2e.ts`
+- Isolated live smoke used
+  `/Users/alenbohcelyan/.openamce-hosted-integrations-test-env` and
+  `127.0.0.1:3466`. `lsof -nP -iTCP:3466 -sTCP:LISTEN` returned no listener
+  after shutdown.
+- The safe promoted tools were `safe_echo`, `safe_sum`, and
+  `safe_large_result`; invocation went through Agent Settings data and
+  `registry.getVercelTools()`. `safe_large_result` returned a `result_ref`
+  artifact instead of inline payload.
 
 ## Milestone 6: Failure Buckets And Regression Loop
 

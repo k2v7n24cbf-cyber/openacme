@@ -131,6 +131,18 @@ export {
   type WriteHostedIntegrationHumanSecretsResult,
 } from "./secrets.js";
 export {
+  createAgentSettingsHostedIntegrationBinding,
+  evaluateHostedIntegrationPolicy,
+  type CreateAgentSettingsHostedIntegrationBindingResult,
+  type HostedIntegrationPolicyAction,
+  type HostedIntegrationPolicyActor,
+  type HostedIntegrationPolicyActorKind,
+  type HostedIntegrationPolicyDecision,
+  type HostedIntegrationPolicyInput,
+  type HostedIntegrationPolicyMode,
+  type HostedIntegrationPolicyOperationClass,
+} from "./policy.js";
+export {
   createFileHostedIntegrationExampleRegistry,
   type HostedIntegrationExampleRegistry,
   type HostedIntegrationExampleRegistryOptions,

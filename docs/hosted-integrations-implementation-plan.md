@@ -697,6 +697,21 @@ pnpm --filter @openacme/hosted-integrations test -- secrets
 
 ### Slice 3.3: Access Policy MVP
 
+Status: done.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/hosted-integrations test -- policy` failed before
+  implementation because `evaluateHostedIntegrationPolicy` and
+  `createAgentSettingsHostedIntegrationBinding` did not exist.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- policy`
+  `pnpm --filter @openacme/hosted-integrations test`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/server check-types`
+
 Goal:
 
 - Add a deny-by-default policy evaluator.

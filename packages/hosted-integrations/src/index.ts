@@ -8,6 +8,7 @@ export {
   HostedIntegrationExampleSchema,
   HostedIntegrationExecutionModeSchema,
   HostedIntegrationFailureBucketSchema,
+  HostedIntegrationFamilyLockSchema,
   HostedIntegrationFamilyIdSchema,
   HostedIntegrationFreshnessSchema,
   HostedIntegrationGenerationSchema,
@@ -35,6 +36,7 @@ export {
   type HostedIntegrationExampleCategory,
   type HostedIntegrationExecutionMode,
   type HostedIntegrationFailureBucket,
+  type HostedIntegrationFamilyLock,
   type HostedIntegrationFamilyId,
   type HostedIntegrationFreshness,
   type HostedIntegrationGeneration,
@@ -67,3 +69,14 @@ export {
   type FileHostedIntegrationServiceOptions,
   type HostedIntegrationService,
 } from "./service.js";
+export {
+  createFileHostedIntegrationLockStore,
+  type AcquireHostedIntegrationLockRequest,
+  type AcquireHostedIntegrationLockResult,
+  type FileHostedIntegrationLockStoreOptions,
+  type HostedIntegrationLockStore,
+  type ReleaseHostedIntegrationLockRequest,
+  type ReleaseHostedIntegrationLockResult,
+  type RenewHostedIntegrationLockRequest,
+  type RenewHostedIntegrationLockResult,
+} from "./locks.js";

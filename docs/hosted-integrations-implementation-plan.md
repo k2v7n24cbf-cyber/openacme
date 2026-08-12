@@ -341,6 +341,20 @@ merge workflows.
 
 ### Slice 2.1: Family Edit Locks With TTL
 
+Status: done.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/hosted-integrations test -- locks` failed before
+  implementation because `createFileHostedIntegrationLockStore` was not
+  exported.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- locks`
+  `pnpm --filter @openacme/hosted-integrations test`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+
 Goal:
 
 - Add a file-backed lock store.

@@ -168,6 +168,21 @@ export type HostedIntegrationSourceRevision = z.infer<
   typeof HostedIntegrationSourceRevisionSchema
 >;
 
+export const HostedIntegrationFamilyLockSchema = z
+  .object({
+    id: z.string().min(1),
+    familyId: HostedIntegrationFamilyIdSchema,
+    lockedBy: z.string().min(1),
+    draftId: z.string().min(1).optional(),
+    acquiredAt: IsoTimestampSchema,
+    renewedAt: IsoTimestampSchema,
+    expiresAt: IsoTimestampSchema,
+  })
+  .strict();
+export type HostedIntegrationFamilyLock = z.infer<
+  typeof HostedIntegrationFamilyLockSchema
+>;
+
 export const HostedIntegrationDraftSchema = z
   .object({
     id: z.string().min(1),

@@ -288,6 +288,7 @@ export async function createApp(
 
   registerHostedIntegrationRoutes(app, runtime.hostedIntegrationService, {
     authStore: manager.authStore,
+    dataDir: config.dataDir,
   });
 
   // Health check

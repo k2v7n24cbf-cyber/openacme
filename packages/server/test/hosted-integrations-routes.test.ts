@@ -1048,7 +1048,12 @@ describe("hosted integrations invocation routes", () => {
       bucket: { id: bucketId, assignedTo: "tool-developer" },
     });
 
-    await upsertSmokeExample(draftId, undefined, "regression");
+    const lockId = await readDraftLockId(draftId);
+    await upsertSmokeExample(draftId, lockId, "regression");
+    const failingRegressionGenerationId = await promoteDraftViaRoutes(
+      draftId,
+      lockId,
+    );
     res = await req(
       `/api/hosted-integrations/failure-buckets/${bucketId}/close`,
       {
@@ -1057,6 +1062,72 @@ describe("hosted integrations invocation routes", () => {
         body: JSON.stringify({
           actor: toolDeveloperActor(),
           draftId,
+          generationId: failingRegressionGenerationId,
+          regressionExampleId: "smoke_count",
+        }),
+      },
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: { code: "regression_example_failed" },
+      runId: expect.any(String),
+    });
+
+    await writeDraftFileViaRoutes(
+      draftId,
+      lockId,
+      "qualys.py",
+      pythonTool("return {'fixed': True}"),
+    );
+    await upsertSmokeExample(draftId, lockId, "smoke");
+    const smokeFixGenerationId = await promoteDraftViaRoutes(draftId, lockId);
+    res = await req(
+      `/api/hosted-integrations/failure-buckets/${bucketId}/close`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          actor: toolDeveloperActor(),
+          draftId,
+          generationId: smokeFixGenerationId,
+        }),
+      },
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: { code: "regression_example_required" },
+    });
+
+    await upsertSmokeExample(draftId, lockId, "regression");
+    const regressionFixGenerationId = await promoteDraftViaRoutes(
+      draftId,
+      lockId,
+    );
+    expect(
+      readFileSync(
+        path.join(
+          dataDir,
+          "hosted-integrations",
+          "source",
+          "families",
+          "qualys",
+          "examples.yaml",
+        ),
+        "utf-8",
+      ),
+    ).toContain("category: regression");
+
+    res = await req(
+      `/api/hosted-integrations/failure-buckets/${bucketId}/close`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          actor: toolDeveloperActor(),
+          draftId,
+          generationId: regressionFixGenerationId,
           regressionExampleId: "smoke_count",
         }),
       },
@@ -1632,6 +1703,36 @@ async function upsertSmokeExample(
     }),
   });
   expect(res.status).toBe(200);
+}
+
+async function writeDraftFileViaRoutes(
+  draftId: string,
+  lockId: string,
+  filePath: string,
+  content: string,
+): Promise<void> {
+  const res = await req(
+    `/api/hosted-integrations/drafts/${draftId}/files/${filePath}`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ lockId, content }),
+    },
+  );
+  expect(res.status).toBe(200);
+}
+
+async function promoteDraftViaRoutes(
+  draftId: string,
+  lockId: string,
+): Promise<string> {
+  const res = await req(`/api/hosted-integrations/drafts/${draftId}/promote`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ actor: toolDeveloperActor(), lockId }),
+  });
+  expect(res.status).toBe(200);
+  return ((await res.json()) as { generation: { id: string } }).generation.id;
 }
 
 async function readDraftLockId(draftId: string): Promise<string> {

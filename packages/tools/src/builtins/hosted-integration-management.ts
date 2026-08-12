@@ -290,6 +290,7 @@ const definitions: Array<{
       .object({
         bucket_id: BucketId,
         draft_id: DraftId.optional(),
+        generation_id: GenerationId.optional(),
         regression_example_id: z.string().min(1).optional(),
       })
       .strict(),

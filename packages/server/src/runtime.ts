@@ -48,6 +48,7 @@ import {
   dispatchDueScheduledWorkflowTriggers as dispatchDueScheduledWorkflowTriggersForRuntime,
   type DispatchDueScheduledWorkflowTriggersOptions,
 } from "./workflow-scheduler.js";
+import { validateHostedIntegrationRegressionClose } from "./hosted-integration-regression.js";
 
 const log = createLogger("server.workflow-runtime");
 const DEFAULT_WORKFLOW_DISPATCHER_INTERVAL_MS = 60_000;
@@ -75,6 +76,7 @@ export class ServerRuntime {
   readonly workflowExecutionPorts: WorkflowExecutionPorts;
   readonly hostedIntegrationService: HostedIntegrationService;
   readonly hostedIntegrationToolRegistry: HostedIntegrationToolRegistryAdapter;
+  private readonly dataDir: string;
   private readonly workflowDb: ReturnType<typeof createDatabase>;
   private readonly workflowDispatcherIntervalMs: number;
   private readonly workflowDispatcherNow: () => Date;
@@ -82,6 +84,7 @@ export class ServerRuntime {
   private workflowDispatcherTickInFlight: Promise<void> | null = null;
 
   constructor(config: Config, opts?: ServerRuntimeOptions) {
+    this.dataDir = config.dataDir;
     this.agentManager = new AgentManager(config, opts);
     this.workflowDb = createDatabase(config);
     this.workflowStore = createWorkflowStore(this.workflowDb, {
@@ -512,7 +515,7 @@ export class ServerRuntime {
           : { ok: false, error: { code: result.reason } };
       }
       case "hosted_integration_failure_bucket_close":
-        return this.closeHostedIntegrationFailureBucket(p);
+        return this.closeHostedIntegrationFailureBucket(request);
       default:
         return {
           ok: false,
@@ -640,35 +643,29 @@ export class ServerRuntime {
   }
 
   private async closeHostedIntegrationFailureBucket(
-    params: Record<string, unknown>,
+    request: HostedIntegrationManagementRequest,
   ): Promise<unknown> {
+    const params = request.params;
     const bucket = await this.hostedIntegrationService.failureBuckets.getBucket(
       stringParam(params, "bucket_id"),
     );
     if (!bucket) return { ok: false, error: { code: "not_found" } };
 
-    const regressionExampleId = optionalStringParam(
-      params,
-      "regression_example_id",
-    );
-    if (regressionExampleId) {
-      const draftId = optionalStringParam(params, "draft_id");
-      if (!draftId) return { ok: false, error: { code: "draft_required" } };
-      const examples =
-        await this.hostedIntegrationService.examples.listExamples(draftId);
-      const hasRegression = examples.some(
-        (example) =>
-          example.id === regressionExampleId &&
-          example.familyId === bucket.familyId &&
-          example.toolName === bucket.toolName &&
-          example.category === "regression",
-      );
-      if (!hasRegression) {
-        return {
-          ok: false,
-          error: { code: "regression_example_not_found" },
-        };
-      }
+    const regression = await validateHostedIntegrationRegressionClose({
+      service: this.hostedIntegrationService,
+      dataDir: this.dataDir,
+      actorId: request.actorId,
+      bucket,
+      draftId: optionalStringParam(params, "draft_id"),
+      generationId: optionalStringParam(params, "generation_id"),
+      regressionExampleId: optionalStringParam(params, "regression_example_id"),
+    });
+    if (!regression.ok) {
+      return {
+        ok: false,
+        error: { code: regression.code },
+        ...(regression.runId ? { runId: regression.runId } : {}),
+      };
     }
 
     const result =

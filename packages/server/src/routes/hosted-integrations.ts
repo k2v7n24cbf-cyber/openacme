@@ -16,7 +16,6 @@ import {
   type HostedIntegrationDraft,
   type HostedIntegrationExample,
   type HostedIntegrationExecutionLogEntry,
-  type HostedIntegrationFailureBucket,
   type HostedIntegrationGatewayError,
   type HostedIntegrationGeneration,
   type HostedIntegrationHumanApprovalRecord,
@@ -25,11 +24,13 @@ import {
 } from "@openacme/hosted-integrations";
 import type { AuthStore } from "@openacme/db";
 import { resolveMember } from "../middleware/auth.js";
+import { validateHostedIntegrationRegressionClose } from "../hosted-integration-regression.js";
 
 const DEFAULT_LOCK_TTL_MS = 30 * 60 * 1000;
 
 export interface HostedIntegrationRouteOptions {
   authStore?: AuthStore;
+  dataDir?: string;
 }
 
 export function registerHostedIntegrationRoutes(
@@ -690,30 +691,33 @@ export function registerHostedIntegrationRoutes(
         const bucket = await service.failureBuckets.getBucket(
           c.req.param("bucketId"),
         );
-        if (!bucket) return c.json({ ok: false, error: { code: "not_found" } }, 404);
-        const regressionExampleId = optionalStringField(
-          body,
-          "regressionExampleId",
-        );
-        if (regressionExampleId) {
-          const draftId = optionalStringField(body, "draftId");
-          if (!draftId) {
-            return c.json(
-              { ok: false, error: { code: "draft_required" } },
-              400,
-            );
-          }
-          const ok = await hasRegressionExample(service, {
-            bucket,
-            draftId,
-            regressionExampleId,
-          });
-          if (!ok) {
-            return c.json(
-              { ok: false, error: { code: "regression_example_not_found" } },
-              400,
-            );
-          }
+        if (!bucket)
+          return c.json({ ok: false, error: { code: "not_found" } }, 404);
+        const actor = actorField(body);
+        if (!options.dataDir) {
+          return c.json(
+            { ok: false, error: { code: "platform_unavailable" } },
+            500,
+          );
+        }
+        const regression = await validateHostedIntegrationRegressionClose({
+          service,
+          dataDir: options.dataDir,
+          actorId: actor.id,
+          bucket,
+          draftId: optionalStringField(body, "draftId"),
+          generationId: optionalStringField(body, "generationId"),
+          regressionExampleId: optionalStringField(body, "regressionExampleId"),
+        });
+        if (!regression.ok) {
+          return c.json(
+            {
+              ok: false,
+              error: { code: regression.code },
+              ...(regression.runId ? { runId: regression.runId } : {}),
+            },
+            regression.code === "generation_not_found" ? 404 : 400,
+          );
         }
         const result = await service.failureBuckets.closeBucket({
           bucketId: bucket.id,
@@ -990,24 +994,6 @@ function canManageFailureBuckets(c: Context): boolean {
     .map((role) => role.trim())
     .filter(Boolean);
   return roles.includes("tool_developer") || roles.includes("management_tool");
-}
-
-async function hasRegressionExample(
-  service: HostedIntegrationService,
-  input: {
-    bucket: HostedIntegrationFailureBucket;
-    draftId: string;
-    regressionExampleId: string;
-  },
-): Promise<boolean> {
-  const examples = await service.examples.listExamples(input.draftId);
-  return examples.some(
-    (example) =>
-      example.id === input.regressionExampleId &&
-      example.familyId === input.bucket.familyId &&
-      example.toolName === input.bucket.toolName &&
-      example.category === "regression",
-  );
 }
 
 async function hasCurrentDraftLock(

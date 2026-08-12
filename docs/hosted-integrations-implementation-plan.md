@@ -1870,8 +1870,33 @@ TDD:
 Validation:
 
 ```text
-pnpm --filter @openacme/hosted-integrations test -- regression
+pnpm --filter @openacme/server test -- hosted-integrations-routes tools-hosted-integrations
+pnpm --filter @openacme/tools test -- hosted-integration-management
 ```
+
+Implementation notes:
+
+- Failure-bucket close now requires `draft_id` / `draftId`,
+  `generation_id` / `generationId`, and `regression_example_id` /
+  `regressionExampleId` evidence. The generation must belong to the bucket
+  family and must have been promoted from the linked draft.
+- The regression example must exist on the linked draft and in the promoted
+  generation's copied `examples.yaml`, which verifies the regression was
+  retained in source/generation artifacts after promotion.
+- The close path executes the regression example against promoted generation
+  files before closing. Failed regression execution leaves the bucket open and
+  returns a sanitized regression run id to the Tool Developer Agent.
+
+Evidence:
+
+- Green validation:
+  `pnpm --filter @openacme/server test -- hosted-integrations-routes`
+  `pnpm --filter @openacme/server test -- tools-hosted-integrations`
+  `pnpm --filter @openacme/server check-types`
+  `pnpm --filter @openacme/server build`
+  `pnpm --filter @openacme/tools test -- hosted-integration-management`
+  `pnpm --filter @openacme/tools check-types`
+  `pnpm --filter @openacme/tools build`
 
 ### Slice 6.6: Run Artifact Retention
 

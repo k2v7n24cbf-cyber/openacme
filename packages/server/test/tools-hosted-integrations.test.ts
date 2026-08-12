@@ -561,6 +561,18 @@ describe("/api/tools hosted integration surfacing", () => {
       sourceRevisionId: "source_rev_1",
     });
     if (!draft.ok) throw new Error("failed to create draft");
+    const patched =
+      await runtime.hostedIntegrationService.drafts.writeDraftFile({
+        draftId: draft.draft.id,
+        lockId: lock.lock.id,
+        path: "qualys.py",
+        content: [
+          "def call_tool(name, args, ctx):",
+          "    return {'fixed': True}",
+          "",
+        ].join("\n"),
+      });
+    if (!patched.ok) throw new Error("failed to patch draft");
     await runtime.hostedIntegrationService.examples.upsertExample({
       draftId: draft.draft.id,
       lockId: lock.lock.id,
@@ -573,6 +585,13 @@ describe("/api/tools hosted integration surfacing", () => {
         expected: {},
       },
     });
+    const promoted =
+      await runtime.hostedIntegrationService.generations.promoteDraft({
+        draftId: draft.draft.id,
+        promotedBy: "agent:tool-developer",
+        validation: { ok: true, diagnostics: [] },
+      });
+    if (!promoted.ok) throw new Error("failed to promote fix generation");
 
     const managementToolNames = [
       "hosted_integration_failure_bucket_list",
@@ -661,6 +680,7 @@ describe("/api/tools hosted integration surfacing", () => {
       call("hosted_integration_failure_bucket_close", {
         bucket_id: seeded.bucket.id,
         draft_id: draft.draft.id,
+        generation_id: promoted.generation.id,
         regression_example_id: "missing_regression",
       }),
     ).resolves.toMatchObject({
@@ -672,6 +692,7 @@ describe("/api/tools hosted integration surfacing", () => {
       call("hosted_integration_failure_bucket_close", {
         bucket_id: seeded.bucket.id,
         draft_id: draft.draft.id,
+        generation_id: promoted.generation.id,
         regression_example_id: "regression_1",
       }),
     ).resolves.toMatchObject({

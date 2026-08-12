@@ -143,7 +143,7 @@ docs/hosted-integrations-architecture.md
 
 ### Slice 0.2: Implementation Plan
 
-Status: this document.
+Status: done.
 
 Artifact:
 
@@ -1793,6 +1793,8 @@ Evidence:
 
 ### Slice 6.4: Repair Task Creation
 
+Status: done.
+
 Goal:
 
 - Assign new owner-actionable buckets to the Tool Developer Agent.
@@ -1852,6 +1854,8 @@ Evidence:
 
 ### Slice 6.5: Regression Example On Fix
 
+Status: done.
+
 Goal:
 
 - Require fixed buckets to add or link a regression example before close.
@@ -1899,6 +1903,8 @@ Evidence:
   `pnpm --filter @openacme/tools build`
 
 ### Slice 6.6: Run Artifact Retention
+
+Status: done.
 
 Goal:
 
@@ -1958,6 +1964,8 @@ gateway or examples complex.
 
 ### Slice 7.1: Async Job Contract
 
+Status: done.
+
 Goal:
 
 - Add opt-in async execution for tools classified as `execution: async`.
@@ -2005,6 +2013,8 @@ Evidence:
   `pnpm --filter @openacme/server check-types`
 
 ### Slice 7.2: Async Job Routes
+
+Status: done.
 
 Goal:
 
@@ -2068,6 +2078,8 @@ Evidence:
   `pnpm --filter @openacme/server build`
 
 ### Slice 7.3: Explicit Cache Contract
+
+Status: done.
 
 Goal:
 
@@ -2156,7 +2168,7 @@ pnpm --filter web check-types
 pnpm --filter web test -- agents
 ```
 
-Status: Completed in local commit pending push.
+Status: done.
 
 Implemented:
 
@@ -2211,7 +2223,7 @@ Validation:
 pnpm --filter web check-types
 ```
 
-Status: Completed in local commit pending push.
+Status: done.
 
 Implemented:
 
@@ -2270,7 +2282,7 @@ pnpm --filter web check-types
 pnpm --filter web test -- hosted-integrations
 ```
 
-Status: Completed in local commit pending push.
+Status: done.
 
 Implemented:
 
@@ -2328,7 +2340,7 @@ Validation:
 pnpm --filter @openacme/hosted-integrations test -- telemetry
 ```
 
-Status: Completed in local commit pending push.
+Status: done.
 
 Implemented:
 

@@ -949,6 +949,19 @@ Validation:
 pnpm --filter @openacme/hosted-integrations test -- artifacts
 ```
 
+Status: done.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/hosted-integrations test -- artifacts` failed before implementation because the artifact store/export did not exist.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- artifacts`
+  `pnpm --filter @openacme/hosted-integrations test`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/server check-types`
+
 ### Slice 4.4: Python Dependency Policy V0
 
 Goal:

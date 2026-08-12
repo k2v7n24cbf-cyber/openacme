@@ -3,6 +3,10 @@ import {
   type HostedIntegrationApprovalStore,
 } from "./approvals.js";
 import {
+  createFileHostedIntegrationArtifactStore,
+  type HostedIntegrationArtifactStore,
+} from "./artifacts.js";
+import {
   createFileHostedIntegrationCatalog,
   type FileHostedIntegrationCatalogOptions,
   type HostedIntegrationCatalog,
@@ -64,6 +68,7 @@ export interface HostedIntegrationService {
   readonly secrets: HostedIntegrationSecretStore;
   readonly approvals: HostedIntegrationApprovalStore;
   readonly generations: HostedIntegrationGenerationStore;
+  readonly artifacts: HostedIntegrationArtifactStore;
   listFamilies(): Promise<HostedIntegrationManagementFamilySummary[]>;
   getFamily(
     familyId: HostedIntegrationFamilyId | string,
@@ -109,6 +114,7 @@ export function createFileHostedIntegrationService(
     ...options,
     draftStore: drafts,
   });
+  const artifacts = createFileHostedIntegrationArtifactStore(options);
   return new FileHostedIntegrationService({
     catalog,
     locks,
@@ -121,6 +127,7 @@ export function createFileHostedIntegrationService(
     secrets,
     approvals,
     generations,
+    artifacts,
   });
 }
 
@@ -135,6 +142,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
   readonly secrets: HostedIntegrationSecretStore;
   readonly approvals: HostedIntegrationApprovalStore;
   readonly generations: HostedIntegrationGenerationStore;
+  readonly artifacts: HostedIntegrationArtifactStore;
 
   private readonly catalog: HostedIntegrationCatalog;
 
@@ -150,6 +158,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     secrets: HostedIntegrationSecretStore;
     approvals: HostedIntegrationApprovalStore;
     generations: HostedIntegrationGenerationStore;
+    artifacts: HostedIntegrationArtifactStore;
   }) {
     this.catalog = parts.catalog;
     this.locks = parts.locks;
@@ -162,6 +171,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     this.secrets = parts.secrets;
     this.approvals = parts.approvals;
     this.generations = parts.generations;
+    this.artifacts = parts.artifacts;
   }
 
   async start(): Promise<void> {

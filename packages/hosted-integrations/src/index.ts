@@ -77,6 +77,19 @@ export {
   type HostedIntegrationApprovalStore,
 } from "./approvals.js";
 export {
+  createFileHostedIntegrationArtifactStore,
+  type CompleteHostedIntegrationRunErrorRequest,
+  type CompleteHostedIntegrationRunSuccessRequest,
+  type CreateHostedIntegrationRunRequest,
+  type CreateHostedIntegrationRunResult,
+  type FileHostedIntegrationArtifactStoreOptions,
+  type HostedIntegrationArtifactRef,
+  type HostedIntegrationArtifactStore,
+  type HostedIntegrationSuccessEnvelope,
+  type ReadHostedIntegrationArtifactRequest,
+  type WriteHostedIntegrationDiagnosticsRequest,
+} from "./artifacts.js";
+export {
   createFileHostedIntegrationCatalog,
   type FileHostedIntegrationCatalogOptions,
   type HostedIntegrationCatalog,

@@ -153,6 +153,7 @@ export {
   createFileHostedIntegrationIdempotencyStore,
   type CompleteHostedIntegrationIdempotencyRequest,
   type FileHostedIntegrationGatewayOptions,
+  type HostedIntegrationFailureBucketRecordedEvent,
   type HostedIntegrationExecutionLogEntry,
   type HostedIntegrationExecutionResultMetadata,
   type HostedIntegrationExecutionLogStore,

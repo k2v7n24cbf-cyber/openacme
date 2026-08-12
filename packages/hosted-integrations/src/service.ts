@@ -42,6 +42,7 @@ import {
 import {
   createFileHostedIntegrationGateway,
   type HostedIntegrationGateway,
+  type HostedIntegrationFailureBucketRecordedEvent,
 } from "./gateway.js";
 import {
   createFileHostedIntegrationLockStore,
@@ -98,6 +99,9 @@ export interface FileHostedIntegrationServiceOptions extends FileHostedIntegrati
   onRegistryRefresh?: (
     event: HostedIntegrationRegistryRefreshEvent,
   ) => void | Promise<void>;
+  onFailureBucketRecorded?: (
+    event: HostedIntegrationFailureBucketRecordedEvent,
+  ) => void | Promise<void>;
 }
 
 export function createFileHostedIntegrationService(
@@ -130,8 +134,7 @@ export function createFileHostedIntegrationService(
   const secrets = createFileHostedIntegrationSecretStore(options);
   const approvals = createFileHostedIntegrationApprovalStore(options);
   const disablements = createFileHostedIntegrationDisablementStore(options);
-  const failureBuckets =
-    createFileHostedIntegrationFailureBucketStore(options);
+  const failureBuckets = createFileHostedIntegrationFailureBucketStore(options);
   const generations = createFileHostedIntegrationGenerationStore({
     ...options,
     draftStore: drafts,
@@ -147,6 +150,7 @@ export function createFileHostedIntegrationService(
     artifacts,
     disablements,
     failureBuckets,
+    onFailureBucketRecorded: options.onFailureBucketRecorded,
   });
   return new FileHostedIntegrationService({
     catalog,

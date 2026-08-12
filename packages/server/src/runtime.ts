@@ -16,6 +16,7 @@ import {
   type FamilyManifest,
   type HostedIntegrationDraft,
   type HostedIntegrationExample,
+  type HostedIntegrationFailureBucketRecordedEvent,
   type HostedIntegrationGatewayError,
   type HostedIntegrationGeneration,
   type HostedIntegrationHumanApprovalRecord,
@@ -50,6 +51,10 @@ import {
 
 const log = createLogger("server.workflow-runtime");
 const DEFAULT_WORKFLOW_DISPATCHER_INTERVAL_MS = 60_000;
+const HOSTED_INTEGRATION_REPAIR_AGENT_ID = "tool-developer";
+const HOSTED_INTEGRATION_REPAIR_TASK_CREATOR = "system:hosted-integrations";
+const HOSTED_INTEGRATION_REPAIR_MARKER_PREFIX =
+  "openacme:hosted-integration-repair-bucket=";
 
 export interface ServerRuntimeOptions {
   resolveModel?: ModelResolver;
@@ -97,6 +102,8 @@ export class ServerRuntime {
         dataDir: config.dataDir,
         onRegistryRefresh: (event) =>
           this.refreshHostedIntegrationRegistry(event),
+        onFailureBucketRecorded: (event) =>
+          this.createHostedIntegrationRepairTask(event),
       });
     bindHostedIntegrationManagement({
       invoke: (request) => this.invokeHostedIntegrationManagement(request),
@@ -138,6 +145,12 @@ export class ServerRuntime {
       bindings: [binding.binding],
       generationId: request.generationId,
     });
+    if (!result.ok) {
+      return this.hostedIntegrationToolFailure(request, {
+        code: "tool_failed",
+        message: "tool failed",
+      });
+    }
     return JSON.stringify(result);
   }
 
@@ -216,6 +229,37 @@ export class ServerRuntime {
       familyId: request.familyId,
       toolName: request.toolName,
       generationId: request.generationId,
+    });
+  }
+
+  private async createHostedIntegrationRepairTask(
+    event: HostedIntegrationFailureBucketRecordedEvent,
+  ): Promise<void> {
+    const { bucket, log } = event;
+    if (bucket.status !== "open") return;
+    if (!bucket.assignedTo) {
+      await this.hostedIntegrationService.failureBuckets.assignBucket({
+        bucketId: bucket.id,
+        assignedTo: HOSTED_INTEGRATION_REPAIR_AGENT_ID,
+      });
+    }
+
+    const marker = `${HOSTED_INTEGRATION_REPAIR_MARKER_PREFIX}${bucket.id}`;
+    const existing = this.agentManager.taskStore
+      .list({ assignee: HOSTED_INTEGRATION_REPAIR_AGENT_ID })
+      .find(
+        (task) =>
+          task.body.includes(marker) &&
+          task.status !== "done" &&
+          task.status !== "canceled",
+      );
+    if (existing) return;
+
+    await this.agentManager.taskStore.create({
+      title: `Repair hosted integration ${bucket.familyId}/${bucket.toolName}`,
+      assignee: HOSTED_INTEGRATION_REPAIR_AGENT_ID,
+      created_by: HOSTED_INTEGRATION_REPAIR_TASK_CREATOR,
+      body: buildHostedIntegrationRepairTaskBody({ event, marker }),
     });
   }
 
@@ -598,10 +642,9 @@ export class ServerRuntime {
   private async closeHostedIntegrationFailureBucket(
     params: Record<string, unknown>,
   ): Promise<unknown> {
-    const bucket =
-      await this.hostedIntegrationService.failureBuckets.getBucket(
-        stringParam(params, "bucket_id"),
-      );
+    const bucket = await this.hostedIntegrationService.failureBuckets.getBucket(
+      stringParam(params, "bucket_id"),
+    );
     if (!bucket) return { ok: false, error: { code: "not_found" } };
 
     const regressionExampleId = optionalStringParam(
@@ -1009,6 +1052,33 @@ export class ServerRuntime {
         });
     await this.workflowDispatcherTickInFlight;
   }
+}
+
+function buildHostedIntegrationRepairTaskBody(input: {
+  event: HostedIntegrationFailureBucketRecordedEvent;
+  marker: string;
+}): string {
+  const { bucket, log } = input.event;
+  return [
+    input.marker,
+    "",
+    "Repair the hosted integration failure bucket and add or link a regression example before closing it.",
+    "",
+    "```yaml",
+    `bucket_id: ${bucket.id}`,
+    `latest_run_ref: ${log.runId}`,
+    `error_artifact_ref: ${log.runId}/error.json`,
+    `family_id: ${bucket.familyId}`,
+    `tool_name: ${bucket.toolName}`,
+    `generation_id: ${bucket.generationId}`,
+    `sanitized_error_category: ${log.error?.code ?? "unknown"}`,
+    "```",
+    "",
+    "Sanitized args:",
+    "```json",
+    JSON.stringify(log.sanitizedArgs, null, 2),
+    "```",
+  ].join("\n");
 }
 
 function missingHostedIntegrationExampleToolNames(

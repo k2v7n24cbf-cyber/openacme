@@ -1818,6 +1818,38 @@ pnpm --filter @openacme/server test -- tasks
 pnpm --filter @openacme/hosted-integrations test -- failure-buckets
 ```
 
+Implementation notes:
+
+- `@openacme/hosted-integrations` emits a failure-bucket-recorded callback
+  after the gateway writes the sanitized failed execution log and records the
+  bucket. The package still does not depend on task-store/server internals.
+- `ServerRuntime` adapts that callback into a Tool Developer Agent repair task,
+  assigns the bucket to `tool-developer`, and uses a stable task-body marker to
+  avoid duplicate open tasks for repeated occurrences of the same bucket.
+- Normal agent-facing hosted tool failures are normalized to
+  `{ code: "tool_failed", message: "tool failed" }`; run, bucket, and task
+  routing details remain platform/developer surfaces.
+
+Evidence:
+
+- Red validation:
+  `pnpm --filter @openacme/server test -- hosted-integrations-routes` first
+  failed because no Tool Developer Agent repair task was created for the new
+  bucket.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- failure-buckets`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/server test -- hosted-integrations-routes`
+  `pnpm --filter @openacme/server test -- tools-hosted-integrations`
+  `pnpm --filter @openacme/server check-types`
+  `pnpm --filter @openacme/server build`
+  `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/tasks.e2e.ts`
+- Validation note:
+  `pnpm --filter @openacme/server test -- tasks` has no matching unit test file
+  in this repo; the task lifecycle coverage lives in `test/e2e/tasks.e2e.ts`
+  and was run with the e2e Vitest config.
+
 ### Slice 6.5: Regression Example On Fix
 
 Goal:

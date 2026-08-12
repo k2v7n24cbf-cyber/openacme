@@ -40,6 +40,7 @@ import {
   HostedIntegrationIdempotencyRecordSchema,
   HostedIntegrationToolNameSchema,
   JsonObjectSchema,
+  type HostedIntegrationFailureBucket,
   type HostedIntegrationIdempotencyRecord,
   type HostedIntegrationPolicyBinding,
   type HostedIntegrationToolClassification,
@@ -66,6 +67,9 @@ export interface FileHostedIntegrationGatewayOptions {
   artifacts?: HostedIntegrationArtifactStore;
   executionLogs?: HostedIntegrationExecutionLogStore;
   failureBuckets?: HostedIntegrationFailureBucketStore;
+  onFailureBucketRecorded?: (
+    event: HostedIntegrationFailureBucketRecordedEvent,
+  ) => void | Promise<void>;
   idempotency?: HostedIntegrationIdempotencyStore;
   runtime?: Pick<HostedIntegrationPythonRuntime, "callTool">;
   now?: () => Date;
@@ -130,6 +134,12 @@ export interface HostedIntegrationGateway {
   invoke(
     request: InvokeHostedIntegrationRequest,
   ): Promise<InvokeHostedIntegrationResult>;
+}
+
+export interface HostedIntegrationFailureBucketRecordedEvent {
+  created: boolean;
+  bucket: HostedIntegrationFailureBucket;
+  log: HostedIntegrationExecutionLogEntry;
 }
 
 export interface HostedIntegrationExecutionLogEntry {
@@ -281,6 +291,7 @@ export function createFileHostedIntegrationGateway(
     artifacts,
     executionLogs,
     failureBuckets,
+    onFailureBucketRecorded: options.onFailureBucketRecorded,
     idempotency,
     runtime: options.runtime ?? new HostedIntegrationPythonRuntime(),
     now: options.now ?? (() => new Date()),
@@ -290,6 +301,11 @@ export function createFileHostedIntegrationGateway(
 class FileHostedIntegrationGateway implements HostedIntegrationGateway {
   readonly executionLogs: HostedIntegrationExecutionLogStore;
   private readonly failureBuckets: HostedIntegrationFailureBucketStore;
+  private readonly onFailureBucketRecorded:
+    | ((
+        event: HostedIntegrationFailureBucketRecordedEvent,
+      ) => void | Promise<void>)
+    | null;
 
   private readonly dataDir: string;
   private readonly catalog: HostedIntegrationCatalog;
@@ -312,6 +328,11 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
     artifacts: HostedIntegrationArtifactStore;
     executionLogs: HostedIntegrationExecutionLogStore;
     failureBuckets: HostedIntegrationFailureBucketStore;
+    onFailureBucketRecorded?:
+      | ((
+          event: HostedIntegrationFailureBucketRecordedEvent,
+        ) => void | Promise<void>)
+      | undefined;
     idempotency: HostedIntegrationIdempotencyStore;
     runtime: Pick<HostedIntegrationPythonRuntime, "callTool">;
     now: () => Date;
@@ -325,6 +346,7 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
     this.artifacts = parts.artifacts;
     this.executionLogs = parts.executionLogs;
     this.failureBuckets = parts.failureBuckets;
+    this.onFailureBucketRecorded = parts.onFailureBucketRecorded ?? null;
     this.idempotency = parts.idempotency;
     this.runtime = parts.runtime;
     this.now = parts.now;
@@ -576,7 +598,15 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
   private async recordFailureBucket(runId: string): Promise<void> {
     try {
       const log = await this.executionLogs.getRunLog(runId);
-      if (log) await this.failureBuckets.recordFailure({ log });
+      if (!log) return;
+      const result = await this.failureBuckets.recordFailure({ log });
+      if (result.ok) {
+        await this.onFailureBucketRecorded?.({
+          created: result.created,
+          bucket: result.bucket,
+          log,
+        });
+      }
     } catch {
       // Bucket creation is a repair signal, not part of the caller-visible
       // tool result. Do not mask the original hosted integration failure.

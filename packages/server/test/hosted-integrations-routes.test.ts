@@ -962,6 +962,9 @@ describe("hosted integrations invocation routes", () => {
       body: JSON.stringify(allowedInvokeBody()),
     });
     expect(res.status).toBe(500);
+    const failed = await res.json();
+    expect(failed).not.toHaveProperty("taskId");
+    expect(JSON.stringify(failed)).not.toContain("repair");
 
     res = await req("/api/hosted-integrations/failure-buckets");
     expect(res.status).toBe(403);
@@ -982,13 +985,50 @@ describe("hosted integrations invocation routes", () => {
       ],
     });
     const bucketId = listed.buckets[0].id as string;
+    const repairTasks = manager.taskStore
+      .list({ assignee: "tool-developer" })
+      .filter((task) =>
+        task.body.includes(
+          `openacme:hosted-integration-repair-bucket=${bucketId}`,
+        ),
+      );
+    expect(repairTasks).toHaveLength(1);
+    expect(repairTasks[0]).toMatchObject({
+      assignee: "tool-developer",
+      created_by: "system:hosted-integrations",
+      status: "open",
+    });
+    expect(repairTasks[0]?.body).toContain(`bucket_id: ${bucketId}`);
+    expect(repairTasks[0]?.body).toContain(`latest_run_ref: ${failed.runId}`);
+    expect(repairTasks[0]?.body).toContain("family_id: qualys");
+    expect(repairTasks[0]?.body).toContain("tool_name: qualys_count_assets");
+    expect(repairTasks[0]?.body).toContain("generation_id: gen_qualys_1");
+    expect(repairTasks[0]?.body).toContain(
+      "sanitized_error_category: tool_bug",
+    );
+
+    res = await req("/api/hosted-integrations/invoke", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(allowedInvokeBody()),
+    });
+    expect(res.status).toBe(500);
+    expect(
+      manager.taskStore
+        .list({ assignee: "tool-developer" })
+        .filter((task) =>
+          task.body.includes(
+            `openacme:hosted-integration-repair-bucket=${bucketId}`,
+          ),
+        ),
+    ).toHaveLength(1);
 
     res = await req(
       `/api/hosted-integrations/failure-buckets/${bucketId}?roles=tool_developer`,
     );
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({
-      bucket: { id: bucketId, familyId: "qualys" },
+      bucket: { id: bucketId, familyId: "qualys", count: 2 },
     });
 
     res = await req(

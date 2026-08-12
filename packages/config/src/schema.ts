@@ -222,6 +222,19 @@ export const AgentEmailSchema = z
   .strict();
 export type AgentEmail = z.infer<typeof AgentEmailSchema>;
 
+export const AgentHostedIntegrationBindingSchema = z
+  .object({
+    familyId: z.string().min(1),
+    toolName: z.string().min(1),
+    allowedConfigScopeIds: z.array(z.string().min(1)).min(1),
+    defaultConfigScopeId: z.string().min(1).optional(),
+    environment: z.string().min(1),
+  })
+  .strict();
+export type AgentHostedIntegrationBinding = z.infer<
+  typeof AgentHostedIntegrationBindingSchema
+>;
+
 /**
  * Agent definition — a named agent with its own config.
  */
@@ -298,6 +311,13 @@ export const AgentDefinitionSchema = z.object({
   // Names of global mcp.json servers this agent should NOT receive.
   // Empty (default) = inherit everything.
   mcpDisabled: z.array(z.string()).default([]),
+  // Per-agent hosted integration invocation bindings. Tool visibility still
+  // comes from `tools`; these bindings choose the allowed/default config scope
+  // for a selected hosted integration tool without exposing scope choice to
+  // the model as a tool argument.
+  hostedIntegrationBindings: z
+    .array(AgentHostedIntegrationBindingSchema)
+    .optional(),
   // Per-agent skills allowlist. `[]` (default) means the agent sees every
   // installed skill in the workforce. Non-empty restricts to just those
   // names. Edit-form picker, not exposed in the catalog import form.

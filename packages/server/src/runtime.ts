@@ -5,15 +5,19 @@ import path from "node:path";
 import { WorkflowManager } from "@openacme/workflows";
 import {
   createFileHostedIntegrationService,
+  HostedIntegrationPolicyBindingSchema,
   isHostedIntegrationToolVisibleForSelection,
   type HostedIntegrationGeneration,
+  type HostedIntegrationPolicyBinding,
   type HostedIntegrationRegistryRefreshEvent,
   type HostedIntegrationService,
+  JsonObjectSchema,
 } from "@openacme/hosted-integrations";
 import {
   HostedIntegrationToolRegistryAdapter,
   registry as toolRegistry,
   type HostedIntegrationRegistrySnapshot,
+  type HostedIntegrationToolInvokeRequest,
 } from "@openacme/tools";
 import { jsonSchemaToZod } from "@openacme/mcp-client";
 import {
@@ -72,18 +76,7 @@ export class ServerRuntime {
     this.hostedIntegrationToolRegistry =
       new HostedIntegrationToolRegistryAdapter({
         registry: toolRegistry,
-        invoke: async (request) =>
-          JSON.stringify({
-            ok: false,
-            error: {
-              code: "platform_unavailable",
-              message:
-                "Hosted integration invocation through agent tools is not bound yet.",
-            },
-            familyId: request.familyId,
-            toolName: request.toolName,
-            generationId: request.generationId,
-          }),
+        invoke: (request) => this.invokeHostedIntegrationTool(request),
       });
     this.hostedIntegrationService =
       opts?.hostedIntegrationService ??
@@ -103,6 +96,111 @@ export class ServerRuntime {
       DEFAULT_WORKFLOW_DISPATCHER_INTERVAL_MS;
     this.workflowDispatcherNow =
       opts?.workflowDispatcherNow ?? (() => new Date());
+  }
+
+  private async invokeHostedIntegrationTool(
+    request: HostedIntegrationToolInvokeRequest,
+  ): Promise<string> {
+    const binding = this.hostedIntegrationBindingForTool(request);
+    if (!binding.ok) {
+      return this.hostedIntegrationToolFailure(request, binding.error);
+    }
+    const args = JsonObjectSchema.safeParse(request.args);
+    if (!args.success) {
+      return this.hostedIntegrationToolFailure(request, {
+        code: "policy_denied",
+        message: "hosted integration tool arguments must be a JSON object",
+      });
+    }
+
+    const result = await this.hostedIntegrationService.gateway.invoke({
+      actor: { id: request.actorId, kind: "agent", roles: ["agent"] },
+      familyId: request.familyId,
+      toolName: request.toolName,
+      environment: binding.binding.environment,
+      args: args.data,
+      bindings: [binding.binding],
+      generationId: request.generationId,
+    });
+    return JSON.stringify(result);
+  }
+
+  private hostedIntegrationBindingForTool(
+    request: HostedIntegrationToolInvokeRequest,
+  ):
+    | { ok: true; binding: HostedIntegrationPolicyBinding }
+    | { ok: false; error: { code: string; message: string } } {
+    const def = this.agentManager.getAgentDef(request.actorId);
+    if (!def) {
+      return {
+        ok: false,
+        error: {
+          code: "policy_denied",
+          message: "hosted integration caller agent was not found",
+        },
+      };
+    }
+    if (!def.tools.includes(request.toolName)) {
+      return {
+        ok: false,
+        error: {
+          code: "policy_denied",
+          message: "hosted integration tool is not enabled for agent",
+        },
+      };
+    }
+    const matches = (def.hostedIntegrationBindings ?? []).filter(
+      (binding) =>
+        binding.familyId === request.familyId &&
+        binding.toolName === request.toolName,
+    );
+    if (matches.length === 0) {
+      return {
+        ok: false,
+        error: {
+          code: "policy_denied",
+          message: "agent is not bound to hosted integration tool",
+        },
+      };
+    }
+    if (matches.length > 1) {
+      return {
+        ok: false,
+        error: {
+          code: "config_missing",
+          message:
+            "multiple hosted integration bindings require a single default binding",
+        },
+      };
+    }
+
+    const parsed = HostedIntegrationPolicyBindingSchema.safeParse({
+      agentId: def.id,
+      ...matches[0],
+    });
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "policy_denied",
+          message: "hosted integration binding is invalid",
+        },
+      };
+    }
+    return { ok: true, binding: parsed.data };
+  }
+
+  private hostedIntegrationToolFailure(
+    request: HostedIntegrationToolInvokeRequest,
+    error: { code: string; message: string },
+  ): string {
+    return JSON.stringify({
+      ok: false,
+      error,
+      familyId: request.familyId,
+      toolName: request.toolName,
+      generationId: request.generationId,
+    });
   }
 
   async initWorkflowMCP(): Promise<void> {

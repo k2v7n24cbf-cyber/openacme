@@ -15,6 +15,7 @@ export {
   SkillsConfigSchema,
   BrowserConfigSchema,
   AgentEmailSchema,
+  AgentHostedIntegrationBindingSchema,
   EmailConfigSchema,
   lookupModelMetadata,
   type Config,
@@ -31,6 +32,7 @@ export {
   type SkillsConfig,
   type BrowserConfig,
   type AgentEmail,
+  type AgentHostedIntegrationBinding,
   type EmailConfig,
 } from "./schema.js";
 

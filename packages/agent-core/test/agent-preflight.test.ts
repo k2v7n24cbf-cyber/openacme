@@ -222,6 +222,92 @@ function contextLengthExceededError() {
   };
 }
 
+describe("Agent hosted integration tool surface", () => {
+  beforeEach(() => {
+    streamTextMock.mockReset();
+    generateTextMock.mockReset();
+    getModelMock.mockReset();
+    getEffectiveContextWindowMock.mockReset();
+    getModelMock.mockReturnValue({});
+    streamTextMock.mockReturnValue(successfulAssistantStream("ok"));
+  });
+
+  it("passes selected hosted integration tools to the model tool surface", async () => {
+    const db = freshDb();
+    createSessionStore(db).create("a1", { id: "hosted-selected" });
+    const seenToolSets: Array<Set<string> | undefined> = [];
+    const registry = {
+      get(name: string) {
+        return name === "qualys_count_assets"
+          ? { name, description: "Count Qualys assets.", toolset: "hosted" }
+          : undefined;
+      },
+      getVercelTools(toolNames?: Set<string>) {
+        seenToolSets.push(toolNames);
+        return toolNames?.has("qualys_count_assets")
+          ? {
+              qualys_count_assets: {
+                description: "Count Qualys assets.",
+              },
+            }
+          : {};
+      },
+    } as unknown as ToolRegistry;
+    const agent = makeAgent({
+      db,
+      thresholdTokens: null,
+      tools: ["qualys_count_assets"],
+      toolRegistry: registry,
+    });
+
+    await agent.runStream({
+      sessionId: "hosted-selected",
+      history: [bigUserMsg("u1", 10)],
+    });
+
+    expect([...seenToolSets[0]!]).toEqual(["qualys_count_assets"]);
+    expect(streamTextMock.mock.calls[0]![0]!.tools).toHaveProperty(
+      "qualys_count_assets",
+    );
+  });
+
+  it("does not pass unselected hosted integration tools to the model tool surface", async () => {
+    const db = freshDb();
+    createSessionStore(db).create("a1", { id: "hosted-not-selected" });
+    const registry = {
+      get(name: string) {
+        return name === "shell"
+          ? { name, description: "Shell.", toolset: "terminal" }
+          : undefined;
+      },
+      getVercelTools(toolNames?: Set<string>) {
+        return toolNames?.has("qualys_count_assets")
+          ? {
+              qualys_count_assets: {
+                description: "Count Qualys assets.",
+              },
+            }
+          : {};
+      },
+    } as unknown as ToolRegistry;
+    const agent = makeAgent({
+      db,
+      thresholdTokens: null,
+      tools: ["shell"],
+      toolRegistry: registry,
+    });
+
+    await agent.runStream({
+      sessionId: "hosted-not-selected",
+      history: [bigUserMsg("u1", 10)],
+    });
+
+    expect(streamTextMock.mock.calls[0]![0]!.tools).not.toHaveProperty(
+      "qualys_count_assets",
+    );
+  });
+});
+
 describe("Agent.preflightCompress", () => {
   beforeEach(() => {
     streamTextMock.mockReset();
@@ -648,9 +734,7 @@ describe("Agent.preflightCompress", () => {
     ];
     for (let i = 1; i < 24; i++) {
       seed.push(
-        i % 2 === 0
-          ? bigUserMsg(`u${i}`, 500)
-          : bigAssistantMsg(`a${i}`, 500),
+        i % 2 === 0 ? bigUserMsg(`u${i}`, 500) : bigAssistantMsg(`a${i}`, 500),
       );
     }
 
@@ -955,7 +1039,9 @@ describe("Agent.preflightCompress", () => {
               "If file/log-specific detail matters and is not explicit here, re-open the referenced source before acting.",
           };
         }
-        throw new Error(`unexpected generateText call: ${functionId ?? "none"}`);
+        throw new Error(
+          `unexpected generateText call: ${functionId ?? "none"}`,
+        );
       },
     );
 
@@ -1057,7 +1143,9 @@ describe("Agent.preflightCompress", () => {
     const statusEvents = broadcasts
       .map((broadcast) => broadcast.event)
       .filter(
-        (event): event is {
+        (
+          event,
+        ): event is {
           kind: "ui_message_part";
           part: {
             type?: string;
@@ -1101,7 +1189,9 @@ describe("Agent.preflightCompress", () => {
       new Error("preflight exploded"),
     );
 
-    await expect(agent.runAutonomous({ sessionId: parent.id })).rejects.toThrow();
+    await expect(
+      agent.runAutonomous({ sessionId: parent.id }),
+    ).rejects.toThrow();
     expect(runStreamSpy).not.toHaveBeenCalled();
   });
 

@@ -212,6 +212,33 @@ describe("file-based AgentStore (folder + AGENT.md)", () => {
     expect(store.get("parallel")?.parallelSchedulingPolicy).toBe("chain_first");
   });
 
+  it("persists hosted integration bindings in AGENT.md frontmatter", () => {
+    const store = createAgentStore(dir);
+    const agent = {
+      ...makeAgent("hosted"),
+      tools: ["qualys_count_assets"],
+      hostedIntegrationBindings: [
+        {
+          familyId: "qualys",
+          toolName: "qualys_count_assets",
+          allowedConfigScopeIds: ["qualys-prod"],
+          defaultConfigScopeId: "qualys-prod",
+          environment: "prod",
+        },
+      ],
+    };
+    store.upsert(agent);
+
+    const raw = fs.readFileSync(path.join(dir, "hosted", "AGENT.md"), "utf-8");
+    const { data } = matter(raw);
+    expect(data.hostedIntegrationBindings).toEqual(
+      agent.hostedIntegrationBindings,
+    );
+    expect(store.get("hosted")?.hostedIntegrationBindings).toEqual(
+      agent.hostedIntegrationBindings,
+    );
+  });
+
   it("persists agentAskEnabled in AGENT.md frontmatter", () => {
     const store = createAgentStore(dir);
     const agent = { ...makeAgent("asker"), agentAskEnabled: false };

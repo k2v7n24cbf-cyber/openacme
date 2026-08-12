@@ -1400,6 +1400,28 @@ Evidence:
 
 ### Slice 5.2: Invocation Through Existing Agent Tool Path
 
+Status: done.
+
+Evidence:
+
+- Focused validation first failed while wiring this slice:
+  `pnpm --filter @openacme/agent-core test -- agent-preflight` exposed an
+  incomplete test registry stub for `get()`;
+  `pnpm --filter @openacme/server test -- tools-hosted-integrations` exposed
+  the missing persisted agent binding in the invocation path before rebuilt
+  config declarations reached server tests.
+- Green validation:
+  `pnpm --filter @openacme/config test -- agent-store`
+  `pnpm --filter @openacme/config check-types`
+  `pnpm --filter @openacme/config build`
+  `pnpm --filter @openacme/agent-core test -- agent-preflight`
+  `pnpm --filter @openacme/agent-core check-types`
+  `pnpm --filter @openacme/agent-core build`
+  `pnpm --filter @openacme/tools test -- hosted-integrations`
+  `pnpm --filter @openacme/server test -- tools-hosted-integrations`
+  `pnpm --filter @openacme/server check-types`
+  `pnpm --filter @openacme/server build`
+
 Goal:
 
 - A selected hosted integration tool reaches the Hosted Integration Gateway

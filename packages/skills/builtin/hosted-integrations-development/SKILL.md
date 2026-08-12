@@ -11,6 +11,29 @@ Use this skill when developing, validating, promoting, debugging, or repairing
 hosted integration tool families through the `hosted_integration_*` management
 tools.
 
+This is not a script to follow blindly. Use it as the operating model for
+deciding what kind of work is in front of you, which platform surface owns that
+work, and what evidence is required before you promote or close anything.
+
+## Triage first
+
+Classify the request before editing:
+
+- New capability: add or extend a tool-family behavior. Expect a draft, source
+  patch, smoke examples, validation, example runs, and promotion if
+  non-destructive.
+- Bug or production failure: inspect sanitized run and failure-bucket evidence,
+  reproduce with a debug run or regression example, patch, validate, promote,
+  then close the bucket with regression evidence.
+- Config issue: inspect sanitized config-scope metadata only. Report the missing
+  or invalid config key/scope and stop; do not patch source to compensate for
+  missing credentials.
+- Question or investigation: inspect family, generation, examples, logs, or
+  artifacts and answer from sanitized evidence. Do not acquire a lock unless a
+  source change is actually needed.
+- Destructive or external write behavior: prepare the target and evidence, then
+  stop for human approval before promotion or invocation.
+
 ## Operating boundaries
 
 - Use hosted integration management tools instead of generic filesystem access.
@@ -29,6 +52,33 @@ tools.
   workspace home.
 - Treat destructive or external write behavior as an approval boundary. Prepare
   the exact promotion or invocation target, then stop for human approval.
+
+## Tool surface map
+
+Use the management tools by intent:
+
+- Discover families/source: `hosted_integration_family_list`,
+  `hosted_integration_source_read`.
+- Create or prepare work: `hosted_integration_family_create`,
+  `hosted_integration_lock_acquire`, `hosted_integration_lock_renew`,
+  `hosted_integration_draft_create`.
+- Edit draft source: `hosted_integration_draft_get`,
+  `hosted_integration_draft_patch`, `hosted_integration_draft_delete`.
+- Maintain examples: `hosted_integration_example_list`,
+  `hosted_integration_example_upsert`, `hosted_integration_example_run`.
+- Validate and promote: `hosted_integration_validate`,
+  `hosted_integration_promote`.
+- Inspect or rollback generations: `hosted_integration_generation_list`,
+  `hosted_integration_generation_get`,
+  `hosted_integration_generation_rollback`.
+- Inspect config metadata: `hosted_integration_config_scope_list`,
+  `hosted_integration_config_scope_get`.
+- Investigate runs: `hosted_integration_debug_run`,
+  `hosted_integration_run_get`, `hosted_integration_artifact_get`.
+- Repair buckets: `hosted_integration_failure_bucket_list`,
+  `hosted_integration_failure_bucket_get`,
+  `hosted_integration_failure_bucket_assign`,
+  `hosted_integration_failure_bucket_close`.
 
 ## Request to promotion lifecycle
 
@@ -49,6 +99,21 @@ tools.
    changes can be promoted by the Tool Developer Agent; destructive changes stop
    at the human approval boundary.
 8. Release the lock once the draft is promoted or intentionally abandoned.
+
+Before promotion, check:
+
+- You still own the lock or can renew it.
+- The draft source is the intended family only; no unrelated family was edited.
+- Every new or changed tool has at least one safe example.
+- Any reproduced bug has a regression example.
+- `hosted_integration_validate` passed after the final patch.
+- Required safe examples passed after the final patch.
+- Tool classification is accurate: read, write, destructive, live, cached,
+  sync, sync execution, async execution, approval mode.
+- Runtime settings are family-level unless a tool-specific override is
+  intentional and documented in the manifest.
+- Large expected responses are allowed to spill to artifacts.
+- No source, example, log, artifact, or response includes raw secrets.
 
 ## Example policy
 
@@ -77,6 +142,17 @@ tool failed. The platform and Tool Developer Agent own the repair process.
 6. Patch the draft, rerun validation and the regression example, promote the
    fixed generation, then close the bucket with the generation and example IDs.
 
+Close a failure bucket only after you have:
+
+- inspected the bucket and latest sanitized run evidence
+- identified whether the cause is source, config, dependency, policy, timeout,
+  target-system behavior, or caller misuse
+- added or linked a regression example for code-owned fixes
+- promoted a generation that includes the fix
+- rerun the regression example against that generation
+- supplied the bucket close evidence fields requested by the tool, including the
+  draft, generation, and regression example identifiers when applicable
+
 ## Debug runs
 
 Use a debug run when you need one-off investigation that should not become the
@@ -87,6 +163,22 @@ taxonomy for a single attempted call.
 If a debug run proves a durable bug, convert it into a regression example before
 promoting the fix. Cancellable behavior belongs to async hosted integration jobs;
 do not add cancellation semantics to synchronous calls.
+
+## Async, cache, and lifecycle changes
+
+- Async is opt-in per tool classification. Use async jobs only for tools already
+  classified as async; do not retrofit cancellation or progress semantics into
+  synchronous calls during a repair.
+- Cache is explicit. A cached or sync tool must declare and own cache behavior
+  under family home. A live tool must not reuse a previous response as an
+  implicit platform cache.
+- Deprecation is safer than removal. Hide or deprecate a tool before removal
+  unless the request explicitly calls for a breaking change and policy permits
+  it.
+- Rollback is an operational recovery tool. Prefer fixing forward when the
+  current generation is only partially wrong and a small patch is available;
+  rollback when the active generation is broadly unsafe and a known-good
+  previous generation exists.
 
 ## Runtime and workspace expectations
 
@@ -105,3 +197,16 @@ Use config-scope tools to inspect what a family expects and whether a required
 key is present. Do not inspect backing `.env`, token, auth, or secret files. If a
 missing or invalid secret blocks progress, return the config scope and key name
 that a human needs to update.
+
+## Done criteria
+
+For development work, you are done only when the source change is promoted or
+the reason it cannot be promoted is explicit and actionable.
+
+For repair work, you are done only when the failure is classified, the fix is
+validated, regression evidence exists for code-owned bugs, and the failure
+bucket is closed or left open with a clear blocker.
+
+For investigation-only work, you are done when the answer cites sanitized
+family, generation, run, artifact, config-scope, or bucket evidence and no edit
+lock remains held by you.

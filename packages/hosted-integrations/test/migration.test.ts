@@ -15,10 +15,13 @@ import {
   createFileHostedIntegrationSecretStore,
   EXPECTED_LEGACY_INTEGRATION_HUB_TOOL_NAMES,
   FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY,
+  LEGACY_INTEGRATION_HUB_INCIDENT_SOURCE,
   LEGACY_INTEGRATION_HUB_INVENTORY,
+  LEGACY_INTEGRATION_HUB_MIGRATED_SECURITY_FAMILIES,
   validateLegacyIntegrationHubMigrationInventory,
   type HostedIntegrationPolicyActor,
   type LegacyIntegrationHubInventory,
+  type LegacyIntegrationHubMigratedFamilyFixture,
 } from "../src/index.js";
 
 let dataDir: string;
@@ -197,49 +200,129 @@ describe("legacy integration-hub first migrated family", () => {
   });
 });
 
+describe("legacy integration-hub migrated security families", () => {
+  it("validates and promotes every migrated security family fixture", async () => {
+    expect(
+      LEGACY_INTEGRATION_HUB_MIGRATED_SECURITY_FAMILIES.map(
+        (fixture) => fixture.familyId,
+      ),
+    ).toEqual(["qualys", "splunk", "msgraph", "mde", "defender-alert"]);
+
+    for (const fixture of LEGACY_INTEGRATION_HUB_MIGRATED_SECURITY_FAMILIES) {
+      await seedMigratedSourceFamily(fixture);
+      const { draftId, lockId } = await createMigratedDraft(fixture);
+      await registerMigratedExamples(draftId, lockId, fixture);
+      const validation = await createFileHostedIntegrationDraftValidator({
+        draftStore: createDraftStore(fixture),
+        catalog: createFileHostedIntegrationCatalog({ dataDir }),
+      }).validateDraft(draftId);
+
+      expect(validation).toEqual({ ok: true, diagnostics: [] });
+      const generation = await promoteDraft(draftId, validation, fixture);
+      expect(generation.tools?.map((tool) => tool.name)).toEqual(
+        fixture.migratedToolNames,
+      );
+    }
+  });
+
+  it("maps env requirements to config scopes and never reads process env", () => {
+    for (const fixture of LEGACY_INTEGRATION_HUB_MIGRATED_SECURITY_FAMILIES) {
+      const inventoryFamily = LEGACY_INTEGRATION_HUB_INVENTORY.families.find(
+        (entry) => entry.familyId === fixture.familyId,
+      );
+      expect(inventoryFamily).toMatchObject({
+        configKeys: fixture.configKeys,
+        secretRefs: fixture.secretRefs,
+      });
+      for (const [filePath, content] of Object.entries(fixture.sourceFiles)) {
+        if (!filePath.endsWith(".py")) continue;
+        expect(content).not.toContain("os.environ");
+        expect(content).not.toContain("process.env");
+      }
+    }
+  });
+
+  it("declares hosted cache only for explicitly cached or sync tools", async () => {
+    for (const fixture of LEGACY_INTEGRATION_HUB_MIGRATED_SECURITY_FAMILIES) {
+      await seedMigratedSourceFamily(fixture);
+    }
+    const catalog = createFileHostedIntegrationCatalog({ dataDir });
+
+    for (const fixture of LEGACY_INTEGRATION_HUB_MIGRATED_SECURITY_FAMILIES) {
+      const family = await catalog.getFamily(fixture.familyId);
+      expect(family).not.toBeNull();
+      for (const tool of family!.manifest.tools) {
+        const inventoryTool = LEGACY_INTEGRATION_HUB_INVENTORY.tools.find(
+          (entry) =>
+            entry.familyId === fixture.familyId &&
+            entry.hostedToolName === tool.name,
+        );
+        const expectsCache =
+          inventoryTool?.freshness === "cached" ||
+          inventoryTool?.freshness === "sync";
+        expect(Boolean(tool.cache)).toBe(expectsCache);
+      }
+    }
+  });
+
+  it("does not invent regression examples when legacy incidents are unavailable", () => {
+    expect(LEGACY_INTEGRATION_HUB_INCIDENT_SOURCE).toMatchObject({
+      available: false,
+      path: "ops/incidents.jsonl",
+    });
+    expect(
+      LEGACY_INTEGRATION_HUB_MIGRATED_SECURITY_FAMILIES.flatMap(
+        (fixture) => fixture.regressionExamples,
+      ),
+    ).toEqual([]);
+  });
+});
+
 const migrationActor: HostedIntegrationPolicyActor = {
   id: "agent:migration-test",
   kind: "agent",
   roles: ["agent"],
 };
 
-async function seedMigratedSourceFamily(): Promise<void> {
+async function seedMigratedSourceFamily(
+  fixture = FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY,
+): Promise<void> {
   const sourceDir = path.join(
     dataDir,
     "hosted-integrations",
     "source",
     "families",
-    FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY.familyId,
+    fixture.familyId,
   );
   await mkdir(sourceDir, { recursive: true });
   await Promise.all(
-    Object.entries(
-      FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY.sourceFiles,
-    ).map(([filePath, content]) =>
+    Object.entries(fixture.sourceFiles).map(([filePath, content]) =>
       writeFile(path.join(sourceDir, filePath), content, "utf-8"),
     ),
   );
 }
 
-async function createMigratedDraft(): Promise<{
+async function createMigratedDraft(
+  fixture = FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY,
+): Promise<{
   draftId: string;
   lockId: string;
 }> {
-  const lockId = "lock_migration_1";
+  const lockId = `lock_migration_${safeFixtureId(fixture)}`;
   await createFileHostedIntegrationLockStore({
     dataDir,
     now: () => new Date(nowMs),
     createId: () => lockId,
   }).acquireLock({
-    familyId: FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY.familyId,
+    familyId: fixture.familyId,
     lockedBy: "agent:tool-developer",
     ttlMs: 60_000,
   });
-  const created = await createDraftStore().createDraftFromFiles({
-    familyId: FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY.familyId,
+  const created = await createDraftStore(fixture).createDraftFromFiles({
+    familyId: fixture.familyId,
     lockId,
     sourceRevisionId: "source_rev_migration_1",
-    files: FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY.sourceFiles,
+    files: fixture.sourceFiles,
   });
   if (!created.ok) throw new Error(created.reason);
   return { draftId: created.draft.id, lockId };
@@ -248,11 +331,12 @@ async function createMigratedDraft(): Promise<{
 async function registerMigratedExamples(
   draftId: string,
   lockId: string,
+  fixture = FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY,
 ): Promise<void> {
   const registry = createFileHostedIntegrationExampleRegistry({
-    draftStore: createDraftStore(),
+    draftStore: createDraftStore(fixture),
   });
-  for (const example of FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY.examples) {
+  for (const example of fixture.examples) {
     await expect(
       registry.upsertExample({ draftId, lockId, example }),
     ).resolves.toEqual({ ok: true });
@@ -262,12 +346,13 @@ async function registerMigratedExamples(
 async function promoteDraft(
   draftId: string,
   validation: { ok: boolean; diagnostics: Array<Record<string, unknown>> },
+  fixture = FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY,
 ) {
   const promoted = await createFileHostedIntegrationGenerationStore({
     dataDir,
-    draftStore: createDraftStore(),
+    draftStore: createDraftStore(fixture),
     now: () => new Date(nowMs),
-    createId: () => "gen_migration_1",
+    createId: () => `gen_migration_${safeFixtureId(fixture)}`,
   }).promoteDraft({
     draftId,
     promotedBy: "agent:tool-developer",
@@ -298,7 +383,9 @@ async function seedSplunkConfig(): Promise<void> {
   });
 }
 
-function createDraftStore() {
+function createDraftStore(
+  fixture = FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY,
+) {
   return createFileHostedIntegrationDraftStore({
     dataDir,
     lockStore: createFileHostedIntegrationLockStore({
@@ -306,7 +393,7 @@ function createDraftStore() {
       now: () => new Date(nowMs),
     }),
     now: () => new Date(nowMs),
-    createId: () => "draft_migration_1",
+    createId: () => `draft_migration_${safeFixtureId(fixture)}`,
   });
 }
 
@@ -326,4 +413,8 @@ function splunkBinding() {
     defaultConfigScopeId: "splunk-test",
     environment: "test",
   };
+}
+
+function safeFixtureId(fixture: LegacyIntegrationHubMigratedFamilyFixture): string {
+  return fixture.familyId.replaceAll("-", "_");
 }

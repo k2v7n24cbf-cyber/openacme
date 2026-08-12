@@ -2455,6 +2455,28 @@ pnpm --filter @openacme/tools test -- hosted-integrations
 
 ### Slice 10.3: Migrate Security Families
 
+Status: done.
+
+Evidence:
+
+- Added generated migration fixtures for Qualys, Microsoft Graph, MDE, and
+  defender-alert, alongside the first Splunk migrated family.
+- Each migrated family fixture is generated from the migration inventory so
+  hosted tool names, legacy MCP names, config keys, secret refs, freshness, and
+  result behavior stay aligned.
+- Proved every migrated security family validates, registers examples, and
+  promotes to an active generation.
+- Proved config and secret requirements are represented as hosted config-scope
+  metadata and migrated Python fixtures do not read process env directly.
+- Proved hosted cache declarations exist only for tools classified as
+  `cached` or `sync`.
+- `ops/incidents.jsonl` is not present in the current worktree; no synthetic
+  regression examples were created.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- migration`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+
 Goal:
 
 - Migrate Qualys, Splunk, Microsoft Graph, MDE, and defender-alert families

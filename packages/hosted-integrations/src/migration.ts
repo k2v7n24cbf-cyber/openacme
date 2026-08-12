@@ -43,8 +43,17 @@ export interface LegacyIntegrationHubMigratedFamilyFixture {
   familyName: string;
   migratedToolNames: string[];
   legacyMcpToolNames: string[];
+  configKeys: string[];
+  secretRefs: string[];
   sourceFiles: Record<string, string>;
   examples: HostedIntegrationExample[];
+  regressionExamples: HostedIntegrationExample[];
+}
+
+export interface LegacyIntegrationHubIncidentSourceInventory {
+  available: boolean;
+  path: string;
+  notes: string;
 }
 
 const LEGACY_SERVER_NAME = "integration-hub";
@@ -188,6 +197,8 @@ export const FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY: LegacyIntegrationHubM
     familyName: "Splunk",
     migratedToolNames: ["splunk_search"],
     legacyMcpToolNames: ["mcp_integration-hub__splunk_search"],
+    configKeys: ["SPLUNK_BASE_URL"],
+    secretRefs: ["SPLUNK_TOKEN"],
     sourceFiles: {
       "family.yaml": splunkFamilyYaml(),
       "splunk.py": splunkPythonSource(),
@@ -205,7 +216,29 @@ export const FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY: LegacyIntegrationHubM
         },
       },
     ],
+    regressionExamples: [],
   };
+
+export const LEGACY_INTEGRATION_HUB_INCIDENT_SOURCE: LegacyIntegrationHubIncidentSourceInventory =
+  {
+    available: false,
+    path: "ops/incidents.jsonl",
+    notes:
+      "No ops/incidents.jsonl file is present in the current worktree; no synthetic regression examples are created during migration.",
+  };
+
+export const LEGACY_INTEGRATION_HUB_MIGRATED_SECURITY_FAMILIES: LegacyIntegrationHubMigratedFamilyFixture[] =
+  [
+    buildMigratedFamilyFixture("qualys", "Qualys", "qualys.py"),
+    FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY,
+    buildMigratedFamilyFixture("msgraph", "Microsoft Graph", "msgraph.py"),
+    buildMigratedFamilyFixture("mde", "Microsoft Defender for Endpoint", "mde.py"),
+    buildMigratedFamilyFixture(
+      "defender-alert",
+      "Defender Alert",
+      "defender_alert.py",
+    ),
+  ];
 
 export function validateLegacyIntegrationHubMigrationInventory(
   inventory: LegacyIntegrationHubInventory,
@@ -286,6 +319,139 @@ function duplicates(values: string[]): string[] {
     seen.add(value);
   }
   return [...repeated].sort();
+}
+
+function buildMigratedFamilyFixture(
+  familyId: string,
+  familyName: string,
+  entrypoint: string,
+): LegacyIntegrationHubMigratedFamilyFixture {
+  const familyEntry = LEGACY_INTEGRATION_HUB_INVENTORY.families.find(
+    (candidate) => candidate.familyId === familyId,
+  );
+  if (!familyEntry) throw new Error(`missing migration family: ${familyId}`);
+  const tools = LEGACY_INTEGRATION_HUB_INVENTORY.tools.filter(
+    (entry) => entry.familyId === familyId,
+  );
+  if (tools.length === 0) {
+    throw new Error(`missing migration tools for family: ${familyId}`);
+  }
+  return {
+    familyId,
+    familyName,
+    migratedToolNames: tools.map((entry) => entry.hostedToolName),
+    legacyMcpToolNames: tools.map((entry) => entry.legacyMcpToolName),
+    configKeys: familyEntry.configKeys,
+    secretRefs: familyEntry.secretRefs,
+    sourceFiles: {
+      "family.yaml": generatedFamilyYaml(familyId, familyName, entrypoint, tools),
+      [entrypoint]: generatedPythonSource(tools),
+    },
+    examples: [
+      {
+        id: `${familyId.replaceAll("-", "_")}_migration_smoke`,
+        familyId,
+        toolName: tools[0]!.hostedToolName,
+        category: "mock_only",
+        args: {},
+        expected: {
+          migrated: true,
+          tool: tools[0]!.hostedToolName,
+        },
+      },
+    ],
+    regressionExamples: [],
+  };
+}
+
+function generatedFamilyYaml(
+  familyId: string,
+  familyName: string,
+  entrypoint: string,
+  tools: LegacyIntegrationHubToolInventoryEntry[],
+): string {
+  return `
+id: ${familyId}
+name: ${familyName}
+version: 1
+runtime:
+  language: python
+  entrypoint: ${entrypoint}
+  defaultTimeoutMs: 30000
+  inlineResultTokenLimit: 8000
+  maxConcurrency: 2
+  runtimePolicy:
+    filesystem: run_dir_and_family_home
+    processEnv: tool_context_only
+    subprocess: denied
+    network: declared_egress
+    declaredEgress: []
+  dependencyPolicy:
+    installDuringInvocation: false
+    allowedPackages: []
+tools:
+${tools.map(toolYaml).join("")}`;
+}
+
+function toolYaml(entry: LegacyIntegrationHubToolInventoryEntry): string {
+  const cacheYaml =
+    entry.freshness === "cached" || entry.freshness === "sync"
+      ? `    cache:
+      scope: family_home
+      path: ${entry.hostedToolName}.json
+      description: Explicit migration cache for ${entry.hostedToolName}.
+`
+      : "";
+  return `  - name: ${entry.hostedToolName}
+    title: ${titleizeToolName(entry.hostedToolName)}
+    description: Migrated legacy integration-hub tool ${entry.legacyMcpToolName}.
+    inputSchema:
+      type: object
+      additionalProperties: true
+    classification:
+      operation: ${entry.operation}
+      freshness: ${entry.freshness}
+      idempotency: idempotent
+      execution: sync
+      approval: none
+${cacheYaml}`;
+}
+
+function generatedPythonSource(
+  tools: LegacyIntegrationHubToolInventoryEntry[],
+): string {
+  return `TOOL_NAMES = ${JSON.stringify(tools.map((entry) => entry.hostedToolName), null, 4)}
+CACHE_TOOLS = ${JSON.stringify(
+    tools
+      .filter((entry) => entry.freshness === "cached" || entry.freshness === "sync")
+      .map((entry) => entry.hostedToolName),
+    null,
+    4,
+  )}
+
+def list_tools():
+    return []
+
+def call_tool(name, args, context):
+    if name not in TOOL_NAMES:
+        raise ValueError(f"unknown tool: {name}")
+    return {
+        "migrated": True,
+        "tool": name,
+        "args": args,
+        "family_id": context["familyId"],
+        "generation_id": context["generationId"],
+        "uses_explicit_cache": name in CACHE_TOOLS,
+        "auth_configured": bool(context.get("secrets")),
+    }
+`;
+}
+
+function titleizeToolName(toolName: string): string {
+  return toolName
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function splunkFamilyYaml(): string {

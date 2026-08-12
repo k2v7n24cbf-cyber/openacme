@@ -305,9 +305,12 @@ export {
 export {
   EXPECTED_LEGACY_INTEGRATION_HUB_TOOL_NAMES,
   FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY,
+  LEGACY_INTEGRATION_HUB_INCIDENT_SOURCE,
   LEGACY_INTEGRATION_HUB_INVENTORY,
+  LEGACY_INTEGRATION_HUB_MIGRATED_SECURITY_FAMILIES,
   validateLegacyIntegrationHubMigrationInventory,
   type LegacyIntegrationHubFamilyInventoryEntry,
+  type LegacyIntegrationHubIncidentSourceInventory,
   type LegacyIntegrationHubInventory,
   type LegacyIntegrationHubMigratedFamilyFixture,
   type LegacyIntegrationHubToolInventoryEntry,

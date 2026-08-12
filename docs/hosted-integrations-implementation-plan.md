@@ -76,8 +76,19 @@ Evidence:
   registry, hosted integration gateway, execution logs, artifacts, and
   file-backed test environment. It uses the deterministic e2e stub model rather
   than an external LLM so the acceptance is repeatable and offline.
+- Added `packages/server/scripts/hosted-integrations-real-llm-dogfood.ts` for
+  live model acceptance against the same local test environment. The runner uses
+  the real configured OpenAI model path, starts the real Hono server on
+  `127.0.0.1:3466`, and drives the same Tool Developer / consumer / denied-agent
+  lifecycle through `/api/chat`.
+- Real LLM dogfood exposed that OpenAI strict tool schemas may require optional
+  management-tool fields to be present. Hosted integration management schemas now
+  accept `null` for optional fields that LLMs must include in strict mode, while
+  the runtime still treats `null` as absent.
 - Green validation:
   `OPENACME_DATA_DIR=/Users/alenbohcelyan/.openamce-hosted-integrations-test-env OPENACME_E2E_PORT=3466 pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/hosted-integrations-dogfood.e2e.ts`
+- Green real LLM validation:
+  `OPENACME_DATA_DIR=/Users/alenbohcelyan/.openamce-hosted-integrations-test-env OPENACME_E2E_PORT=3466 pnpm --filter @openacme/server dogfood:hosted-integrations:real-llm`
 
 ## Non-Goals For MVP
 

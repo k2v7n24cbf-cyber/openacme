@@ -55,7 +55,8 @@ export function bindHostedIntegrationManagement(
 }
 
 const JsonObjectParam = z.record(z.string(), z.unknown());
-const OptionalPositiveInteger = z.number().int().positive().optional();
+const OptionalPositiveInteger = z.number().int().positive().nullable().optional();
+const OptionalStringParam = z.string().min(1).nullable().optional();
 const FamilyId = z.string().min(1);
 const DraftId = z.string().min(1);
 const LockId = z.string().min(1);
@@ -109,9 +110,9 @@ const definitions: Array<{
       "Inspect canonical family source or a draft source file without filesystem access.",
     parameters: z
       .object({
-        family_id: FamilyId.optional(),
-        draft_id: DraftId.optional(),
-        path: z.string().min(1).optional(),
+        family_id: FamilyId.nullable().optional(),
+        draft_id: DraftId.nullable().optional(),
+        path: OptionalStringParam,
       })
       .strict(),
   },
@@ -141,16 +142,14 @@ const definitions: Array<{
       .object({
         family_id: FamilyId,
         lock_id: LockId,
-        source_revision_id: z.string().min(1).optional(),
+        source_revision_id: OptionalStringParam,
       })
       .strict(),
   },
   {
     name: "hosted_integration_draft_get",
     description: "Inspect a hosted integration draft or one draft source file.",
-    parameters: z
-      .object({ draft_id: DraftId, path: z.string().min(1).optional() })
-      .strict(),
+    parameters: z.object({ draft_id: DraftId, path: OptionalStringParam }).strict(),
   },
   {
     name: "hosted_integration_draft_patch",
@@ -204,14 +203,14 @@ const definitions: Array<{
       .object({
         draft_id: DraftId,
         lock_id: LockId,
-        approval_id: z.string().min(1).optional(),
+        approval_id: OptionalStringParam,
       })
       .strict(),
   },
   {
     name: "hosted_integration_generation_list",
     description: "List hosted integration generations.",
-    parameters: z.object({ family_id: FamilyId.optional() }).strict(),
+    parameters: z.object({ family_id: FamilyId.nullable().optional() }).strict(),
   },
   {
     name: "hosted_integration_generation_get",
@@ -247,7 +246,7 @@ const definitions: Array<{
         environment: z.string().min(1),
         config_scope_id: z.string().min(1),
         args: JsonObjectParam.default({}),
-        generation_id: GenerationId.optional(),
+        generation_id: GenerationId.nullable().optional(),
         operation_class: z
           .enum(["read", "write", "destructive"])
           .default("read"),
@@ -268,7 +267,7 @@ const definitions: Array<{
   {
     name: "hosted_integration_failure_bucket_list",
     description: "List hosted integration failure buckets assigned for repair.",
-    parameters: z.object({ family_id: FamilyId.optional() }).strict(),
+    parameters: z.object({ family_id: FamilyId.nullable().optional() }).strict(),
   },
   {
     name: "hosted_integration_failure_bucket_get",
@@ -289,9 +288,9 @@ const definitions: Array<{
     parameters: z
       .object({
         bucket_id: BucketId,
-        draft_id: DraftId.optional(),
-        generation_id: GenerationId.optional(),
-        regression_example_id: z.string().min(1).optional(),
+        draft_id: DraftId.nullable().optional(),
+        generation_id: GenerationId.nullable().optional(),
+        regression_example_id: OptionalStringParam,
       })
       .strict(),
   },

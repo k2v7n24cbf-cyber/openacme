@@ -1513,11 +1513,15 @@ Evidence:
 
 ### Slice 5.4: Tool Developer Agent Template
 
+Status: done.
+
 Goal:
 
 - Add `packages/agent-catalog/templates/tool-developer/AGENT.md`.
 - Mark it `managed: true`.
-- Bundle the `hosted-integrations-development` skill.
+- Bundle the `hosted-integrations-development` skill. This slice adds the
+  minimal builtin skill package so managed materialization never points at a
+  missing dependency; Slice 5.5 expands the playbook content.
 
 Non-goals:
 
@@ -1535,11 +1539,24 @@ Validation:
 pnpm --filter @openacme/server test -- agent-catalog
 ```
 
+Evidence:
+
+- Red validation:
+  `pnpm --filter @openacme/server test -- agent-catalog` first failed because
+  only `acme` was materialized and `tool-developer` did not exist.
+- Green validation:
+  `pnpm --filter @openacme/server test -- agent-catalog`
+  `pnpm --filter @openacme/agent-catalog check-types`
+  `pnpm --filter @openacme/agent-catalog build`
+  `pnpm --filter @openacme/skills check-types`
+  `pnpm --filter @openacme/skills build`
+  `pnpm --filter @openacme/server check-types`
+
 ### Slice 5.5: Hosted Integrations Development Skill
 
 Goal:
 
-- Add the bundled `hosted-integrations-development` skill.
+- Expand the bundled `hosted-integrations-development` skill.
 - Teach the practical lifecycle from request to promotion and failure repair.
 
 Non-goals:

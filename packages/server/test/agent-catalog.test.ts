@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConfigSchema, loadGlobalMcpServers } from "@openacme/config";
+import { HOSTED_INTEGRATION_MANAGEMENT_TOOL_NAMES } from "@openacme/tools";
 import { AgentManager } from "../src/agent-manager.js";
 
 /**
@@ -214,25 +215,46 @@ describe("AgentManager.ensureManagedAgents", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it("materializes Acme on an empty workforce and marks it managed", async () => {
+  it("materializes platform-managed agents on an empty workforce and marks them managed", async () => {
     expect(manager.listAgents()).toHaveLength(0);
 
     await manager.ensureManagedAgents();
 
     const agents = manager.listAgents();
-    expect(agents).toHaveLength(1);
-    const acme = agents[0]!;
+    expect(agents.map((agent) => agent.id).sort()).toEqual([
+      "acme",
+      "tool-developer",
+    ]);
+    const acme = agents.find((agent) => agent.id === "acme")!;
     expect(acme.id).toBe("acme");
     expect(acme.name).toBe("Acme");
     expect(acme.managed).toBe(true);
+    const toolDeveloper = agents.find((agent) => agent.id === "tool-developer")!;
+    expect(toolDeveloper.name).toBe("Tool Developer");
+    expect(toolDeveloper.managed).toBe(true);
+    expect(toolDeveloper.tools).toEqual(
+      expect.arrayContaining([...HOSTED_INTEGRATION_MANAGEMENT_TOOL_NAMES]),
+    );
+    expect(toolDeveloper.skills).toEqual(["hosted-integrations-development"]);
 
     // Agent folder
     expect(existsSync(path.join(dataDir, "agents", "acme", "AGENT.md"))).toBe(true);
     expect(existsSync(path.join(dataDir, "agents", "acme", "workspace"))).toBe(true);
+    expect(
+      existsSync(path.join(dataDir, "agents", "tool-developer", "AGENT.md")),
+    ).toBe(true);
+    expect(
+      existsSync(path.join(dataDir, "agents", "tool-developer", "workspace")),
+    ).toBe(true);
 
     // Bundled skill landed
     expect(existsSync(path.join(dataDir, "skills", "openacme-platform", "SKILL.md")))
       .toBe(true);
+    expect(
+      existsSync(
+        path.join(dataDir, "skills", "hosted-integrations-development", "SKILL.md"),
+      ),
+    ).toBe(true);
 
     // Resources copied
     expect(
@@ -255,21 +277,25 @@ describe("AgentManager.ensureManagedAgents", () => {
   it("is idempotent — second call does not duplicate the agent", async () => {
     await manager.ensureManagedAgents();
     await manager.ensureManagedAgents();
-    expect(manager.listAgents()).toHaveLength(1);
+    expect(manager.listAgents().map((agent) => agent.id).sort()).toEqual([
+      "acme",
+      "tool-developer",
+    ]);
   });
 
-  it("installs Acme even when other (unmanaged) agents exist", async () => {
-    // Pretend a user-added agent showed up before Acme.
+  it("installs managed agents even when other unmanaged agents exist", async () => {
+    // Pretend a user-added agent showed up before first boot materialization.
     await manager.importAgentFromTemplate("software-engineer", {});
     expect(manager.listAgents().map((a) => a.id)).toEqual(["software-engineer"]);
 
     await manager.ensureManagedAgents();
 
-    // The gate is per-template: the acme slot is empty, so Acme installs
-    // even though another agent already exists.
+    // The gate is per-template: empty managed slots install even though another
+    // agent already exists.
     const ids = manager.listAgents().map((a) => a.id).sort();
-    expect(ids).toEqual(["acme", "software-engineer"]);
+    expect(ids).toEqual(["acme", "software-engineer", "tool-developer"]);
     expect(existsSync(path.join(dataDir, "agents", "acme"))).toBe(true);
+    expect(existsSync(path.join(dataDir, "agents", "tool-developer"))).toBe(true);
   });
 
   it("rejects mutations on a managed agent", async () => {
@@ -278,5 +304,11 @@ describe("AgentManager.ensureManagedAgents", () => {
       manager.updateAgent("acme", { persona: "hacked" })
     ).rejects.toThrow(/platform-managed/);
     await expect(manager.deleteAgent("acme")).rejects.toThrow(/platform-managed/);
+    await expect(
+      manager.updateAgent("tool-developer", { persona: "hacked" }),
+    ).rejects.toThrow(/platform-managed/);
+    await expect(manager.deleteAgent("tool-developer")).rejects.toThrow(
+      /platform-managed/,
+    );
   });
 });

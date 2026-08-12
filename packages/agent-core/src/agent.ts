@@ -95,6 +95,26 @@ export interface PreparedModelHistory {
   compressionThreshold?: number;
 }
 
+export interface PrepareModelHistoryOptions {
+  toolFilter?: ReadonlySet<string>;
+  onCompressionStart?: (event: {
+    sessionId: string;
+    reason: ContextSnapshotReason;
+    estimatedTokens: number;
+    threshold: number;
+  }) => void;
+}
+
+interface SnapshotProjection {
+  snapshotId: string;
+  sourceLastMessageId: string;
+  sourceIndex: number;
+  modelHistory: UIMessage[];
+  tailMessageCount: number;
+  sourceSummaryText: string | null;
+  sourceSummarySha256: string | null;
+}
+
 function bindAgentToolObservation(): void {
   bindToolObservation({
     getSink: () => createEvidenceRecorder(),
@@ -606,10 +626,10 @@ export class Agent {
     return snapshot?.id;
   }
 
-  private latestSnapshotTailHistory(
+  private latestSnapshotProjection(
     sessionId: string,
     canonicalHistory: UIMessage[],
-  ): UIMessage[] | null {
+  ): SnapshotProjection | null {
     if (!this.contextSnapshotStore) return null;
     for (const snapshot of this.contextSnapshotStore.listForSession(
       sessionId,
@@ -622,12 +642,47 @@ export class Agent {
         (message) => message.id === snapshot.sourceLastMessageId,
       );
       if (sourceIndex < 0) continue;
-      return [
-        ...snapshot.modelMessages,
-        ...canonicalHistory.slice(sourceIndex + 1),
-      ];
+      const tail = canonicalHistory.slice(sourceIndex + 1);
+      return {
+        snapshotId: snapshot.id,
+        sourceLastMessageId: snapshot.sourceLastMessageId,
+        sourceIndex,
+        modelHistory: [
+          ...snapshot.modelMessages,
+          ...tail,
+        ],
+        tailMessageCount: tail.length,
+        sourceSummaryText: snapshot.summaryText,
+        sourceSummarySha256: snapshot.summarySha256,
+      };
     }
     return null;
+  }
+
+  private materializeSnapshotProjection(args: {
+    sessionId: string;
+    reason: ContextSnapshotReason;
+    projection: SnapshotProjection;
+    canonicalHistory: UIMessage[];
+  }): string {
+    if (args.projection.tailMessageCount === 0) {
+      return args.projection.snapshotId;
+    }
+    const snapshotId = this.createContextSnapshot({
+      sessionId: args.sessionId,
+      reason: args.reason,
+      modelHistory: args.projection.modelHistory,
+      canonicalHistory: args.canonicalHistory,
+      sourceLastMessageId:
+        args.canonicalHistory[args.canonicalHistory.length - 1]?.id ?? null,
+      summaryText: args.projection.sourceSummaryText,
+    });
+    if (!snapshotId) {
+      throw new Error(
+        "context snapshot projection could not be materialized for compressed model history",
+      );
+    }
+    return snapshotId;
   }
 
   private fallbackHardLimitTokens(threshold: number): number {
@@ -702,6 +757,7 @@ export class Agent {
     canonicalHistory: UIMessage[];
     threshold: number;
     compressionRequired: boolean;
+    options?: PrepareModelHistoryOptions;
   }): Promise<PreparedModelHistory | null> {
     try {
       const emergency = await this.emergencySummarizeHistory({
@@ -723,6 +779,7 @@ export class Agent {
         estimatedTokens: this.estimateRequestTokens(
           args.sessionId,
           emergency.modelHistory,
+          args.options,
         ),
         compressionThreshold: args.threshold,
       };
@@ -1113,8 +1170,10 @@ export class Agent {
     } catch (e) {
       log.warn(
         { err: e, sessionId },
-        "preflight compression failed; continuing on canonical session",
+        "preflight compression failed; aborting autonomous provider turn",
       );
+      this.surfaceAutonomousError(sessionId, e);
+      throw e;
     }
 
     const timeoutMs =
@@ -1742,6 +1801,7 @@ export class Agent {
     sessionId: string,
     history: UIMessage[],
     reason: ContextSnapshotReason = "proactive",
+    options: PrepareModelHistoryOptions = {},
   ): Promise<PreparedModelHistory> {
     if (!this.config.compression) {
       return {
@@ -1765,14 +1825,61 @@ export class Agent {
       }
     }
 
-    let currentHistory = history;
     let lastResult: Awaited<ReturnType<Compressor["compress"]>> | null = null;
     let compressionRequired = false;
     let lastEstimatedTokens: number | undefined;
     let compressionFailureReason: string | undefined;
+    let compressionStartNotified = false;
+    const initialProjection = this.latestSnapshotProjection(sessionId, history);
+    let currentHistory = initialProjection?.modelHistory ?? history;
+
+    if (reason === "proactive" && initialProjection) {
+      const projectionTokens = this.estimateRequestTokens(
+        sessionId,
+        initialProjection.modelHistory,
+        options,
+      );
+      lastEstimatedTokens = projectionTokens;
+      if (!this.compressor.shouldCompress(sessionId, projectionTokens, threshold)) {
+        const snapshotId = this.materializeSnapshotProjection({
+          sessionId,
+          reason,
+          projection: initialProjection,
+          canonicalHistory: history,
+        });
+        this.reportTimelineEvent({
+          sessionId,
+          agentId: this.config.id,
+          eventType: "session.compression.snapshot_reused",
+          source: "agent",
+          status: "ok",
+          payload: {
+            reason,
+            snapshotId,
+            sourceSnapshotId: initialProjection.snapshotId,
+            tailMessageCount: initialProjection.tailMessageCount,
+            estimatedTokens: projectionTokens,
+            threshold,
+            mode: "model_context",
+          },
+        });
+        return {
+          modelHistory: initialProjection.modelHistory,
+          compressed: true,
+          snapshotId,
+          compressionRequired: false,
+          estimatedTokens: projectionTokens,
+          compressionThreshold: threshold,
+        };
+      }
+    }
 
     for (let pass = 0; pass < 3; pass++) {
-      const tokens = this.estimateRequestTokens(sessionId, currentHistory);
+      const tokens = this.estimateRequestTokens(
+        sessionId,
+        currentHistory,
+        options,
+      );
       lastEstimatedTokens = tokens;
       if (
         reason === "proactive" &&
@@ -1784,6 +1891,22 @@ export class Agent {
         break;
       }
       compressionRequired = true;
+      if (!compressionStartNotified) {
+        compressionStartNotified = true;
+        try {
+          options.onCompressionStart?.({
+            sessionId,
+            reason,
+            estimatedTokens: tokens,
+            threshold,
+          });
+        } catch (e) {
+          log.warn(
+            { err: e, sessionId },
+            "preflight compression start callback failed",
+          );
+        }
+      }
       log.info(
         {
           sessionId,
@@ -1922,22 +2045,21 @@ export class Agent {
 
     if (!lastResult) {
       if (compressionRequired) {
-        const fallbackHistory = this.latestSnapshotTailHistory(
-          sessionId,
-          history,
-        );
-        if (fallbackHistory) {
+        const fallbackProjection =
+          initialProjection ?? this.latestSnapshotProjection(sessionId, history);
+        if (fallbackProjection) {
+          const fallbackHistory = fallbackProjection.modelHistory;
           const fallbackTokens = this.estimateRequestTokens(
             sessionId,
             fallbackHistory,
+            options,
           );
           if (fallbackTokens <= this.fallbackHardLimitTokens(threshold)) {
-            const snapshotId = this.createContextSnapshot({
+            const snapshotId = this.materializeSnapshotProjection({
               sessionId,
               reason,
-              modelHistory: fallbackHistory,
+              projection: fallbackProjection,
               canonicalHistory: history,
-              summaryText: null,
             });
             return {
               modelHistory: fallbackHistory,
@@ -1956,9 +2078,27 @@ export class Agent {
             canonicalHistory: history,
             threshold,
             compressionRequired,
+            options,
           });
           if (emergency) return emergency;
         }
+      }
+      if (initialProjection) {
+        const snapshotId = this.materializeSnapshotProjection({
+          sessionId,
+          reason,
+          projection: initialProjection,
+          canonicalHistory: history,
+        });
+        return {
+          modelHistory: currentHistory,
+          compressed: true,
+          snapshotId,
+          compressionRequired,
+          compressionFailureReason,
+          estimatedTokens: lastEstimatedTokens,
+          compressionThreshold: threshold,
+        };
       }
       return {
         modelHistory: history,
@@ -1973,6 +2113,7 @@ export class Agent {
     const postCompressionTokens = this.estimateRequestTokens(
       sessionId,
       currentHistory,
+      options,
     );
     if (
       compressionRequired &&
@@ -1981,10 +2122,11 @@ export class Agent {
       const emergency = await this.tryEmergencyPreparedHistory({
         sessionId,
         reason,
-        history,
+        history: currentHistory,
         canonicalHistory: history,
         threshold,
         compressionRequired,
+        options,
       });
       if (emergency) return emergency;
     }
@@ -2039,6 +2181,7 @@ export class Agent {
   private estimateRequestTokens(
     sessionId: string,
     history: UIMessage[],
+    options: PrepareModelHistoryOptions = {},
   ): number {
     const IMAGE_TOKEN_COST = 1500;
     const system = this.getSystemPrompt(sessionId);
@@ -2058,7 +2201,10 @@ export class Agent {
         }
       }
     }
-    const tools = this.toolRegistry.getVercelTools(new Set(this.config.tools));
+    const effectiveToolNames = options.toolFilter
+      ? this.config.tools.filter((toolName) => options.toolFilter!.has(toolName))
+      : this.config.tools;
+    const tools = this.toolRegistry.getVercelTools(new Set(effectiveToolNames));
     chars += JSON.stringify(tools).length;
     return Math.floor(chars / 4) + imageTokens;
   }

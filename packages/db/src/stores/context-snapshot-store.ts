@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import type { WasmDatabase } from "../wasm/adapter.js";
 import { drizzle } from "../wasm/drizzle.js";
 import {
@@ -75,7 +75,7 @@ export function createContextSnapshotStore(db: WasmDatabase) {
         .select()
         .from(sessionContextSnapshots)
         .where(eq(sessionContextSnapshots.sessionId, sessionId))
-        .orderBy(desc(sessionContextSnapshots.createdAt))
+        .orderBy(desc(sessionContextSnapshots.createdAt), sql`rowid desc`)
         .limit(Math.min(Math.max(limit, 1), 500))
         .all()
         .map(toContextSnapshot);

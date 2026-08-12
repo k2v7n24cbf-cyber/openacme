@@ -11,13 +11,15 @@ replace canonical chat messages.
 ## Flow
 
 1. `/api/chat` persists the new user message in `messages`.
-2. `Agent.prepareModelHistory()` estimates system prompt, history, tools, and
-   image costs.
+2. `Agent.prepareModelHistory()` estimates system prompt, history, effective
+   tools, and image costs.
 3. If the configured threshold is crossed, `Compressor.compress()` creates a
    `[head + summary + tail]` UIMessage list.
-4. The compacted list is stored in `session_context_snapshots`.
-5. `Agent.runStream()` receives the compacted list as `history` and converts it
-   with `uiToModelMessages()`.
+4. The compacted list is stored in `session_context_snapshots` as an initial
+   UIMessage projection.
+5. `Agent.runStream()` receives the compacted list as `history`, then adds the
+   system prompt, effective tool schemas, UIMessage-to-provider conversion, and
+   any per-step runtime injections.
 6. The assistant response is appended to canonical `messages` with
    `metadata.contextSnapshotId`.
 
@@ -49,8 +51,8 @@ Assistant messages produced from a compacted context include:
 The web UI uses that id to render a side-by-side comparison:
 
 - Conversation: canonical `messages`.
-- Model Context: exact `session_context_snapshots.model_messages` sent to the
-  provider.
+- Model Context: exact `session_context_snapshots.model_messages` initial
+  UIMessage projection passed into `runStream()`.
 
 The backend endpoint is:
 
@@ -58,7 +60,10 @@ The backend endpoint is:
 GET /api/sessions/:sessionId/context-snapshots/:snapshotId
 ```
 
-It returns canonical messages, model-context messages, and snapshot metadata.
+It returns canonical messages, model-context projection messages, and snapshot
+metadata. `modelContext.includesProviderRequestEnvelope` is `false`; complete
+provider request evidence belongs to the forensic prompt snapshot/evidence
+system when that instrumentation is enabled.
 
 ## Verification
 

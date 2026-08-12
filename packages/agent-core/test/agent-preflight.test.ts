@@ -510,6 +510,255 @@ describe("Agent.preflightCompress", () => {
     ).toBe(true);
   });
 
+  it("reuses a successful snapshot plus small canonical tail before fresh proactive compression", async () => {
+    const db = freshDb();
+    const sessions = createSessionStore(db);
+    const snapshots = createContextSnapshotStore(db);
+    const parent = sessions.create("a1", {
+      id: "preflight-snapshot-fast-path",
+    });
+
+    const seed: UIMessage[] = [];
+    for (let i = 0; i < 20; i++) {
+      seed.push(bigUserMsg(`u${i}`, 500));
+      seed.push(bigAssistantMsg(`a${i}`, 500));
+    }
+    const snapshotModelHistory: UIMessage[] = [
+      {
+        id: "snapshot-summary-fast",
+        role: "user",
+        parts: [
+          {
+            type: "text",
+            text: "[CONTEXT COMPACTION] Existing successful summary",
+          },
+        ],
+      } as UIMessage,
+    ];
+    const sourceLastMessageId = seed[37]!.id;
+    snapshots.create({
+      id: "snapshot-fast-ok",
+      sessionId: parent.id,
+      reason: "proactive",
+      compressed: true,
+      modelMessages: snapshotModelHistory,
+      canonicalMessageCount: 38,
+      sourceLastMessageId,
+      summaryText: "Existing successful summary",
+    });
+
+    const agent = makeAgent({
+      db,
+      thresholdTokens: 1000,
+      protectFirstN: 1,
+      tailTokenBudget: 200,
+    });
+    const prepared = await agent.prepareModelHistory(
+      parent.id,
+      seed,
+      "proactive",
+    );
+
+    const functionIds = generateTextMock.mock.calls.map(
+      ([arg]) => arg?.experimental_telemetry?.functionId,
+    );
+    expect(functionIds).not.toContain("a1:memory-flush");
+    expect(functionIds).not.toContain("compression-summarizer");
+    expect(prepared.compressed).toBe(true);
+    expect(prepared.compressionRequired).toBe(false);
+    expect(prepared.modelHistory.map((message) => message.id)).toEqual([
+      ...snapshotModelHistory.map((message) => message.id),
+      ...seed.slice(38).map((message) => message.id),
+    ]);
+  });
+
+  it("materializes an exact snapshot ledger when snapshot reuse adds canonical tail", async () => {
+    const db = freshDb();
+    const sessions = createSessionStore(db);
+    const snapshots = createContextSnapshotStore(db);
+    const parent = sessions.create("a1", {
+      id: "preflight-snapshot-fast-path-ledger",
+    });
+
+    const seed: UIMessage[] = [];
+    for (let i = 0; i < 20; i++) {
+      seed.push(bigUserMsg(`u${i}`, 500));
+      seed.push(bigAssistantMsg(`a${i}`, 500));
+    }
+    const snapshotModelHistory: UIMessage[] = [
+      {
+        id: "snapshot-ledger-summary",
+        role: "user",
+        parts: [
+          {
+            type: "text",
+            text: "[CONTEXT COMPACTION] Existing ledger summary",
+          },
+        ],
+      } as UIMessage,
+    ];
+    snapshots.create({
+      id: "snapshot-ledger-source",
+      sessionId: parent.id,
+      reason: "proactive",
+      compressed: true,
+      modelMessages: snapshotModelHistory,
+      canonicalMessageCount: 38,
+      sourceLastMessageId: seed[37]!.id,
+      summaryText: "Existing ledger summary",
+    });
+
+    const agent = makeAgent({
+      db,
+      thresholdTokens: 1000,
+      protectFirstN: 1,
+      tailTokenBudget: 200,
+    });
+    const prepared = await agent.prepareModelHistory(
+      parent.id,
+      seed,
+      "proactive",
+    );
+
+    expect(prepared.snapshotId).toBeTruthy();
+    expect(prepared.snapshotId).not.toBe("snapshot-ledger-source");
+    const snapshot = snapshots.get(prepared.snapshotId!);
+    expect(snapshot?.modelMessages).toEqual(prepared.modelHistory);
+    expect(snapshot?.sourceLastMessageId).toBe(seed[seed.length - 1]!.id);
+    expect(snapshot?.canonicalMessageCount).toBe(seed.length);
+    expect(snapshot?.summaryText).toBe("Existing ledger summary");
+    expect(snapshot?.summarySha256).toBeTruthy();
+  });
+
+  it("compresses an over-threshold snapshot projection instead of raw canonical history", async () => {
+    const db = freshDb();
+    const sessions = createSessionStore(db);
+    const snapshots = createContextSnapshotStore(db);
+    const parent = sessions.create("a1", {
+      id: "preflight-snapshot-incremental-compression",
+    });
+
+    const seed: UIMessage[] = [];
+    seed.push(bigUserMsg("raw-old-marker", 100));
+    seed[0]!.parts = [
+      {
+        type: "text",
+        text: "RAW_OLD_CONTEXT_SHOULD_NOT_BE_SENT_TO_INCREMENTAL_SUMMARIZER",
+      },
+    ];
+    for (let i = 1; i < 24; i++) {
+      seed.push(
+        i % 2 === 0
+          ? bigUserMsg(`u${i}`, 500)
+          : bigAssistantMsg(`a${i}`, 500),
+      );
+    }
+
+    snapshots.create({
+      id: "snapshot-incremental-source",
+      sessionId: parent.id,
+      reason: "proactive",
+      compressed: true,
+      modelMessages: [
+        {
+          id: "snapshot-incremental-summary",
+          role: "user",
+          parts: [
+            {
+              type: "text",
+              text: "[CONTEXT COMPACTION] Existing incremental summary",
+            },
+          ],
+        } as UIMessage,
+      ],
+      canonicalMessageCount: 10,
+      sourceLastMessageId: seed[9]!.id,
+      summaryText: "Existing incremental summary",
+    });
+
+    generateTextMock.mockImplementation(
+      async (arg: {
+        prompt?: string;
+        experimental_telemetry?: { functionId?: string };
+      }) => {
+        if (arg.experimental_telemetry?.functionId === "a1:memory-flush") {
+          return { text: "## Active Task\nNone." };
+        }
+        if (
+          arg.experimental_telemetry?.functionId === "compression-summarizer"
+        ) {
+          expect(arg.prompt ?? "").not.toContain(
+            "RAW_OLD_CONTEXT_SHOULD_NOT_BE_SENT_TO_INCREMENTAL_SUMMARIZER",
+          );
+          return { text: "## Active Task\nIncremental summary." };
+        }
+        throw new Error(
+          `unexpected generateText call: ${
+            arg.experimental_telemetry?.functionId ?? "none"
+          }`,
+        );
+      },
+    );
+
+    const agent = makeAgent({
+      db,
+      thresholdTokens: 1000,
+      protectFirstN: 1,
+      tailTokenBudget: 200,
+    });
+    const prepared = await agent.prepareModelHistory(
+      parent.id,
+      seed,
+      "proactive",
+    );
+
+    expect(prepared.compressed).toBe(true);
+    expect(prepared.compressionRequired).toBe(true);
+    expect(
+      prepared.modelHistory.some((message) =>
+        messageText(message).includes("Incremental summary."),
+      ),
+    ).toBe(true);
+  });
+
+  it("selects same-second snapshots newest-first deterministically", () => {
+    const db = freshDb();
+    const sessions = createSessionStore(db);
+    const snapshots = createContextSnapshotStore(db);
+    const parent = sessions.create("a1", {
+      id: "preflight-snapshot-same-second",
+    });
+
+    snapshots.create({
+      id: "snapshot-older-same-second",
+      sessionId: parent.id,
+      reason: "proactive",
+      compressed: true,
+      modelMessages: [bigUserMsg("older-model", 10)],
+      canonicalMessageCount: 1,
+      sourceLastMessageId: "older-source",
+      summaryText: "older",
+    });
+    snapshots.create({
+      id: "snapshot-newer-same-second",
+      sessionId: parent.id,
+      reason: "proactive",
+      compressed: true,
+      modelMessages: [bigUserMsg("newer-model", 10)],
+      canonicalMessageCount: 2,
+      sourceLastMessageId: "newer-source",
+      summaryText: "newer",
+    });
+    db.exec(
+      "UPDATE session_context_snapshots SET created_at = 12345 WHERE session_id = 'preflight-snapshot-same-second'",
+    );
+
+    expect(snapshots.listForSession(parent.id).map((s) => s.id)).toEqual([
+      "snapshot-newer-same-second",
+      "snapshot-older-same-second",
+    ]);
+  });
+
   it("uses the latest successful snapshot plus canonical tail after retry exhaustion", async () => {
     const db = freshDb();
     const sessions = createSessionStore(db);
@@ -835,6 +1084,27 @@ describe("Agent.preflightCompress", () => {
     );
   });
 
+  it("does not continue autonomous turns with raw history after preflight failure", async () => {
+    const db = freshDb();
+    const sessions = createSessionStore(db);
+    const parent = sessions.create("a1", {
+      id: "autonomous-preflight-failure",
+    });
+    const agent = makeAgent({
+      db,
+      thresholdTokens: 1,
+      protectFirstN: 1,
+      tailTokenBudget: 200,
+    });
+    const runStreamSpy = vi.spyOn(agent, "runStream");
+    vi.spyOn(agent, "prepareModelHistory").mockRejectedValue(
+      new Error("preflight exploded"),
+    );
+
+    await expect(agent.runAutonomous({ sessionId: parent.id })).rejects.toThrow();
+    expect(runStreamSpy).not.toHaveBeenCalled();
+  });
+
   it("does not require compression when only the base request crosses threshold", async () => {
     const db = freshDb();
     const sessions = createSessionStore(db);
@@ -863,6 +1133,54 @@ describe("Agent.preflightCompress", () => {
     expect(prepared.compressed).toBe(false);
     expect(prepared.compressionFailureReason).toBeUndefined();
     expect(prepared.modelHistory).toBe(seed);
+    expect(generateTextMock).not.toHaveBeenCalled();
+  });
+
+  it("estimates preflight size with the same effective tool filter as the provider call", async () => {
+    const db = freshDb();
+    const sessions = createSessionStore(db);
+    const parent = sessions.create("a1", {
+      id: "preflight-effective-tool-filter",
+    });
+    const toolRegistry = {
+      get: () => undefined,
+      getVercelTools: (names: ReadonlySet<string>) =>
+        Object.fromEntries(
+          [...names].map((name) => [
+            name,
+            {
+              description:
+                name === "heavy_tool" ? "h".repeat(20_000) : "small tool",
+            },
+          ]),
+        ),
+    } as unknown as ToolRegistry;
+    const agent = makeAgent({
+      db,
+      thresholdTokens: 1000,
+      protectFirstN: 1,
+      tailTokenBudget: 200,
+      tools: ["small_tool", "heavy_tool"],
+      toolRegistry,
+    });
+    const history: UIMessage[] = [];
+    for (let i = 0; i < 6; i++) {
+      history.push(
+        i % 2 === 0
+          ? bigUserMsg(`filtered-u-${i}`, 80)
+          : bigAssistantMsg(`filtered-a-${i}`, 80),
+      );
+    }
+
+    const prepared = await agent.prepareModelHistory(
+      parent.id,
+      history,
+      "proactive",
+      { toolFilter: new Set(["small_tool"]) },
+    );
+
+    expect(prepared.compressionRequired).toBe(false);
+    expect(prepared.compressed).toBe(false);
     expect(generateTextMock).not.toHaveBeenCalled();
   });
 

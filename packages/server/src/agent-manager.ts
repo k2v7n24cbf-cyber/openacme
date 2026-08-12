@@ -2488,15 +2488,19 @@ export class AgentManager {
       });
 
       const agent = this.getAgent(request.targetAgentId);
-      await agent.preflightCompress(
+      const peerAskToolFilter = new Set(
+        agent.config.tools.filter((t) => t !== "agent_ask"),
+      );
+      const prepared = await agent.prepareModelHistory(
         session.id,
         sanitizeStoredHistory(
           this.messageStore.getHistory(session.id),
         ) as unknown as UIMessage[],
+        "proactive",
+        { toolFilter: peerAskToolFilter },
       );
-      let history = sanitizeStoredHistory(
-        this.messageStore.getHistory(session.id),
-      ) as unknown as UIMessage[];
+      let history = prepared.modelHistory;
+      const contextSnapshotId = prepared.snapshotId;
 
       const recall = await agent.applyMemoryRecall({
         sessionId: session.id,
@@ -2524,9 +2528,7 @@ export class AgentManager {
         sessionId: session.id,
         history,
         signal: timeout.signal,
-        toolFilter: new Set(
-          agent.config.tools.filter((t) => t !== "agent_ask"),
-        ),
+        toolFilter: peerAskToolFilter,
         usage: { kind: "interactive", messageId: responseMessageId },
         onError: ({ error }) => {
           capturedError = error;
@@ -2585,6 +2587,12 @@ export class AgentManager {
         id: assistant.id,
         role: "assistant",
         parts: assistant.parts as unknown[],
+        metadata: contextSnapshotId
+          ? ({
+              contextSnapshotId,
+              contextCompressed: true,
+            } satisfies MessageMetadata)
+          : undefined,
       });
       this.broadcaster.broadcast(session.id, {
         kind: "messages_appended",
@@ -2593,6 +2601,12 @@ export class AgentManager {
             id: assistant.id,
             role: "assistant",
             parts: assistant.parts as unknown[],
+            metadata: contextSnapshotId
+              ? ({
+                  contextSnapshotId,
+                  contextCompressed: true,
+                } satisfies MessageMetadata)
+              : undefined,
           },
         ],
       });

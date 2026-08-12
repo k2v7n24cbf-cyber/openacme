@@ -449,9 +449,14 @@ export async function createApp(
         messages: canonical,
       },
       modelContext: {
+        kind: "initial_ui_message_projection",
+        includesProviderRequestEnvelope: false,
+        notes:
+          "Initial UIMessage projection passed into runStream before system prompt, tool schemas, provider message conversion, and per-step injections.",
         messages: snapshot.modelMessages,
       },
       meta: {
+        semantics: "ui_message_projection",
         compressed: snapshot.compressed,
         reason: snapshot.reason,
         canonicalMessageCount: snapshot.canonicalMessageCount,
@@ -2163,11 +2168,10 @@ async function runChatTurn(args: {
   // (rename-swap), so all external references stay valid; we only
   // need to re-read history after.
   const compressionStatusId = `compress-${responseMessageId}`;
-  try {
-    const agent = manager.getAgent(agentId);
-    // Surface a chip while compaction runs — summarizing 100K+ tokens
-    // can take 20-60s and looks like a freeze otherwise. Cleared
-    // unconditionally in the `finally` so the chip doesn't linger.
+  let compressionStatusShown = false;
+  const showCompressionStatus = () => {
+    if (compressionStatusShown) return;
+    compressionStatusShown = true;
     manager.broadcaster.broadcast(sessionId, {
       kind: "ui_message_part",
       part: {
@@ -2181,10 +2185,14 @@ async function runChatTurn(args: {
         transient: true,
       },
     });
+  };
+  try {
+    const agent = manager.getAgent(agentId);
     const prepared = await agent.prepareModelHistory(
       sessionId,
       history,
       "proactive",
+      { onCompressionStart: showCompressionStatus },
     );
     history = prepared.modelHistory;
     contextSnapshotId = prepared.snapshotId;
@@ -2248,19 +2256,21 @@ async function runChatTurn(args: {
   } finally {
     // Clear the in-progress chip. Same id + empty `message` removes
     // the entry from the client's statusBoard.
-    manager.broadcaster.broadcast(sessionId, {
-      kind: "ui_message_part",
-      part: {
-        type: "data-status",
-        id: compressionStatusId,
-        data: {
+    if (compressionStatusShown) {
+      manager.broadcaster.broadcast(sessionId, {
+        kind: "ui_message_part",
+        part: {
+          type: "data-status",
           id: compressionStatusId,
-          kind: "info",
-          message: "",
+          data: {
+            id: compressionStatusId,
+            kind: "info",
+            message: "",
+          },
+          transient: true,
         },
-        transient: true,
-      },
-    });
+      });
+    }
   }
 
   // `createUIMessageStream` doesn't reject the consumer when execute()

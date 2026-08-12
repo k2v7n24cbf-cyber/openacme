@@ -108,9 +108,11 @@ export const messages = sqliteTable(
 );
 
 /**
- * Exact per-turn model-context snapshots. The canonical conversation stays in
- * `messages`; this table records the projected UIMessage list sent to the
- * provider when runtime compaction changes what the model sees.
+ * Per-turn model-context snapshots. The canonical conversation stays in
+ * `messages`; this table records the initial UIMessage projection passed to
+ * the agent runtime when compaction changes model input. It is not a complete
+ * provider transcript: system prompt, tool schemas, UIMessage-to-provider
+ * conversion, and autonomous per-step injections are added after this layer.
  */
 export const sessionContextSnapshots = sqliteTable(
   "session_context_snapshots",

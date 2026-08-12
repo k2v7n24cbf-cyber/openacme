@@ -85,6 +85,15 @@ export {
   type HostedIntegrationFamilySummary,
 } from "./catalog.js";
 export {
+  createFileHostedIntegrationGenerationStore,
+  type FileHostedIntegrationGenerationStoreOptions,
+  type HostedIntegrationGenerationStore,
+  type PromoteHostedIntegrationDraftRequest,
+  type PromoteHostedIntegrationDraftResult,
+  type RollbackHostedIntegrationGenerationRequest,
+  type RollbackHostedIntegrationGenerationResult,
+} from "./generations.js";
+export {
   createFileHostedIntegrationService,
   type FileHostedIntegrationServiceOptions,
   type HostedIntegrationManagementFamilySummary,

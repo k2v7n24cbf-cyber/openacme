@@ -23,6 +23,10 @@ import {
   type HostedIntegrationExampleRegistry,
 } from "./examples.js";
 import {
+  createFileHostedIntegrationGenerationStore,
+  type HostedIntegrationGenerationStore,
+} from "./generations.js";
+import {
   createFileHostedIntegrationLockStore,
   type HostedIntegrationLockStore,
 } from "./locks.js";
@@ -59,6 +63,7 @@ export interface HostedIntegrationService {
   readonly configScopes: HostedIntegrationConfigScopeStore;
   readonly secrets: HostedIntegrationSecretStore;
   readonly approvals: HostedIntegrationApprovalStore;
+  readonly generations: HostedIntegrationGenerationStore;
   listFamilies(): Promise<HostedIntegrationManagementFamilySummary[]>;
   getFamily(
     familyId: HostedIntegrationFamilyId | string,
@@ -100,6 +105,10 @@ export function createFileHostedIntegrationService(
   });
   const secrets = createFileHostedIntegrationSecretStore(options);
   const approvals = createFileHostedIntegrationApprovalStore(options);
+  const generations = createFileHostedIntegrationGenerationStore({
+    ...options,
+    draftStore: drafts,
+  });
   return new FileHostedIntegrationService({
     catalog,
     locks,
@@ -111,6 +120,7 @@ export function createFileHostedIntegrationService(
     configScopes,
     secrets,
     approvals,
+    generations,
   });
 }
 
@@ -124,6 +134,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
   readonly configScopes: HostedIntegrationConfigScopeStore;
   readonly secrets: HostedIntegrationSecretStore;
   readonly approvals: HostedIntegrationApprovalStore;
+  readonly generations: HostedIntegrationGenerationStore;
 
   private readonly catalog: HostedIntegrationCatalog;
 
@@ -138,6 +149,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     configScopes: HostedIntegrationConfigScopeStore;
     secrets: HostedIntegrationSecretStore;
     approvals: HostedIntegrationApprovalStore;
+    generations: HostedIntegrationGenerationStore;
   }) {
     this.catalog = parts.catalog;
     this.locks = parts.locks;
@@ -149,6 +161,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     this.configScopes = parts.configScopes;
     this.secrets = parts.secrets;
     this.approvals = parts.approvals;
+    this.generations = parts.generations;
   }
 
   async start(): Promise<void> {

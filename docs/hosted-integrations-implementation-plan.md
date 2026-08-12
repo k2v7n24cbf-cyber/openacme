@@ -843,6 +843,20 @@ invoke it through the gateway.
 
 ### Slice 4.1: Generation Artifact Store
 
+Status: done.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/hosted-integrations test -- generations` failed
+  before implementation because the generation store/export did not exist.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- generations`
+  `pnpm --filter @openacme/hosted-integrations test`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/server check-types`
+
 Goal:
 
 - Package a validated draft into an immutable generation.

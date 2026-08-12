@@ -2270,6 +2270,34 @@ pnpm --filter web check-types
 pnpm --filter web test -- hosted-integrations
 ```
 
+Status: Completed in local commit pending push.
+
+Implemented:
+
+- Added a browser draft editor inside the hosted integrations Settings tab.
+- The editor reads canonical source through
+  `/api/hosted-integrations/families/:family/source/files/*`.
+- The editor can acquire/release family locks, create drafts, read draft files,
+  patch/delete draft files, upsert examples, run examples, validate drafts, and
+  submit promotion through the hosted integrations API.
+- Added optional backend lock-owner enforcement for draft file patch/delete and
+  example upsert. Existing management tools remain compatible because the
+  owner check only runs when `lockedBy` is supplied.
+- The editor sends `lockedBy: web-settings`; edits are disabled unless the
+  active lock is owned by that actor.
+- Destructive promotion displays the human-approval requirement and does not
+  create agent self-approval.
+
+Green validation:
+
+```text
+pnpm --filter web check-types
+pnpm --filter @openacme/server test -- hosted-integrations-routes
+pnpm --filter web test -- hosted-integrations
+pnpm --filter @openacme/server check-types
+pnpm --filter web test
+```
+
 ## Milestone 9: Observability Wiring
 
 Goal: connect hosted integrations execution records to existing OpenTelemetry

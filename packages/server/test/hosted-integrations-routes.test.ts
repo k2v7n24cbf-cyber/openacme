@@ -538,6 +538,22 @@ describe("hosted integrations draft control plane routes", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           lockId,
+          lockedBy: "agent:other",
+          content: "def run():\n    return {'changed': False}\n",
+        }),
+      },
+    );
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: "lock_conflict" });
+
+    res = await req(
+      `/api/hosted-integrations/drafts/${draftId}/files/qualys.py`,
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          lockId,
+          lockedBy: "agent:tool-developer",
           content: "def run():\n    return {'changed': True}\n",
         }),
       },

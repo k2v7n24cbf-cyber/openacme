@@ -582,9 +582,16 @@ export function registerHostedIntegrationRoutes(
       );
       if (!filePath) return c.json({ error: "path_required" }, 400);
       const body = await readJsonObject(c);
+      const lockId = stringField(body, "lockId");
+      const ownerError = await optionalLockOwnerError(c, service, {
+        draftId,
+        lockId,
+        lockedBy: optionalStringField(body, "lockedBy") ?? undefined,
+      });
+      if (ownerError) return ownerError;
       const result = await service.drafts.writeDraftFile({
         draftId,
-        lockId: stringField(body, "lockId"),
+        lockId,
         path: filePath,
         content: stringField(body, "content"),
       });
@@ -603,9 +610,16 @@ export function registerHostedIntegrationRoutes(
       );
       if (!filePath) return c.json({ error: "path_required" }, 400);
       const body = await readJsonObject(c);
+      const lockId = stringField(body, "lockId");
+      const ownerError = await optionalLockOwnerError(c, service, {
+        draftId,
+        lockId,
+        lockedBy: optionalStringField(body, "lockedBy") ?? undefined,
+      });
+      if (ownerError) return ownerError;
       const result = await service.drafts.deleteDraftFile({
         draftId,
-        lockId: stringField(body, "lockId"),
+        lockId,
         path: filePath,
       });
       return writeResultResponse(c, result);
@@ -628,9 +642,16 @@ export function registerHostedIntegrationRoutes(
   app.post("/api/hosted-integrations/drafts/:draftId/examples", async (c) => {
     try {
       const body = await readJsonObject(c);
+      const lockId = stringField(body, "lockId");
+      const ownerError = await optionalLockOwnerError(c, service, {
+        draftId: c.req.param("draftId"),
+        lockId,
+        lockedBy: optionalStringField(body, "lockedBy") ?? undefined,
+      });
+      if (ownerError) return ownerError;
       const result = await service.examples.upsertExample({
         draftId: c.req.param("draftId"),
-        lockId: stringField(body, "lockId"),
+        lockId,
         example: HostedIntegrationExampleSchema.parse(
           objectField(body, "example"),
         ),
@@ -1192,6 +1213,24 @@ async function hasCurrentDraftLock(
   if (draft.lockId !== lockId) return false;
   const lock = await service.locks.getActiveLock(draft.familyId);
   return lock?.id === lockId;
+}
+
+async function optionalLockOwnerError(
+  c: Context,
+  service: HostedIntegrationService,
+  request: { draftId: string; lockId: string; lockedBy?: string },
+): Promise<Response | null> {
+  if (!request.lockedBy) return null;
+  const draft = await service.drafts.getDraft(request.draftId);
+  if (!draft) return c.json({ error: "not_found" }, 404);
+  const lock = await service.locks.getActiveLock(draft.familyId);
+  if (!lock || lock.id !== request.lockId) {
+    return c.json({ error: "lock_required" }, 409);
+  }
+  if (lock.lockedBy !== request.lockedBy) {
+    return c.json({ error: "lock_conflict", lock }, 409);
+  }
+  return null;
 }
 
 async function runDraftExampleRoute(

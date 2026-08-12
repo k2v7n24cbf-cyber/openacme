@@ -90,6 +90,35 @@ interface Provider {
   models?: Array<{ id: string; label: string; hint?: string }>;
 }
 
+interface HostedIntegrationFileEntry {
+  path: string;
+  size: number;
+}
+
+interface HostedIntegrationDraft {
+  id: string;
+  familyId: string;
+  sourceRevisionId: string;
+  lockId: string;
+  status: "open" | "promoted" | "cancelled";
+  updatedAt: string;
+}
+
+interface HostedIntegrationExample {
+  id: string;
+  familyId: string;
+  toolName: string;
+  category: string;
+  args: Record<string, unknown>;
+  expected?: unknown;
+}
+
+const HOSTED_INTEGRATION_EDITOR_ACTOR = {
+  id: "web-settings",
+  kind: "human",
+  roles: ["tool_developer"],
+} as const;
+
 const SETTINGS_TABS = [
   "api-keys",
   "server",
@@ -2051,154 +2080,704 @@ function HostedIntegrationsSettingsTab({
   error: string | null;
   onRefresh: () => void;
 }) {
+  const [editorFamilyId, setEditorFamilyId] = useState<string | null>(null);
+  const editorRow = rows.find((row) => row.id === editorFamilyId) ?? null;
+
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <CardTitle>Hosted Integrations</CardTitle>
-            <CardDescription>
-              Runtime families, promoted generations, config scopes, locks, and
-              failure buckets.
-            </CardDescription>
+    <div className="grid gap-4">
+      <Card>
+        <CardHeader>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <CardTitle>Hosted Integrations</CardTitle>
+              <CardDescription>
+                Runtime families, promoted generations, config scopes, locks,
+                and failure buckets.
+              </CardDescription>
+            </div>
+            <Button variant="outline" size="sm" onClick={onRefresh}>
+              Refresh
+            </Button>
           </div>
-          <Button variant="outline" size="sm" onClick={onRefresh}>
-            Refresh
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {loading && rows.length === 0 ? (
-          <p className="font-mono text-[12px] text-ink-faint">Loading…</p>
-        ) : error ? (
-          <p className="border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-900">
-            {error}
-          </p>
-        ) : rows.length === 0 ? (
-          <p className="border border-paper-rule bg-paper-sunk px-3 py-2 font-mono text-[12px] text-ink-soft">
-            No hosted integration families registered.
-          </p>
-        ) : (
-          <div className="grid gap-px bg-paper-rule">
-            {rows.map((row) => (
-              <div key={row.id} className="grid gap-4 bg-paper p-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="font-mono text-[13px] text-ink">
-                        {row.name}
-                      </h3>
-                      <Badge variant="outline" className="font-mono text-[10px]">
-                        {row.id}
-                      </Badge>
-                      <Badge variant="secondary" className="font-mono text-[10px]">
-                        v{row.version}
-                      </Badge>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {loading && rows.length === 0 ? (
+            <p className="font-mono text-[12px] text-ink-faint">Loading…</p>
+          ) : error ? (
+            <p className="border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-900">
+              {error}
+            </p>
+          ) : rows.length === 0 ? (
+            <p className="border border-paper-rule bg-paper-sunk px-3 py-2 font-mono text-[12px] text-ink-soft">
+              No hosted integration families registered.
+            </p>
+          ) : (
+            <div className="grid gap-px bg-paper-rule">
+              {rows.map((row) => (
+                <div key={row.id} className="grid gap-4 bg-paper p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="font-mono text-[13px] text-ink">
+                          {row.name}
+                        </h3>
+                        <Badge variant="outline" className="font-mono text-[10px]">
+                          {row.id}
+                        </Badge>
+                        <Badge variant="secondary" className="font-mono text-[10px]">
+                          v{row.version}
+                        </Badge>
+                      </div>
+                      <p className="mt-1 font-mono text-[11px] text-ink-faint">
+                        {row.activeGeneration
+                          ? `active ${row.activeGeneration.id}`
+                          : "no active generation"}
+                      </p>
                     </div>
-                    <p className="mt-1 font-mono text-[11px] text-ink-faint">
-                      {row.activeGeneration
-                        ? `active ${row.activeGeneration.id}`
-                        : "no active generation"}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {row.lock ? (
-                      <Badge variant="outline" className="font-mono text-[10px]">
-                        locked by {row.lock.lockedBy}
-                      </Badge>
-                    ) : (
-                      <Badge variant="secondary" className="font-mono text-[10px]">
-                        unlocked
-                      </Badge>
-                    )}
-                    {row.openFailureBucketCount > 0 && (
-                      <Badge variant="destructive" className="font-mono text-[10px]">
-                        {row.openFailureBucketCount} open bucket
-                      </Badge>
-                    )}
-                  </div>
-                </div>
-
-                <div className="grid gap-3 md:grid-cols-3">
-                  <section className="grid gap-2">
-                    <Label>Tools</Label>
-                    <div className="grid gap-1">
-                      {row.tools.map((tool) => (
-                        <div
-                          key={tool.name}
-                          className="border border-paper-rule bg-paper-sunk px-2 py-1.5"
-                        >
-                          <div className="truncate font-mono text-[11px] text-ink">
-                            {tool.name}
-                          </div>
-                          <div className="mt-1 flex flex-wrap gap-1">
-                            <Badge variant="outline" className="font-mono text-[9px]">
-                              {tool.lifecycle}
-                            </Badge>
-                            <Badge variant="outline" className="font-mono text-[9px]">
-                              {tool.classification.operation}
-                            </Badge>
-                            <Badge variant="outline" className="font-mono text-[9px]">
-                              {tool.classification.execution}
-                            </Badge>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-
-                  <section className="grid gap-2">
-                    <Label>Config scopes</Label>
-                    <div className="grid gap-1">
-                      {row.configScopes.length === 0 ? (
-                        <p className="font-mono text-[11px] text-ink-faint">
-                          none
-                        </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {row.lock ? (
+                        <Badge variant="outline" className="font-mono text-[10px]">
+                          locked by {row.lock.lockedBy}
+                        </Badge>
                       ) : (
-                        row.configScopes.map((scope) => (
+                        <Badge variant="secondary" className="font-mono text-[10px]">
+                          unlocked
+                        </Badge>
+                      )}
+                      {row.openFailureBucketCount > 0 && (
+                        <Badge variant="destructive" className="font-mono text-[10px]">
+                          {row.openFailureBucketCount} open bucket
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <section className="grid gap-2">
+                      <Label>Tools</Label>
+                      <div className="grid gap-1">
+                        {row.tools.map((tool) => (
                           <div
-                            key={scope.id}
+                            key={tool.name}
                             className="border border-paper-rule bg-paper-sunk px-2 py-1.5"
                           >
                             <div className="truncate font-mono text-[11px] text-ink">
-                              {scope.id}
+                              {tool.name}
                             </div>
-                            <div className="font-mono text-[10px] text-ink-faint">
-                              {scope.environment} · rev {scope.revision} ·{" "}
-                              {scope.configKeyCount} config ·{" "}
-                              {scope.configuredSecretCount} secret
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              <Badge variant="outline" className="font-mono text-[9px]">
+                                {tool.lifecycle}
+                              </Badge>
+                              <Badge variant="outline" className="font-mono text-[9px]">
+                                {tool.classification.operation}
+                              </Badge>
+                              <Badge variant="outline" className="font-mono text-[9px]">
+                                {tool.classification.execution}
+                              </Badge>
                             </div>
                           </div>
-                        ))
-                      )}
-                    </div>
-                  </section>
+                        ))}
+                      </div>
+                    </section>
 
-                  <section className="grid gap-2">
-                    <Label>Operations</Label>
-                    <div className="grid gap-1 font-mono text-[11px] text-ink-faint">
-                      <div>
-                        promoted by{" "}
-                        {row.activeGeneration?.promotedBy ?? "n/a"}
+                    <section className="grid gap-2">
+                      <Label>Config scopes</Label>
+                      <div className="grid gap-1">
+                        {row.configScopes.length === 0 ? (
+                          <p className="font-mono text-[11px] text-ink-faint">
+                            none
+                          </p>
+                        ) : (
+                          row.configScopes.map((scope) => (
+                            <div
+                              key={scope.id}
+                              className="border border-paper-rule bg-paper-sunk px-2 py-1.5"
+                            >
+                              <div className="truncate font-mono text-[11px] text-ink">
+                                {scope.id}
+                              </div>
+                              <div className="font-mono text-[10px] text-ink-faint">
+                                {scope.environment} · rev {scope.revision} ·{" "}
+                                {scope.configKeyCount} config ·{" "}
+                                {scope.configuredSecretCount} secret
+                              </div>
+                            </div>
+                          ))
+                        )}
                       </div>
-                      <div>
-                        lock expires{" "}
-                        {row.lock ? formatTimestamp(row.lock.expiresAt) : "n/a"}
+                    </section>
+
+                    <section className="grid gap-2">
+                      <Label>Operations</Label>
+                      <div className="grid gap-2 font-mono text-[11px] text-ink-faint">
+                        <div>
+                          promoted by{" "}
+                          {row.activeGeneration?.promotedBy ?? "n/a"}
+                        </div>
+                        <div>
+                          lock expires{" "}
+                          {row.lock ? formatTimestamp(row.lock.expiresAt) : "n/a"}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setEditorFamilyId(row.id)}
+                          >
+                            Open editor
+                          </Button>
+                          <a
+                            href={`${API_BASE}/api/hosted-integrations/failure-buckets?familyId=${encodeURIComponent(row.id)}&roles=tool_developer`}
+                            className="self-center text-plot-red underline-offset-2 hover:underline"
+                          >
+                            failure buckets
+                          </a>
+                        </div>
                       </div>
-                      <a
-                        href={`${API_BASE}/api/hosted-integrations/failure-buckets?familyId=${encodeURIComponent(row.id)}&roles=tool_developer`}
-                        className="text-plot-red underline-offset-2 hover:underline"
-                      >
-                        failure buckets
-                      </a>
-                    </div>
-                  </section>
+                    </section>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
+          {loading && rows.length > 0 && <LoadingHairline inline />}
+        </CardContent>
+      </Card>
+      {editorRow && (
+        <HostedIntegrationDraftEditor row={editorRow} onRefresh={onRefresh} />
+      )}
+    </div>
+  );
+}
+
+function HostedIntegrationDraftEditor({
+  row,
+  onRefresh,
+}: {
+  row: HostedIntegrationAdminFamilyRow;
+  onRefresh: () => void;
+}) {
+  const [sourceFiles, setSourceFiles] = useState<HostedIntegrationFileEntry[]>(
+    [],
+  );
+  const [sourcePath, setSourcePath] = useState("");
+  const [sourceContent, setSourceContent] = useState("");
+  const [lock, setLock] = useState<HostedIntegrationFamilyLock | null>(
+    row.lock,
+  );
+  const [draft, setDraft] = useState<HostedIntegrationDraft | null>(null);
+  const [draftFiles, setDraftFiles] = useState<HostedIntegrationFileEntry[]>(
+    [],
+  );
+  const [draftPath, setDraftPath] = useState("");
+  const [draftContent, setDraftContent] = useState("");
+  const [examples, setExamples] = useState<HostedIntegrationExample[]>([]);
+  const [exampleId, setExampleId] = useState("");
+  const [exampleDraft, setExampleDraft] = useState(
+    JSON.stringify(defaultExampleForRow(row), null, 2),
+  );
+  const [validation, setValidation] = useState<unknown>(null);
+  const [runResult, setRunResult] = useState<unknown>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const canEdit = Boolean(draft && lock?.lockedBy === HOSTED_INTEGRATION_EDITOR_ACTOR.id);
+  const promotionNeedsHumanApproval = row.tools.some(
+    (tool) => tool.classification.operation === "destructive",
+  );
+
+  useEffect(() => {
+    setSourceFiles([]);
+    setSourcePath("");
+    setSourceContent("");
+    setLock(row.lock);
+    setDraft(null);
+    setDraftFiles([]);
+    setDraftPath("");
+    setDraftContent("");
+    setExamples([]);
+    setExampleId("");
+    setExampleDraft(JSON.stringify(defaultExampleForRow(row), null, 2));
+    setValidation(null);
+    setRunResult(null);
+    setMessage(null);
+    setError(null);
+    void refreshEditor();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [row.id]);
+
+  async function refreshEditor() {
+    await withBusy("load", async () => {
+      const [filesBody, lockBody] = await Promise.all([
+        hostedApiJson<{ files: HostedIntegrationFileEntry[] }>(
+          `/api/hosted-integrations/families/${encodeURIComponent(row.id)}/source/files`,
+        ),
+        hostedApiJson<{ lock: HostedIntegrationFamilyLock | null }>(
+          `/api/hosted-integrations/families/${encodeURIComponent(row.id)}/lock`,
+        ),
+      ]);
+      setSourceFiles(filesBody.files);
+      const firstPath = filesBody.files[0]?.path ?? "";
+      setSourcePath(firstPath);
+      setLock(lockBody.lock);
+      if (firstPath) await readSourceFile(firstPath);
+      if (lockBody.lock?.draftId) {
+        await loadDraft(lockBody.lock.draftId);
+      }
+    });
+  }
+
+  async function readSourceFile(pathValue: string) {
+    const body = await hostedApiJson<{ content: string }>(
+      `/api/hosted-integrations/families/${encodeURIComponent(row.id)}/source/files/${encodeHostedPath(pathValue)}`,
+    );
+    setSourcePath(pathValue);
+    setSourceContent(body.content);
+  }
+
+  async function acquireLock() {
+    await withBusy("lock", async () => {
+      const body = await hostedApiJson<{ lock: HostedIntegrationFamilyLock }>(
+        `/api/hosted-integrations/families/${encodeURIComponent(row.id)}/lock`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            lockedBy: HOSTED_INTEGRATION_EDITOR_ACTOR.id,
+            ttlMs: 30 * 60 * 1000,
+          }),
+        },
+      );
+      setLock(body.lock);
+      onRefresh();
+    });
+  }
+
+  async function releaseLock() {
+    if (!lock) return;
+    await withBusy("lock", async () => {
+      await hostedApiJson<{ ok: true }>(
+        `/api/hosted-integrations/locks/${encodeURIComponent(lock.id)}`,
+        {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lockedBy: HOSTED_INTEGRATION_EDITOR_ACTOR.id }),
+        },
+      );
+      setLock(null);
+      onRefresh();
+    });
+  }
+
+  async function createDraft() {
+    if (!lock) return;
+    await withBusy("draft", async () => {
+      const body = await hostedApiJson<{ draft: HostedIntegrationDraft }>(
+        `/api/hosted-integrations/families/${encodeURIComponent(row.id)}/drafts`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lockId: lock.id }),
+        },
+      );
+      await loadDraft(body.draft.id);
+    });
+  }
+
+  async function loadDraft(draftId: string) {
+    const [draftBody, filesBody, examplesBody] = await Promise.all([
+      hostedApiJson<{ draft: HostedIntegrationDraft }>(
+        `/api/hosted-integrations/drafts/${encodeURIComponent(draftId)}`,
+      ),
+      hostedApiJson<{ files: HostedIntegrationFileEntry[] }>(
+        `/api/hosted-integrations/drafts/${encodeURIComponent(draftId)}/files`,
+      ),
+      hostedApiJson<{ examples: HostedIntegrationExample[] }>(
+        `/api/hosted-integrations/drafts/${encodeURIComponent(draftId)}/examples`,
+      ),
+    ]);
+    setDraft(draftBody.draft);
+    setDraftFiles(filesBody.files);
+    setExamples(examplesBody.examples);
+    const nextExample = examplesBody.examples[0];
+    if (nextExample) {
+      setExampleId(nextExample.id);
+      setExampleDraft(JSON.stringify(nextExample, null, 2));
+    }
+    const nextPath = filesBody.files[0]?.path ?? "";
+    setDraftPath(nextPath);
+    if (nextPath) await readDraftFile(draftId, nextPath);
+  }
+
+  async function readDraftFile(draftId: string, pathValue: string) {
+    const body = await hostedApiJson<{ content: string }>(
+      `/api/hosted-integrations/drafts/${encodeURIComponent(draftId)}/files/${encodeHostedPath(pathValue)}`,
+    );
+    setDraftPath(pathValue);
+    setDraftContent(body.content);
+  }
+
+  async function saveDraftFile() {
+    if (!draft || !lock || !draftPath) return;
+    await withBusy("file", async () => {
+      await hostedApiJson<{ ok: true }>(
+        `/api/hosted-integrations/drafts/${encodeURIComponent(draft.id)}/files/${encodeHostedPath(draftPath)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            lockId: lock.id,
+            lockedBy: HOSTED_INTEGRATION_EDITOR_ACTOR.id,
+            content: draftContent,
+          }),
+        },
+      );
+      await loadDraft(draft.id);
+      setMessage("Draft file saved");
+    });
+  }
+
+  async function deleteDraftFile() {
+    if (!draft || !lock || !draftPath) return;
+    if (!confirm(`Delete ${draftPath}?`)) return;
+    await withBusy("file", async () => {
+      await hostedApiJson<{ ok: true }>(
+        `/api/hosted-integrations/drafts/${encodeURIComponent(draft.id)}/files/${encodeHostedPath(draftPath)}`,
+        {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            lockId: lock.id,
+            lockedBy: HOSTED_INTEGRATION_EDITOR_ACTOR.id,
+          }),
+        },
+      );
+      await loadDraft(draft.id);
+      setMessage("Draft file deleted");
+    });
+  }
+
+  async function validateDraft() {
+    if (!draft) return;
+    await withBusy("validate", async () => {
+      const body = await hostedApiJson<unknown>(
+        `/api/hosted-integrations/drafts/${encodeURIComponent(draft.id)}/validate`,
+        { method: "POST" },
+      );
+      setValidation(body);
+    });
+  }
+
+  async function upsertExample() {
+    if (!draft || !lock) return;
+    await withBusy("example", async () => {
+      const example = JSON.parse(exampleDraft) as HostedIntegrationExample;
+      await hostedApiJson<{ ok: true }>(
+        `/api/hosted-integrations/drafts/${encodeURIComponent(draft.id)}/examples`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            lockId: lock.id,
+            lockedBy: HOSTED_INTEGRATION_EDITOR_ACTOR.id,
+            example,
+          }),
+        },
+      );
+      await loadDraft(draft.id);
+      setMessage("Example saved");
+    });
+  }
+
+  async function runExample() {
+    if (!draft || !exampleId) return;
+    await withBusy("run", async () => {
+      const body = await hostedApiJson<unknown>(
+        `/api/hosted-integrations/drafts/${encodeURIComponent(draft.id)}/run-example`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            actor: HOSTED_INTEGRATION_EDITOR_ACTOR,
+            exampleId,
+          }),
+        },
+      );
+      setRunResult(body);
+    });
+  }
+
+  async function promoteDraft() {
+    if (!draft || !lock) return;
+    await withBusy("promote", async () => {
+      const body = await hostedApiJson<unknown>(
+        `/api/hosted-integrations/drafts/${encodeURIComponent(draft.id)}/promote`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            actor: HOSTED_INTEGRATION_EDITOR_ACTOR,
+            lockId: lock.id,
+          }),
+        },
+      );
+      setRunResult(body);
+      setMessage("Draft promoted");
+      onRefresh();
+    });
+  }
+
+  async function withBusy(name: string, fn: () => Promise<void>) {
+    setBusy(name);
+    setError(null);
+    setMessage(null);
+    try {
+      await fn();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Draft Editor</CardTitle>
+        <CardDescription>
+          {row.name} · {row.id}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-5">
+        <div className="flex flex-wrap items-center gap-2">
+          {lock ? (
+            <>
+              <Badge variant="outline" className="font-mono text-[10px]">
+                {lock.lockedBy}
+              </Badge>
+              <Badge variant="secondary" className="font-mono text-[10px]">
+                expires {formatTimestamp(lock.expiresAt)}
+              </Badge>
+            </>
+          ) : (
+            <Badge variant="secondary" className="font-mono text-[10px]">
+              unlocked
+            </Badge>
+          )}
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy !== null || Boolean(lock)}
+            onClick={acquireLock}
+          >
+            Acquire lock
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={
+              busy !== null ||
+              !lock ||
+              lock.lockedBy !== HOSTED_INTEGRATION_EDITOR_ACTOR.id
+            }
+            onClick={releaseLock}
+          >
+            Release lock
+          </Button>
+          <Button
+            size="sm"
+            disabled={
+              busy !== null ||
+              !lock ||
+              lock.lockedBy !== HOSTED_INTEGRATION_EDITOR_ACTOR.id ||
+              Boolean(draft)
+            }
+            onClick={createDraft}
+          >
+            Create draft
+          </Button>
+        </div>
+
+        {message && (
+          <p className="border border-emerald-200 bg-emerald-50 px-3 py-2 text-[12px] text-emerald-900">
+            {message}
+          </p>
         )}
-        {loading && rows.length > 0 && <LoadingHairline inline />}
+        {error && (
+          <p className="border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-900">
+            {error}
+          </p>
+        )}
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <section className="grid gap-3">
+            <Label>Source</Label>
+            <Select
+              value={sourcePath}
+              onValueChange={(pathValue) => void readSourceFile(pathValue)}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select source file" />
+              </SelectTrigger>
+              <SelectContent>
+                {sourceFiles.map((file) => (
+                  <SelectItem key={file.path} value={file.path}>
+                    {file.path}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Textarea
+              readOnly
+              value={sourceContent}
+              className="min-h-[320px] font-mono text-[12px]"
+            />
+          </section>
+
+          <section className="grid gap-3">
+            <div className="flex items-center justify-between gap-3">
+              <Label>Draft</Label>
+              {draft && (
+                <span className="font-mono text-[11px] text-ink-faint">
+                  {draft.id} · {formatTimestamp(draft.updatedAt)}
+                </span>
+              )}
+            </div>
+            <Select
+              value={draftPath}
+              onValueChange={(pathValue) =>
+                draft && void readDraftFile(draft.id, pathValue)
+              }
+              disabled={!draft}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select draft file" />
+              </SelectTrigger>
+              <SelectContent>
+                {draftFiles.map((file) => (
+                  <SelectItem key={file.path} value={file.path}>
+                    {file.path}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Input
+              value={draftPath}
+              onChange={(e) => setDraftPath(e.target.value)}
+              disabled={!draft}
+              className="font-mono text-[12px]"
+            />
+            <Textarea
+              value={draftContent}
+              onChange={(e) => setDraftContent(e.target.value)}
+              disabled={!canEdit}
+              className="min-h-[320px] font-mono text-[12px]"
+            />
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy !== null || !canEdit || !draftPath}
+                onClick={deleteDraftFile}
+              >
+                Delete file
+              </Button>
+              <Button
+                size="sm"
+                disabled={busy !== null || !canEdit || !draftPath}
+                onClick={saveDraftFile}
+              >
+                Save file
+              </Button>
+            </div>
+          </section>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <section className="grid gap-3">
+            <div className="flex items-center justify-between gap-3">
+              <Label>Examples</Label>
+              <Select
+                value={exampleId}
+                onValueChange={(id) => {
+                  setExampleId(id);
+                  const selected = examples.find((example) => example.id === id);
+                  if (selected) setExampleDraft(JSON.stringify(selected, null, 2));
+                }}
+                disabled={examples.length === 0}
+              >
+                <SelectTrigger className="w-56">
+                  <SelectValue placeholder="Select example" />
+                </SelectTrigger>
+                <SelectContent>
+                  {examples.map((example) => (
+                    <SelectItem key={example.id} value={example.id}>
+                      {example.id}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Textarea
+              value={exampleDraft}
+              onChange={(e) => setExampleDraft(e.target.value)}
+              disabled={!canEdit}
+              className="min-h-[220px] font-mono text-[12px]"
+            />
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy !== null || !draft || !exampleId}
+                onClick={runExample}
+              >
+                Run example
+              </Button>
+              <Button
+                size="sm"
+                disabled={busy !== null || !canEdit}
+                onClick={upsertExample}
+              >
+                Save example
+              </Button>
+            </div>
+          </section>
+
+          <section className="grid gap-3">
+            <Label>Verification</Label>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy !== null || !draft}
+                onClick={validateDraft}
+              >
+                Validate
+              </Button>
+              <Button
+                size="sm"
+                disabled={
+                  busy !== null ||
+                  !canEdit ||
+                  (promotionNeedsHumanApproval && !validation)
+                }
+                onClick={promoteDraft}
+              >
+                Promote
+              </Button>
+            </div>
+            {promotionNeedsHumanApproval && (
+              <p className="border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
+                Human approval is required for destructive promotion.
+              </p>
+            )}
+            <pre className="max-h-[340px] overflow-auto border border-paper-rule bg-paper-sunk p-3 font-mono text-[11px] text-ink-soft">
+              {jsonPreview({ validation, runResult })}
+            </pre>
+          </section>
+        </div>
+        {busy && <LoadingHairline inline />}
       </CardContent>
     </Card>
   );
@@ -2208,4 +2787,48 @@ function formatTimestamp(value: string): string {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return value;
   return date.toLocaleString();
+}
+
+function defaultExampleForRow(
+  row: HostedIntegrationAdminFamilyRow,
+): HostedIntegrationExample {
+  const toolName = row.tools[0]?.name ?? `${row.id}_tool`;
+  return {
+    id: "smoke_example",
+    familyId: row.id,
+    toolName,
+    category: "smoke",
+    args: {},
+    expected: {},
+  };
+}
+
+function encodeHostedPath(pathValue: string): string {
+  return pathValue.split("/").map(encodeURIComponent).join("/");
+}
+
+async function hostedApiJson<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, init);
+  const body = (await res.json().catch(() => null)) as unknown;
+  if (!res.ok) throw new Error(hostedApiErrorMessage(body, res.statusText));
+  return body as T;
+}
+
+function hostedApiErrorMessage(body: unknown, fallback: string): string {
+  if (body && typeof body === "object" && "error" in body) {
+    const error = (body as { error?: unknown }).error;
+    if (typeof error === "string") return error;
+    if (error && typeof error === "object" && "code" in error) {
+      const code = (error as { code?: unknown }).code;
+      if (typeof code === "string") return code;
+    }
+  }
+  return fallback;
+}
+
+function jsonPreview(value: unknown): string {
+  return JSON.stringify(value, null, 2);
 }

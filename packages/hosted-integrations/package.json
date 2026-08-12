@@ -1,0 +1,49 @@
+{
+  "name": "@openacme/hosted-integrations",
+  "version": "0.14.0",
+  "description": "Hosted integration family schemas and lifecycle seams for OpenAcme.",
+  "license": "MIT",
+  "author": "sandydasari",
+  "homepage": "https://github.com/sandydasari/openacme/tree/main/packages/hosted-integrations#readme",
+  "bugs": "https://github.com/sandydasari/openacme/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sandydasari/openacme.git",
+    "directory": "packages/hosted-integrations"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": false
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "check-types": "tsc --noEmit",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "zod": "^4.1.8"
+  },
+  "devDependencies": {
+    "@repo/typescript-config": "workspace:*",
+    "@types/node": "^22.15.3",
+    "typescript": "5.9.2",
+    "vitest": "^2.1.9"
+  }
+}

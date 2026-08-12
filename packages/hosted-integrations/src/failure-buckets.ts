@@ -70,9 +70,7 @@ export function createFileHostedIntegrationFailureBucketStore(
   });
 }
 
-class FileHostedIntegrationFailureBucketStore
-  implements HostedIntegrationFailureBucketStore
-{
+class FileHostedIntegrationFailureBucketStore implements HostedIntegrationFailureBucketStore {
   private readonly bucketsDir: string;
   private readonly now: () => Date;
   private readonly createId: () => string;
@@ -105,7 +103,7 @@ class FileHostedIntegrationFailureBucketStore
       return { ok: false, reason: "not_owner_actionable", classification };
     }
 
-    const fingerprint = fingerprintFailure(request.log);
+    const fingerprint = fingerprintHostedIntegrationFailure(request.log);
     const existing = await this.getBucketByFingerprint(fingerprint);
     const now = this.now().toISOString();
     if (existing) {
@@ -176,7 +174,9 @@ class FileHostedIntegrationFailureBucketStore
     return { ok: true, bucket };
   }
 
-  async closeBucket(request: { bucketId: string }): Promise<
+  async closeBucket(request: {
+    bucketId: string;
+  }): Promise<
     | { ok: true; bucket: HostedIntegrationFailureBucket }
     | { ok: false; reason: "not_found" }
   > {
@@ -240,7 +240,9 @@ function classifyFailure(
   return "owner_actionable";
 }
 
-function fingerprintFailure(log: HostedIntegrationExecutionLogEntry): string {
+export function fingerprintHostedIntegrationFailure(
+  log: HostedIntegrationExecutionLogEntry,
+): string {
   return `sha256:${sha256(
     stableStringify({
       familyId: log.familyId,

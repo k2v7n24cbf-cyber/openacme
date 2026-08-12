@@ -131,7 +131,16 @@ export {
   type HostedIntegrationFailureBucketStore,
   type RecordHostedIntegrationFailureRequest,
   type RecordHostedIntegrationFailureResult,
+  fingerprintHostedIntegrationFailure,
 } from "./failure-buckets.js";
+export {
+  createFileHostedIntegrationRetentionSweeper,
+  type FileHostedIntegrationRetentionSweeperOptions,
+  type HostedIntegrationRetentionPolicy,
+  type HostedIntegrationRetentionSweepLog,
+  type HostedIntegrationRetentionSweepResult,
+  type HostedIntegrationRetentionSweeper,
+} from "./retention.js";
 export {
   createFileHostedIntegrationGenerationStore,
   type BeginHostedIntegrationInvocationRequest,

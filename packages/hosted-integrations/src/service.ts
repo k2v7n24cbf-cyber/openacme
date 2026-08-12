@@ -40,6 +40,10 @@ import {
   type HostedIntegrationGenerationStore,
 } from "./generations.js";
 import {
+  createFileHostedIntegrationRetentionSweeper,
+  type HostedIntegrationRetentionSweeper,
+} from "./retention.js";
+import {
   createFileHostedIntegrationGateway,
   type HostedIntegrationGateway,
   type HostedIntegrationFailureBucketRecordedEvent,
@@ -85,6 +89,7 @@ export interface HostedIntegrationService {
   readonly generations: HostedIntegrationGenerationStore;
   readonly artifacts: HostedIntegrationArtifactStore;
   readonly failureBuckets: HostedIntegrationFailureBucketStore;
+  readonly retention: HostedIntegrationRetentionSweeper;
   readonly gateway: HostedIntegrationGateway;
   listFamilies(): Promise<HostedIntegrationManagementFamilySummary[]>;
   getFamily(
@@ -141,6 +146,7 @@ export function createFileHostedIntegrationService(
     onRegistryRefresh: options.onRegistryRefresh,
   });
   const artifacts = createFileHostedIntegrationArtifactStore(options);
+  const retention = createFileHostedIntegrationRetentionSweeper(options);
   const gateway = createFileHostedIntegrationGateway({
     ...options,
     catalog,
@@ -167,6 +173,7 @@ export function createFileHostedIntegrationService(
     generations,
     artifacts,
     failureBuckets,
+    retention,
     gateway,
   });
 }
@@ -185,6 +192,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
   readonly generations: HostedIntegrationGenerationStore;
   readonly artifacts: HostedIntegrationArtifactStore;
   readonly failureBuckets: HostedIntegrationFailureBucketStore;
+  readonly retention: HostedIntegrationRetentionSweeper;
   readonly gateway: HostedIntegrationGateway;
 
   private readonly catalog: HostedIntegrationCatalog;
@@ -204,6 +212,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     generations: HostedIntegrationGenerationStore;
     artifacts: HostedIntegrationArtifactStore;
     failureBuckets: HostedIntegrationFailureBucketStore;
+    retention: HostedIntegrationRetentionSweeper;
     gateway: HostedIntegrationGateway;
   }) {
     this.catalog = parts.catalog;
@@ -220,6 +229,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     this.generations = parts.generations;
     this.artifacts = parts.artifacts;
     this.failureBuckets = parts.failureBuckets;
+    this.retention = parts.retention;
     this.gateway = parts.gateway;
   }
 

@@ -1927,6 +1927,30 @@ Validation:
 pnpm --filter @openacme/hosted-integrations test -- retention
 ```
 
+Implementation notes:
+
+- Added a hosted-integrations retention sweeper that deletes expired run
+  directories, execution logs, and closed failure-bucket evidence while
+  retaining failed run/log evidence tied to open bucket fingerprints.
+- Running run directories/logs are never deleted, even when old.
+- Sweep logging is count/byte-only and intentionally excludes artifact content.
+- `HostedIntegrationService` exposes the retention sweeper as a hosted
+  integrations package port, keeping the policy implementation outside server
+  routes.
+
+Evidence:
+
+- Red validation:
+  `pnpm --filter @openacme/hosted-integrations test -- retention` first failed
+  because `createFileHostedIntegrationRetentionSweeper` was not implemented.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- retention`
+  `pnpm --filter @openacme/hosted-integrations test -- artifacts failure-buckets execution-log`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/server check-types`
+  `pnpm --filter @openacme/server build`
+
 ## Milestone 7: Async Jobs And Explicit Cache Tools
 
 Goal: support longer-running hosted integration work without making the MVP

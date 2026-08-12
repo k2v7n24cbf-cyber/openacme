@@ -120,9 +120,12 @@ describe("ServerRuntime", () => {
       ],
       getFamily: async () => null,
       getDiagnostics: async () => [],
+      generations: {
+        listGenerations: vi.fn(async () => []),
+      },
       start: vi.fn(async () => undefined),
       close: vi.fn(async () => undefined),
-    };
+    } as unknown as HostedIntegrationService;
 
     const { app, manager, close } = await createApp(tempConfig(), {
       hostedIntegrationService,

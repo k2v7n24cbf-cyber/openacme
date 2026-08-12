@@ -23,6 +23,7 @@ import type { Hono } from "hono";
 let dataDir: string;
 let app: Hono;
 let manager: AgentManager;
+let closeApp: () => Promise<void>;
 let authToken: string;
 let generationCounter: number;
 
@@ -32,7 +33,7 @@ beforeEach(async () => {
     dataDir,
     model: { provider: "anthropic", model: "claude-sonnet-4-6" },
   });
-  ({ app, manager } = await createApp(config));
+  ({ app, manager, close: closeApp } = await createApp(config));
   generationCounter = 0;
   const member = manager.authStore.createMember({
     email: "test@example.com",
@@ -42,7 +43,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await manager.close();
+  await closeApp();
   rmSync(dataDir, { recursive: true, force: true });
 });
 
@@ -1365,6 +1366,48 @@ describe("hosted integrations example execution and promotion routes", () => {
     });
   });
 
+  it("refreshes /api/tools and evicts affected agents after promotion", async () => {
+    await createAgentViaRoutes("qualys-agent", ["qualys_count_assets"]);
+    const cachedAgent = manager.getAgent("qualys-agent");
+    const { draftId, lockId } = await createDraftViaRoutes(
+      pythonTool("return {'count': 4}"),
+    );
+    await upsertSmokeExample(draftId, lockId);
+
+    const promoted = await req(
+      `/api/hosted-integrations/drafts/${draftId}/promote`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ actor: toolDeveloperActor(), lockId }),
+      },
+    );
+    expect(promoted.status).toBe(200);
+    const { sourceRevisionId, generation } = await promoted.json();
+
+    const tools = await req("/api/tools");
+    expect(tools.status).toBe(200);
+    const toolsBody = (await tools.json()) as {
+      toolsets: string[];
+      tools: Array<{ name: string }>;
+    };
+    expect(toolsBody.toolsets).toContain("hosted-integrations");
+    expect(
+      toolsBody.tools.find((tool) => tool.name === "qualys_count_assets"),
+    ).toMatchObject({
+      name: "qualys_count_assets",
+      toolset: "hosted-integrations",
+      source: {
+        kind: "hosted_integration",
+        familyId: "qualys",
+        familyName: "Qualys",
+        generationId: generation.id,
+      },
+    });
+    expect(sourceRevisionId).toEqual(generation.sourceRevisionId);
+    expect(manager.getAgent("qualys-agent")).not.toBe(cachedAgent);
+  });
+
   it("requires human approval for destructive promotion", async () => {
     const { draftId, lockId } = await createDraftViaRoutes(
       pythonTool("return {'deleted': True}"),
@@ -1471,6 +1514,18 @@ async function readDraftLockId(draftId: string): Promise<string> {
   const res = await req(`/api/hosted-integrations/drafts/${draftId}`);
   expect(res.status).toBe(200);
   return ((await res.json()) as { draft: { lockId: string } }).draft.lockId;
+}
+
+async function createAgentViaRoutes(
+  id: string,
+  tools: string[],
+): Promise<void> {
+  const res = await req("/api/agents", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id, name: id, tools }),
+  });
+  expect(res.status).toBe(201);
 }
 
 function allowedInvokeBody() {

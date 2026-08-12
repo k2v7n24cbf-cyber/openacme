@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 /**
  * Schema for a tool's parameter definition (maps to JSON Schema).
@@ -39,8 +39,15 @@ export interface ToolResultClassification {
 }
 
 export type ToolResultClassifier = (
-  context: ToolResultClassifierContext
+  context: ToolResultClassifierContext,
 ) => ToolResultClassification;
+
+export type ToolSource = {
+  kind: "hosted_integration";
+  familyId: string;
+  familyName: string;
+  generationId: string;
+};
 
 /**
  * A registered tool entry — mirrors Hermes tools/registry.py ToolEntry.
@@ -64,6 +71,8 @@ export interface ToolEntry {
   checkFn?: () => boolean;
   /** Emoji for display */
   emoji?: string;
+  /** Structured source metadata for dynamically surfaced tool families. */
+  source?: ToolSource;
   /** Whether this tool is safe to run in parallel with other tools */
   parallelSafe?: boolean;
   /** Execution locality. `"worker"` routes the call to the per-agent
@@ -117,6 +126,7 @@ export interface ToolInfo {
   description: string;
   toolset: string;
   emoji?: string;
+  source?: ToolSource;
   /** Always-on tool merged into every agent regardless of config; the agent
    *  picker should not present it as toggleable. */
   system?: boolean;

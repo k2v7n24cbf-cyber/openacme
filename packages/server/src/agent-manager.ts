@@ -1756,6 +1756,18 @@ export class AgentManager {
     void this.toolHostManager.stopWorker(id);
   }
 
+  evictAgentsUsingTools(toolNames: Iterable<string>): string[] {
+    const selected = new Set(toolNames);
+    if (selected.size === 0) return [];
+    const evicted: string[] = [];
+    for (const def of this.agentStore.list()) {
+      if (!def.tools.some((toolName) => selected.has(toolName))) continue;
+      this.evictAgent(def.id);
+      evicted.push(def.id);
+    }
+    return evicted;
+  }
+
   startObjectiveCloseoutService(): void {
     this.objectiveCloseoutService.start();
   }

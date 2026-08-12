@@ -339,6 +339,7 @@ export class ToolRegistry {
         description: entry.description,
         toolset: entry.toolset,
         emoji: entry.emoji,
+        source: entry.source,
         system: SYSTEM_TOOL_SET.has(entry.name) || undefined,
       }))
       .sort((a, b) =>

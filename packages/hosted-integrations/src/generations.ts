@@ -62,7 +62,9 @@ export interface FileHostedIntegrationGenerationStoreOptions {
   draftStore?: HostedIntegrationDraftStore;
   now?: () => Date;
   createId?: () => string;
-  onRegistryRefresh?: (event: HostedIntegrationRegistryRefreshEvent) => void;
+  onRegistryRefresh?: (
+    event: HostedIntegrationRegistryRefreshEvent,
+  ) => void | Promise<void>;
 }
 
 export interface PromoteHostedIntegrationDraftRequest {
@@ -164,7 +166,7 @@ class FileHostedIntegrationGenerationStore implements HostedIntegrationGeneratio
   private readonly createId: () => string;
   private readonly onRegistryRefresh: (
     event: HostedIntegrationRegistryRefreshEvent,
-  ) => void;
+  ) => void | Promise<void>;
   private readonly inflightByGeneration = new Map<string, number>();
   private readonly leaseToGeneration = new Map<string, string>();
 
@@ -173,7 +175,9 @@ class FileHostedIntegrationGenerationStore implements HostedIntegrationGeneratio
     draftStore: HostedIntegrationDraftStore;
     now: () => Date;
     createId: () => string;
-    onRegistryRefresh: (event: HostedIntegrationRegistryRefreshEvent) => void;
+    onRegistryRefresh: (
+      event: HostedIntegrationRegistryRefreshEvent,
+    ) => void | Promise<void>;
   }) {
     this.generationsDir = path.join(
       parts.dataDir,
@@ -246,6 +250,7 @@ class FileHostedIntegrationGenerationStore implements HostedIntegrationGeneratio
         promotedAt: now,
         promotedBy: request.promotedBy,
         runtime: manifest?.runtime,
+        tools: manifest?.tools,
         dependencyResolution: dependencyResolution?.dependencyResolution,
         provenance: buildHostedIntegrationGenerationProvenance({
           draftId: draft.id,
@@ -279,7 +284,7 @@ class FileHostedIntegrationGenerationStore implements HostedIntegrationGeneratio
         updatedAt: now,
         updatedBy: request.promotedBy,
       });
-      this.onRegistryRefresh({
+      await this.onRegistryRefresh({
         familyId: generation.familyId,
         generationId: generation.id,
         reason: "promote",
@@ -455,7 +460,7 @@ class FileHostedIntegrationGenerationStore implements HostedIntegrationGeneratio
       updatedAt: now,
       updatedBy: request.rolledBackBy,
     });
-    this.onRegistryRefresh({
+    await this.onRegistryRefresh({
       familyId,
       generationId: generation.id,
       reason: "rollback",

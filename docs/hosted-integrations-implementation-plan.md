@@ -1344,6 +1344,8 @@ without inventing a second tool selection system.
 
 ### Slice 5.1: Runtime Tool Registry Adapter
 
+Status: done.
+
 Goal:
 
 - Register promoted hosted integration tools as `ToolEntry` adapters.
@@ -1375,6 +1377,26 @@ Validation:
 pnpm --filter @openacme/tools test -- hosted-integrations
 pnpm --filter @openacme/server test -- tools
 ```
+
+Evidence:
+
+- Red tests first:
+  `pnpm --filter @openacme/server test -- hosted-integrations` failed because
+  promoted hosted integration tools were not synced into `/api/tools`.
+  `pnpm --filter @openacme/server test -- tools` initially had no matching
+  server test file, so this slice added a startup-sync `/api/tools` coverage
+  file.
+- Green validation:
+  `pnpm --filter @openacme/tools test -- hosted-integrations`
+  `pnpm --filter @openacme/server test -- tools`
+  `pnpm --filter @openacme/hosted-integrations test -- generations`
+  `pnpm --filter @openacme/server test -- hosted-integrations`
+  `pnpm --filter @openacme/tools check-types`
+  `pnpm --filter @openacme/tools build`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/server check-types`
+  `pnpm --filter @openacme/server build`
 
 ### Slice 5.2: Invocation Through Existing Agent Tool Path
 

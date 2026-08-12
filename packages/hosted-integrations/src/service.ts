@@ -32,6 +32,7 @@ import {
 } from "./examples.js";
 import {
   createFileHostedIntegrationGenerationStore,
+  type HostedIntegrationRegistryRefreshEvent,
   type HostedIntegrationGenerationStore,
 } from "./generations.js";
 import {
@@ -88,8 +89,11 @@ export interface HostedIntegrationService {
   close(): Promise<void>;
 }
 
-export type FileHostedIntegrationServiceOptions =
-  FileHostedIntegrationCatalogOptions;
+export interface FileHostedIntegrationServiceOptions extends FileHostedIntegrationCatalogOptions {
+  onRegistryRefresh?: (
+    event: HostedIntegrationRegistryRefreshEvent,
+  ) => void | Promise<void>;
+}
 
 export function createFileHostedIntegrationService(
   options: FileHostedIntegrationServiceOptions,
@@ -124,6 +128,7 @@ export function createFileHostedIntegrationService(
   const generations = createFileHostedIntegrationGenerationStore({
     ...options,
     draftStore: drafts,
+    onRegistryRefresh: options.onRegistryRefresh,
   });
   const artifacts = createFileHostedIntegrationArtifactStore(options);
   const gateway = createFileHostedIntegrationGateway({

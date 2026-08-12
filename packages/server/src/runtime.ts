@@ -5,8 +5,17 @@ import path from "node:path";
 import { WorkflowManager } from "@openacme/workflows";
 import {
   createFileHostedIntegrationService,
+  isHostedIntegrationToolVisibleForSelection,
+  type HostedIntegrationGeneration,
+  type HostedIntegrationRegistryRefreshEvent,
   type HostedIntegrationService,
 } from "@openacme/hosted-integrations";
+import {
+  HostedIntegrationToolRegistryAdapter,
+  registry as toolRegistry,
+  type HostedIntegrationRegistrySnapshot,
+} from "@openacme/tools";
+import { jsonSchemaToZod } from "@openacme/mcp-client";
 import {
   createDatabase,
   createWorkflowStore,
@@ -43,6 +52,7 @@ export class ServerRuntime {
   readonly workflowPythonRuntime: WorkflowPythonRuntime;
   readonly workflowExecutionPorts: WorkflowExecutionPorts;
   readonly hostedIntegrationService: HostedIntegrationService;
+  readonly hostedIntegrationToolRegistry: HostedIntegrationToolRegistryAdapter;
   private readonly workflowDb: ReturnType<typeof createDatabase>;
   private readonly workflowDispatcherIntervalMs: number;
   private readonly workflowDispatcherNow: () => Date;
@@ -59,9 +69,29 @@ export class ServerRuntime {
     this.workflowAgentRuntime = new WorkflowAgentRuntime(this.agentManager);
     this.workflowMcpRuntime = new WorkflowMcpRuntime(config);
     this.workflowPythonRuntime = new WorkflowPythonRuntime(config);
+    this.hostedIntegrationToolRegistry =
+      new HostedIntegrationToolRegistryAdapter({
+        registry: toolRegistry,
+        invoke: async (request) =>
+          JSON.stringify({
+            ok: false,
+            error: {
+              code: "platform_unavailable",
+              message:
+                "Hosted integration invocation through agent tools is not bound yet.",
+            },
+            familyId: request.familyId,
+            toolName: request.toolName,
+            generationId: request.generationId,
+          }),
+      });
     this.hostedIntegrationService =
       opts?.hostedIntegrationService ??
-      createFileHostedIntegrationService({ dataDir: config.dataDir });
+      createFileHostedIntegrationService({
+        dataDir: config.dataDir,
+        onRegistryRefresh: (event) =>
+          this.refreshHostedIntegrationRegistry(event),
+      });
     this.workflowExecutionPorts = {
       agent: this.workflowAgentRuntime,
       mcp: this.workflowMcpRuntime,
@@ -81,6 +111,7 @@ export class ServerRuntime {
 
   async startHostedIntegrations(): Promise<void> {
     await this.hostedIntegrationService.start();
+    await this.refreshHostedIntegrationRegistry();
   }
 
   async dispatchDueScheduledWorkflowTriggers(
@@ -118,6 +149,69 @@ export class ServerRuntime {
     this.workflowDispatcherTimer = null;
   }
 
+  private async refreshHostedIntegrationRegistry(
+    event?: HostedIntegrationRegistryRefreshEvent,
+  ): Promise<void> {
+    const generations = event
+      ? [
+          await this.hostedIntegrationService.generations.getGeneration(
+            event.generationId,
+          ),
+        ]
+      : await this.hostedIntegrationService.generations.listGenerations();
+    const changedToolNames = new Set<string>();
+    for (const generation of generations) {
+      if (!generation || generation.status !== "active") continue;
+      const snapshot = await this.hostedIntegrationRegistrySnapshot(generation);
+      if (!snapshot) continue;
+      const result = this.hostedIntegrationToolRegistry.syncFamily(snapshot);
+      if (!result.ok) {
+        log.error(
+          {
+            familyId: generation.familyId,
+            generationId: generation.id,
+            toolName: result.toolName,
+            existingToolset: result.existingToolset,
+          },
+          "hosted integration tool registration rejected",
+        );
+        continue;
+      }
+      for (const toolName of result.registeredToolNames) {
+        changedToolNames.add(toolName);
+      }
+      for (const toolName of result.removedToolNames) {
+        changedToolNames.add(toolName);
+      }
+    }
+    this.agentManager.evictAgentsUsingTools(changedToolNames);
+  }
+
+  private async hostedIntegrationRegistrySnapshot(
+    generation: HostedIntegrationGeneration,
+  ): Promise<HostedIntegrationRegistrySnapshot | null> {
+    const tools = (generation.tools ?? []).filter(
+      isHostedIntegrationToolVisibleForSelection,
+    );
+    if (tools.length === 0) {
+      this.hostedIntegrationToolRegistry.removeFamily(generation.familyId);
+      return null;
+    }
+    const family = await this.hostedIntegrationService.getFamily(
+      generation.familyId,
+    );
+    return {
+      familyId: generation.familyId,
+      familyName: family?.summary.name ?? generation.familyId,
+      generationId: generation.id,
+      tools: tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        parameters: jsonSchemaToZod(tool.inputSchema),
+      })),
+    };
+  }
+
   isWorkflowDispatcherRunning(): boolean {
     return this.workflowManager.dispatcher.isRunning();
   }
@@ -125,6 +219,7 @@ export class ServerRuntime {
   async close(): Promise<void> {
     this.stopWorkflowDispatcher();
     await this.workflowDispatcherTickInFlight;
+    this.hostedIntegrationToolRegistry.clear();
     await Promise.all([
       this.agentManager.close(),
       this.workflowManager.close(),

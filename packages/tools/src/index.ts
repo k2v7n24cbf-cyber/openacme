@@ -1,9 +1,18 @@
 export { ToolRegistry, registry } from "./registry.js";
+export {
+  HostedIntegrationToolRegistryAdapter,
+  type HostedIntegrationRegistrySnapshot,
+  type HostedIntegrationRegistrySyncResult,
+  type HostedIntegrationRegistryTool,
+  type HostedIntegrationToolInvoke,
+  type HostedIntegrationToolInvokeRequest,
+} from "./hosted-integrations.js";
 export type {
   ToolEntry,
   ToolSchema,
   ToolDefinition,
   ToolInfo,
+  ToolSource,
   ToolExecutionStatus,
   ToolResultStatus,
   ToolResultClassification,

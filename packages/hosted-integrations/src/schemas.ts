@@ -250,6 +250,7 @@ export const HostedIntegrationGenerationSchema = z
     promotedAt: IsoTimestampSchema,
     promotedBy: z.string().min(1),
     runtime: HostedIntegrationRuntimeSettingsSchema.optional(),
+    tools: z.array(HostedIntegrationToolSpecSchema).optional(),
     dependencyResolution:
       HostedIntegrationDependencyResolutionSchema.optional(),
     provenance: z

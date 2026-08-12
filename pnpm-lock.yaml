@@ -823,6 +823,9 @@ importers:
       '@openacme/email':
         specifier: workspace:*
         version: link:../email
+      '@openacme/hosted-integrations':
+        specifier: workspace:*
+        version: link:../hosted-integrations
       '@openacme/llm-provider':
         specifier: workspace:*
         version: link:../llm-provider

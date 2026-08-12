@@ -244,6 +244,21 @@ pnpm --filter @openacme/hosted-integrations test -- catalog
 
 ### Slice 1.3: Read-Only Hosted Integrations API
 
+Status: done.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/server test -- hosted-integrations-routes` failed
+  before implementation because the requests fell through to the web fallback.
+- Green validation:
+  `pnpm --filter @openacme/server test -- hosted-integrations-routes`
+  `pnpm --filter @openacme/server check-types`
+  `pnpm --filter @openacme/server build`
+  `pnpm --filter @openacme/hosted-integrations test`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+
 Goal:
 
 - Add server routes:

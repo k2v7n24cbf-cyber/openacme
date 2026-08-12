@@ -49,6 +49,7 @@
     "@openacme/config": "workspace:*",
     "@openacme/email": "workspace:*",
     "@openacme/db": "workspace:*",
+    "@openacme/hosted-integrations": "workspace:*",
     "@openacme/llm-provider": "workspace:*",
     "@openacme/mcp-client": "workspace:*",
     "@openacme/memory": "workspace:*",

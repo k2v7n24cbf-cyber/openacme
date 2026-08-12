@@ -44,7 +44,9 @@ import { registerPushRoutes } from "./routes/push.js";
 import { registerUsageRoutes } from "./routes/usage.js";
 import { registerSessionTimelineRoutes } from "./routes/session-timeline.js";
 import { registerWorkflowRoutes } from "./routes/workflows.js";
+import { registerHostedIntegrationRoutes } from "./routes/hosted-integrations.js";
 import { SkillHub, HubError } from "@openacme/skills";
+import { createFileHostedIntegrationCatalog } from "@openacme/hosted-integrations";
 import {
   AgentDefinitionSchema,
   MCPServerConfigSchema,
@@ -290,6 +292,13 @@ export async function createApp(
 
   // Usage ledger reads: summary / series / breakdown / heatmap / events.
   registerUsageRoutes(app, manager);
+
+  // Hosted integrations read-only control plane surface. Later slices move
+  // lifecycle ownership behind a server-managed service; routes stay thin.
+  registerHostedIntegrationRoutes(
+    app,
+    createFileHostedIntegrationCatalog({ dataDir: config.dataDir }),
+  );
 
   // Health check
   app.get("/api/health", (c) =>

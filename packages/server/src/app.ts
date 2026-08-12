@@ -967,9 +967,10 @@ export async function createApp(
 
   // ── Tools ──
   app.get("/api/tools", (c) => {
+    const toolView = { hideLegacyIntegrationHubMcpTools: true };
     return c.json({
-      tools: toolRegistry.getInfo(),
-      toolsets: toolRegistry.getToolsets(),
+      tools: toolRegistry.getInfo(toolView),
+      toolsets: toolRegistry.getToolsets(toolView),
     });
   });
 

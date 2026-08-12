@@ -95,6 +95,55 @@ describe("hosted integration tool registry adapter", () => {
       { generationId: "gen_2", actorId: "agent:analyst" },
     ]);
   });
+
+  it("hides legacy integration-hub MCP tools when hosted replacements exist", () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: "mcp_integration-hub__qualys_count_assets",
+      toolset: "mcp-integration-hub",
+      description: "Legacy Qualys MCP tool.",
+      parameters: z.object({}),
+      handler: async () => "{}",
+    });
+    registry.register({
+      name: "mcp_integration-hub__legacy_only",
+      toolset: "mcp-integration-hub",
+      description: "Legacy-only MCP tool.",
+      parameters: z.object({}),
+      handler: async () => "{}",
+    });
+    const adapter = new HostedIntegrationToolRegistryAdapter({
+      registry,
+      invoke: async () => "{}",
+    });
+    expect(adapter.syncFamily(activeQualysSnapshot("gen_1")).ok).toBe(true);
+
+    expect(registry.getInfo().map((tool) => tool.name)).toEqual([
+      "qualys_count_assets",
+      "mcp_integration-hub__legacy_only",
+      "mcp_integration-hub__qualys_count_assets",
+    ]);
+    const cutoverView = { hideLegacyIntegrationHubMcpTools: true };
+    expect(registry.getInfo(cutoverView).map((tool) => tool.name)).toEqual([
+      "qualys_count_assets",
+      "mcp_integration-hub__legacy_only",
+    ]);
+    expect(registry.getToolsets(cutoverView)).toEqual([
+      "hosted-integrations",
+      "mcp-integration-hub",
+    ]);
+    expect(
+      Object.keys(
+        registry.getVercelTools(
+          new Set([
+            "qualys_count_assets",
+            "mcp_integration-hub__qualys_count_assets",
+          ]),
+          cutoverView,
+        ),
+      ),
+    ).toEqual(["qualys_count_assets"]);
+  });
 });
 
 function activeQualysSnapshot(generationId: string) {

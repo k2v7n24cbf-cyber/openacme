@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { z } from "zod";
 import { AgentDefinitionSchema, ConfigSchema } from "@openacme/config";
 import {
   createFileHostedIntegrationConfigScopeStore,
@@ -69,10 +70,22 @@ describe("/api/tools hosted integration surfacing", () => {
       password: "test-password-123",
     });
     const authToken = manager.authStore.createSession(member.id).token;
-
-    const res = await app.request("http://127.0.0.1/api/tools", {
-      headers: { host: "127.0.0.1", authorization: `Bearer ${authToken}` },
+    toolRegistry.register({
+      name: "mcp_integration-hub__qualys_count_assets",
+      toolset: "mcp-integration-hub",
+      description: "Legacy integration-hub Qualys MCP tool.",
+      parameters: z.object({}),
+      handler: async () => "{}",
     });
+
+    let res: Response;
+    try {
+      res = await app.request("http://127.0.0.1/api/tools", {
+        headers: { host: "127.0.0.1", authorization: `Bearer ${authToken}` },
+      });
+    } finally {
+      toolRegistry.deregister("mcp_integration-hub__qualys_count_assets");
+    }
 
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
@@ -92,6 +105,11 @@ describe("/api/tools hosted integration surfacing", () => {
         generationId: "gen_1",
       },
     });
+    expect(
+      body.tools.some(
+        (tool) => tool.name === "mcp_integration-hub__qualys_count_assets",
+      ),
+    ).toBe(false);
   });
 
   it("invokes selected hosted integration tools through the gateway using the agent default config scope", async () => {

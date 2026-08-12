@@ -2505,6 +2505,30 @@ pnpm --filter @openacme/hosted-integrations test -- migration
 
 ### Slice 10.4: Cut Over Agent Tooling
 
+Status: done.
+
+Evidence:
+
+- Added a registry view option that hides legacy
+  `mcp_integration-hub__<tool>` entries when an active hosted integration tool
+  with the same native name is registered.
+- Kept raw registry registration intact so legacy MCP discovery can still
+  exist during parity verification.
+- `/api/tools` now uses the cutover view, so Agent Settings sees hosted
+  integration tools without duplicate legacy integration-hub MCP names.
+- Agent model-facing tool emission uses the same cutover view, so hosted tool
+  schemas are emitted and replaced legacy MCP names are suppressed.
+- Proved legacy MCP-only tools are still visible when no hosted replacement
+  exists.
+- Green validation:
+  `pnpm --filter @openacme/tools test -- hosted-integrations`
+  `pnpm --filter @openacme/tools check-types`
+  `pnpm --filter @openacme/tools build`
+  `pnpm --filter @openacme/server test -- tools-hosted-integrations`
+  `pnpm --filter @openacme/server test -- hosted-integrations`
+  `pnpm --filter @openacme/agent-core check-types`
+  `pnpm --filter @openacme/server check-types`
+
 Goal:
 
 - Stop exposing migrated hosted integration families through the external

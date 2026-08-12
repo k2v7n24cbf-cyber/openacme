@@ -28,6 +28,11 @@ import {
 const log = createLogger("tools.registry");
 
 const SYSTEM_TOOL_SET = new Set<string>(SYSTEM_TOOLS);
+const LEGACY_INTEGRATION_HUB_MCP_PREFIX = "mcp_integration-hub__";
+
+export interface ToolRegistryViewOptions {
+  hideLegacyIntegrationHubMcpTools?: boolean;
+}
 
 function runtimeLabel(entry: ToolEntry): "daemon" | "worker" {
   return entry.runtime ?? "daemon";
@@ -332,8 +337,8 @@ export class ToolRegistry {
    * Serializable description of every registered tool — used by API clients
    * (web UI, etc.) to render tool pickers without leaking handler internals.
    */
-  getInfo(): ToolInfo[] {
-    return [...this._tools.values()]
+  getInfo(options: ToolRegistryViewOptions = {}): ToolInfo[] {
+    return this.visibleEntries(options)
       .map((entry) => ({
         name: entry.name,
         description: entry.description,
@@ -356,8 +361,8 @@ export class ToolRegistry {
    * the provider-side prompt cache for the entire prefix. Name-sorted is
    * byte-stable.
    */
-  private sortedEntries(): ToolEntry[] {
-    return [...this._tools.values()].sort((a, b) =>
+  private sortedEntries(options: ToolRegistryViewOptions = {}): ToolEntry[] {
+    return this.visibleEntries(options).sort((a, b) =>
       a.name.localeCompare(b.name)
     );
   }
@@ -366,9 +371,12 @@ export class ToolRegistry {
    * Get tool definitions in the format expected by the Vercel AI SDK.
    * Only includes tools whose checkFn() passes (or have no checkFn).
    */
-  getDefinitions(toolNames?: Set<string>): ToolDefinition[] {
+  getDefinitions(
+    toolNames?: Set<string>,
+    options: ToolRegistryViewOptions = {}
+  ): ToolDefinition[] {
     const result: ToolDefinition[] = [];
-    for (const entry of this.sortedEntries()) {
+    for (const entry of this.sortedEntries(options)) {
       if (toolNames && !toolNames.has(entry.name)) continue;
       if (entry.checkFn && !entry.checkFn()) continue;
 
@@ -387,9 +395,12 @@ export class ToolRegistry {
   /**
    * Get tools as a Vercel AI SDK `tools` object for generateText/streamText.
    */
-  getVercelTools(toolNames?: Set<string>): Record<string, unknown> {
+  getVercelTools(
+    toolNames?: Set<string>,
+    options: ToolRegistryViewOptions = {}
+  ): Record<string, unknown> {
     const tools: Record<string, unknown> = {};
-    for (const entry of this.sortedEntries()) {
+    for (const entry of this.sortedEntries(options)) {
       if (toolNames && !toolNames.has(entry.name)) continue;
       if (entry.checkFn && !entry.checkFn()) continue;
 
@@ -549,14 +560,37 @@ export class ToolRegistry {
   /**
    * Get unique toolset names.
    */
-  getToolsets(): string[] {
+  getToolsets(options: ToolRegistryViewOptions = {}): string[] {
     const sets = new Set<string>();
-    for (const entry of this._tools.values()) {
+    for (const entry of this.visibleEntries(options)) {
       sets.add(entry.toolset);
     }
     return [...sets].sort();
+  }
+
+  private visibleEntries(options: ToolRegistryViewOptions): ToolEntry[] {
+    const entries = [...this._tools.values()];
+    if (!options.hideLegacyIntegrationHubMcpTools) return entries;
+    const hostedToolNames = new Set(
+      entries
+        .filter((entry) => entry.source?.kind === "hosted_integration")
+        .map((entry) => entry.name)
+    );
+    return entries.filter((entry) => {
+      const hostedReplacementName = legacyIntegrationHubReplacementName(entry);
+      return (
+        hostedReplacementName === null ||
+        !hostedToolNames.has(hostedReplacementName)
+      );
+    });
   }
 }
 
 /** Module-level singleton */
 export const registry = new ToolRegistry();
+
+function legacyIntegrationHubReplacementName(entry: ToolEntry): string | null {
+  if (!entry.name.startsWith(LEGACY_INTEGRATION_HUB_MCP_PREFIX)) return null;
+  if (entry.toolset !== "mcp-integration-hub") return null;
+  return entry.name.slice(LEGACY_INTEGRATION_HUB_MCP_PREFIX.length);
+}

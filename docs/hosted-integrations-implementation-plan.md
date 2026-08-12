@@ -2362,6 +2362,29 @@ MDE, and defender-alert workflows.
 
 ### Slice 10.1: Integration-Hub Compatibility Inventory
 
+Status: done.
+
+Evidence:
+
+- The current worktree does not contain
+  `workspace/src/integration_hub/integrations`; searched the platform
+  workspace and sibling AIProjects directories before treating the legacy
+  source as external/unavailable.
+- Added a seed migration inventory in
+  `packages/hosted-integrations/src/migration.ts`.
+- Seeded Qualys tool names from the installed `qualys-toolkit` reference and
+  seeded Splunk, Microsoft Graph, MDE, and defender-alert placeholder tools
+  from the hosted integrations architecture notes.
+- Preserved legacy external MCP names as
+  `mcp_integration-hub__<legacyToolName>` while keeping hosted tool names equal
+  to the legacy native tool names where valid.
+- Captured family-level config keys and human-managed secret refs for migration
+  into config scopes.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- migration`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+
 Goal:
 
 - Inventory existing `integration-hub` families, tools, schemas, examples,

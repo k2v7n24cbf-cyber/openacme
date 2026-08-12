@@ -302,3 +302,12 @@ export {
   type HostedIntegrationTelemetry,
   type HostedIntegrationTelemetrySpan,
 } from "./telemetry.js";
+export {
+  EXPECTED_LEGACY_INTEGRATION_HUB_TOOL_NAMES,
+  LEGACY_INTEGRATION_HUB_INVENTORY,
+  validateLegacyIntegrationHubMigrationInventory,
+  type LegacyIntegrationHubFamilyInventoryEntry,
+  type LegacyIntegrationHubInventory,
+  type LegacyIntegrationHubToolInventoryEntry,
+  type ValidateMigrationInventoryResult,
+} from "./migration.js";

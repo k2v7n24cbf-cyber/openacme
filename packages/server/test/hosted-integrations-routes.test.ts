@@ -177,6 +177,42 @@ tools:
 `;
 }
 
+function destructiveFamilyYaml(): string {
+  return `
+id: qualys
+name: Qualys
+version: 1
+runtime:
+  language: python
+  entrypoint: qualys.py
+  defaultTimeoutMs: 30000
+  inlineResultTokenLimit: 8000
+  maxConcurrency: 2
+  runtimePolicy:
+    filesystem: run_dir_and_family_home
+    processEnv: tool_context_only
+    subprocess: denied
+    network: declared_egress
+  dependencyPolicy:
+    installDuringInvocation: false
+    allowedPackages: []
+tools:
+  - name: qualys_delete_asset
+    title: Delete asset
+    description: Delete one asset.
+    inputSchema:
+      type: object
+      properties: {}
+      additionalProperties: false
+    classification:
+      operation: destructive
+      freshness: live
+      idempotency: non_idempotent
+      execution: sync
+      approval: human
+`;
+}
+
 describe("hosted integrations read-only routes", () => {
   it("lists families from the hosted integrations source catalog", async () => {
     writeFamily("splunk", familyYaml("splunk", "Splunk", "splunk_search"));
@@ -1173,6 +1209,191 @@ describe("hosted integrations operational disablement routes", () => {
   });
 });
 
+describe("hosted integrations example execution and promotion routes", () => {
+  it("runs a draft example and writes sanitized debug artifacts", async () => {
+    const { draftId } = await createDraftViaRoutes(
+      pythonTool("return {'count': 2}"),
+    );
+    await upsertSmokeExample(draftId);
+
+    const res = await req(
+      `/api/hosted-integrations/drafts/${draftId}/run-example`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          actor: toolDeveloperActor(),
+          exampleId: "smoke_count",
+        }),
+      },
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({
+      ok: true,
+      envelope: { ok: true, result: { count: 2 } },
+    });
+
+    const artifact = await req(
+      `/api/hosted-integrations/runs/${body.runId}/artifacts/output.json?roles=tool_developer`,
+    );
+    expect(artifact.status).toBe(200);
+    expect(await artifact.json()).toMatchObject({
+      name: "output.json",
+      content: expect.stringContaining('"count": 2'),
+    });
+  });
+
+  it("refuses invalid draft promotion", async () => {
+    const { draftId, lockId } = await createDraftViaRoutes(
+      pythonTool("return {'count': 2}"),
+    );
+    const write = await req(
+      `/api/hosted-integrations/drafts/${draftId}/files/family.yaml`,
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ lockId, content: "not: [valid" }),
+      },
+    );
+    expect(write.status).toBe(200);
+
+    const res = await req(
+      `/api/hosted-integrations/drafts/${draftId}/promote`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ actor: toolDeveloperActor(), lockId }),
+      },
+    );
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: { code: "validation_failed" },
+    });
+  });
+
+  it("refuses promotion when required tool examples are missing", async () => {
+    const { draftId, lockId } = await createDraftViaRoutes(
+      pythonTool("return {'count': 2}"),
+    );
+
+    const res = await req(
+      `/api/hosted-integrations/drafts/${draftId}/promote`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ actor: toolDeveloperActor(), lockId }),
+      },
+    );
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: {
+        code: "missing_required_examples",
+        toolNames: ["qualys_count_assets"],
+      },
+    });
+  });
+
+  it("requires the current draft lock for promotion", async () => {
+    const { draftId } = await createDraftViaRoutes(
+      pythonTool("return {'count': 2}"),
+    );
+    await upsertSmokeExample(draftId);
+
+    const res = await req(
+      `/api/hosted-integrations/drafts/${draftId}/promote`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          actor: toolDeveloperActor(),
+          lockId: "lock_stale",
+        }),
+      },
+    );
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      ok: false,
+      error: { code: "lock_required" },
+    });
+  });
+
+  it("promotes a draft, updates canonical source, and seeds the next draft revision", async () => {
+    const currentSource = pythonTool("return {'count': 3}");
+    const { draftId, lockId } = await createDraftViaRoutes(currentSource);
+    await upsertSmokeExample(draftId, lockId);
+
+    let res = await req(`/api/hosted-integrations/drafts/${draftId}/promote`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ actor: toolDeveloperActor(), lockId }),
+    });
+    expect(res.status).toBe(200);
+    const promoted = await res.json();
+    expect(promoted).toMatchObject({
+      ok: true,
+      generation: {
+        familyId: "qualys",
+        sourceRevisionId: promoted.sourceRevisionId,
+        status: "active",
+      },
+    });
+
+    res = await req(
+      "/api/hosted-integrations/families/qualys/source/files/qualys.py",
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      path: "qualys.py",
+      content: currentSource,
+    });
+
+    res = await req("/api/hosted-integrations/families/qualys/drafts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ lockId }),
+    });
+    expect(res.status).toBe(201);
+    expect(await res.json()).toMatchObject({
+      draft: { sourceRevisionId: promoted.sourceRevisionId },
+    });
+  });
+
+  it("requires human approval for destructive promotion", async () => {
+    const { draftId, lockId } = await createDraftViaRoutes(
+      pythonTool("return {'deleted': True}"),
+      destructiveFamilyYaml(),
+    );
+    await upsertSmokeExample(
+      draftId,
+      lockId,
+      "destructive_requires_human",
+      "qualys_delete_asset",
+    );
+
+    const res = await req(
+      `/api/hosted-integrations/drafts/${draftId}/promote`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ actor: toolDeveloperActor(), lockId }),
+      },
+    );
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      ok: false,
+      error: { code: "approval_required" },
+    });
+  });
+});
+
 function agentActor() {
   return { id: "agent:analyst", kind: "agent", roles: ["agent"] };
 }
@@ -1183,6 +1404,73 @@ function toolDeveloperActor() {
     kind: "agent",
     roles: ["tool_developer"],
   };
+}
+
+async function createDraftViaRoutes(
+  source: string,
+  manifest = familyYaml("qualys", "Qualys", "qualys_count_assets"),
+): Promise<{ draftId: string; lockId: string }> {
+  writeFamily("qualys", manifest, {
+    "qualys.py": pythonTool("return {'count': 1}"),
+  });
+  let res = await req("/api/hosted-integrations/families/qualys/lock", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      lockedBy: "agent:tool-developer",
+      ttlMs: 60_000,
+    }),
+  });
+  expect(res.status).toBe(201);
+  const lockId = ((await res.json()) as { lock: { id: string } }).lock.id;
+  res = await req("/api/hosted-integrations/families/qualys/drafts", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ lockId, sourceRevisionId: "source_rev_1" }),
+  });
+  expect(res.status).toBe(201);
+  const draftId = ((await res.json()) as { draft: { id: string } }).draft.id;
+  res = await req(
+    `/api/hosted-integrations/drafts/${draftId}/files/qualys.py`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ lockId, content: source }),
+    },
+  );
+  expect(res.status).toBe(200);
+  return { draftId, lockId };
+}
+
+async function upsertSmokeExample(
+  draftId: string,
+  lockId?: string,
+  category = "smoke",
+  toolName = "qualys_count_assets",
+): Promise<void> {
+  const actualLockId = lockId ?? (await readDraftLockId(draftId));
+  const res = await req(`/api/hosted-integrations/drafts/${draftId}/examples`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      lockId: actualLockId,
+      example: {
+        id: "smoke_count",
+        familyId: "qualys",
+        toolName,
+        category,
+        args: {},
+        expected: {},
+      },
+    }),
+  });
+  expect(res.status).toBe(200);
+}
+
+async function readDraftLockId(draftId: string): Promise<string> {
+  const res = await req(`/api/hosted-integrations/drafts/${draftId}`);
+  expect(res.status).toBe(200);
+  return ((await res.json()) as { draft: { lockId: string } }).draft.lockId;
 }
 
 function allowedInvokeBody() {

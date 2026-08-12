@@ -69,6 +69,7 @@ export interface PromoteHostedIntegrationDraftRequest {
   draftId: string;
   promotedBy: string;
   validation: HostedIntegrationValidationResult;
+  sourceRevisionId?: string;
   draftRevisionId?: string;
   approval?: HostedIntegrationHumanApprovalRecord;
 }
@@ -240,7 +241,7 @@ class FileHostedIntegrationGenerationStore implements HostedIntegrationGeneratio
       const generation = HostedIntegrationGenerationSchema.parse({
         id: generationId,
         familyId: draft.familyId,
-        sourceRevisionId: draft.sourceRevisionId,
+        sourceRevisionId: request.sourceRevisionId ?? draft.sourceRevisionId,
         status: "active",
         promotedAt: now,
         promotedBy: request.promotedBy,

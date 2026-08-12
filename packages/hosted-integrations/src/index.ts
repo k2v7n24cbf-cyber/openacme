@@ -194,6 +194,8 @@ export {
   type ListHostedIntegrationSourceFilesResult,
   type ReadHostedIntegrationSourceFileRequest,
   type ReadHostedIntegrationSourceFileResult,
+  type ReplaceHostedIntegrationSourceFilesRequest,
+  type ReplaceHostedIntegrationSourceFilesResult,
 } from "./source-files.js";
 export { type HostedIntegrationFileEntry } from "./file-access.js";
 export {

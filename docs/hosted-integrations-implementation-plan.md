@@ -1282,6 +1282,8 @@ Evidence:
 
 ### Slice 4.11: Example Execution And Promotion Routes
 
+Status: done.
+
 Goal:
 
 - Add the runtime-dependent draft routes:
@@ -1306,6 +1308,7 @@ TDD:
 - run-example route writes a debug run directory and sanitized artifacts
 - promote route refuses invalid drafts
 - promote route refuses missing required examples
+- promote route requires the current draft lock
 - promote route creates a generation and updates active generation atomically
 - promote route updates canonical source from the accepted draft
 - next draft starts from the promoted source revision
@@ -1317,6 +1320,22 @@ Validation:
 pnpm --filter @openacme/server test -- hosted-integrations
 pnpm --filter @openacme/hosted-integrations test -- promotion
 ```
+
+Evidence:
+
+- Red tests first:
+  `pnpm --filter @openacme/hosted-integrations test -- promotion` failed on a
+  missing source revision metadata type guard.
+  `pnpm --filter @openacme/server test -- hosted-integrations` exposed that
+  draft example runs wrote artifacts without execution logs, so artifact routes
+  could not authorize the debug run.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- promotion`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/server test -- hosted-integrations`
+  `pnpm --filter @openacme/server check-types`
+  `pnpm --filter @openacme/server build`
 
 ## Milestone 5: ToolRegistry Surfacing And Management Tools
 

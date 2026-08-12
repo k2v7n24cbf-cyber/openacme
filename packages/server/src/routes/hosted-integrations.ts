@@ -1,13 +1,24 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Context, Hono } from "hono";
+import { parse as parseYaml } from "yaml";
 import {
   HostedIntegrationExampleSchema,
   HostedIntegrationDisableTargetSchema,
+  FamilyManifestSchema,
+  HostedIntegrationPythonRuntime,
   HostedIntegrationPolicyBindingSchema,
   HostedIntegrationPromotionApprovalTargetSchema,
   JsonObjectSchema,
+  evaluateHostedIntegrationPromotionApproval,
   isHostedIntegrationToolVisibleForSelection,
+  type FamilyManifest,
+  type HostedIntegrationDraft,
+  type HostedIntegrationExample,
   type HostedIntegrationExecutionLogEntry,
+  type HostedIntegrationGatewayError,
   type HostedIntegrationGeneration,
+  type HostedIntegrationHumanApprovalRecord,
   type HostedIntegrationPolicyActor,
   type HostedIntegrationService,
 } from "@openacme/hosted-integrations";
@@ -308,11 +319,14 @@ export function registerHostedIntegrationRoutes(
   app.post("/api/hosted-integrations/families/:family/drafts", async (c) => {
     try {
       const body = await readJsonObject(c);
+      const familyId = c.req.param("family");
       const result = await service.drafts.createDraft({
-        familyId: c.req.param("family"),
+        familyId,
         lockId: stringField(body, "lockId"),
         sourceRevisionId:
-          optionalStringField(body, "sourceRevisionId") ?? "source_current",
+          optionalStringField(body, "sourceRevisionId") ??
+          (await service.sourceFiles.getCurrentSourceRevisionId(familyId)) ??
+          "source_current",
       });
       if (result.ok) return c.json({ draft: result.draft }, 201);
       return c.json(
@@ -491,6 +505,95 @@ export function registerHostedIntegrationRoutes(
       return c.json(
         await service.validator.validateDraft(c.req.param("draftId")),
       );
+    } catch (error) {
+      return invalidRequest(c, error);
+    }
+  });
+
+  app.post(
+    "/api/hosted-integrations/drafts/:draftId/run-example",
+    async (c): Promise<Response> => runDraftExampleRoute(c as Context, service),
+  );
+
+  app.post("/api/hosted-integrations/drafts/:draftId/promote", async (c) => {
+    try {
+      const draftId = c.req.param("draftId");
+      const body = await readJsonObject(c);
+      const actor = actorField(body);
+      if (!actor.roles.includes("tool_developer")) {
+        return c.json({ ok: false, error: { code: "policy_denied" } }, 403);
+      }
+      const draft = await service.drafts.getDraft(draftId);
+      if (!draft) return c.json({ ok: false, error: "not_found" }, 404);
+      const lockId = stringField(body, "lockId");
+      if (!(await hasCurrentDraftLock(service, draft, lockId))) {
+        return c.json({ ok: false, error: { code: "lock_required" } }, 409);
+      }
+      const validation = await service.validator.validateDraft(draftId);
+      if (!validation.ok) {
+        return c.json(
+          { ok: false, error: { code: "validation_failed" }, validation },
+          400,
+        );
+      }
+      const manifest = await readDraftManifest(service, draftId);
+      const examples = await service.examples.listExamples(draftId);
+      const missingExamples = missingExampleToolNames(manifest, examples);
+      if (missingExamples.length > 0) {
+        return c.json(
+          {
+            ok: false,
+            error: {
+              code: "missing_required_examples",
+              toolNames: missingExamples,
+            },
+          },
+          400,
+        );
+      }
+
+      const target = promotionTargetForDraft(draft, manifest);
+      const approvalId = optionalStringField(body, "approvalId");
+      let approval: HostedIntegrationHumanApprovalRecord | null = null;
+      if (approvalId)
+        approval = await service.approvals.getApproval(approvalId);
+      const approvalDecision = evaluateHostedIntegrationPromotionApproval({
+        actor,
+        target,
+        approval,
+      });
+      if (!approvalDecision.ok) {
+        return c.json(
+          { ok: false, error: { code: approvalDecision.reason } },
+          403,
+        );
+      }
+
+      const files = await collectDraftFiles(service, draftId);
+      const source = await service.sourceFiles.replaceSourceFiles({
+        familyId: draft.familyId,
+        files,
+        updatedBy: actor.id,
+      });
+      const promoted = await service.generations.promoteDraft({
+        draftId,
+        promotedBy: actor.id,
+        validation,
+        draftRevisionId: draft.updatedAt,
+        sourceRevisionId: source.sourceRevisionId,
+        approval: approvalDecision.approval,
+      });
+      if (!promoted.ok) {
+        return c.json(
+          { ok: false, error: { code: promoted.reason } },
+          promoted.reason === "draft_not_found" ? 404 : 400,
+        );
+      }
+      return c.json({
+        ok: true,
+        generation: promoted.generation,
+        sourceRevisionId: source.sourceRevisionId,
+      });
     } catch (error) {
       return invalidRequest(c, error);
     }
@@ -791,6 +894,229 @@ function canReadRun(
     .map((role) => role.trim())
     .filter(Boolean);
   return actorId === log.actorId || roles.includes("tool_developer");
+}
+
+async function hasCurrentDraftLock(
+  service: HostedIntegrationService,
+  draft: HostedIntegrationDraft,
+  lockId: string,
+): Promise<boolean> {
+  if (draft.lockId !== lockId) return false;
+  const lock = await service.locks.getActiveLock(draft.familyId);
+  return lock?.id === lockId;
+}
+
+async function runDraftExampleRoute(
+  c: Context,
+  service: HostedIntegrationService,
+): Promise<Response> {
+  try {
+    const draftId = requiredPathParam(c, "draftId");
+    const body = await readJsonObject(c);
+    const actor = actorField(body);
+    const draft = await service.drafts.getDraft(draftId);
+    if (!draft) return c.json({ ok: false, error: "not_found" }, 404);
+    const exampleId = stringField(body, "exampleId");
+    const examples = await service.examples.listExamples(draftId);
+    const example = examples.find((candidate) => candidate.id === exampleId);
+    if (!example) return c.json({ ok: false, error: "not_found" }, 404);
+    const manifest = await readDraftManifest(service, draftId);
+    const tool = manifest.tools.find(
+      (candidate) => candidate.name === example.toolName,
+    );
+    if (!tool) {
+      return c.json({ ok: false, error: { code: "tool_not_found" } }, 404);
+    }
+
+    const draftGenerationId = `draft:${draft.id}`;
+    const { run, familyHome, runDir } = await service.artifacts.createRun({
+      familyId: draft.familyId,
+      toolName: example.toolName,
+      generationId: draftGenerationId,
+      actorId: actor.id,
+      input: example.args,
+    });
+    await service.gateway.executionLogs.startLog({
+      runId: run.id,
+      familyId: draft.familyId,
+      toolName: example.toolName,
+      generationId: draftGenerationId,
+      actorId: actor.id,
+      configScopeId: "debug",
+      configRevision: 1,
+      status: "running",
+      startedAt: run.startedAt,
+    });
+    const filesRoot = path.join(runDir, "files");
+    await copyDraftFilesToDirectory(service, draftId, filesRoot);
+    const runtimeResult = await new HostedIntegrationPythonRuntime().callTool({
+      familyId: draft.familyId,
+      generationId: draftGenerationId,
+      filesRoot,
+      runtime: manifest.runtime,
+      timeoutMs: manifest.runtime.defaultTimeoutMs,
+      toolName: example.toolName,
+      args: JsonObjectSchema.parse(example.args),
+      context: {
+        familyId: draft.familyId,
+        generationId: draftGenerationId,
+        runId: run.id,
+        familyHome,
+        runDir,
+        config: {},
+        secrets: {},
+      },
+    });
+    if (!runtimeResult.ok) {
+      const normalizedError = routeRuntimeError(runtimeResult.error);
+      const artifactError = JsonObjectSchema.parse(normalizedError);
+      const errorEnvelope = await service.artifacts.completeRunError({
+        familyId: draft.familyId,
+        runId: run.id,
+        error: artifactError,
+      });
+      await service.gateway.executionLogs.finishLog(run.id, {
+        status: "failed",
+        endedAt: new Date().toISOString(),
+        error: normalizedError,
+      });
+      return c.json(
+        { ok: false, runId: run.id, error: errorEnvelope.error },
+        runtimeResult.error.code === "timeout" ? 504 : 500,
+      );
+    }
+    const envelope = await service.artifacts.completeRunSuccess({
+      familyId: draft.familyId,
+      runId: run.id,
+      result: runtimeResult.result,
+      inlineResultTokenLimit: manifest.runtime.inlineResultTokenLimit,
+    });
+    await service.gateway.executionLogs.finishLog(run.id, {
+      status: "succeeded",
+      endedAt: new Date().toISOString(),
+      resultEnvelopeRef: `${run.id}/output.json`,
+    });
+    return c.json({ ok: true, runId: run.id, envelope });
+  } catch (error) {
+    return invalidRequest(c, error);
+  }
+}
+
+function requiredPathParam(c: Context, name: string): string {
+  const value = c.req.param(name);
+  if (!value) throw new Error(`${name} is required`);
+  return value;
+}
+
+function routeRuntimeError(error: {
+  code: HostedIntegrationGatewayError["code"];
+  message: string;
+  details?: HostedIntegrationGatewayError["details"];
+}): HostedIntegrationGatewayError {
+  return {
+    code: error.code,
+    message: error.message,
+    ...(error.details === undefined ? {} : { details: error.details }),
+  };
+}
+
+async function readDraftManifest(
+  service: HostedIntegrationService,
+  draftId: string,
+): Promise<FamilyManifest> {
+  const manifestFile = await service.drafts.readDraftFile({
+    draftId,
+    path: "family.yaml",
+  });
+  if (!manifestFile.ok) throw new Error("family.yaml is required");
+  return FamilyManifestSchema.parse(parseYaml(manifestFile.content));
+}
+
+async function collectDraftFiles(
+  service: HostedIntegrationService,
+  draftId: string,
+): Promise<Record<string, string>> {
+  const listed = await service.drafts.listDraftFiles(draftId);
+  if (!listed.ok) throw new Error("draft files not found");
+  const files: Record<string, string> = {};
+  for (const file of listed.files) {
+    const read = await service.drafts.readDraftFile({
+      draftId,
+      path: file.path,
+    });
+    if (!read.ok) throw new Error(`draft file ${file.path} not found`);
+    files[file.path] = read.content;
+  }
+  return files;
+}
+
+async function copyDraftFilesToDirectory(
+  service: HostedIntegrationService,
+  draftId: string,
+  outputRoot: string,
+): Promise<void> {
+  const files = await collectDraftFiles(service, draftId);
+  await mkdir(outputRoot, { recursive: true });
+  for (const [relPath, content] of Object.entries(files)) {
+    const resolved = path.resolve(outputRoot, relPath);
+    const relative = path.relative(outputRoot, resolved);
+    if (
+      relative === "" ||
+      relative.startsWith("..") ||
+      path.isAbsolute(relative)
+    ) {
+      throw new Error("path escapes draft runtime root");
+    }
+    await mkdir(path.dirname(resolved), { recursive: true });
+    await writeFile(resolved, content, "utf-8");
+  }
+}
+
+function missingExampleToolNames(
+  manifest: FamilyManifest,
+  examples: HostedIntegrationExample[],
+): string[] {
+  const covered = new Set(examples.map((example) => example.toolName));
+  return manifest.tools
+    .map((tool) => tool.name)
+    .filter((toolName) => !covered.has(toolName));
+}
+
+function promotionTargetForDraft(
+  draft: HostedIntegrationDraft,
+  manifest: FamilyManifest,
+) {
+  const toolNames = manifest.tools.map((tool) => tool.name);
+  const destructiveToolNames = manifest.tools
+    .filter((tool) => tool.classification.operation === "destructive")
+    .map((tool) => tool.name);
+  return HostedIntegrationPromotionApprovalTargetSchema.parse({
+    familyId: draft.familyId,
+    draftId: draft.id,
+    draftRevisionId: draft.updatedAt,
+    operation: "promote",
+    operationClass: operationClassForManifest(manifest),
+    toolNames,
+    destructiveToolNames,
+  });
+}
+
+function operationClassForManifest(
+  manifest: FamilyManifest,
+): "read" | "write" | "destructive" {
+  if (
+    manifest.tools.some(
+      (tool) => tool.classification.operation === "destructive",
+    )
+  ) {
+    return "destructive";
+  }
+  if (
+    manifest.tools.some((tool) => tool.classification.operation === "write")
+  ) {
+    return "write";
+  }
+  return "read";
 }
 
 function generationSummary(generation: HostedIntegrationGeneration) {

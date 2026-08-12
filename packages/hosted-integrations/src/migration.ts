@@ -1,4 +1,5 @@
 import { HostedIntegrationToolNameSchema } from "./schemas.js";
+import type { HostedIntegrationExample } from "./schemas.js";
 
 export interface LegacyIntegrationHubToolInventoryEntry {
   familyId: string;
@@ -35,6 +36,15 @@ export interface LegacyIntegrationHubInventory {
 export interface ValidateMigrationInventoryResult {
   ok: boolean;
   diagnostics: string[];
+}
+
+export interface LegacyIntegrationHubMigratedFamilyFixture {
+  familyId: string;
+  familyName: string;
+  migratedToolNames: string[];
+  legacyMcpToolNames: string[];
+  sourceFiles: Record<string, string>;
+  examples: HostedIntegrationExample[];
 }
 
 const LEGACY_SERVER_NAME = "integration-hub";
@@ -172,6 +182,31 @@ export const LEGACY_INTEGRATION_HUB_INVENTORY: LegacyIntegrationHubInventory = {
   ],
 };
 
+export const FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY: LegacyIntegrationHubMigratedFamilyFixture =
+  {
+    familyId: "splunk",
+    familyName: "Splunk",
+    migratedToolNames: ["splunk_search"],
+    legacyMcpToolNames: ["mcp_integration-hub__splunk_search"],
+    sourceFiles: {
+      "family.yaml": splunkFamilyYaml(),
+      "splunk.py": splunkPythonSource(),
+    },
+    examples: [
+      {
+        id: "splunk_search_smoke",
+        familyId: "splunk",
+        toolName: "splunk_search",
+        category: "mock_only",
+        args: { query: 'index=main "login"', limit: 2 },
+        expected: {
+          query: 'index=main "login"',
+          result_count: 2,
+        },
+      },
+    ],
+  };
+
 export function validateLegacyIntegrationHubMigrationInventory(
   inventory: LegacyIntegrationHubInventory,
   expectedToolNames: readonly string[] =
@@ -251,4 +286,101 @@ function duplicates(values: string[]): string[] {
     seen.add(value);
   }
   return [...repeated].sort();
+}
+
+function splunkFamilyYaml(): string {
+  return `
+id: splunk
+name: Splunk
+version: 1
+runtime:
+  language: python
+  entrypoint: splunk.py
+  defaultTimeoutMs: 30000
+  inlineResultTokenLimit: 200
+  maxConcurrency: 2
+  runtimePolicy:
+    filesystem: run_dir_and_family_home
+    processEnv: tool_context_only
+    subprocess: denied
+    network: declared_egress
+    declaredEgress:
+      - SPLUNK_BASE_URL
+  dependencyPolicy:
+    installDuringInvocation: false
+    allowedPackages: []
+tools:
+  - name: splunk_search
+    title: Search Splunk
+    description: Runs a read-only Splunk search through the migrated hosted integration surface.
+    inputSchema:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+          minLength: 1
+        limit:
+          type: integer
+      additionalProperties: false
+    classification:
+      operation: read
+      freshness: live
+      idempotency: idempotent
+      execution: sync
+      approval: none
+`;
+}
+
+function splunkPythonSource(): string {
+  return String.raw`
+def list_tools():
+    return [
+        {
+            "name": "splunk_search",
+            "title": "Search Splunk",
+            "description": "Runs a read-only Splunk search through the migrated hosted integration surface.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                    "query": {"type": "string", "minLength": 1},
+                    "limit": {"type": "integer"},
+                },
+                "additionalProperties": False,
+            },
+            "classification": {
+                "operation": "read",
+                "freshness": "live",
+                "idempotency": "idempotent",
+                "execution": "sync",
+                "approval": "none",
+            },
+        }
+    ]
+
+def call_tool(name, args, context):
+    if name != "splunk_search":
+        raise ValueError(f"unknown tool: {name}")
+    query = args["query"]
+    limit = int(args.get("limit", 2))
+    base_url = context["config"].get("baseUrl", "https://splunk.example.test")
+    has_token = bool(context["secrets"].get("token"))
+    rows = [
+        {
+            "offset": index,
+            "source": "migration_fixture",
+            "message": f"{query} event {index}",
+        }
+        for index in range(limit)
+    ]
+    return {
+        "query": query,
+        "base_url": base_url,
+        "auth_configured": has_token,
+        "result_count": len(rows),
+        "results": rows,
+    }
+`;
 }

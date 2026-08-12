@@ -304,10 +304,12 @@ export {
 } from "./telemetry.js";
 export {
   EXPECTED_LEGACY_INTEGRATION_HUB_TOOL_NAMES,
+  FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY,
   LEGACY_INTEGRATION_HUB_INVENTORY,
   validateLegacyIntegrationHubMigrationInventory,
   type LegacyIntegrationHubFamilyInventoryEntry,
   type LegacyIntegrationHubInventory,
+  type LegacyIntegrationHubMigratedFamilyFixture,
   type LegacyIntegrationHubToolInventoryEntry,
   type ValidateMigrationInventoryResult,
 } from "./migration.js";

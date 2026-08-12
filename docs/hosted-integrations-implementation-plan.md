@@ -2410,6 +2410,26 @@ pnpm --filter @openacme/hosted-integrations test -- migration
 
 ### Slice 10.2: Migrate First Read-Only Family
 
+Status: done.
+
+Evidence:
+
+- Added `FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY` as the first migrated
+  read-only family fixture for `splunk/splunk_search`.
+- Preserved the legacy external MCP registry name
+  `mcp_integration-hub__splunk_search` in the migration fixture metadata.
+- Proved the migrated source validates, registers examples, promotes to an
+  active generation, and exposes the expected hosted tool name.
+- Proved a registered example runs through the hosted integration gateway and
+  real Python runtime with config scope and human-owned secret metadata.
+- Proved legacy `result_file` behavior maps to hosted run artifacts for large
+  responses and does not expose the dummy secret value in the artifact.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- migration`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/tools test -- hosted-integrations`
+
 Goal:
 
 - Migrate one existing read-only family, preferably `example` or the smallest

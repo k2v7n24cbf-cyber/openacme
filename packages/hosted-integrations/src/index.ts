@@ -73,6 +73,20 @@ export {
   type JsonValue,
 } from "./schemas.js";
 export {
+  createFileHostedIntegrationJobStore,
+  type CancelHostedIntegrationJobRequest,
+  type CompleteHostedIntegrationJobRequest,
+  type FailHostedIntegrationJobRequest,
+  type FileHostedIntegrationJobStoreOptions,
+  type GetHostedIntegrationJobResultResult,
+  type HostedIntegrationJobStore,
+  type MarkHostedIntegrationJobRunningRequest,
+  type MutateHostedIntegrationJobResult,
+  type StartHostedIntegrationJobRequest,
+  type StartHostedIntegrationJobResult,
+  type UpdateHostedIntegrationJobProgressRequest,
+} from "./jobs.js";
+export {
   buildHostedIntegrationGenerationProvenance,
   createFileHostedIntegrationApprovalStore,
   evaluateHostedIntegrationPromotionApproval,

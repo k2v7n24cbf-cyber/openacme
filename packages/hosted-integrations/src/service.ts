@@ -40,6 +40,10 @@ import {
   type HostedIntegrationGenerationStore,
 } from "./generations.js";
 import {
+  createFileHostedIntegrationJobStore,
+  type HostedIntegrationJobStore,
+} from "./jobs.js";
+import {
   createFileHostedIntegrationRetentionSweeper,
   type HostedIntegrationRetentionSweeper,
 } from "./retention.js";
@@ -87,6 +91,7 @@ export interface HostedIntegrationService {
   readonly approvals: HostedIntegrationApprovalStore;
   readonly disablements: HostedIntegrationDisablementStore;
   readonly generations: HostedIntegrationGenerationStore;
+  readonly jobs: HostedIntegrationJobStore;
   readonly artifacts: HostedIntegrationArtifactStore;
   readonly failureBuckets: HostedIntegrationFailureBucketStore;
   readonly retention: HostedIntegrationRetentionSweeper;
@@ -145,6 +150,7 @@ export function createFileHostedIntegrationService(
     draftStore: drafts,
     onRegistryRefresh: options.onRegistryRefresh,
   });
+  const jobs = createFileHostedIntegrationJobStore(options);
   const artifacts = createFileHostedIntegrationArtifactStore(options);
   const retention = createFileHostedIntegrationRetentionSweeper(options);
   const gateway = createFileHostedIntegrationGateway({
@@ -171,6 +177,7 @@ export function createFileHostedIntegrationService(
     approvals,
     disablements,
     generations,
+    jobs,
     artifacts,
     failureBuckets,
     retention,
@@ -190,6 +197,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
   readonly approvals: HostedIntegrationApprovalStore;
   readonly disablements: HostedIntegrationDisablementStore;
   readonly generations: HostedIntegrationGenerationStore;
+  readonly jobs: HostedIntegrationJobStore;
   readonly artifacts: HostedIntegrationArtifactStore;
   readonly failureBuckets: HostedIntegrationFailureBucketStore;
   readonly retention: HostedIntegrationRetentionSweeper;
@@ -210,6 +218,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     approvals: HostedIntegrationApprovalStore;
     disablements: HostedIntegrationDisablementStore;
     generations: HostedIntegrationGenerationStore;
+    jobs: HostedIntegrationJobStore;
     artifacts: HostedIntegrationArtifactStore;
     failureBuckets: HostedIntegrationFailureBucketStore;
     retention: HostedIntegrationRetentionSweeper;
@@ -227,6 +236,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     this.approvals = parts.approvals;
     this.disablements = parts.disablements;
     this.generations = parts.generations;
+    this.jobs = parts.jobs;
     this.artifacts = parts.artifacts;
     this.failureBuckets = parts.failureBuckets;
     this.retention = parts.retention;

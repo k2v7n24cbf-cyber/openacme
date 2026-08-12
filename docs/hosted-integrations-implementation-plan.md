@@ -1981,6 +1981,29 @@ Validation:
 pnpm --filter @openacme/hosted-integrations test -- jobs
 ```
 
+Implementation notes:
+
+- Added the file-backed hosted integration job store and expanded
+  `HostedIntegrationJob` with generation, actor, progress, result ref,
+  cancellation, and error fields.
+- Async start is contract-level and opt-in: tools with `execution: sync` are
+  rejected by the store. Route/worker binding remains in Slice 7.2+.
+- Job status exposes the latest progress snapshot. `cancel` only applies while
+  the job is running. `result` returns a `result_ref` only after success.
+- `HostedIntegrationService` exposes the job store as the package-level port.
+
+Evidence:
+
+- Red validation:
+  `pnpm --filter @openacme/hosted-integrations test -- jobs` first failed
+  because `createFileHostedIntegrationJobStore` was not implemented.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- jobs`
+  `pnpm --filter @openacme/hosted-integrations test -- jobs retention gateway validation`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/server check-types`
+
 ### Slice 7.2: Async Job Routes
 
 Goal:

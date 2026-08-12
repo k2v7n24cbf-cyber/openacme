@@ -3,6 +3,13 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConfigSchema } from "@openacme/config";
+import {
+  createFileHostedIntegrationConfigScopeStore,
+  createFileHostedIntegrationDraftStore,
+  createFileHostedIntegrationGenerationStore,
+  createFileHostedIntegrationLockStore,
+  createFileHostedIntegrationSecretStore,
+} from "@openacme/hosted-integrations";
 import { createApp } from "../src/app.js";
 import type { AgentManager } from "../src/agent-manager.js";
 import type { Hono } from "hono";
@@ -100,7 +107,10 @@ tools:
 describe("hosted integrations read-only routes", () => {
   it("lists families from the hosted integrations source catalog", async () => {
     writeFamily("splunk", familyYaml("splunk", "Splunk", "splunk_search"));
-    writeFamily("qualys", familyYaml("qualys", "Qualys", "qualys_count_assets"));
+    writeFamily(
+      "qualys",
+      familyYaml("qualys", "Qualys", "qualys_count_assets"),
+    );
 
     const res = await req("/api/hosted-integrations/families");
 
@@ -126,7 +136,10 @@ describe("hosted integrations read-only routes", () => {
   });
 
   it("returns sanitized family detail and tool metadata", async () => {
-    writeFamily("qualys", familyYaml("qualys", "Qualys", "qualys_count_assets"));
+    writeFamily(
+      "qualys",
+      familyYaml("qualys", "Qualys", "qualys_count_assets"),
+    );
 
     let res = await req("/api/hosted-integrations/families/qualys");
     expect(res.status).toBe(200);
@@ -156,7 +169,10 @@ describe("hosted integrations read-only routes", () => {
   });
 
   it("404s unknown families and does not expose malformed source contents", async () => {
-    writeFamily("broken", "id: Broken Prod\nname: SECRET_TOKEN\nversion: nope\n");
+    writeFamily(
+      "broken",
+      "id: Broken Prod\nname: SECRET_TOKEN\nversion: nope\n",
+    );
 
     let res = await req("/api/hosted-integrations/families/missing");
     expect(res.status).toBe(404);
@@ -442,7 +458,10 @@ describe("hosted integrations draft control plane routes", () => {
 
 describe("hosted integrations config scope and secret routes", () => {
   it("lists and reads config scopes with sanitized secret metadata only", async () => {
-    writeFamily("qualys", familyYaml("qualys", "Qualys", "qualys_count_assets"));
+    writeFamily(
+      "qualys",
+      familyYaml("qualys", "Qualys", "qualys_count_assets"),
+    );
 
     let res = await req("/api/hosted-integrations/config-scopes/qualys-prod", {
       method: "PUT",
@@ -494,7 +513,10 @@ describe("hosted integrations config scope and secret routes", () => {
   });
 
   it("increments config-scope revision on PUT and maps validation failures", async () => {
-    writeFamily("qualys", familyYaml("qualys", "Qualys", "qualys_count_assets"));
+    writeFamily(
+      "qualys",
+      familyYaml("qualys", "Qualys", "qualys_count_assets"),
+    );
 
     let res = await req("/api/hosted-integrations/config-scopes/qualys-prod", {
       method: "PUT",
@@ -545,7 +567,10 @@ describe("hosted integrations config scope and secret routes", () => {
   });
 
   it("requires a human session to write secrets and never echoes values", async () => {
-    writeFamily("qualys", familyYaml("qualys", "Qualys", "qualys_count_assets"));
+    writeFamily(
+      "qualys",
+      familyYaml("qualys", "Qualys", "qualys_count_assets"),
+    );
 
     let res = await req("/api/hosted-integrations/config-scopes/qualys-prod", {
       method: "PUT",
@@ -563,14 +588,17 @@ describe("hosted integrations config scope and secret routes", () => {
     });
     expect(res.status).toBe(200);
 
-    res = await req("/api/hosted-integrations/config-scopes/qualys-prod/secrets", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        secrets: { QUALYS_USERNAME: "api-user" },
-        updatedBy: "human:alen",
-      }),
-    });
+    res = await req(
+      "/api/hosted-integrations/config-scopes/qualys-prod/secrets",
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          secrets: { QUALYS_USERNAME: "api-user" },
+          updatedBy: "human:alen",
+        }),
+      },
+    );
     expect(res.status).toBe(200);
     const secretBody = await res.json();
     expect(secretBody).toMatchObject({
@@ -592,14 +620,17 @@ describe("hosted integrations config scope and secret routes", () => {
     });
     expect(JSON.stringify(secretBody)).not.toContain("api-user");
 
-    res = await req("/api/hosted-integrations/config-scopes/qualys-prod/secrets", {
-      method: "PUT",
-      headers: { "content-type": "application/json", authorization: "" },
-      body: JSON.stringify({
-        secrets: { QUALYS_PASSWORD: "super-secret" },
-        updatedBy: "human:alen",
-      }),
-    });
+    res = await req(
+      "/api/hosted-integrations/config-scopes/qualys-prod/secrets",
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json", authorization: "" },
+        body: JSON.stringify({
+          secrets: { QUALYS_PASSWORD: "super-secret" },
+          updatedBy: "human:alen",
+        }),
+      },
+    );
     expect(res.status).toBe(401);
   });
 });
@@ -653,3 +684,290 @@ describe("hosted integrations approval routes", () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe("hosted integrations invocation routes", () => {
+  it("enforces access policy before runtime dispatch", async () => {
+    writeFamily(
+      "qualys",
+      familyYaml("qualys", "Qualys", "qualys_count_assets"),
+      {
+        "qualys.py": pythonTool("return {'count': 2}"),
+      },
+    );
+    await promoteFamily("qualys");
+    await seedConfigScope("qualys", "qualys-test", "test");
+
+    const res = await req("/api/hosted-integrations/invoke", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actor: agentActor(),
+        familyId: "qualys",
+        toolName: "qualys_count_assets",
+        environment: "test",
+        args: {},
+        bindings: [],
+      }),
+    });
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: { code: "policy_denied" },
+    });
+  });
+
+  it("invokes, exposes sanitized run detail, and authorizes artifact reads", async () => {
+    writeFamily(
+      "qualys",
+      familyYaml("qualys", "Qualys", "qualys_count_assets"),
+      {
+        "qualys.py": pythonTool("return {'count': 2}"),
+      },
+    );
+    await promoteFamily("qualys");
+    await seedConfigScope("qualys", "qualys-test", "test");
+
+    let res = await req("/api/hosted-integrations/invoke", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(allowedInvokeBody()),
+    });
+    expect(res.status).toBe(200);
+    const invoked = await res.json();
+    expect(invoked).toMatchObject({
+      ok: true,
+      replayed: false,
+      envelope: { ok: true, result: { count: 2 } },
+    });
+    const runId = invoked.runId as string;
+
+    res = await req(
+      `/api/hosted-integrations/runs/${runId}?actorId=agent:analyst`,
+    );
+    expect(res.status).toBe(200);
+    const runBody = await res.json();
+    expect(runBody).toMatchObject({
+      run: {
+        runId,
+        actorId: "agent:analyst",
+        configScopeId: "qualys-test",
+        configRevision: 1,
+        status: "succeeded",
+      },
+    });
+    expect(JSON.stringify(runBody)).not.toContain("apiToken");
+
+    res = await req(
+      `/api/hosted-integrations/runs/${runId}/artifacts/output.json`,
+    );
+    expect(res.status).toBe(403);
+
+    res = await req(
+      `/api/hosted-integrations/runs/${runId}/artifacts/output.json?actorId=agent:analyst`,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      runId,
+      name: "output.json",
+      content: expect.stringContaining('"count": 2'),
+    });
+  });
+
+  it("allows the Tool Developer Agent to inspect sanitized failure artifacts", async () => {
+    writeFamily(
+      "qualys",
+      familyYaml("qualys", "Qualys", "qualys_count_assets"),
+      {
+        "qualys.py": pythonTool("raise ValueError('super-secret-token')"),
+      },
+    );
+    await promoteFamily("qualys");
+    await seedConfigScope("qualys", "qualys-test", "test");
+
+    const res = await req("/api/hosted-integrations/invoke", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(allowedInvokeBody()),
+    });
+    expect(res.status).toBe(500);
+    const failed = await res.json();
+    const runId = failed.runId as string;
+
+    const ordinary = await req(
+      `/api/hosted-integrations/runs/${runId}/artifacts/error.json?roles=management_tool`,
+    );
+    expect(ordinary.status).toBe(403);
+
+    const developer = await req(
+      `/api/hosted-integrations/runs/${runId}/artifacts/error.json?roles=tool_developer`,
+    );
+    expect(developer.status).toBe(200);
+    const body = await developer.json();
+    expect(body.content).toContain("tool_bug");
+    expect(body.content).not.toContain("super-secret-token");
+  });
+
+  it("debug-runs can target drafts or promoted generations when policy allows", async () => {
+    writeFamily(
+      "qualys",
+      familyYaml("qualys", "Qualys", "qualys_count_assets"),
+      {
+        "qualys.py": pythonTool("return {'debug': True}"),
+      },
+    );
+    const draftId = await createDraft("qualys");
+    await promoteFamily("qualys", draftId);
+    await seedConfigScope("qualys", "qualys-test", "test");
+
+    let res = await req("/api/hosted-integrations/debug-runs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actor: toolDeveloperActor(),
+        operationClass: "read",
+        draftId,
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, target: "draft" });
+
+    res = await req("/api/hosted-integrations/debug-runs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actor: toolDeveloperActor(),
+        familyId: "qualys",
+        toolName: "qualys_count_assets",
+        environment: "test",
+        configScopeId: "qualys-test",
+        operationClass: "read",
+        args: {},
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      ok: true,
+      replayed: false,
+      envelope: { ok: true, result: { debug: true } },
+    });
+  });
+
+  it("debug-run route denies write replay unless explicitly allowed", async () => {
+    const res = await req("/api/hosted-integrations/debug-runs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actor: toolDeveloperActor(),
+        operationClass: "write",
+        draftId: "draft_1",
+      }),
+    });
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      ok: false,
+      error: { code: "approval_required" },
+    });
+  });
+});
+
+function agentActor() {
+  return { id: "agent:analyst", kind: "agent", roles: ["agent"] };
+}
+
+function toolDeveloperActor() {
+  return {
+    id: "agent:tool-developer",
+    kind: "agent",
+    roles: ["tool_developer"],
+  };
+}
+
+function allowedInvokeBody() {
+  return {
+    actor: agentActor(),
+    familyId: "qualys",
+    toolName: "qualys_count_assets",
+    environment: "test",
+    args: {},
+    bindings: [
+      {
+        agentId: "agent:analyst",
+        familyId: "qualys",
+        toolName: "qualys_count_assets",
+        allowedConfigScopeIds: ["qualys-test"],
+        defaultConfigScopeId: "qualys-test",
+        environment: "test",
+      },
+    ],
+  };
+}
+
+async function seedConfigScope(
+  familyId: string,
+  scopeId: string,
+  environment: string,
+): Promise<void> {
+  await createFileHostedIntegrationConfigScopeStore({
+    dataDir,
+  }).upsertConfigScope({
+    scopeId,
+    familyId,
+    environment,
+    config: { endpoint: "https://qualys.example.test" },
+    secrets: { apiToken: { configured: true } },
+    updatedBy: "human:alen",
+  });
+  await createFileHostedIntegrationSecretStore({
+    dataDir,
+  }).writeHumanOwnedSecrets({
+    scopeId,
+    secrets: { apiToken: "raw-token-123" },
+    updatedBy: "human:alen",
+  });
+}
+
+async function createDraft(familyId: string): Promise<string> {
+  const lockStore = createFileHostedIntegrationLockStore({
+    dataDir,
+    createId: () => `lock_${familyId}`,
+  });
+  await lockStore.acquireLock({
+    familyId,
+    lockedBy: "agent:tool-developer",
+    ttlMs: 60_000,
+  });
+  const draftStore = createFileHostedIntegrationDraftStore({
+    dataDir,
+    lockStore,
+    createId: () => `draft_${familyId}`,
+  });
+  const draft = await draftStore.createDraft({
+    familyId,
+    lockId: `lock_${familyId}`,
+    sourceRevisionId: "source_rev_1",
+  });
+  if (!draft.ok) throw new Error(draft.reason);
+  return draft.draft.id;
+}
+
+async function promoteFamily(
+  familyId: string,
+  existingDraftId?: string,
+): Promise<void> {
+  const draftId = existingDraftId ?? (await createDraft(familyId));
+  const generation = await createFileHostedIntegrationGenerationStore({
+    dataDir,
+    createId: () => `gen_${familyId}`,
+  }).promoteDraft({
+    draftId,
+    promotedBy: "agent:tool-developer",
+    validation: { ok: true, diagnostics: [] },
+  });
+  if (!generation.ok) throw new Error(generation.reason);
+}
+
+function pythonTool(body: string): string {
+  return `def call_tool(name, args, ctx):\n    ${body}\n`;
+}

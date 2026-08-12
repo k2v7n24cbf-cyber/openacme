@@ -1096,6 +1096,8 @@ Evidence:
 
 ### Slice 4.7: Invocation, Run, Artifact, And Debug Routes
 
+Status: done.
+
 Goal:
 
 - Add runtime API routes:
@@ -1128,6 +1130,15 @@ Validation:
 ```text
 pnpm --filter @openacme/server test -- hosted-integrations
 ```
+
+Evidence:
+
+- Focused validation initially failed until promotion test helpers used the
+  source family code under test instead of fixed debug code.
+- Green validation:
+  `pnpm --filter @openacme/server test -- hosted-integrations`
+  `pnpm --filter @openacme/server check-types`
+  `pnpm --filter @openacme/hosted-integrations test`
 
 ### Slice 4.8: Generation Routes
 

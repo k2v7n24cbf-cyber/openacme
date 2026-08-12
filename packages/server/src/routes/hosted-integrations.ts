@@ -1,8 +1,11 @@
 import type { Context, Hono } from "hono";
 import {
   HostedIntegrationExampleSchema,
+  HostedIntegrationPolicyBindingSchema,
   HostedIntegrationPromotionApprovalTargetSchema,
   JsonObjectSchema,
+  type HostedIntegrationExecutionLogEntry,
+  type HostedIntegrationPolicyActor,
   type HostedIntegrationService,
 } from "@openacme/hosted-integrations";
 import type { AuthStore } from "@openacme/db";
@@ -19,6 +22,107 @@ export function registerHostedIntegrationRoutes(
   service: HostedIntegrationService,
   options: HostedIntegrationRouteOptions = {},
 ): void {
+  app.post("/api/hosted-integrations/invoke", async (c) => {
+    try {
+      const body = await readJsonObject(c);
+      const result = await service.gateway.invoke({
+        actor: actorField(body),
+        familyId: stringField(body, "familyId"),
+        toolName: stringField(body, "toolName"),
+        environment: stringField(body, "environment"),
+        args: JsonObjectSchema.parse(objectField(body, "args")),
+        bindings: policyBindingsField(body),
+        requestedConfigScopeId:
+          optionalStringField(body, "requestedConfigScopeId") ?? undefined,
+        generationId: optionalStringField(body, "generationId") ?? undefined,
+        idempotencyKey:
+          optionalStringField(body, "idempotencyKey") ?? undefined,
+        approvalGranted: optionalBooleanField(body, "approvalGranted"),
+      });
+      if (result.ok) return c.json(result);
+      return c.json(result, statusForGatewayError(result.error.code));
+    } catch (error) {
+      return invalidRequest(c, error);
+    }
+  });
+
+  app.post("/api/hosted-integrations/debug-runs", async (c) => {
+    try {
+      const body = await readJsonObject(c);
+      const actor = actorField(body);
+      if (!actor.roles.includes("tool_developer")) {
+        return c.json({ ok: false, error: { code: "policy_denied" } }, 403);
+      }
+      if (
+        optionalBooleanField(body, "allowWrites") !== true &&
+        optionalStringField(body, "operationClass") !== "read"
+      ) {
+        return c.json({ ok: false, error: { code: "approval_required" } }, 403);
+      }
+      const draftId = optionalStringField(body, "draftId");
+      if (draftId) {
+        const draft = await service.drafts.getDraft(draftId);
+        if (!draft) return c.json({ ok: false, error: "not_found" }, 404);
+        return c.json({ ok: true, target: "draft", draft });
+      }
+      const familyId = stringField(body, "familyId");
+      const toolName = stringField(body, "toolName");
+      const result = await service.gateway.invoke({
+        actor,
+        familyId,
+        toolName,
+        environment: stringField(body, "environment"),
+        args: JsonObjectSchema.parse(objectField(body, "args")),
+        bindings: [
+          {
+            agentId: actor.id,
+            familyId,
+            toolName,
+            allowedConfigScopeIds: [stringField(body, "configScopeId")],
+            defaultConfigScopeId: stringField(body, "configScopeId"),
+            environment: stringField(body, "environment"),
+          },
+        ],
+        generationId: optionalStringField(body, "generationId") ?? undefined,
+      });
+      if (result.ok) return c.json(result);
+      return c.json(result, statusForGatewayError(result.error.code));
+    } catch (error) {
+      return invalidRequest(c, error);
+    }
+  });
+
+  app.get("/api/hosted-integrations/runs/:runId", async (c) => {
+    const log = await service.gateway.executionLogs.getRunLog(
+      c.req.param("runId"),
+    );
+    if (!log) return c.json({ error: "not_found" }, 404);
+    if (!canReadRun(c, log)) return c.json({ error: "forbidden" }, 403);
+    return c.json({ run: log });
+  });
+
+  app.get("/api/hosted-integrations/runs/:runId/artifacts/*", async (c) => {
+    const runId = c.req.param("runId");
+    const log = await service.gateway.executionLogs.getRunLog(runId);
+    if (!log) return c.json({ error: "not_found" }, 404);
+    if (!canReadRun(c, log)) return c.json({ error: "forbidden" }, 403);
+    try {
+      const name = relPathFromWildcard(
+        c,
+        `/api/hosted-integrations/runs/${runId}/artifacts/`,
+      );
+      if (!name) return c.json({ error: "path_required" }, 400);
+      const content = await service.artifacts.readArtifact({
+        familyId: log.familyId,
+        runId,
+        name,
+      });
+      return c.json({ runId, name, content });
+    } catch (error) {
+      return invalidRequest(c, error);
+    }
+  });
+
   app.get("/api/hosted-integrations/families", async (c) => {
     const families = await service.listFamilies();
     return c.json({ families });
@@ -444,10 +548,44 @@ function optionalPositiveInteger(
   return value;
 }
 
+function optionalBooleanField(
+  body: JsonRecord,
+  name: string,
+): boolean | undefined {
+  const value = body[name];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "boolean") throw new Error(`${name} must be a boolean`);
+  return value;
+}
+
 function objectField(body: JsonRecord, name: string): JsonRecord {
   const value = body[name];
   if (!isRecord(value)) throw new Error(`${name} is required`);
   return value;
+}
+
+function actorField(body: JsonRecord): HostedIntegrationPolicyActor {
+  const raw = objectField(body, "actor");
+  const roles = raw.roles;
+  return {
+    id: stringField(raw, "id"),
+    kind:
+      raw.kind === "agent" || raw.kind === "human" || raw.kind === "system"
+        ? raw.kind
+        : "agent",
+    roles: Array.isArray(roles)
+      ? roles.map((role) => {
+          if (typeof role !== "string") throw new Error("actor.roles invalid");
+          return role;
+        })
+      : [],
+  };
+}
+
+function policyBindingsField(body: JsonRecord) {
+  const value = body.bindings;
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => HostedIntegrationPolicyBindingSchema.parse(item));
 }
 
 function stringRecordField(
@@ -482,9 +620,7 @@ function optionalSecretMetadata(body: JsonRecord) {
 
 function writeResultResponse(
   c: Context,
-  result:
-    | { ok: true }
-    | { ok: false; reason: "not_found" | "lock_required" },
+  result: { ok: true } | { ok: false; reason: "not_found" | "lock_required" },
 ) {
   if (result.ok) return c.json({ ok: true });
   return c.json(
@@ -514,6 +650,7 @@ function isInvalidRequestError(error: unknown): error is Error {
     error.message === "json_object_required" ||
     error.message.includes(" is required") ||
     error.message.includes(" must be ") ||
+    error.message.includes(" invalid") ||
     error.message.includes("path escapes") ||
     error.message.includes("safe path segment") ||
     error.name === "ZodError"
@@ -522,4 +659,39 @@ function isInvalidRequestError(error: unknown): error is Error {
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function statusForGatewayError(
+  code: string,
+): 400 | 403 | 404 | 409 | 500 | 504 {
+  switch (code) {
+    case "policy_denied":
+    case "approval_required":
+      return 403;
+    case "config_scope_not_found":
+    case "family_not_found":
+    case "tool_not_found":
+    case "no_active_generation":
+    case "generation_not_found":
+    case "stale_generation":
+      return 404;
+    case "idempotency_conflict":
+      return 409;
+    case "timeout":
+      return 504;
+    default:
+      return 500;
+  }
+}
+
+function canReadRun(
+  c: Context,
+  log: HostedIntegrationExecutionLogEntry,
+): boolean {
+  const actorId = c.req.query("actorId");
+  const roles = (c.req.query("roles") ?? "")
+    .split(",")
+    .map((role) => role.trim())
+    .filter(Boolean);
+  return actorId === log.actorId || roles.includes("tool_developer");
 }

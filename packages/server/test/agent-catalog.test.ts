@@ -250,6 +250,11 @@ describe("AgentManager.ensureManagedAgents", () => {
     // Bundled skill landed
     expect(existsSync(path.join(dataDir, "skills", "openacme-platform", "SKILL.md")))
       .toBe(true);
+    const platformSkill = manager.skillRegistry.getSkill("openacme-platform");
+    expect(platformSkill?.body).toContain("$hosted-integrations-development");
+    expect(platformSkill?.body).toContain(
+      "Tool Developer Agent owns routine hosted integration source work",
+    );
     expect(
       existsSync(
         path.join(dataDir, "skills", "hosted-integrations-development", "SKILL.md"),

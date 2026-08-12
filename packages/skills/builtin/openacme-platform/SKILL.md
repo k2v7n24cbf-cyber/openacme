@@ -2,7 +2,7 @@
 name: openacme-platform
 description: How OpenAcme is laid out — data dir, agents, skills, MCP servers, tasks, memory, the peer-notes convention. Read this when the user asks you to manage their workforce, set up an agent, install a skill, configure an MCP server, or explain how the platform works.
 tags: [platform, admin, reference]
-related-skills: [openacme-forensic-investigation, openacme-workflow-author]
+related-skills: [openacme-forensic-investigation, openacme-workflow-author, hosted-integrations-development]
 ---
 
 # OpenAcme platform reference
@@ -39,6 +39,24 @@ platform skill.
 Workflow reference syntax, human-editable step ids, run-history inspection, MCP
 tool discovery, and agent-call authoring rules are owned by that workflow skill.
 Do not duplicate or reinterpret those contracts here.
+
+Hosted integration development has its own skill file. If the task involves
+creating, editing, validating, promoting, debugging, repairing, migrating, or
+cutting over hosted integration tool families, read
+`$hosted-integrations-development` before planning or changing anything. Keep
+hosted integration lifecycle rules, management tool sequences, failure-bucket
+repair, promotion gates, config-scope boundaries, and secret-handling guidance
+in that skill rather than duplicating them here.
+
+The hosted integrations development skill is intentionally a separate skill:
+
+- Packaged builtin source:
+  `packages/skills/builtin/hosted-integrations-development/SKILL.md`
+
+Tool Developer Agent owns routine hosted integration source work. Acme should
+understand the routing and platform boundaries, then either use the hosted
+integrations skill for platform-admin coordination or delegate code-owned
+family changes to Tool Developer Agent.
 
 ## Data directory layout
 

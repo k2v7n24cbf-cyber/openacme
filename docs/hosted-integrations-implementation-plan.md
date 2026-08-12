@@ -380,6 +380,20 @@ pnpm --filter @openacme/hosted-integrations test -- locks
 
 ### Slice 2.2: Draft Workspace
 
+Status: done.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/hosted-integrations test -- drafts` failed before
+  implementation because `createFileHostedIntegrationDraftStore` was not
+  exported.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- drafts`
+  `pnpm --filter @openacme/hosted-integrations test`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+
 Goal:
 
 - Create drafts from family source while holding the family lock.

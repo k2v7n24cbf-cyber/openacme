@@ -80,3 +80,16 @@ export {
   type RenewHostedIntegrationLockRequest,
   type RenewHostedIntegrationLockResult,
 } from "./locks.js";
+export {
+  createFileHostedIntegrationDraftStore,
+  type CreateHostedIntegrationDraftRequest,
+  type CreateHostedIntegrationDraftResult,
+  type DeleteHostedIntegrationDraftFileRequest,
+  type DeleteHostedIntegrationDraftFileResult,
+  type FileHostedIntegrationDraftStoreOptions,
+  type HostedIntegrationDraftStore,
+  type ReadHostedIntegrationDraftFileRequest,
+  type ReadHostedIntegrationDraftFileResult,
+  type WriteHostedIntegrationDraftFileRequest,
+  type WriteHostedIntegrationDraftFileResult,
+} from "./drafts.js";

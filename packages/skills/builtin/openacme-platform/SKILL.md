@@ -289,8 +289,9 @@ to every agent's prompt (no restart).
 
 ## Tasks
 
-Tasks are filesystem-backed at `<dataDir>/tasks/<id>.md`. One file per
-task, YAML frontmatter + markdown body.
+Tasks are SQL-backed in `<dataDir>/state.db`; old task markdown files are an
+import/backup format, not the live write path. Use task tools and API surfaces
+instead of editing task storage directly.
 
 **Lifecycle:** `open → in_progress` (claimed by assignee) `→ done |
 canceled` (terminal). `blocked` is **explicit-only** — `depends_on`
@@ -300,6 +301,19 @@ Recurring tasks self-reset to `open` with the next fire time when
 marked `done`; use `canceled` to stop a recurrence permanently.
 
 **At most one `in_progress` per session.** The platform enforces this.
+
+**Session choice.** `task_create` defaults to the current session when an
+agent self-assigns and to a fresh session for cross-agent delegation. Use
+`session: "current"` only for self-work the current agent intends to work on
+now in this same session. Use `session: "fresh"` for delegated, isolated, or
+future work. A task linked to the current session can still be `open`; the
+agent claims execution by moving it to `in_progress`.
+
+**Sticky defer.** `defer_session(...)` suppresses routine dispatcher wakes but
+does not block real inbox signals. If an agent creates or activates actionable
+self-work in its current session, the platform clears the old stale defer so
+routine task continuation can resume. If the agent still intentionally wants
+quiet time after creating that work, it should call `defer_session(...)` again.
 
 **Comments vs body vs events:**
 
@@ -317,6 +331,34 @@ agent has pending inbox rows (or a ready task), the dispatcher wakes
 its session for one autonomous turn and the agent picks what to work
 on. Wake latency is bounded by the tick (~60s from task creation to
 the assignee starting).
+
+## Objectives
+
+Objectives are lightweight goal records above tasks:
+
+```text
+Objective = task grouping + owner closeout wake
+Task      = executable work
+Session   = execution context
+```
+
+Do not create objectives for simple one-turn actions. If an agent creates
+multiple tasks for the same intended outcome, it should create one objective
+or reuse an existing objective only when it is the same logical grouping and
+original scope, then link every related task with `objective_id`. Do not
+reopen or attach new work to a past objective merely because the title sounds
+related; use a new objective for a new phase, scope, or outcome.
+
+An objective does not create sessions, decompose work, verify results, or
+dispatch agents by itself. Agents choose whether linked tasks run in the same
+session, fresh sessions, delegated sessions, scheduled runs, or manual flows.
+
+Objective closeout is a separate service from the task dispatcher. When all
+linked tasks are terminal, it sends the objective owner an inbox notice with a
+bounded closeout packet/summary. The owner agent decides whether to mark the
+objective complete, add/attach follow-up work, create a verification task, or
+mark it failed/canceled. Objective summaries are briefing assistance, not
+automatic verification.
 
 **Direct agent messaging.** `agent_ask` is the low-hurdle path for a
 quick synchronous answer from another agent: pass `agent_id` and

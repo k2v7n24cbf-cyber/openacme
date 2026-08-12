@@ -43,7 +43,11 @@ export {
   type ProcessCompletionEvent,
 } from "./builtins/process.js";
 export { bindMemory, type MemoryBindings } from "./builtins/memory.js";
-export { bindTaskStore, type TaskStoreBindings } from "./builtins/tasks.js";
+export {
+  bindTaskStore,
+  type ClearSessionDeferEvent,
+  type TaskStoreBindings,
+} from "./builtins/tasks.js";
 export {
   bindObjectiveStore,
   type ObjectiveStoreBindings,

@@ -9,8 +9,11 @@ import {
   type Task,
   type TaskStatus,
 } from "@openacme/tasks";
+import { createLogger } from "@openacme/config/logger";
 import { registry } from "../registry.js";
 import { getCurrentAgentId, getCurrentSessionId } from "../session-context.js";
+
+const log = createLogger("tools.tasks");
 
 // Recurrence shape for tool params — describes the same data as
 // @openacme/tasks RecurrenceSchema but with prose `.describe()` strings
@@ -71,8 +74,17 @@ function taskId(v: string | number): string {
   return String(v);
 }
 
+export interface ClearSessionDeferEvent {
+  sessionId: string;
+  agentId: string;
+  taskId: string;
+  taskStatus: "open" | "in_progress";
+  source: "task_create" | "task_update";
+}
+
 export interface TaskStoreBindings {
   store: TaskStore;
+  clearSessionDeferUntil?: (event: ClearSessionDeferEvent) => void;
 }
 
 let bindings: TaskStoreBindings | null = null;
@@ -94,6 +106,77 @@ function frontmatterOnly(t: Task) {
   const { body: _body, ...rest } = t;
   void _body;
   return rest;
+}
+
+function isStartReady(startAt: string | null | undefined, nowMs: number): boolean {
+  if (!startAt) return true;
+  const t = Date.parse(startAt);
+  if (!Number.isFinite(t)) return true;
+  return t <= nowMs;
+}
+
+function depsSatisfied(task: Task, store: TaskStore): boolean {
+  return task.depends_on.every((depId) => {
+    const dep = store.get(depId);
+    return dep?.status === "done";
+  });
+}
+
+function shouldClearDeferForCurrentTask(
+  task: Task,
+  store: TaskStore,
+  currentAgentId: string | null,
+  currentSessionId: string | null,
+): task is Task & { status: "open" | "in_progress"; session_id: string } {
+  if (!currentAgentId || !currentSessionId) return false;
+  if (task.assignee !== currentAgentId) return false;
+  if (task.session_id !== currentSessionId) return false;
+  if (task.status === "in_progress") return true;
+  return (
+    task.status === "open" &&
+    isStartReady(task.start_at, Date.now()) &&
+    depsSatisfied(task, store)
+  );
+}
+
+function maybeClearSessionDeferForCurrentTask(
+  bindings: TaskStoreBindings,
+  task: Task,
+  source: ClearSessionDeferEvent["source"],
+  currentAgentId: string | null,
+  currentSessionId: string | null,
+): void {
+  if (!bindings.clearSessionDeferUntil) return;
+  if (!currentAgentId || !currentSessionId) return;
+  if (
+    !shouldClearDeferForCurrentTask(
+      task,
+      bindings.store,
+      currentAgentId,
+      currentSessionId,
+    )
+  )
+    return;
+  try {
+    bindings.clearSessionDeferUntil({
+      sessionId: task.session_id,
+      agentId: currentAgentId,
+      taskId: task.id,
+      taskStatus: task.status,
+      source,
+    });
+  } catch (e) {
+    log.warn(
+      {
+        err: e,
+        sessionId: task.session_id,
+        agentId: currentAgentId,
+        taskId: task.id,
+        source,
+      },
+      "self-task defer clear callback failed",
+    );
+  }
 }
 
 // ── task_list ────────────────────────────────────────────────────────
@@ -219,7 +302,7 @@ const TASK_CREATE_DESCRIPTION =
   'When to choose: pass `"current"` for a task you intend to work on RIGHT NOW in this same turn. ' +
   'Pass `"fresh"` (or omit) for future work, or any cross-agent delegation. Picking wrong creates session races.\n\n' +
   "Use `start_at` (ISO timestamp) to schedule a future autonomous start. " +
-  "Use `depends_on` to gate this task on others (cycle-checked; unmet deps force `blocked`).\n\n" +
+  "Use `depends_on` to gate this task on others (cycle-checked; the task stays `open` but is not ready until deps are done).\n\n" +
   "RECURRING TASKS: pass `recurrence` to fire on a schedule. When you mark a recurring " +
   "task `done` via task_update, it self-resets to `open` with the next fire time — the " +
   'returned status will be `open`, not `done`. Use `status: "canceled"` to stop a ' +
@@ -370,16 +453,16 @@ registry.register({
         recurrence: a.recurrence ?? null,
         team: a.team ?? null,
       });
-      const warnings: string[] = [];
-      if (task.status === "blocked") {
-        warnings.push(
-          "Task created in `blocked` status because depends_on are not yet done.",
-        );
-      }
+      maybeClearSessionDeferForCurrentTask(
+        b,
+        task,
+        "task_create",
+        agentId,
+        callerSession,
+      );
       return JSON.stringify({
         ok: true,
         task: frontmatterOnly(task),
-        warnings: warnings.length ? warnings : undefined,
       });
     } catch (e) {
       return JSON.stringify({
@@ -489,6 +572,7 @@ registry.register({
         error: "task_update requires an active agent context.",
       });
     }
+    const callerSession = getCurrentSessionId() || null;
 
     // Soft-warn pre-check: closing as `done` without a result comment by
     // this agent. Must check before update — recurring-task self-reset
@@ -537,6 +621,13 @@ registry.register({
         ok: true,
         task: frontmatterOnly(task),
       };
+      maybeClearSessionDeferForCurrentTask(
+        b,
+        task,
+        "task_update",
+        agentId,
+        callerSession,
+      );
       if (warnMissingResult) {
         out.warning =
           "Marked done without a result comment. If this task produced output, " +

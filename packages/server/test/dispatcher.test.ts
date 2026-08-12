@@ -458,6 +458,24 @@ describe("Dispatcher spawn rule", () => {
     expect(calls).toEqual([{ agentId: "a1", sessionId: session.id }]);
   });
 
+  it("wakes routine in_progress work after stale defer is cleared externally", async () => {
+    const { manager, calls } = fakeManager(["a1"]);
+    const { session } = await makeBoundTask("a1", { status: "in_progress" });
+    sessionStore.setDeferUntil(
+      session.id,
+      Math.floor(Date.now() / 1000) + 3600,
+    );
+
+    const d = makeDispatcher(manager);
+    await d.start();
+    await d.drain(5_000);
+    expect(calls).toEqual([]);
+
+    sessionStore.clearDeferUntil(session.id);
+    await tick(d);
+    expect(calls).toEqual([{ agentId: "a1", sessionId: session.id }]);
+  });
+
   it("wakes a taskless chat session once when defer_until expires", async () => {
     let nowMs = Date.now();
     const { manager, calls } = fakeManager(["a1"]);

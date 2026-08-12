@@ -388,7 +388,27 @@ export class AgentManager {
       },
     });
     this.objectiveStore = createObjectiveStore(this.db);
-    bindTaskStore({ store: this.taskStore });
+    bindTaskStore({
+      store: this.taskStore,
+      clearSessionDeferUntil: (event) => {
+        const priorDeferUntil = this.sessionStore.getDeferUntil(event.sessionId);
+        this.sessionStore.clearDeferUntil(event.sessionId);
+        if (priorDeferUntil == null) return;
+        this.recordSessionTimeline({
+          sessionId: event.sessionId,
+          agentId: event.agentId,
+          taskId: event.taskId,
+          eventType: "session.defer.cleared_by_self_task",
+          source: "server",
+          status: "completed",
+          payload: {
+            taskStatus: event.taskStatus,
+            sourceTool: event.source,
+            priorDeferUntil,
+          },
+        });
+      },
+    });
     bindObjectiveStore({
       objectiveStore: this.objectiveStore,
       taskStore: this.taskStore,

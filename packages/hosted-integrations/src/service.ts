@@ -29,6 +29,10 @@ import {
 } from "./proposed-family.js";
 import type { HostedIntegrationFamilyId } from "./schemas.js";
 import {
+  createFileHostedIntegrationSecretStore,
+  type HostedIntegrationSecretStore,
+} from "./secrets.js";
+import {
   createFileHostedIntegrationSourceFileStore,
   type HostedIntegrationSourceFileStore,
 } from "./source-files.js";
@@ -49,6 +53,7 @@ export interface HostedIntegrationService {
   readonly validator: HostedIntegrationDraftValidator;
   readonly proposedFamilies: HostedIntegrationProposedFamilyManager;
   readonly configScopes: HostedIntegrationConfigScopeStore;
+  readonly secrets: HostedIntegrationSecretStore;
   listFamilies(): Promise<HostedIntegrationManagementFamilySummary[]>;
   getFamily(
     familyId: HostedIntegrationFamilyId | string,
@@ -88,6 +93,7 @@ export function createFileHostedIntegrationService(
     ...options,
     catalog,
   });
+  const secrets = createFileHostedIntegrationSecretStore(options);
   return new FileHostedIntegrationService({
     catalog,
     locks,
@@ -97,6 +103,7 @@ export function createFileHostedIntegrationService(
     validator,
     proposedFamilies,
     configScopes,
+    secrets,
   });
 }
 
@@ -108,6 +115,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
   readonly validator: HostedIntegrationDraftValidator;
   readonly proposedFamilies: HostedIntegrationProposedFamilyManager;
   readonly configScopes: HostedIntegrationConfigScopeStore;
+  readonly secrets: HostedIntegrationSecretStore;
 
   private readonly catalog: HostedIntegrationCatalog;
 
@@ -120,6 +128,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     validator: HostedIntegrationDraftValidator;
     proposedFamilies: HostedIntegrationProposedFamilyManager;
     configScopes: HostedIntegrationConfigScopeStore;
+    secrets: HostedIntegrationSecretStore;
   }) {
     this.catalog = parts.catalog;
     this.locks = parts.locks;
@@ -129,6 +138,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     this.validator = parts.validator;
     this.proposedFamilies = parts.proposedFamilies;
     this.configScopes = parts.configScopes;
+    this.secrets = parts.secrets;
   }
 
   async start(): Promise<void> {

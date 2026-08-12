@@ -657,6 +657,21 @@ pnpm --filter @openacme/hosted-integrations test -- config-scopes
 
 ### Slice 3.2: Human-Owned Secret Store
 
+Status: done.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/hosted-integrations test -- secrets` failed before
+  implementation because `createFileHostedIntegrationSecretStore` did not
+  exist.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- secrets`
+  `pnpm --filter @openacme/hosted-integrations test`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/server check-types`
+
 Goal:
 
 - Store secret values under `<dataDir>/hosted-integrations/secrets`.

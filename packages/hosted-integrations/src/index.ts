@@ -121,6 +121,16 @@ export {
   type UpsertHostedIntegrationConfigScopeResult,
 } from "./config-scopes.js";
 export {
+  createFileHostedIntegrationSecretStore,
+  type FileHostedIntegrationSecretStoreOptions,
+  type GetHostedIntegrationSecretMetadataRequest,
+  type HostedIntegrationSecretMetadata,
+  type HostedIntegrationSecretStore,
+  type ReadHostedIntegrationRuntimeSecretsRequest,
+  type WriteHostedIntegrationHumanSecretsRequest,
+  type WriteHostedIntegrationHumanSecretsResult,
+} from "./secrets.js";
+export {
   createFileHostedIntegrationExampleRegistry,
   type HostedIntegrationExampleRegistry,
   type HostedIntegrationExampleRegistryOptions,

@@ -1669,6 +1669,8 @@ into repair work for the Tool Developer Agent.
 
 ### Slice 6.1: Execution Log Store
 
+Status: done.
+
 Goal:
 
 - Record invocation start/finish with sanitized args, config revision,
@@ -1690,6 +1692,18 @@ Validation:
 ```text
 pnpm --filter @openacme/hosted-integrations test -- execution-log
 ```
+
+Evidence:
+
+- Red validation:
+  `pnpm --filter @openacme/hosted-integrations test -- execution-log` first
+  failed because execution logs did not include sanitized args, duration, or
+  result metadata, and failed logs persisted raw normalized error details.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- execution-log`
+  `pnpm --filter @openacme/hosted-integrations test -- gateway`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
 
 ### Slice 6.2: Failure Bucket Dedupe
 

@@ -4,6 +4,8 @@ import path from "node:path";
 import { z } from "zod";
 import {
   createFileHostedIntegrationArtifactStore,
+  sanitizeHostedIntegrationJsonValue,
+  type HostedIntegrationArtifactRef,
   type HostedIntegrationArtifactStore,
   type HostedIntegrationSuccessEnvelope,
 } from "./artifacts.js";
@@ -133,11 +135,24 @@ export interface HostedIntegrationExecutionLogEntry {
   actorId: string;
   configScopeId: string;
   configRevision: number;
+  sanitizedArgs: JsonObject;
   status: "running" | "succeeded" | "failed";
   startedAt: string;
   endedAt?: string;
+  durationMs?: number;
   resultEnvelopeRef?: string;
+  resultMetadata?: HostedIntegrationExecutionResultMetadata;
   error?: HostedIntegrationGatewayError;
+}
+
+export interface HostedIntegrationExecutionResultMetadata {
+  envelopeRef: string;
+  responseMode: "inline" | "artifact";
+  artifact?: {
+    name: string;
+    sizeBytes: number;
+    estimatedTokens: number;
+  };
 }
 
 export interface HostedIntegrationExecutionLogStore {
@@ -146,7 +161,12 @@ export interface HostedIntegrationExecutionLogStore {
     runId: string,
     update: Pick<
       HostedIntegrationExecutionLogEntry,
-      "status" | "endedAt" | "resultEnvelopeRef" | "error"
+      | "status"
+      | "endedAt"
+      | "durationMs"
+      | "resultEnvelopeRef"
+      | "resultMetadata"
+      | "error"
     >,
   ): Promise<void>;
   getRunLog(runId: string): Promise<HostedIntegrationExecutionLogEntry | null>;
@@ -191,10 +211,26 @@ const ExecutionLogEntrySchema: z.ZodType<HostedIntegrationExecutionLogEntry> = z
     actorId: z.string().min(1),
     configScopeId: z.string().min(1),
     configRevision: z.number().int().positive(),
+    sanitizedArgs: JsonObjectSchema,
     status: z.enum(["running", "succeeded", "failed"]),
     startedAt: z.string().datetime({ offset: true }),
     endedAt: z.string().datetime({ offset: true }).optional(),
+    durationMs: z.number().int().nonnegative().optional(),
     resultEnvelopeRef: z.string().min(1).optional(),
+    resultMetadata: z
+      .object({
+        envelopeRef: z.string().min(1),
+        responseMode: z.enum(["inline", "artifact"]),
+        artifact: z
+          .object({
+            name: z.string().min(1),
+            sizeBytes: z.number().int().nonnegative(),
+            estimatedTokens: z.number().int().nonnegative(),
+          })
+          .optional(),
+      })
+      .strict()
+      .optional(),
     error: z
       .object({
         code: z.string().min(1),
@@ -409,6 +445,7 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
       actorId: request.actor.id,
       configScopeId: configScope.id,
       configRevision: configScope.revision,
+      sanitizedArgs: sanitizeJsonObject(args),
       status: "running",
       startedAt: run.startedAt,
     });
@@ -438,6 +475,7 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
         return await this.failRun({
           familyId,
           runId: run.id,
+          startedAt: run.startedAt,
           leaseId: lease.lease.id,
           error: normalizeRuntimeError(runtimeResult.error),
         });
@@ -450,10 +488,13 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
         inlineResultTokenLimit: generation.runtime.inlineResultTokenLimit,
       });
       const resultEnvelopeRef = `${run.id}/output.json`;
+      const endedAt = this.now().toISOString();
       await this.executionLogs.finishLog(run.id, {
         status: "succeeded",
-        endedAt: this.now().toISOString(),
+        endedAt,
+        durationMs: durationMs(run.startedAt, endedAt),
         resultEnvelopeRef,
+        resultMetadata: resultMetadata(resultEnvelopeRef, envelope),
       });
       if (request.idempotencyKey) {
         await this.idempotency.complete({
@@ -474,6 +515,7 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
       return await this.failRun({
         familyId,
         runId: run.id,
+        startedAt: run.startedAt,
         leaseId: lease.lease.id,
         error: {
           code: "runtime_error",
@@ -498,6 +540,7 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
   private async failRun(args: {
     familyId: string;
     runId: string;
+    startedAt: string;
     leaseId: string;
     error: HostedIntegrationGatewayError;
   }): Promise<InvokeHostedIntegrationResult> {
@@ -506,10 +549,12 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
       runId: args.runId,
       error: gatewayErrorToJson(args.error),
     });
+    const endedAt = this.now().toISOString();
     await this.executionLogs.finishLog(args.runId, {
       status: "failed",
-      endedAt: this.now().toISOString(),
-      error: args.error,
+      endedAt,
+      durationMs: durationMs(args.startedAt, endedAt),
+      error: sanitizeGatewayError(args.error),
     });
     await this.generations.completeInvocation({ leaseId: args.leaseId });
     return { ok: false, runId: args.runId, error: args.error };
@@ -688,6 +733,51 @@ function gatewayErrorToJson(error: HostedIntegrationGatewayError): JsonObject {
     code: error.code,
     message: error.message,
     ...(error.details === undefined ? {} : { details: error.details }),
+  };
+}
+
+function sanitizeJsonObject(value: JsonObject): JsonObject {
+  return JsonObjectSchema.parse(sanitizeHostedIntegrationJsonValue(value));
+}
+
+function sanitizeGatewayError(
+  error: HostedIntegrationGatewayError,
+): HostedIntegrationGatewayError {
+  const sanitized = sanitizeJsonObject(gatewayErrorToJson(error));
+  return {
+    code: String(sanitized.code) as HostedIntegrationGatewayError["code"],
+    message: String(sanitized.message),
+    ...(sanitized.details === undefined ? {} : { details: sanitized.details }),
+  };
+}
+
+function durationMs(startedAt: string, endedAt: string): number {
+  return Math.max(0, Date.parse(endedAt) - Date.parse(startedAt));
+}
+
+function resultMetadata(
+  envelopeRef: string,
+  envelope: HostedIntegrationSuccessEnvelope,
+): HostedIntegrationExecutionResultMetadata {
+  if ("result_ref" in envelope) {
+    return {
+      envelopeRef,
+      responseMode: "artifact",
+      artifact: artifactMetadata(envelope.result_ref),
+    };
+  }
+  return { envelopeRef, responseMode: "inline" };
+}
+
+function artifactMetadata(ref: HostedIntegrationArtifactRef): {
+  name: string;
+  sizeBytes: number;
+  estimatedTokens: number;
+} {
+  return {
+    name: ref.name,
+    sizeBytes: ref.size_bytes,
+    estimatedTokens: ref.estimated_tokens,
   };
 }
 

@@ -146,6 +146,7 @@ export {
   type CompleteHostedIntegrationIdempotencyRequest,
   type FileHostedIntegrationGatewayOptions,
   type HostedIntegrationExecutionLogEntry,
+  type HostedIntegrationExecutionResultMetadata,
   type HostedIntegrationExecutionLogStore,
   type HostedIntegrationGateway,
   type HostedIntegrationGatewayError,

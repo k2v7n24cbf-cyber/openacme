@@ -168,7 +168,7 @@ class FileHostedIntegrationArtifactStore
     request: CompleteHostedIntegrationRunSuccessRequest,
   ): Promise<HostedIntegrationSuccessEnvelope> {
     const result = JsonValueSchema.parse(request.result);
-    const sanitized = sanitizeJsonValue(result);
+    const sanitized = sanitizeHostedIntegrationJsonValue(result);
     const artifact = await this.writeJsonArtifact(
       request.familyId,
       request.runId,
@@ -188,7 +188,9 @@ class FileHostedIntegrationArtifactStore
   async completeRunError(
     request: CompleteHostedIntegrationRunErrorRequest,
   ): Promise<{ ok: false; error: JsonValue }> {
-    const error = sanitizeJsonValue(JsonValueSchema.parse(request.error));
+    const error = sanitizeHostedIntegrationJsonValue(
+      JsonValueSchema.parse(request.error),
+    );
     await this.writeJsonArtifact(
       request.familyId,
       request.runId,
@@ -228,7 +230,11 @@ class FileHostedIntegrationArtifactStore
     value: JsonValue,
   ): Promise<HostedIntegrationArtifactRef> {
     const familyId = HostedIntegrationFamilyIdSchema.parse(familyIdInput);
-    const content = `${JSON.stringify(sanitizeJsonValue(value), null, 2)}\n`;
+    const content = `${JSON.stringify(
+      sanitizeHostedIntegrationJsonValue(value),
+      null,
+      2,
+    )}\n`;
     const resolved = resolveInsideRoot(
       this.runDir(familyId, runId),
       name,
@@ -283,13 +289,17 @@ class FileHostedIntegrationArtifactStore
   }
 }
 
-function sanitizeJsonValue(value: JsonValue): JsonValue {
-  if (Array.isArray(value)) return value.map((item) => sanitizeJsonValue(item));
+export function sanitizeHostedIntegrationJsonValue(value: JsonValue): JsonValue {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeHostedIntegrationJsonValue(item));
+  }
   if (value && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value).map(([key, child]) => [
         key,
-        SENSITIVE_KEY_PATTERN.test(key) ? REDACTED : sanitizeJsonValue(child),
+        SENSITIVE_KEY_PATTERN.test(key)
+          ? REDACTED
+          : sanitizeHostedIntegrationJsonValue(child),
       ]),
     );
   }

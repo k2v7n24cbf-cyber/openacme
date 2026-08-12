@@ -18,6 +18,11 @@ import {
   createFileHostedIntegrationLockStore,
   type HostedIntegrationLockStore,
 } from "./locks.js";
+import {
+  createFileHostedIntegrationProposedFamilyManager,
+  type HostedIntegrationProposedFamilySummary,
+  type HostedIntegrationProposedFamilyManager,
+} from "./proposed-family.js";
 import type { HostedIntegrationFamilyId } from "./schemas.js";
 import {
   createFileHostedIntegrationSourceFileStore,
@@ -28,12 +33,22 @@ import {
   type HostedIntegrationDraftValidator,
 } from "./validation.js";
 
-export interface HostedIntegrationService extends HostedIntegrationCatalog {
+export type HostedIntegrationManagementFamilySummary =
+  | HostedIntegrationFamilySummary
+  | HostedIntegrationProposedFamilySummary;
+
+export interface HostedIntegrationService {
   readonly locks: HostedIntegrationLockStore;
   readonly drafts: HostedIntegrationDraftStore;
   readonly sourceFiles: HostedIntegrationSourceFileStore;
   readonly examples: HostedIntegrationExampleRegistry;
   readonly validator: HostedIntegrationDraftValidator;
+  readonly proposedFamilies: HostedIntegrationProposedFamilyManager;
+  listFamilies(): Promise<HostedIntegrationManagementFamilySummary[]>;
+  getFamily(
+    familyId: HostedIntegrationFamilyId | string,
+  ): Promise<HostedIntegrationFamilyDetail | null>;
+  getDiagnostics(): Promise<HostedIntegrationCatalogDiagnostic[]>;
   start(): Promise<void>;
   close(): Promise<void>;
 }
@@ -58,6 +73,12 @@ export function createFileHostedIntegrationService(
     draftStore: drafts,
     catalog,
   });
+  const proposedFamilies = createFileHostedIntegrationProposedFamilyManager({
+    ...options,
+    catalog,
+    lockStore: locks,
+    draftStore: drafts,
+  });
   return new FileHostedIntegrationService({
     catalog,
     locks,
@@ -65,6 +86,7 @@ export function createFileHostedIntegrationService(
     sourceFiles,
     examples,
     validator,
+    proposedFamilies,
   });
 }
 
@@ -74,6 +96,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
   readonly sourceFiles: HostedIntegrationSourceFileStore;
   readonly examples: HostedIntegrationExampleRegistry;
   readonly validator: HostedIntegrationDraftValidator;
+  readonly proposedFamilies: HostedIntegrationProposedFamilyManager;
 
   private readonly catalog: HostedIntegrationCatalog;
 
@@ -84,6 +107,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     sourceFiles: HostedIntegrationSourceFileStore;
     examples: HostedIntegrationExampleRegistry;
     validator: HostedIntegrationDraftValidator;
+    proposedFamilies: HostedIntegrationProposedFamilyManager;
   }) {
     this.catalog = parts.catalog;
     this.locks = parts.locks;
@@ -91,6 +115,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     this.sourceFiles = parts.sourceFiles;
     this.examples = parts.examples;
     this.validator = parts.validator;
+    this.proposedFamilies = parts.proposedFamilies;
   }
 
   async start(): Promise<void> {
@@ -101,8 +126,13 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     // The file-backed catalog has no resources to release yet.
   }
 
-  listFamilies(): Promise<HostedIntegrationFamilySummary[]> {
-    return this.catalog.listFamilies();
+  async listFamilies(): Promise<HostedIntegrationManagementFamilySummary[]> {
+    const families = [
+      ...(await this.catalog.listFamilies()),
+      ...(await this.proposedFamilies.listProposedFamilies()),
+    ];
+    families.sort((a, b) => a.id.localeCompare(b.id));
+    return families;
   }
 
   getFamily(

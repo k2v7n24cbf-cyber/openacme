@@ -67,6 +67,7 @@ export {
 export {
   createFileHostedIntegrationService,
   type FileHostedIntegrationServiceOptions,
+  type HostedIntegrationManagementFamilySummary,
   type HostedIntegrationService,
 } from "./service.js";
 export {
@@ -82,6 +83,7 @@ export {
 } from "./locks.js";
 export {
   createFileHostedIntegrationDraftStore,
+  type CreateHostedIntegrationDraftFromFilesRequest,
   type CreateHostedIntegrationDraftRequest,
   type CreateHostedIntegrationDraftResult,
   type DeleteHostedIntegrationDraftFileRequest,
@@ -103,6 +105,14 @@ export {
   type ReadHostedIntegrationSourceFileResult,
 } from "./source-files.js";
 export { type HostedIntegrationFileEntry } from "./file-access.js";
+export {
+  createFileHostedIntegrationProposedFamilyManager,
+  type CreateHostedIntegrationProposedFamilyRequest,
+  type CreateHostedIntegrationProposedFamilyResult,
+  type FileHostedIntegrationProposedFamilyManagerOptions,
+  type HostedIntegrationProposedFamilyManager,
+  type HostedIntegrationProposedFamilySummary,
+} from "./proposed-family.js";
 export {
   createFileHostedIntegrationExampleRegistry,
   type HostedIntegrationExampleRegistry,

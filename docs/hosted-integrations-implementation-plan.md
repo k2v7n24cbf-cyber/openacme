@@ -563,6 +563,24 @@ pnpm --filter @openacme/server test -- hosted-integrations
 
 ### Slice 2.6: Proposed Family Initialization
 
+Status: done.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/hosted-integrations test -- proposed-family`
+  failed before implementation because
+  `createFileHostedIntegrationProposedFamilyManager` did not exist.
+- Red route test:
+  `pnpm --filter @openacme/server test -- hosted-integrations` failed before
+  implementation because `POST /api/hosted-integrations/families` returned
+  404 and active family summaries did not include a management status.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/server test -- hosted-integrations`
+  `pnpm --filter @openacme/server check-types`
+
 Goal:
 
 - Add `POST /api/hosted-integrations/families`.
@@ -583,7 +601,7 @@ TDD:
 - proposed family appears in management family list with `status: proposed`
 - proposed family tools do not appear in `/api/tools`
 - first promotion turns the proposed family into an active family source and
-  generation
+  generation in the promotion slice, not in this non-promotion slice
 
 Validation:
 

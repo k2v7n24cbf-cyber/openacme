@@ -15,6 +15,36 @@ export function registerHostedIntegrationRoutes(
     return c.json({ families });
   });
 
+  app.post("/api/hosted-integrations/families", async (c) => {
+    try {
+      const body = await readJsonObject(c);
+      const result = await service.proposedFamilies.createProposedFamily({
+        familyId: stringField(body, "familyId"),
+        name: stringField(body, "name"),
+        toolName: stringField(body, "toolName"),
+        lockedBy: stringField(body, "lockedBy"),
+        ttlMs: optionalPositiveInteger(body, "ttlMs") ?? DEFAULT_LOCK_TTL_MS,
+      });
+      if (result.ok) {
+        return c.json(
+          {
+            family: result.family,
+            lock: result.lock,
+            draft: result.draft,
+            sourceRevisionId: result.sourceRevisionId,
+          },
+          201,
+        );
+      }
+      return c.json(
+        { error: result.reason },
+        result.reason === "duplicate_family" ? 409 : 400,
+      );
+    } catch (error) {
+      return invalidRequest(c, error);
+    }
+  });
+
   app.get("/api/hosted-integrations/families/:family/tools", async (c) => {
     const family = await service.getFamily(c.req.param("family"));
     if (!family) return c.json({ error: "not_found" }, 404);

@@ -10,12 +10,16 @@ import {
   type HostedIntegrationToolName,
 } from "./schemas.js";
 
-export interface HostedIntegrationFamilySummary {
+export interface HostedIntegrationActiveFamilySummary {
   id: HostedIntegrationFamilyId;
   name: string;
   version: number;
   toolNames: HostedIntegrationToolName[];
+  status: "active";
 }
+
+export type HostedIntegrationFamilySummary =
+  HostedIntegrationActiveFamilySummary;
 
 export interface HostedIntegrationFamilyDetail {
   summary: HostedIntegrationFamilySummary;
@@ -183,6 +187,7 @@ function detailFromManifest(
       name: manifest.name,
       version: manifest.version,
       toolNames: manifest.tools.map((tool) => tool.name),
+      status: "active",
     },
     manifest,
   };

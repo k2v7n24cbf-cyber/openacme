@@ -32,6 +32,13 @@ export interface CreateHostedIntegrationDraftRequest {
   sourceRevisionId: string;
 }
 
+export interface CreateHostedIntegrationDraftFromFilesRequest {
+  familyId: HostedIntegrationFamilyId | string;
+  lockId: string;
+  sourceRevisionId: string;
+  files: Record<string, string>;
+}
+
 export type CreateHostedIntegrationDraftResult =
   | { ok: true; draft: HostedIntegrationDraft }
   | { ok: false; reason: "lock_required" | "source_not_found" };
@@ -73,6 +80,9 @@ export type DeleteHostedIntegrationDraftFileResult =
 export interface HostedIntegrationDraftStore {
   createDraft(
     request: CreateHostedIntegrationDraftRequest,
+  ): Promise<CreateHostedIntegrationDraftResult>;
+  createDraftFromFiles(
+    request: CreateHostedIntegrationDraftFromFilesRequest,
   ): Promise<CreateHostedIntegrationDraftResult>;
   getDraft(draftId: string): Promise<HostedIntegrationDraft | null>;
   listDraftFiles(
@@ -156,6 +166,50 @@ class FileHostedIntegrationDraftStore implements HostedIntegrationDraftStore {
       if (isNodeError(error) && error.code === "ENOENT") {
         return { ok: false, reason: "source_not_found" };
       }
+      throw error;
+    }
+
+    return { ok: true, draft };
+  }
+
+  async createDraftFromFiles(
+    request: CreateHostedIntegrationDraftFromFilesRequest,
+  ): Promise<CreateHostedIntegrationDraftResult> {
+    const familyId = HostedIntegrationFamilyIdSchema.parse(request.familyId);
+    assertNonEmpty("lockId", request.lockId);
+    assertNonEmpty("sourceRevisionId", request.sourceRevisionId);
+
+    if (!(await this.hasActiveLock(familyId, request.lockId))) {
+      return { ok: false, reason: "lock_required" };
+    }
+
+    const now = this.now().toISOString();
+    const draft = HostedIntegrationDraftSchema.parse({
+      id: this.createId(),
+      familyId,
+      sourceRevisionId: request.sourceRevisionId,
+      lockId: request.lockId,
+      status: "open",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const draftRoot = this.draftRoot(draft.id);
+    await rm(draftRoot, { recursive: true, force: true });
+    try {
+      await mkdir(this.draftFilesRoot(draft.id), { recursive: true });
+      for (const [relPath, content] of Object.entries(request.files)) {
+        const resolved = resolveInsideRoot(
+          this.draftFilesRoot(draft.id),
+          relPath,
+          "draft root",
+        );
+        await mkdir(path.dirname(resolved), { recursive: true });
+        await writeFile(resolved, content, "utf-8");
+      }
+      await this.writeDraftMetadata(draft);
+    } catch (error) {
+      await rm(draftRoot, { recursive: true, force: true });
       throw error;
     }
 

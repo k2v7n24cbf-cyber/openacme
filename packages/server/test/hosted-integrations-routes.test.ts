@@ -110,12 +110,14 @@ describe("hosted integrations read-only routes", () => {
         {
           id: "qualys",
           name: "Qualys",
+          status: "active",
           version: 1,
           toolNames: ["qualys_count_assets"],
         },
         {
           id: "splunk",
           name: "Splunk",
+          status: "active",
           version: 1,
           toolNames: ["splunk_search"],
         },
@@ -133,6 +135,7 @@ describe("hosted integrations read-only routes", () => {
       family: {
         summary: {
           id: "qualys",
+          status: "active",
           toolNames: ["qualys_count_assets"],
         },
       },
@@ -165,6 +168,77 @@ describe("hosted integrations read-only routes", () => {
     res = await req("/api/hosted-integrations/families");
     expect(res.status).toBe(200);
     expect(JSON.stringify(await res.json())).not.toContain("SECRET_TOKEN");
+  });
+});
+
+describe("hosted integrations proposed family routes", () => {
+  it("creates a proposed family draft and keeps it out of the runtime tool surface", async () => {
+    let res = await req("/api/hosted-integrations/families", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        familyId: "github",
+        name: "GitHub",
+        toolName: "github_search",
+        lockedBy: "agent:tool-developer",
+        ttlMs: 60_000,
+      }),
+    });
+    expect(res.status).toBe(201);
+    const created = await res.json();
+    expect(created).toMatchObject({
+      family: {
+        id: "github",
+        name: "GitHub",
+        status: "proposed",
+        toolNames: ["github_search"],
+      },
+      lock: { familyId: "github", lockedBy: "agent:tool-developer" },
+      draft: { familyId: "github", status: "open" },
+      sourceRevisionId: "proposed_initial",
+    });
+
+    const draftId = created.draft.id as string;
+    res = await req(`/api/hosted-integrations/drafts/${draftId}/validate`, {
+      method: "POST",
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, diagnostics: [] });
+
+    res = await req("/api/hosted-integrations/families");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      families: [
+        {
+          id: "github",
+          name: "GitHub",
+          status: "proposed",
+          version: 1,
+          toolNames: ["github_search"],
+          draftId,
+          lockId: created.lock.id,
+          sourceRevisionId: "proposed_initial",
+        },
+      ],
+    });
+
+    res = await req("/api/tools");
+    expect(res.status).toBe(200);
+    const toolsBody = await res.json();
+    expect(JSON.stringify(toolsBody)).not.toContain("github_search");
+
+    res = await req("/api/hosted-integrations/families", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        familyId: "github",
+        name: "GitHub duplicate",
+        toolName: "github_other",
+        lockedBy: "agent:tool-developer",
+      }),
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "duplicate_family" });
   });
 });
 

@@ -431,6 +431,12 @@ describe("hosted integrations draft control plane routes", () => {
     });
     const lockId = lockBody.lock.id as string;
 
+    res = await req("/api/hosted-integrations/families/qualys/lock");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      lock: { id: lockId, familyId: "qualys" },
+    });
+
     res = await req("/api/hosted-integrations/families/qualys/source/files");
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({
@@ -480,6 +486,10 @@ describe("hosted integrations draft control plane routes", () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
+
+    res = await req("/api/hosted-integrations/families/qualys/lock");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ lock: null });
   });
 
   it("creates drafts, edits files with the active lock, upserts examples, and validates", async () => {

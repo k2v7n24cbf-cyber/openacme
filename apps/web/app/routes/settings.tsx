@@ -14,6 +14,7 @@ import {
   Bell,
   Users,
   Mail,
+  Plug,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Sidebar } from "../components/Sidebar";
@@ -23,6 +24,16 @@ import { API_BASE } from "../lib/api";
 import { docsUrl } from "../lib/links";
 import { usePublishCurrentView } from "@/app/lib/CurrentViewContext";
 import type { ModelDefaultsView, ModelDefaultsUpdate } from "../lib/types";
+import {
+  buildHostedIntegrationsAdminRows,
+  type HostedIntegrationAdminFamilyRow,
+  type HostedIntegrationFailureBucket,
+  type HostedIntegrationFamilyDetail,
+  type HostedIntegrationFamilyLock,
+  type HostedIntegrationFamilySummary,
+  type HostedIntegrationGenerationSummary,
+} from "@/app/lib/hosted-integrations-admin";
+import type { HostedIntegrationConfigScope } from "@/app/lib/hosted-integration-agent-settings";
 import { McpManager } from "@/app/components/mcp/McpManager";
 import { Button } from "@/app/components/ui/button";
 import { Input } from "@/app/components/ui/input";
@@ -85,6 +96,7 @@ const SETTINGS_TABS = [
   "members",
   "providers",
   "mcp",
+  "hosted-integrations",
   "web-search",
   "browser",
   "email",
@@ -107,6 +119,11 @@ function SettingsPage() {
   const [configuredKeys, setConfiguredKeys] = useState<Record<string, boolean>>({});
   const [apiKeyInputs, setApiKeyInputs] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | null>(null);
+  const [hostedRows, setHostedRows] = useState<
+    HostedIntegrationAdminFamilyRow[]
+  >([]);
+  const [hostedLoading, setHostedLoading] = useState(false);
+  const [hostedError, setHostedError] = useState<string | null>(null);
 
   // Default-model editor — workforce-wide root config.yaml#model. `draft` is
   // hydrated from the loaded `config.model` and pushed via PUT
@@ -195,6 +212,8 @@ function SettingsPage() {
       const content =
         activeTab === "providers"
           ? modelDraft
+          : activeTab === "hosted-integrations"
+            ? hostedRows
           : activeTab === "mcp"
             ? null
             : activeTab === "context"
@@ -216,6 +235,7 @@ function SettingsPage() {
     }, [
       activeTab,
       modelDraft,
+      hostedRows,
       agentsMdDraft,
       emailForm,
       browserCfg,
@@ -305,6 +325,7 @@ function SettingsPage() {
     loadWebSearch(ctrl.signal);
     loadBrowser(ctrl.signal);
     loadEmail(ctrl.signal);
+    loadHostedIntegrations(ctrl.signal);
     return () => ctrl.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -379,6 +400,89 @@ function SettingsPage() {
       }
     } catch {
       // /api/keys may not exist on older servers — fail silently
+    }
+  };
+
+  const loadHostedIntegrations = async (signal?: AbortSignal) => {
+    setHostedLoading(true);
+    setHostedError(null);
+    try {
+      const [familiesRes, generationsRes, scopesRes, bucketsRes] =
+        await Promise.all([
+          fetch(`${API_BASE}/api/hosted-integrations/families`, { signal }),
+          fetch(`${API_BASE}/api/hosted-integrations/generations`, { signal }),
+          fetch(`${API_BASE}/api/hosted-integrations/config-scopes`, {
+            signal,
+          }),
+          fetch(
+            `${API_BASE}/api/hosted-integrations/failure-buckets?roles=tool_developer`,
+            { signal },
+          ),
+        ]);
+      if (!familiesRes.ok) throw new Error("Failed to load families");
+      const familiesBody = (await familiesRes.json()) as {
+        families?: HostedIntegrationFamilySummary[];
+      };
+      const families = familiesBody.families ?? [];
+      const [familyDetails, locks] = await Promise.all([
+        Promise.all(
+          families.map(async (family) => {
+            const res = await fetch(
+              `${API_BASE}/api/hosted-integrations/families/${encodeURIComponent(family.id)}`,
+              { signal },
+            );
+            if (!res.ok) return null;
+            return ((await res.json()) as {
+              family: HostedIntegrationFamilyDetail;
+            }).family;
+          }),
+        ),
+        Promise.all(
+          families.map(async (family) => {
+            const res = await fetch(
+              `${API_BASE}/api/hosted-integrations/families/${encodeURIComponent(family.id)}/lock`,
+              { signal },
+            );
+            if (!res.ok) return null;
+            return ((await res.json()) as {
+              lock: HostedIntegrationFamilyLock | null;
+            }).lock;
+          }),
+        ),
+      ]);
+      const generations = generationsRes.ok
+        ? ((await generationsRes.json()) as {
+            generations?: HostedIntegrationGenerationSummary[];
+          }).generations ?? []
+        : [];
+      const configScopes = scopesRes.ok
+        ? ((await scopesRes.json()) as {
+            configScopes?: HostedIntegrationConfigScope[];
+          }).configScopes ?? []
+        : [];
+      const failureBuckets = bucketsRes.ok
+        ? ((await bucketsRes.json()) as {
+            buckets?: HostedIntegrationFailureBucket[];
+          }).buckets ?? []
+        : [];
+      setHostedRows(
+        buildHostedIntegrationsAdminRows({
+          families,
+          familyDetails: familyDetails.filter(
+            (detail): detail is HostedIntegrationFamilyDetail =>
+              detail !== null,
+          ),
+          generations,
+          configScopes,
+          failureBuckets,
+          locks,
+        }),
+      );
+    } catch (e) {
+      if ((e as Error).name === "AbortError") return;
+      setHostedError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setHostedLoading(false);
     }
   };
 
@@ -760,6 +864,10 @@ function SettingsPage() {
                   <TabsTrigger value="mcp" className="h-9 shrink-0 max-md:!w-auto md:px-4 data-[state=active]:bg-paper-sunk data-[state=active]:font-medium">
                     <Boxes className="size-3.5" />
                     MCP
+                  </TabsTrigger>
+                  <TabsTrigger value="hosted-integrations" className="h-9 shrink-0 max-md:!w-auto md:px-4 data-[state=active]:bg-paper-sunk data-[state=active]:font-medium">
+                    <Plug className="size-3.5" />
+                    Hosted Integrations
                   </TabsTrigger>
                   <TabsTrigger value="web-search" className="h-9 shrink-0 max-md:!w-auto md:px-4 data-[state=active]:bg-paper-sunk data-[state=active]:font-medium">
                     <Search className="size-3.5" />
@@ -1236,6 +1344,15 @@ function SettingsPage() {
 
               <TabsContent value="mcp">
                 <McpManager scope="global" />
+              </TabsContent>
+
+              <TabsContent value="hosted-integrations">
+                <HostedIntegrationsSettingsTab
+                  rows={hostedRows}
+                  loading={hostedLoading}
+                  error={hostedError}
+                  onRefresh={() => void loadHostedIntegrations()}
+                />
               </TabsContent>
 
               <TabsContent value="web-search">
@@ -1921,4 +2038,174 @@ function SettingsPage() {
       </main>
     </div>
   );
+}
+
+function HostedIntegrationsSettingsTab({
+  rows,
+  loading,
+  error,
+  onRefresh,
+}: {
+  rows: HostedIntegrationAdminFamilyRow[];
+  loading: boolean;
+  error: string | null;
+  onRefresh: () => void;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle>Hosted Integrations</CardTitle>
+            <CardDescription>
+              Runtime families, promoted generations, config scopes, locks, and
+              failure buckets.
+            </CardDescription>
+          </div>
+          <Button variant="outline" size="sm" onClick={onRefresh}>
+            Refresh
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {loading && rows.length === 0 ? (
+          <p className="font-mono text-[12px] text-ink-faint">Loading…</p>
+        ) : error ? (
+          <p className="border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-900">
+            {error}
+          </p>
+        ) : rows.length === 0 ? (
+          <p className="border border-paper-rule bg-paper-sunk px-3 py-2 font-mono text-[12px] text-ink-soft">
+            No hosted integration families registered.
+          </p>
+        ) : (
+          <div className="grid gap-px bg-paper-rule">
+            {rows.map((row) => (
+              <div key={row.id} className="grid gap-4 bg-paper p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-mono text-[13px] text-ink">
+                        {row.name}
+                      </h3>
+                      <Badge variant="outline" className="font-mono text-[10px]">
+                        {row.id}
+                      </Badge>
+                      <Badge variant="secondary" className="font-mono text-[10px]">
+                        v{row.version}
+                      </Badge>
+                    </div>
+                    <p className="mt-1 font-mono text-[11px] text-ink-faint">
+                      {row.activeGeneration
+                        ? `active ${row.activeGeneration.id}`
+                        : "no active generation"}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {row.lock ? (
+                      <Badge variant="outline" className="font-mono text-[10px]">
+                        locked by {row.lock.lockedBy}
+                      </Badge>
+                    ) : (
+                      <Badge variant="secondary" className="font-mono text-[10px]">
+                        unlocked
+                      </Badge>
+                    )}
+                    {row.openFailureBucketCount > 0 && (
+                      <Badge variant="destructive" className="font-mono text-[10px]">
+                        {row.openFailureBucketCount} open bucket
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-3">
+                  <section className="grid gap-2">
+                    <Label>Tools</Label>
+                    <div className="grid gap-1">
+                      {row.tools.map((tool) => (
+                        <div
+                          key={tool.name}
+                          className="border border-paper-rule bg-paper-sunk px-2 py-1.5"
+                        >
+                          <div className="truncate font-mono text-[11px] text-ink">
+                            {tool.name}
+                          </div>
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            <Badge variant="outline" className="font-mono text-[9px]">
+                              {tool.lifecycle}
+                            </Badge>
+                            <Badge variant="outline" className="font-mono text-[9px]">
+                              {tool.classification.operation}
+                            </Badge>
+                            <Badge variant="outline" className="font-mono text-[9px]">
+                              {tool.classification.execution}
+                            </Badge>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section className="grid gap-2">
+                    <Label>Config scopes</Label>
+                    <div className="grid gap-1">
+                      {row.configScopes.length === 0 ? (
+                        <p className="font-mono text-[11px] text-ink-faint">
+                          none
+                        </p>
+                      ) : (
+                        row.configScopes.map((scope) => (
+                          <div
+                            key={scope.id}
+                            className="border border-paper-rule bg-paper-sunk px-2 py-1.5"
+                          >
+                            <div className="truncate font-mono text-[11px] text-ink">
+                              {scope.id}
+                            </div>
+                            <div className="font-mono text-[10px] text-ink-faint">
+                              {scope.environment} · rev {scope.revision} ·{" "}
+                              {scope.configKeyCount} config ·{" "}
+                              {scope.configuredSecretCount} secret
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </section>
+
+                  <section className="grid gap-2">
+                    <Label>Operations</Label>
+                    <div className="grid gap-1 font-mono text-[11px] text-ink-faint">
+                      <div>
+                        promoted by{" "}
+                        {row.activeGeneration?.promotedBy ?? "n/a"}
+                      </div>
+                      <div>
+                        lock expires{" "}
+                        {row.lock ? formatTimestamp(row.lock.expiresAt) : "n/a"}
+                      </div>
+                      <a
+                        href={`${API_BASE}/api/hosted-integrations/failure-buckets?familyId=${encodeURIComponent(row.id)}&roles=tool_developer`}
+                        className="text-plot-red underline-offset-2 hover:underline"
+                      >
+                        failure buckets
+                      </a>
+                    </div>
+                  </section>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {loading && rows.length > 0 && <LoadingHairline inline />}
+      </CardContent>
+    </Card>
+  );
+}
+
+function formatTimestamp(value: string): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return value;
+  return date.toLocaleString();
 }

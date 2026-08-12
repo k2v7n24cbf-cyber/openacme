@@ -427,6 +427,11 @@ export function registerHostedIntegrationRoutes(
     }
   });
 
+  app.get("/api/hosted-integrations/families/:family/lock", async (c) => {
+    const lock = await service.locks.getActiveLock(c.req.param("family"));
+    return c.json({ lock });
+  });
+
   app.get(
     "/api/hosted-integrations/families/:family/source/files",
     async (c) => {

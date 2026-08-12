@@ -2211,6 +2211,30 @@ Validation:
 pnpm --filter web check-types
 ```
 
+Status: Completed in local commit pending push.
+
+Implemented:
+
+- Added a read-only Settings tab for hosted integration families.
+- Added a view-model helper that aggregates families with tools, active
+  generation, sanitized config-scope summaries, active lock, and open failure
+  bucket counts.
+- Added `GET /api/hosted-integrations/families/:family/lock` so the UI can show
+  lock owner/expiry without acquiring a lock.
+- Linked each family row to the existing failure-bucket API filtered by family.
+- Kept secret values out of the admin model and UI; only config key counts and
+  configured secret counts are shown.
+
+Green validation:
+
+```text
+pnpm --filter web test -- hosted-integrations-admin hosted-integration-agent-settings
+pnpm --filter web check-types
+pnpm --filter @openacme/server test -- hosted-integrations-routes
+pnpm --filter web test
+pnpm --filter @openacme/server check-types
+```
+
 ### Slice 8.3: Browser Draft Code Editor
 
 Goal:

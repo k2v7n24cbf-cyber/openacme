@@ -439,3 +439,167 @@ describe("hosted integrations draft control plane routes", () => {
     expect(await res.json()).toEqual({ ok: true, diagnostics: [] });
   });
 });
+
+describe("hosted integrations config scope and secret routes", () => {
+  it("lists and reads config scopes with sanitized secret metadata only", async () => {
+    writeFamily("qualys", familyYaml("qualys", "Qualys", "qualys_count_assets"));
+
+    let res = await req("/api/hosted-integrations/config-scopes/qualys-prod", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        familyId: "qualys",
+        environment: "prod",
+        config: { QUALYS_BASE_URL: "https://qualys.example" },
+        secrets: {
+          QUALYS_USERNAME: {
+            configured: false,
+            value: "must-not-survive",
+          },
+        },
+        updatedBy: "human:alen",
+      }),
+    });
+    expect(res.status).toBe(200);
+
+    res = await req("/api/hosted-integrations/config-scopes");
+    expect(res.status).toBe(200);
+    const listBody = await res.json();
+    expect(listBody).toEqual({
+      configScopes: [
+        {
+          id: "qualys-prod",
+          familyId: "qualys",
+          revision: 1,
+          environment: "prod",
+          config: { QUALYS_BASE_URL: "https://qualys.example" },
+          secrets: { QUALYS_USERNAME: { configured: false } },
+          updatedAt: expect.any(String),
+          updatedBy: "human:alen",
+        },
+      ],
+    });
+    expect(JSON.stringify(listBody)).not.toContain("must-not-survive");
+
+    res = await req("/api/hosted-integrations/config-scopes/qualys-prod");
+    expect(res.status).toBe(200);
+    const detailBody = await res.json();
+    expect(detailBody).toMatchObject({
+      configScope: {
+        id: "qualys-prod",
+        secrets: { QUALYS_USERNAME: { configured: false } },
+      },
+    });
+    expect(JSON.stringify(detailBody)).not.toContain("must-not-survive");
+  });
+
+  it("increments config-scope revision on PUT and maps validation failures", async () => {
+    writeFamily("qualys", familyYaml("qualys", "Qualys", "qualys_count_assets"));
+
+    let res = await req("/api/hosted-integrations/config-scopes/qualys-prod", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        familyId: "qualys",
+        environment: "prod",
+        config: { QUALYS_BASE_URL: "https://old.example" },
+        updatedBy: "human:alen",
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      configScope: { id: "qualys-prod", revision: 1 },
+    });
+
+    res = await req("/api/hosted-integrations/config-scopes/qualys-prod", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        familyId: "qualys",
+        environment: "prod",
+        config: { QUALYS_BASE_URL: "https://new.example" },
+        updatedBy: "human:alen",
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      configScope: {
+        id: "qualys-prod",
+        revision: 2,
+        config: { QUALYS_BASE_URL: "https://new.example" },
+      },
+    });
+
+    res = await req("/api/hosted-integrations/config-scopes/missing-prod", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        familyId: "missing",
+        environment: "prod",
+        config: {},
+        updatedBy: "human:alen",
+      }),
+    });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "family_not_found" });
+  });
+
+  it("requires a human session to write secrets and never echoes values", async () => {
+    writeFamily("qualys", familyYaml("qualys", "Qualys", "qualys_count_assets"));
+
+    let res = await req("/api/hosted-integrations/config-scopes/qualys-prod", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        familyId: "qualys",
+        environment: "prod",
+        config: { QUALYS_BASE_URL: "https://qualys.example" },
+        secrets: {
+          QUALYS_USERNAME: { configured: false },
+          QUALYS_PASSWORD: { configured: false },
+        },
+        updatedBy: "human:alen",
+      }),
+    });
+    expect(res.status).toBe(200);
+
+    res = await req("/api/hosted-integrations/config-scopes/qualys-prod/secrets", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        secrets: { QUALYS_USERNAME: "api-user" },
+        updatedBy: "human:alen",
+      }),
+    });
+    expect(res.status).toBe(200);
+    const secretBody = await res.json();
+    expect(secretBody).toMatchObject({
+      metadata: {
+        scopeId: "qualys-prod",
+        secrets: {
+          QUALYS_USERNAME: { configured: true },
+          QUALYS_PASSWORD: { configured: false },
+        },
+      },
+      configScope: {
+        id: "qualys-prod",
+        revision: 2,
+        secrets: {
+          QUALYS_USERNAME: { configured: true },
+          QUALYS_PASSWORD: { configured: false },
+        },
+      },
+    });
+    expect(JSON.stringify(secretBody)).not.toContain("api-user");
+
+    res = await req("/api/hosted-integrations/config-scopes/qualys-prod/secrets", {
+      method: "PUT",
+      headers: { "content-type": "application/json", authorization: "" },
+      body: JSON.stringify({
+        secrets: { QUALYS_PASSWORD: "super-secret" },
+        updatedBy: "human:alen",
+      }),
+    });
+    expect(res.status).toBe(401);
+  });
+});

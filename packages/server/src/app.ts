@@ -286,7 +286,9 @@ export async function createApp(
   // Usage ledger reads: summary / series / breakdown / heatmap / events.
   registerUsageRoutes(app, manager);
 
-  registerHostedIntegrationRoutes(app, runtime.hostedIntegrationService);
+  registerHostedIntegrationRoutes(app, runtime.hostedIntegrationService, {
+    authStore: manager.authStore,
+  });
 
   // Health check
   app.get("/api/health", (c) =>

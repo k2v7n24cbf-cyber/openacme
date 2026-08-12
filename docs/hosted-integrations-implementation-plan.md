@@ -749,6 +749,19 @@ pnpm --filter @openacme/hosted-integrations test -- policy
 
 ### Slice 3.4: Config Scope And Secret Routes
 
+Status: done.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/server test -- hosted-integrations` failed before
+  implementation because config-scope routes returned 404.
+- Green validation:
+  `pnpm --filter @openacme/server test -- hosted-integrations`
+  `pnpm --filter @openacme/server check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/server build`
+
 Goal:
 
 - Add config-scope and human-only secret API routes:

@@ -1,14 +1,22 @@
 import type { Context, Hono } from "hono";
 import {
   HostedIntegrationExampleSchema,
+  JsonObjectSchema,
   type HostedIntegrationService,
 } from "@openacme/hosted-integrations";
+import type { AuthStore } from "@openacme/db";
+import { resolveMember } from "../middleware/auth.js";
 
 const DEFAULT_LOCK_TTL_MS = 30 * 60 * 1000;
+
+export interface HostedIntegrationRouteOptions {
+  authStore?: AuthStore;
+}
 
 export function registerHostedIntegrationRoutes(
   app: Hono,
   service: HostedIntegrationService,
+  options: HostedIntegrationRouteOptions = {},
 ): void {
   app.get("/api/hosted-integrations/families", async (c) => {
     const families = await service.listFamilies();
@@ -293,6 +301,79 @@ export function registerHostedIntegrationRoutes(
       return invalidRequest(c, error);
     }
   });
+
+  app.get("/api/hosted-integrations/config-scopes", async (c) => {
+    return c.json({
+      configScopes: await service.configScopes.listConfigScopes(),
+    });
+  });
+
+  app.get("/api/hosted-integrations/config-scopes/:scopeId", async (c) => {
+    const configScope = await service.configScopes.getConfigScope(
+      c.req.param("scopeId"),
+    );
+    if (!configScope) return c.json({ error: "not_found" }, 404);
+    return c.json({ configScope });
+  });
+
+  app.put("/api/hosted-integrations/config-scopes/:scopeId", async (c) => {
+    try {
+      const body = await readJsonObject(c);
+      const result = await service.configScopes.upsertConfigScope({
+        scopeId: c.req.param("scopeId"),
+        familyId: stringField(body, "familyId"),
+        environment: stringField(body, "environment"),
+        config: JsonObjectSchema.parse(objectField(body, "config")),
+        secrets: optionalSecretMetadata(body),
+        updatedBy: stringField(body, "updatedBy"),
+      });
+      if (result.ok) return c.json({ configScope: result.scope });
+      return c.json(
+        { error: result.reason },
+        result.reason === "family_not_found" ? 404 : 409,
+      );
+    } catch (error) {
+      return invalidRequest(c, error);
+    }
+  });
+
+  app.put(
+    "/api/hosted-integrations/config-scopes/:scopeId/secrets",
+    async (c) => {
+      if (options.authStore && !resolveMember(c, options.authStore)) {
+        return c.json({ error: "Unauthorized" }, 401);
+      }
+
+      try {
+        const scopeId = c.req.param("scopeId");
+        const body = await readJsonObject(c);
+        const existing = await service.configScopes.getConfigScope(scopeId);
+        if (!existing) return c.json({ error: "not_found" }, 404);
+
+        await service.secrets.writeHumanOwnedSecrets({
+          scopeId,
+          secrets: stringRecordField(body, "secrets"),
+          updatedBy: stringField(body, "updatedBy"),
+        });
+        const metadata = await service.secrets.getSecretMetadata({
+          scopeId,
+          secretNames: Object.keys(existing.secrets),
+        });
+        const result = await service.configScopes.upsertConfigScope({
+          scopeId,
+          familyId: existing.familyId,
+          environment: existing.environment,
+          config: existing.config,
+          secrets: metadata.secrets,
+          updatedBy: stringField(body, "updatedBy"),
+        });
+        if (!result.ok) return c.json({ error: result.reason }, 409);
+        return c.json({ metadata, configScope: result.scope });
+      } catch (error) {
+        return invalidRequest(c, error);
+      }
+    },
+  );
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -341,6 +422,36 @@ function objectField(body: JsonRecord, name: string): JsonRecord {
   const value = body[name];
   if (!isRecord(value)) throw new Error(`${name} is required`);
   return value;
+}
+
+function stringRecordField(
+  body: JsonRecord,
+  name: string,
+): Record<string, string> {
+  const value = objectField(body, name);
+  return Object.fromEntries(
+    Object.entries(value).map(([key, rawValue]) => {
+      if (typeof rawValue !== "string") {
+        throw new Error(`${name}.${key} must be a string`);
+      }
+      return [key, rawValue];
+    }),
+  );
+}
+
+function optionalSecretMetadata(body: JsonRecord) {
+  const value = body.secrets;
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) throw new Error("secrets must be an object");
+  return Object.fromEntries(
+    Object.entries(value).map(([key, rawMetadata]) => {
+      const configured =
+        isRecord(rawMetadata) && typeof rawMetadata.configured === "boolean"
+          ? rawMetadata.configured
+          : false;
+      return [key, { configured }];
+    }),
+  );
 }
 
 function writeResultResponse(

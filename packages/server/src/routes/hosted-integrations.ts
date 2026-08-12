@@ -5,6 +5,7 @@ import {
   HostedIntegrationPromotionApprovalTargetSchema,
   JsonObjectSchema,
   type HostedIntegrationExecutionLogEntry,
+  type HostedIntegrationGeneration,
   type HostedIntegrationPolicyActor,
   type HostedIntegrationService,
 } from "@openacme/hosted-integrations";
@@ -122,6 +123,61 @@ export function registerHostedIntegrationRoutes(
       return invalidRequest(c, error);
     }
   });
+
+  app.get("/api/hosted-integrations/generations", async (c) => {
+    try {
+      const generations = await service.generations.listGenerations({
+        familyId: c.req.query("familyId") ?? undefined,
+      });
+      return c.json({
+        generations: generations.map(generationSummary),
+      });
+    } catch (error) {
+      return invalidRequest(c, error);
+    }
+  });
+
+  app.get("/api/hosted-integrations/generations/:generationId", async (c) => {
+    const generation = await service.generations.getGeneration(
+      c.req.param("generationId"),
+    );
+    if (!generation) return c.json({ error: "not_found" }, 404);
+    return c.json({ generation });
+  });
+
+  app.post(
+    "/api/hosted-integrations/generations/:generationId/rollback",
+    async (c) => {
+      try {
+        const body = await readJsonObject(c);
+        const actor = actorField(body);
+        if (!actor.roles.includes("tool_developer")) {
+          return c.json({ ok: false, error: { code: "policy_denied" } }, 403);
+        }
+        const generation = await service.generations.getGeneration(
+          c.req.param("generationId"),
+        );
+        if (!generation) return c.json({ error: "not_found" }, 404);
+        const result = await service.generations.rollback({
+          familyId: generation.familyId,
+          generationId: generation.id,
+          rolledBackBy: actor.id,
+        });
+        if (result.ok) {
+          return c.json({
+            ok: true,
+            activeGeneration: generationSummary(result.activeGeneration),
+          });
+        }
+        return c.json(
+          { ok: false, error: { code: result.reason } },
+          result.reason === "generation_not_found" ? 404 : 409,
+        );
+      } catch (error) {
+        return invalidRequest(c, error);
+      }
+    },
+  );
 
   app.get("/api/hosted-integrations/families", async (c) => {
     const families = await service.listFamilies();
@@ -694,4 +750,15 @@ function canReadRun(
     .map((role) => role.trim())
     .filter(Boolean);
   return actorId === log.actorId || roles.includes("tool_developer");
+}
+
+function generationSummary(generation: HostedIntegrationGeneration) {
+  return {
+    id: generation.id,
+    familyId: generation.familyId,
+    sourceRevisionId: generation.sourceRevisionId,
+    status: generation.status,
+    promotedAt: generation.promotedAt,
+    promotedBy: generation.promotedBy,
+  };
 }

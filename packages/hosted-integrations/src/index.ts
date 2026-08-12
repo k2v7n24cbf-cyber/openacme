@@ -117,6 +117,7 @@ export {
   type FileHostedIntegrationGenerationStoreOptions,
   type HostedIntegrationGenerationStore,
   type HostedIntegrationInvocationLease,
+  type ListHostedIntegrationGenerationsRequest,
   type HostedIntegrationRegistryRefreshEvent,
   type PromoteHostedIntegrationDraftRequest,
   type PromoteHostedIntegrationDraftResult,

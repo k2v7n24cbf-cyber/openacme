@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
@@ -106,10 +113,17 @@ export interface CompleteHostedIntegrationInvocationRequest {
   leaseId: string;
 }
 
+export interface ListHostedIntegrationGenerationsRequest {
+  familyId?: HostedIntegrationFamilyId | string;
+}
+
 export interface HostedIntegrationGenerationStore {
   promoteDraft(
     request: PromoteHostedIntegrationDraftRequest,
   ): Promise<PromoteHostedIntegrationDraftResult>;
+  listGenerations(
+    request?: ListHostedIntegrationGenerationsRequest,
+  ): Promise<HostedIntegrationGeneration[]>;
   getGeneration(
     generationId: string,
   ): Promise<HostedIntegrationGeneration | null>;
@@ -141,9 +155,7 @@ export function createFileHostedIntegrationGenerationStore(
   });
 }
 
-class FileHostedIntegrationGenerationStore
-  implements HostedIntegrationGenerationStore
-{
+class FileHostedIntegrationGenerationStore implements HostedIntegrationGenerationStore {
   private readonly generationsDir: string;
   private readonly activeDir: string;
   private readonly draftStore: HostedIntegrationDraftStore;
@@ -279,6 +291,43 @@ class FileHostedIntegrationGenerationStore
     }
   }
 
+  async listGenerations(
+    request: ListHostedIntegrationGenerationsRequest = {},
+  ): Promise<HostedIntegrationGeneration[]> {
+    const familyId =
+      request.familyId === undefined
+        ? null
+        : HostedIntegrationFamilyIdSchema.parse(request.familyId);
+    let entries;
+    try {
+      entries = await readdir(this.generationsDir, { withFileTypes: true });
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") return [];
+      throw error;
+    }
+
+    const generations: HostedIntegrationGeneration[] = [];
+    for (const entry of entries) {
+      if (
+        !entry.isDirectory() ||
+        entry.name === "active" ||
+        entry.name === "state" ||
+        entry.name.endsWith(".tmp")
+      ) {
+        continue;
+      }
+      const generation = await this.getGeneration(entry.name);
+      if (!generation) continue;
+      if (familyId && generation.familyId !== familyId) continue;
+      generations.push(generation);
+    }
+
+    return generations.sort((a, b) => {
+      const byPromotedAt = b.promotedAt.localeCompare(a.promotedAt);
+      return byPromotedAt === 0 ? b.id.localeCompare(a.id) : byPromotedAt;
+    });
+  }
+
   async getGeneration(
     generationId: string,
   ): Promise<HostedIntegrationGeneration | null> {
@@ -411,7 +460,13 @@ class FileHostedIntegrationGenerationStore
       reason: "rollback",
       toolNames: await this.readGenerationToolNames(generation.id),
     });
-    return { ok: true, activeGeneration: generation };
+    return {
+      ok: true,
+      activeGeneration: (await this.getGeneration(generation.id)) ?? {
+        ...generation,
+        status: "active",
+      },
+    };
   }
 
   private async writeRetirementStatus(

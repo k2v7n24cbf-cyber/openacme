@@ -1142,6 +1142,8 @@ Evidence:
 
 ### Slice 4.8: Generation Routes
 
+Status: done.
+
 Goal:
 
 - Add generation listing, detail, and rollback routes:
@@ -1170,6 +1172,18 @@ Validation:
 ```text
 pnpm --filter @openacme/server test -- hosted-integrations
 ```
+
+Evidence:
+
+- Focused validation initially failed until `HostedIntegrationGenerationStore`
+  exposed `listGenerations` through the built package and rollback returned the
+  refreshed active status.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- generations`
+  `pnpm --filter @openacme/server test -- hosted-integrations`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/server check-types`
+  `pnpm --filter @openacme/server build`
 
 ### Slice 4.9: Deprecation And Removal Policy
 

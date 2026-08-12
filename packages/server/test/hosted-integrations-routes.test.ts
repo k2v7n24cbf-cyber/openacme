@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -18,6 +24,7 @@ let dataDir: string;
 let app: Hono;
 let manager: AgentManager;
 let authToken: string;
+let generationCounter: number;
 
 beforeEach(async () => {
   dataDir = mkdtempSync(path.join(tmpdir(), "openacme-hosted-routes-"));
@@ -26,6 +33,7 @@ beforeEach(async () => {
     model: { provider: "anthropic", model: "claude-sonnet-4-6" },
   });
   ({ app, manager } = await createApp(config));
+  generationCounter = 0;
   const member = manager.authStore.createMember({
     email: "test@example.com",
     password: "test-password-123",
@@ -872,6 +880,140 @@ describe("hosted integrations invocation routes", () => {
   });
 });
 
+describe("hosted integrations generation routes", () => {
+  it("lists active and retired generations and returns promotion provenance detail", async () => {
+    writeFamily(
+      "qualys",
+      familyYaml("qualys", "Qualys", "qualys_count_assets"),
+      {
+        "qualys.py": pythonTool("return {'count': 1}"),
+      },
+    );
+    const firstGenerationId = await promoteFamily("qualys");
+    writeFamily(
+      "qualys",
+      familyYaml("qualys", "Qualys", "qualys_count_assets"),
+      {
+        "qualys.py": pythonTool("return {'count': 2}"),
+      },
+    );
+    const secondGenerationId = await promoteFamily("qualys");
+
+    let res = await req("/api/hosted-integrations/generations?familyId=qualys");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      generations: [
+        { id: secondGenerationId, familyId: "qualys", status: "active" },
+        { id: firstGenerationId, familyId: "qualys", status: "retired" },
+      ],
+    });
+
+    res = await req(
+      `/api/hosted-integrations/generations/${firstGenerationId}`,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      generation: {
+        id: firstGenerationId,
+        familyId: "qualys",
+        status: "retired",
+        provenance: {
+          promotedBy: "agent:tool-developer",
+          validation: { ok: true, diagnostics: [] },
+        },
+      },
+    });
+  });
+
+  it("enforces rollback policy", async () => {
+    writeFamily(
+      "qualys",
+      familyYaml("qualys", "Qualys", "qualys_count_assets"),
+      {
+        "qualys.py": pythonTool("return {'count': 1}"),
+      },
+    );
+    const generationId = await promoteFamily("qualys");
+
+    const res = await req(
+      `/api/hosted-integrations/generations/${generationId}/rollback`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ actor: agentActor() }),
+      },
+    );
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      ok: false,
+      error: { code: "policy_denied" },
+    });
+  });
+
+  it("rolls back only the active pointer without rewriting source or secrets", async () => {
+    writeFamily(
+      "qualys",
+      familyYaml("qualys", "Qualys", "qualys_count_assets"),
+      {
+        "qualys.py": pythonTool("return {'count': 1}"),
+      },
+    );
+    const firstGenerationId = await promoteFamily("qualys");
+    await seedConfigScope("qualys", "qualys-test", "test");
+    await createFileHostedIntegrationSecretStore({
+      dataDir,
+    }).writeHumanOwnedSecrets({
+      scopeId: "qualys-test",
+      secrets: { apiToken: "new-token-456" },
+      updatedBy: "human:alen",
+    });
+
+    const currentSource = pythonTool("return {'count': 2}");
+    writeFamily(
+      "qualys",
+      familyYaml("qualys", "Qualys", "qualys_count_assets"),
+      {
+        "qualys.py": currentSource,
+      },
+    );
+    await promoteFamily("qualys");
+
+    const res = await req(
+      `/api/hosted-integrations/generations/${firstGenerationId}/rollback`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ actor: toolDeveloperActor() }),
+      },
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      ok: true,
+      activeGeneration: { id: firstGenerationId, status: "active" },
+    });
+
+    await expect(
+      createFileHostedIntegrationSecretStore({
+        dataDir,
+      }).readSecretsForRuntime({ scopeId: "qualys-test" }),
+    ).resolves.toEqual({ apiToken: "new-token-456" });
+    expect(
+      readFileSync(
+        path.join(
+          dataDir,
+          "hosted-integrations",
+          "source",
+          "families",
+          "qualys",
+          "qualys.py",
+        ),
+        "utf-8",
+      ),
+    ).toBe(currentSource);
+  });
+});
+
 function agentActor() {
   return { id: "agent:analyst", kind: "agent", roles: ["agent"] };
 }
@@ -955,17 +1097,18 @@ async function createDraft(familyId: string): Promise<string> {
 async function promoteFamily(
   familyId: string,
   existingDraftId?: string,
-): Promise<void> {
+): Promise<string> {
   const draftId = existingDraftId ?? (await createDraft(familyId));
   const generation = await createFileHostedIntegrationGenerationStore({
     dataDir,
-    createId: () => `gen_${familyId}`,
+    createId: () => `gen_${familyId}_${++generationCounter}`,
   }).promoteDraft({
     draftId,
     promotedBy: "agent:tool-developer",
     validation: { ok: true, diagnostics: [] },
   });
   if (!generation.ok) throw new Error(generation.reason);
+  return generation.generation.id;
 }
 
 function pythonTool(body: string): string {

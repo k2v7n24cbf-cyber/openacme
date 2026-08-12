@@ -160,6 +160,33 @@ describe("hosted integration generation artifact store", () => {
     });
   });
 
+  it("lists generations with current lifecycle status by family", async () => {
+    const draftId = await createDraft();
+    const store = generationStore();
+
+    await store.promoteDraft({
+      draftId,
+      promotedBy: "agent:tool-developer",
+      validation: { ok: true, diagnostics: [] },
+    });
+    nowMs += 60_000;
+    await store.promoteDraft({
+      draftId,
+      promotedBy: "agent:tool-developer",
+      validation: { ok: true, diagnostics: [] },
+    });
+
+    await expect(
+      store.listGenerations({ familyId: "qualys" }),
+    ).resolves.toEqual([
+      expect.objectContaining({ id: "gen_2", status: "active" }),
+      expect.objectContaining({ id: "gen_1", status: "retired" }),
+    ]);
+    await expect(
+      store.listGenerations({ familyId: "splunk" }),
+    ).resolves.toEqual([]);
+  });
+
   it("rolls back the active pointer to an existing generation", async () => {
     const draftId = await createDraft();
     const store = generationStore();

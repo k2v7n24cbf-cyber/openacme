@@ -97,6 +97,13 @@ export {
   type ToolObservationSpan,
   withToolObservationSpan,
 } from "./observation.js";
+export {
+  bindHostedIntegrationManagement,
+  HOSTED_INTEGRATION_MANAGEMENT_TOOL_NAMES,
+  type HostedIntegrationManagementBindings,
+  type HostedIntegrationManagementRequest,
+  type HostedIntegrationManagementToolName,
+} from "./builtins/hosted-integration-management.js";
 export { SYSTEM_TOOLS, type SystemTool } from "./system.js";
 export {
   sweepOverflow,
@@ -124,5 +131,6 @@ import "./builtins/objectives.js";
 import "./builtins/agent.js";
 import "./builtins/ping.js";
 import "./builtins/defer-session.js";
+import "./builtins/hosted-integration-management.js";
 import "./builtins/browser/index.js";
 import "./builtins/email/index.js";

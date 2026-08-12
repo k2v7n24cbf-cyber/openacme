@@ -221,6 +221,208 @@ describe("/api/tools hosted integration surfacing", () => {
       },
     });
   });
+
+  it("binds hosted integration management tools to the server control-plane port", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "openacme-tools-hosted-"));
+    writeFamily(dataDir);
+
+    const config = ConfigSchema.parse({
+      dataDir,
+      model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+    });
+    const { manager, close } = await createApp(config);
+    closeApp = close;
+    await manager.createAgent(
+      AgentDefinitionSchema.parse({
+        id: "tool-developer",
+        name: "Tool Developer",
+        role: "",
+        model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+        persona: "Manage hosted integrations.",
+        tools: ["hosted_integration_family_list"],
+      }),
+    );
+    await manager.createAgent(
+      AgentDefinitionSchema.parse({
+        id: "analyst",
+        name: "Analyst",
+        role: "",
+        model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+        persona: "Analyze data.",
+        tools: [],
+      }),
+    );
+
+    const tools = toolRegistry.getVercelTools(
+      new Set(["hosted_integration_family_list"]),
+    ) as Record<
+      string,
+      { execute: (args: Record<string, unknown>) => Promise<string> }
+    >;
+    const allowedOutput = await toolCallContext.run(
+      {
+        agentId: "tool-developer",
+        sessionId: "session_1",
+        workspaceDir: path.join(
+          dataDir,
+          "agents",
+          "tool-developer",
+          "workspace",
+        ),
+      },
+      () => tools.hosted_integration_family_list!.execute({}),
+    );
+    expect(JSON.parse(allowedOutput)).toMatchObject({
+      ok: true,
+      families: [
+        {
+          id: "qualys",
+          name: "Qualys",
+          toolNames: ["qualys_count_assets"],
+        },
+      ],
+    });
+
+    const deniedOutput = await toolCallContext.run(
+      {
+        agentId: "analyst",
+        sessionId: "session_2",
+        workspaceDir: path.join(dataDir, "agents", "analyst", "workspace"),
+      },
+      () => tools.hosted_integration_family_list!.execute({}),
+    );
+    expect(JSON.parse(deniedOutput)).toMatchObject({
+      ok: false,
+      error: {
+        code: "policy_denied",
+        message: "agent cannot manage hosted integrations",
+      },
+    });
+  });
+
+  it("runs examples and promotes drafts through hosted integration management tools", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "openacme-tools-hosted-"));
+    writeFamily(dataDir);
+
+    const config = ConfigSchema.parse({
+      dataDir,
+      model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+    });
+    const { manager, close } = await createApp(config);
+    closeApp = close;
+    const managementToolNames = [
+      "hosted_integration_lock_acquire",
+      "hosted_integration_draft_create",
+      "hosted_integration_draft_patch",
+      "hosted_integration_example_upsert",
+      "hosted_integration_example_run",
+      "hosted_integration_promote",
+    ];
+    await manager.createAgent(
+      AgentDefinitionSchema.parse({
+        id: "tool-developer",
+        name: "Tool Developer",
+        role: "",
+        model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+        persona: "Manage hosted integrations.",
+        tools: managementToolNames,
+      }),
+    );
+
+    const tools = toolRegistry.getVercelTools(
+      new Set(managementToolNames),
+    ) as Record<
+      string,
+      { execute: (args: Record<string, unknown>) => Promise<string> }
+    >;
+    const call = async (name: string, args: Record<string, unknown>) =>
+      JSON.parse(
+        await toolCallContext.run(
+          {
+            agentId: "tool-developer",
+            sessionId: `session_${name}`,
+            workspaceDir: path.join(
+              dataDir!,
+              "agents",
+              "tool-developer",
+              "workspace",
+            ),
+          },
+          () => tools[name]!.execute(args),
+        ),
+      );
+
+    const lock = await call("hosted_integration_lock_acquire", {
+      family_id: "qualys",
+      ttl_ms: 60_000,
+    });
+    expect(lock).toMatchObject({ ok: true, lock: { familyId: "qualys" } });
+
+    const draft = await call("hosted_integration_draft_create", {
+      family_id: "qualys",
+      lock_id: lock.lock.id,
+      source_revision_id: "source_rev_1",
+    });
+    expect(draft).toMatchObject({ ok: true, draft: { familyId: "qualys" } });
+
+    await expect(
+      call("hosted_integration_draft_patch", {
+        draft_id: draft.draft.id,
+        lock_id: lock.lock.id,
+        path: "qualys.py",
+        content: [
+          "def call_tool(name, args, ctx):",
+          "    return {'count': 7, 'mode': 'draft-example'}",
+          "",
+        ].join("\n"),
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    await expect(
+      call("hosted_integration_example_upsert", {
+        draft_id: draft.draft.id,
+        lock_id: lock.lock.id,
+        example: {
+          id: "smoke_count",
+          familyId: "qualys",
+          toolName: "qualys_count_assets",
+          category: "smoke",
+          args: {},
+          expected: {},
+        },
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    const run = await call("hosted_integration_example_run", {
+      draft_id: draft.draft.id,
+      example_id: "smoke_count",
+    });
+    expect(run).toMatchObject({
+      ok: true,
+      envelope: { ok: true, result: { count: 7, mode: "draft-example" } },
+    });
+
+    const promoted = await call("hosted_integration_promote", {
+      draft_id: draft.draft.id,
+      lock_id: lock.lock.id,
+    });
+    expect(promoted).toMatchObject({
+      ok: true,
+      generation: {
+        familyId: "qualys",
+        status: "active",
+      },
+    });
+
+    expect(
+      toolRegistry.getInfo().find((tool) => tool.name === "qualys_count_assets")
+        ?.source,
+    ).toMatchObject({
+      kind: "hosted_integration",
+      familyId: "qualys",
+      generationId: promoted.generation.id,
+    });
+  });
 });
 
 function writeFamily(root: string): void {

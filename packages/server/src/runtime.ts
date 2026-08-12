@@ -1,22 +1,35 @@
 import type { Config } from "@openacme/config";
 import { createLogger } from "@openacme/config/logger";
 import type { ModelResolver } from "@openacme/agent-core";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { parse as parseYaml } from "yaml";
 import { WorkflowManager } from "@openacme/workflows";
 import {
   createFileHostedIntegrationService,
+  HostedIntegrationExampleSchema,
+  FamilyManifestSchema,
+  HostedIntegrationPythonRuntime,
   HostedIntegrationPolicyBindingSchema,
+  evaluateHostedIntegrationPromotionApproval,
   isHostedIntegrationToolVisibleForSelection,
+  type FamilyManifest,
+  type HostedIntegrationDraft,
+  type HostedIntegrationExample,
+  type HostedIntegrationGatewayError,
   type HostedIntegrationGeneration,
+  type HostedIntegrationHumanApprovalRecord,
   type HostedIntegrationPolicyBinding,
   type HostedIntegrationRegistryRefreshEvent,
   type HostedIntegrationService,
   JsonObjectSchema,
 } from "@openacme/hosted-integrations";
 import {
+  bindHostedIntegrationManagement,
   HostedIntegrationToolRegistryAdapter,
   registry as toolRegistry,
   type HostedIntegrationRegistrySnapshot,
+  type HostedIntegrationManagementRequest,
   type HostedIntegrationToolInvokeRequest,
 } from "@openacme/tools";
 import { jsonSchemaToZod } from "@openacme/mcp-client";
@@ -85,6 +98,9 @@ export class ServerRuntime {
         onRegistryRefresh: (event) =>
           this.refreshHostedIntegrationRegistry(event),
       });
+    bindHostedIntegrationManagement({
+      invoke: (request) => this.invokeHostedIntegrationManagement(request),
+    });
     this.workflowExecutionPorts = {
       agent: this.workflowAgentRuntime,
       mcp: this.workflowMcpRuntime,
@@ -201,6 +217,582 @@ export class ServerRuntime {
       toolName: request.toolName,
       generationId: request.generationId,
     });
+  }
+
+  private async invokeHostedIntegrationManagement(
+    request: HostedIntegrationManagementRequest,
+  ): Promise<unknown> {
+    const denied = this.hostedIntegrationManagementDenied(request);
+    if (denied) return denied;
+    const p = request.params;
+    switch (request.operation) {
+      case "hosted_integration_family_list":
+        return {
+          ok: true,
+          families: await this.hostedIntegrationService.listFamilies(),
+        };
+      case "hosted_integration_family_create": {
+        const result =
+          await this.hostedIntegrationService.proposedFamilies.createProposedFamily(
+            {
+              familyId: stringParam(p, "family_id"),
+              name: stringParam(p, "name"),
+              toolName: stringParam(p, "tool_name"),
+              lockedBy: request.actorId,
+              ttlMs: positiveIntegerParam(p, "ttl_ms") ?? 30 * 60 * 1000,
+            },
+          );
+        return result.ok
+          ? {
+              ok: true,
+              family: result.family,
+              lock: result.lock,
+              draft: result.draft,
+              sourceRevisionId: result.sourceRevisionId,
+            }
+          : { ok: false, error: { code: result.reason } };
+      }
+      case "hosted_integration_source_read":
+        return this.readHostedIntegrationSource(p);
+      case "hosted_integration_lock_acquire": {
+        const result = await this.hostedIntegrationService.locks.acquireLock({
+          familyId: stringParam(p, "family_id"),
+          lockedBy: request.actorId,
+          ttlMs: positiveIntegerParam(p, "ttl_ms") ?? 30 * 60 * 1000,
+        });
+        return result.ok
+          ? { ok: true, lock: result.lock }
+          : { ok: false, error: { code: result.reason }, lock: result.lock };
+      }
+      case "hosted_integration_lock_renew": {
+        const result = await this.hostedIntegrationService.locks.renewLock({
+          lockId: stringParam(p, "lock_id"),
+          lockedBy: request.actorId,
+          ttlMs: positiveIntegerParam(p, "ttl_ms") ?? 30 * 60 * 1000,
+        });
+        if (result.ok) return { ok: true, lock: result.lock };
+        return {
+          ok: false,
+          error: { code: result.reason },
+          ...("lock" in result ? { lock: result.lock } : {}),
+        };
+      }
+      case "hosted_integration_lock_release": {
+        const result = await this.hostedIntegrationService.locks.releaseLock({
+          lockId: stringParam(p, "lock_id"),
+          lockedBy: request.actorId,
+        });
+        if (result.ok) return { ok: true };
+        return {
+          ok: false,
+          error: { code: result.reason },
+          ...("lock" in result ? { lock: result.lock } : {}),
+        };
+      }
+      case "hosted_integration_draft_create": {
+        const familyId = stringParam(p, "family_id");
+        const result = await this.hostedIntegrationService.drafts.createDraft({
+          familyId,
+          lockId: stringParam(p, "lock_id"),
+          sourceRevisionId:
+            optionalStringParam(p, "source_revision_id") ??
+            (await this.hostedIntegrationService.sourceFiles.getCurrentSourceRevisionId(
+              familyId,
+            )) ??
+            "source_current",
+        });
+        return result.ok
+          ? { ok: true, draft: result.draft }
+          : { ok: false, error: { code: result.reason } };
+      }
+      case "hosted_integration_draft_get":
+        return this.readHostedIntegrationDraft(p);
+      case "hosted_integration_draft_patch": {
+        const result =
+          await this.hostedIntegrationService.drafts.writeDraftFile({
+            draftId: stringParam(p, "draft_id"),
+            lockId: stringParam(p, "lock_id"),
+            path: stringParam(p, "path"),
+            content: stringParam(p, "content"),
+          });
+        return result.ok
+          ? { ok: true }
+          : { ok: false, error: { code: result.reason } };
+      }
+      case "hosted_integration_draft_delete": {
+        const result =
+          await this.hostedIntegrationService.drafts.deleteDraftFile({
+            draftId: stringParam(p, "draft_id"),
+            lockId: stringParam(p, "lock_id"),
+            path: stringParam(p, "path"),
+          });
+        return result.ok
+          ? { ok: true }
+          : { ok: false, error: { code: result.reason } };
+      }
+      case "hosted_integration_example_list":
+        return {
+          ok: true,
+          examples: await this.hostedIntegrationService.examples.listExamples(
+            stringParam(p, "draft_id"),
+          ),
+        };
+      case "hosted_integration_example_upsert": {
+        const result =
+          await this.hostedIntegrationService.examples.upsertExample({
+            draftId: stringParam(p, "draft_id"),
+            lockId: stringParam(p, "lock_id"),
+            example: HostedIntegrationExampleSchema.parse(p.example),
+          });
+        return result.ok
+          ? { ok: true }
+          : {
+              ok: false,
+              error: {
+                code: result.reason,
+                ...("message" in result ? { message: result.message } : {}),
+              },
+            };
+      }
+      case "hosted_integration_example_run":
+        return this.runHostedIntegrationDraftExample(request);
+      case "hosted_integration_validate":
+        return this.hostedIntegrationService.validator.validateDraft(
+          stringParam(p, "draft_id"),
+        );
+      case "hosted_integration_promote":
+        return this.promoteHostedIntegrationDraft(request);
+      case "hosted_integration_generation_list":
+        return {
+          ok: true,
+          generations:
+            await this.hostedIntegrationService.generations.listGenerations({
+              familyId: optionalStringParam(p, "family_id") ?? undefined,
+            }),
+        };
+      case "hosted_integration_generation_get": {
+        const generation =
+          await this.hostedIntegrationService.generations.getGeneration(
+            stringParam(p, "generation_id"),
+          );
+        return generation
+          ? { ok: true, generation }
+          : { ok: false, error: { code: "not_found" } };
+      }
+      case "hosted_integration_generation_rollback": {
+        const generation =
+          await this.hostedIntegrationService.generations.getGeneration(
+            stringParam(p, "generation_id"),
+          );
+        if (!generation) return { ok: false, error: { code: "not_found" } };
+        const result = await this.hostedIntegrationService.generations.rollback(
+          {
+            familyId: generation.familyId,
+            generationId: generation.id,
+            rolledBackBy: request.actorId,
+          },
+        );
+        return result.ok
+          ? { ok: true, activeGeneration: result.activeGeneration }
+          : { ok: false, error: { code: result.reason } };
+      }
+      case "hosted_integration_config_scope_list":
+        return {
+          ok: true,
+          configScopes:
+            await this.hostedIntegrationService.configScopes.listConfigScopes(),
+        };
+      case "hosted_integration_config_scope_get": {
+        const configScope =
+          await this.hostedIntegrationService.configScopes.getConfigScope(
+            stringParam(p, "scope_id"),
+          );
+        return configScope
+          ? { ok: true, configScope }
+          : { ok: false, error: { code: "not_found" } };
+      }
+      case "hosted_integration_debug_run":
+        return this.invokeHostedIntegrationDebugRun(request);
+      case "hosted_integration_run_get": {
+        const run =
+          await this.hostedIntegrationService.gateway.executionLogs.getRunLog(
+            stringParam(p, "run_id"),
+          );
+        return run
+          ? { ok: true, run }
+          : { ok: false, error: { code: "not_found" } };
+      }
+      case "hosted_integration_artifact_get": {
+        const runId = stringParam(p, "run_id");
+        const run =
+          await this.hostedIntegrationService.gateway.executionLogs.getRunLog(
+            runId,
+          );
+        if (!run) return { ok: false, error: { code: "not_found" } };
+        const content =
+          await this.hostedIntegrationService.artifacts.readArtifact({
+            familyId: run.familyId,
+            runId,
+            name: stringParam(p, "name"),
+          });
+        return { ok: true, runId, name: stringParam(p, "name"), content };
+      }
+      default:
+        return {
+          ok: false,
+          error: {
+            code: "not_implemented",
+            message:
+              "This hosted integration management operation is registered but awaits its owning control-plane slice.",
+          },
+        };
+    }
+  }
+
+  private hostedIntegrationManagementDenied(
+    request: HostedIntegrationManagementRequest,
+  ): { ok: false; error: { code: string; message: string } } | null {
+    const def = this.agentManager.getAgentDef(request.actorId);
+    if (!def || !def.tools.includes(request.toolName)) {
+      return {
+        ok: false,
+        error: {
+          code: "policy_denied",
+          message: "agent cannot manage hosted integrations",
+        },
+      };
+    }
+    return null;
+  }
+
+  private async readHostedIntegrationSource(
+    params: Record<string, unknown>,
+  ): Promise<unknown> {
+    const draftId = optionalStringParam(params, "draft_id");
+    const filePath = optionalStringParam(params, "path");
+    if (draftId) {
+      if (filePath) {
+        const result = await this.hostedIntegrationService.drafts.readDraftFile(
+          {
+            draftId,
+            path: filePath,
+          },
+        );
+        return result.ok
+          ? { ok: true, path: filePath, content: result.content }
+          : { ok: false, error: { code: result.reason } };
+      }
+      return this.readHostedIntegrationDraft({ draft_id: draftId });
+    }
+
+    const familyId = stringParam(params, "family_id");
+    if (filePath) {
+      const result =
+        await this.hostedIntegrationService.sourceFiles.readSourceFile({
+          familyId,
+          path: filePath,
+        });
+      return result.ok
+        ? { ok: true, path: filePath, content: result.content }
+        : { ok: false, error: { code: result.reason } };
+    }
+    const family = await this.hostedIntegrationService.getFamily(familyId);
+    const listed =
+      await this.hostedIntegrationService.sourceFiles.listSourceFiles(familyId);
+    return {
+      ok: family !== null && listed.ok,
+      family,
+      files: listed.ok ? listed.files : [],
+      ...(!listed.ok ? { error: { code: listed.reason } } : {}),
+    };
+  }
+
+  private async readHostedIntegrationDraft(
+    params: Record<string, unknown>,
+  ): Promise<unknown> {
+    const draftId = stringParam(params, "draft_id");
+    const filePath = optionalStringParam(params, "path");
+    if (filePath) {
+      const result = await this.hostedIntegrationService.drafts.readDraftFile({
+        draftId,
+        path: filePath,
+      });
+      return result.ok
+        ? { ok: true, path: filePath, content: result.content }
+        : { ok: false, error: { code: result.reason } };
+    }
+    const draft = await this.hostedIntegrationService.drafts.getDraft(draftId);
+    if (!draft) return { ok: false, error: { code: "not_found" } };
+    const files =
+      await this.hostedIntegrationService.drafts.listDraftFiles(draftId);
+    return {
+      ok: true,
+      draft,
+      files: files.ok ? files.files : [],
+    };
+  }
+
+  private async invokeHostedIntegrationDebugRun(
+    request: HostedIntegrationManagementRequest,
+  ): Promise<unknown> {
+    const p = request.params;
+    const operationClass = optionalStringParam(p, "operation_class") ?? "read";
+    if (operationClass !== "read" && p.allow_writes !== true) {
+      return { ok: false, error: { code: "approval_required" } };
+    }
+    const familyId = stringParam(p, "family_id");
+    const toolName = stringParam(p, "tool_name");
+    const configScopeId = stringParam(p, "config_scope_id");
+    return this.hostedIntegrationService.gateway.invoke({
+      actor: { id: request.actorId, kind: "agent", roles: ["tool_developer"] },
+      familyId,
+      toolName,
+      environment: stringParam(p, "environment"),
+      args: JsonObjectSchema.parse(p.args ?? {}),
+      bindings: [
+        {
+          agentId: request.actorId,
+          familyId,
+          toolName,
+          allowedConfigScopeIds: [configScopeId],
+          defaultConfigScopeId: configScopeId,
+          environment: stringParam(p, "environment"),
+        },
+      ],
+      generationId: optionalStringParam(p, "generation_id") ?? undefined,
+    });
+  }
+
+  private async runHostedIntegrationDraftExample(
+    request: HostedIntegrationManagementRequest,
+  ): Promise<unknown> {
+    const p = request.params;
+    const draftId = stringParam(p, "draft_id");
+    const draft = await this.hostedIntegrationService.drafts.getDraft(draftId);
+    if (!draft) return { ok: false, error: { code: "not_found" } };
+    const exampleId = stringParam(p, "example_id");
+    const examples =
+      await this.hostedIntegrationService.examples.listExamples(draftId);
+    const example = examples.find((candidate) => candidate.id === exampleId);
+    if (!example) return { ok: false, error: { code: "not_found" } };
+    const manifest = await this.readHostedIntegrationDraftManifest(draftId);
+    const tool = manifest.tools.find(
+      (candidate) => candidate.name === example.toolName,
+    );
+    if (!tool) return { ok: false, error: { code: "tool_not_found" } };
+
+    const draftGenerationId = `draft:${draft.id}`;
+    const { run, familyHome, runDir } =
+      await this.hostedIntegrationService.artifacts.createRun({
+        familyId: draft.familyId,
+        toolName: example.toolName,
+        generationId: draftGenerationId,
+        actorId: request.actorId,
+        input: example.args,
+      });
+    await this.hostedIntegrationService.gateway.executionLogs.startLog({
+      runId: run.id,
+      familyId: draft.familyId,
+      toolName: example.toolName,
+      generationId: draftGenerationId,
+      actorId: request.actorId,
+      configScopeId: "debug",
+      configRevision: 1,
+      status: "running",
+      startedAt: run.startedAt,
+    });
+
+    const filesRoot = path.join(runDir, "files");
+    await this.copyHostedIntegrationDraftFiles(draftId, filesRoot);
+    const runtimeResult = await new HostedIntegrationPythonRuntime().callTool({
+      familyId: draft.familyId,
+      generationId: draftGenerationId,
+      filesRoot,
+      runtime: manifest.runtime,
+      timeoutMs: manifest.runtime.defaultTimeoutMs,
+      toolName: example.toolName,
+      args: JsonObjectSchema.parse(example.args),
+      context: {
+        familyId: draft.familyId,
+        generationId: draftGenerationId,
+        runId: run.id,
+        familyHome,
+        runDir,
+        config: {},
+        secrets: {},
+      },
+    });
+    if (!runtimeResult.ok) {
+      const normalizedError = hostedIntegrationRuntimeError(
+        runtimeResult.error,
+      );
+      const errorEnvelope =
+        await this.hostedIntegrationService.artifacts.completeRunError({
+          familyId: draft.familyId,
+          runId: run.id,
+          error: JsonObjectSchema.parse(normalizedError),
+        });
+      await this.hostedIntegrationService.gateway.executionLogs.finishLog(
+        run.id,
+        {
+          status: "failed",
+          endedAt: new Date().toISOString(),
+          error: normalizedError,
+        },
+      );
+      return { ok: false, runId: run.id, error: errorEnvelope.error };
+    }
+
+    const envelope =
+      await this.hostedIntegrationService.artifacts.completeRunSuccess({
+        familyId: draft.familyId,
+        runId: run.id,
+        result: runtimeResult.result,
+        inlineResultTokenLimit: manifest.runtime.inlineResultTokenLimit,
+      });
+    await this.hostedIntegrationService.gateway.executionLogs.finishLog(
+      run.id,
+      {
+        status: "succeeded",
+        endedAt: new Date().toISOString(),
+        resultEnvelopeRef: `${run.id}/output.json`,
+      },
+    );
+    return { ok: true, runId: run.id, envelope };
+  }
+
+  private async promoteHostedIntegrationDraft(
+    request: HostedIntegrationManagementRequest,
+  ): Promise<unknown> {
+    const p = request.params;
+    const draftId = stringParam(p, "draft_id");
+    const draft = await this.hostedIntegrationService.drafts.getDraft(draftId);
+    if (!draft) return { ok: false, error: { code: "not_found" } };
+    const lockId = stringParam(p, "lock_id");
+    if (!(await this.hasCurrentHostedIntegrationDraftLock(draft, lockId))) {
+      return { ok: false, error: { code: "lock_required" } };
+    }
+    const validation =
+      await this.hostedIntegrationService.validator.validateDraft(draftId);
+    if (!validation.ok) {
+      return { ok: false, error: { code: "validation_failed" }, validation };
+    }
+    const manifest = await this.readHostedIntegrationDraftManifest(draftId);
+    const examples =
+      await this.hostedIntegrationService.examples.listExamples(draftId);
+    const missingExamples = missingHostedIntegrationExampleToolNames(
+      manifest,
+      examples,
+    );
+    if (missingExamples.length > 0) {
+      return {
+        ok: false,
+        error: {
+          code: "missing_required_examples",
+          toolNames: missingExamples,
+        },
+      };
+    }
+
+    const approvalId = optionalStringParam(p, "approval_id");
+    let approval: HostedIntegrationHumanApprovalRecord | null = null;
+    if (approvalId) {
+      approval =
+        await this.hostedIntegrationService.approvals.getApproval(approvalId);
+    }
+    const approvalDecision = evaluateHostedIntegrationPromotionApproval({
+      actor: { id: request.actorId, kind: "agent" },
+      target: hostedIntegrationPromotionTargetForDraft(draft, manifest),
+      approval,
+    });
+    if (!approvalDecision.ok) {
+      return { ok: false, error: { code: approvalDecision.reason } };
+    }
+
+    const source =
+      await this.hostedIntegrationService.sourceFiles.replaceSourceFiles({
+        familyId: draft.familyId,
+        files: await this.collectHostedIntegrationDraftFiles(draftId),
+        updatedBy: request.actorId,
+      });
+    const promoted =
+      await this.hostedIntegrationService.generations.promoteDraft({
+        draftId,
+        promotedBy: request.actorId,
+        validation,
+        draftRevisionId: draft.updatedAt,
+        sourceRevisionId: source.sourceRevisionId,
+        approval: approvalDecision.approval,
+      });
+    return promoted.ok
+      ? {
+          ok: true,
+          generation: promoted.generation,
+          sourceRevisionId: source.sourceRevisionId,
+        }
+      : { ok: false, error: { code: promoted.reason } };
+  }
+
+  private async hasCurrentHostedIntegrationDraftLock(
+    draft: HostedIntegrationDraft,
+    lockId: string,
+  ): Promise<boolean> {
+    if (draft.lockId !== lockId) return false;
+    const lock = await this.hostedIntegrationService.locks.getActiveLock(
+      draft.familyId,
+    );
+    return lock?.id === lockId;
+  }
+
+  private async readHostedIntegrationDraftManifest(
+    draftId: string,
+  ): Promise<FamilyManifest> {
+    const manifestFile =
+      await this.hostedIntegrationService.drafts.readDraftFile({
+        draftId,
+        path: "family.yaml",
+      });
+    if (!manifestFile.ok) throw new Error("family.yaml is required");
+    return FamilyManifestSchema.parse(parseYaml(manifestFile.content));
+  }
+
+  private async collectHostedIntegrationDraftFiles(
+    draftId: string,
+  ): Promise<Record<string, string>> {
+    const listed =
+      await this.hostedIntegrationService.drafts.listDraftFiles(draftId);
+    if (!listed.ok) throw new Error("draft files not found");
+    const files: Record<string, string> = {};
+    for (const file of listed.files) {
+      const read = await this.hostedIntegrationService.drafts.readDraftFile({
+        draftId,
+        path: file.path,
+      });
+      if (!read.ok) throw new Error(`draft file ${file.path} not found`);
+      files[file.path] = read.content;
+    }
+    return files;
+  }
+
+  private async copyHostedIntegrationDraftFiles(
+    draftId: string,
+    outputRoot: string,
+  ): Promise<void> {
+    const files = await this.collectHostedIntegrationDraftFiles(draftId);
+    await mkdir(outputRoot, { recursive: true });
+    for (const [relPath, content] of Object.entries(files)) {
+      const resolved = path.resolve(outputRoot, relPath);
+      const relative = path.relative(outputRoot, resolved);
+      if (
+        relative === "" ||
+        relative.startsWith("..") ||
+        path.isAbsolute(relative)
+      ) {
+        throw new Error("path escapes draft runtime root");
+      }
+      await mkdir(path.dirname(resolved), { recursive: true });
+      await writeFile(resolved, content, "utf-8");
+    }
   }
 
   async initWorkflowMCP(): Promise<void> {
@@ -342,4 +934,95 @@ export class ServerRuntime {
         });
     await this.workflowDispatcherTickInFlight;
   }
+}
+
+function missingHostedIntegrationExampleToolNames(
+  manifest: FamilyManifest,
+  examples: HostedIntegrationExample[],
+): string[] {
+  const covered = new Set(examples.map((example) => example.toolName));
+  return manifest.tools
+    .map((tool) => tool.name)
+    .filter((toolName) => !covered.has(toolName));
+}
+
+function hostedIntegrationPromotionTargetForDraft(
+  draft: HostedIntegrationDraft,
+  manifest: FamilyManifest,
+) {
+  const toolNames = manifest.tools.map((tool) => tool.name);
+  const destructiveToolNames = manifest.tools
+    .filter((tool) => tool.classification.operation === "destructive")
+    .map((tool) => tool.name);
+  return {
+    familyId: draft.familyId,
+    draftId: draft.id,
+    draftRevisionId: draft.updatedAt,
+    operation: "promote" as const,
+    operationClass: hostedIntegrationOperationClassForManifest(manifest),
+    toolNames,
+    destructiveToolNames,
+  };
+}
+
+function hostedIntegrationOperationClassForManifest(
+  manifest: FamilyManifest,
+): "read" | "write" | "destructive" {
+  if (
+    manifest.tools.some(
+      (tool) => tool.classification.operation === "destructive",
+    )
+  ) {
+    return "destructive";
+  }
+  if (
+    manifest.tools.some((tool) => tool.classification.operation === "write")
+  ) {
+    return "write";
+  }
+  return "read";
+}
+
+function hostedIntegrationRuntimeError(error: {
+  code: HostedIntegrationGatewayError["code"];
+  message: string;
+  details?: HostedIntegrationGatewayError["details"];
+}): HostedIntegrationGatewayError {
+  return {
+    code: error.code,
+    message: error.message,
+    ...(error.details === undefined ? {} : { details: error.details }),
+  };
+}
+
+function stringParam(params: Record<string, unknown>, name: string): string {
+  const value = params[name];
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${name} is required`);
+  }
+  return value;
+}
+
+function optionalStringParam(
+  params: Record<string, unknown>,
+  name: string,
+): string | null {
+  const value = params[name];
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${name} must be a non-empty string`);
+  }
+  return value;
+}
+
+function positiveIntegerParam(
+  params: Record<string, unknown>,
+  name: string,
+): number | null {
+  const value = params[name];
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
 }

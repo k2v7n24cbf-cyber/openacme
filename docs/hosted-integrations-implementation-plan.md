@@ -1452,6 +1452,8 @@ pnpm --filter @openacme/tools test -- hosted-integrations
 
 ### Slice 5.3: Management Tool Wrappers
 
+Status: done.
+
 Goal:
 
 - Add `hosted_integration_*` management tools in `packages/tools`.
@@ -1462,7 +1464,10 @@ Goal:
 - Cover the Tool Developer Agent lifecycle surface: family create/inspect,
   source inspect, lock/draft edit/delete, example list/upsert/run, validation,
   promotion, generation inspect/rollback, config-scope metadata inspect, debug
-  run, run/artifact inspect, and failure bucket list/get/assign/close.
+  run, and run/artifact inspect.
+- Register failure bucket management tool names against the same bindable port,
+  but keep their store/route behavior in Milestone 6.3 where failure buckets are
+  introduced.
 
 Non-goals:
 
@@ -1487,6 +1492,24 @@ Validation:
 ```text
 pnpm --filter @openacme/tools test -- hosted-integration-management
 ```
+
+Evidence:
+
+- Red/green validation:
+  `pnpm --filter @openacme/server test -- tools-hosted-integrations` first
+  exposed that `hosted_integration_promote` did not refresh the registry through
+  the management path and that the test was reading registry info incorrectly.
+- Green validation:
+  `pnpm --filter @openacme/tools test -- hosted-integration-management`
+  `pnpm --filter @openacme/tools check-types`
+  `pnpm --filter @openacme/tools build`
+  `pnpm --filter @openacme/server test -- tools-hosted-integrations`
+  `pnpm --filter @openacme/server check-types`
+  `pnpm --filter @openacme/server build`
+- Isolated live smoke used
+  `/Users/alenbohcelyan/.openamce-hosted-integrations-test-env` on
+  `127.0.0.1:3466` to promote and invoke a non-destructive Python
+  `live_safe_echo` hosted integration without touching local prod.
 
 ### Slice 5.4: Tool Developer Agent Template
 

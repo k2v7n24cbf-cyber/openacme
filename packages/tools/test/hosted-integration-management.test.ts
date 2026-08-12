@@ -1,0 +1,199 @@
+import { describe, expect, it, afterEach } from "vitest";
+import { registry } from "../src/registry.js";
+import { toolCallContext } from "../src/session-context.js";
+import {
+  bindHostedIntegrationManagement,
+  HOSTED_INTEGRATION_MANAGEMENT_TOOL_NAMES,
+  type HostedIntegrationManagementRequest,
+} from "../src/builtins/hosted-integration-management.js";
+
+afterEach(() => {
+  bindHostedIntegrationManagement(null);
+});
+
+describe("hosted integration management tools", () => {
+  it("registers the complete Tool Developer Agent lifecycle tool surface", () => {
+    expect(
+      HOSTED_INTEGRATION_MANAGEMENT_TOOL_NAMES.filter(
+        (name) => registry.get(name) === undefined,
+      ),
+    ).toEqual([]);
+    expect(HOSTED_INTEGRATION_MANAGEMENT_TOOL_NAMES).toEqual([
+      "hosted_integration_family_list",
+      "hosted_integration_family_create",
+      "hosted_integration_source_read",
+      "hosted_integration_lock_acquire",
+      "hosted_integration_lock_renew",
+      "hosted_integration_lock_release",
+      "hosted_integration_draft_create",
+      "hosted_integration_draft_get",
+      "hosted_integration_draft_patch",
+      "hosted_integration_draft_delete",
+      "hosted_integration_example_list",
+      "hosted_integration_example_upsert",
+      "hosted_integration_example_run",
+      "hosted_integration_validate",
+      "hosted_integration_promote",
+      "hosted_integration_generation_list",
+      "hosted_integration_generation_get",
+      "hosted_integration_generation_rollback",
+      "hosted_integration_config_scope_list",
+      "hosted_integration_config_scope_get",
+      "hosted_integration_debug_run",
+      "hosted_integration_run_get",
+      "hosted_integration_artifact_get",
+      "hosted_integration_failure_bucket_list",
+      "hosted_integration_failure_bucket_get",
+      "hosted_integration_failure_bucket_assign",
+      "hosted_integration_failure_bucket_close",
+    ]);
+  });
+
+  it("delegates management tool calls to the bound control-plane port", async () => {
+    const calls: HostedIntegrationManagementRequest[] = [];
+    bindHostedIntegrationManagement({
+      invoke: async (request) => {
+        calls.push(request);
+        return { ok: true, family: { id: request.params.family_id } };
+      },
+    });
+
+    const result = await runTool(
+      "hosted_integration_lock_acquire",
+      { family_id: "qualys", ttl_ms: 60_000 },
+      "tool-developer",
+    );
+
+    expect(result).toEqual({ ok: true, family: { id: "qualys" } });
+    expect(calls).toEqual([
+      {
+        actorId: "tool-developer",
+        toolName: "hosted_integration_lock_acquire",
+        operation: "hosted_integration_lock_acquire",
+        params: { family_id: "qualys", ttl_ms: 60_000 },
+      },
+    ]);
+  });
+
+  it("returns a clear platform-unavailable error when unbound", async () => {
+    const result = await runTool(
+      "hosted_integration_family_list",
+      {},
+      "tool-developer",
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "platform_unavailable" },
+    });
+  });
+
+  it("requires an active agent context before invoking the bound port", async () => {
+    const calls: HostedIntegrationManagementRequest[] = [];
+    bindHostedIntegrationManagement({
+      invoke: async (request) => {
+        calls.push(request);
+        return { ok: true };
+      },
+    });
+
+    const result = await runTool("hosted_integration_family_list", {});
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "policy_denied" },
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("surfaces Tool Developer Agent policy success and normal-agent denial from the control-plane port", async () => {
+    bindHostedIntegrationManagement({
+      invoke: async (request) => {
+        if (request.actorId !== "tool-developer") {
+          return {
+            ok: false,
+            error: {
+              code: "policy_denied",
+              message: "agent cannot manage hosted integrations",
+            },
+          };
+        }
+        return { ok: true, families: [] };
+      },
+    });
+
+    await expect(
+      runTool("hosted_integration_family_list", {}, "tool-developer"),
+    ).resolves.toEqual({ ok: true, families: [] });
+    await expect(
+      runTool("hosted_integration_family_list", {}, "analyst"),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "policy_denied" },
+    });
+  });
+
+  it("redacts secret-shaped keys and values from management tool responses", async () => {
+    bindHostedIntegrationManagement({
+      invoke: async () => ({
+        ok: true,
+        configScope: {
+          id: "qualys-prod",
+          secrets: { apiToken: { configured: true } },
+          nested: { password: "super-secret-value" },
+          note: "bearer raw-token-123",
+        },
+      }),
+    });
+
+    const result = await runTool(
+      "hosted_integration_config_scope_get",
+      { scope_id: "qualys-prod" },
+      "tool-developer",
+    );
+
+    expect(JSON.stringify(result)).not.toContain("apiToken");
+    expect(JSON.stringify(result)).not.toContain("super-secret-value");
+    expect(JSON.stringify(result)).not.toContain("raw-token-123");
+    expect(result).toMatchObject({
+      ok: true,
+      configScope: {
+        secrets: "[REDACTED]",
+        nested: { password: "[REDACTED]" },
+        note: "[REDACTED]",
+      },
+    });
+  });
+
+  it("rejects self-approval style destructive promotion parameters", async () => {
+    bindHostedIntegrationManagement({
+      invoke: async () => {
+        throw new Error("should not be called");
+      },
+    });
+
+    const output = await registry.dispatch("hosted_integration_promote", {
+      draft_id: "draft_1",
+      lock_id: "lock_1",
+      approvalGranted: true,
+    });
+
+    expect(JSON.parse(output)).toMatchObject({
+      error: expect.stringContaining("Unrecognized key"),
+    });
+  });
+});
+
+async function runTool(
+  name: string,
+  args: Record<string, unknown>,
+  actorId?: string,
+): Promise<unknown> {
+  const tool = registry.get(name);
+  if (!tool) throw new Error(`${name} not registered`);
+  const exec = () => tool.handler(args);
+  const output = actorId
+    ? await toolCallContext.run({ agentId: actorId }, exec)
+    : await exec();
+  return JSON.parse(output);
+}

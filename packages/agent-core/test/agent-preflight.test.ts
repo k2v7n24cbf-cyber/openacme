@@ -668,6 +668,77 @@ describe("Agent.preflightCompress", () => {
     ).toBe(true);
   });
 
+  it("emergency-summarizes after a successful compression that remains over the hard budget", async () => {
+    const db = freshDb();
+    const sessions = createSessionStore(db);
+    const parent = sessions.create("a1", {
+      id: "preflight-successful-compression-still-oversize",
+    });
+
+    const seed: UIMessage[] = [
+      bigUserMsg("protected-huge-u", 40_000),
+      bigAssistantMsg("old-a", 8_000),
+      bigUserMsg("old-u", 8_000),
+      bigAssistantMsg("old-a-2", 8_000),
+      bigUserMsg("old-u-2", 8_000),
+      bigAssistantMsg("tail-a", 500),
+      bigUserMsg("tail-u", 500),
+    ];
+
+    getEffectiveContextWindowMock.mockReturnValue(5_000);
+    generateTextMock.mockImplementation(
+      async (arg: {
+        prompt?: string;
+        experimental_telemetry?: { functionId?: string };
+      }) => {
+        const functionId = arg.experimental_telemetry?.functionId;
+        if (functionId === "a1:memory-flush") {
+          return { text: "## Active Task\nNone." };
+        }
+        if (functionId === "compression-summarizer") {
+          return { text: "## Active Task\nNormal compression succeeded." };
+        }
+        if (functionId === "compression-emergency-summarizer") {
+          return {
+            text:
+              "## Active Task\nContinue.\n\n" +
+              "## Reference Files Read\n- /tmp/oversize.ts - reason: test fixture\n\n" +
+              "If file/log-specific detail matters and is not explicit here, re-open the referenced source before acting.",
+          };
+        }
+        throw new Error(`unexpected generateText call: ${functionId ?? "none"}`);
+      },
+    );
+
+    const agent = makeAgent({
+      db,
+      thresholdTokens: 1000,
+      protectFirstN: 1,
+      tailTokenBudget: 200,
+    });
+    const prepared = await agent.prepareModelHistory(
+      parent.id,
+      seed,
+      "proactive",
+    );
+
+    const functionIds = generateTextMock.mock.calls.map(
+      ([arg]) => arg?.experimental_telemetry?.functionId,
+    );
+    expect(functionIds).toContain("compression-summarizer");
+    expect(functionIds).toContain("compression-emergency-summarizer");
+    expect(prepared.compressionRequired).toBe(true);
+    expect(prepared.compressed).toBe(true);
+    expect(prepared.estimatedTokens ?? Number.POSITIVE_INFINITY).toBeLessThan(
+      5_000,
+    );
+    expect(
+      prepared.modelHistory.some((message) =>
+        messageText(message).includes("Reference Files Read"),
+      ),
+    ).toBe(true);
+  });
+
   it("recovers from provider context_length_exceeded with reactive compression instead of resending raw history", async () => {
     const db = freshDb();
     const sessions = createSessionStore(db);

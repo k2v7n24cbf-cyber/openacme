@@ -695,6 +695,54 @@ export class Agent {
     };
   }
 
+  private async tryEmergencyPreparedHistory(args: {
+    sessionId: string;
+    reason: ContextSnapshotReason;
+    history: UIMessage[];
+    canonicalHistory: UIMessage[];
+    threshold: number;
+    compressionRequired: boolean;
+  }): Promise<PreparedModelHistory | null> {
+    try {
+      const emergency = await this.emergencySummarizeHistory({
+        sessionId: args.sessionId,
+        history: args.history,
+      });
+      const snapshotId = this.createContextSnapshot({
+        sessionId: args.sessionId,
+        reason: args.reason,
+        modelHistory: emergency.modelHistory,
+        canonicalHistory: args.canonicalHistory,
+        summaryText: emergency.summary,
+      });
+      return {
+        modelHistory: emergency.modelHistory,
+        compressed: true,
+        snapshotId,
+        compressionRequired: args.compressionRequired,
+        estimatedTokens: this.estimateRequestTokens(
+          args.sessionId,
+          emergency.modelHistory,
+        ),
+        compressionThreshold: args.threshold,
+      };
+    } catch (e) {
+      this.reportTimelineEvent({
+        sessionId: args.sessionId,
+        agentId: this.config.id,
+        eventType: "session.compression.emergency.failed",
+        source: "agent",
+        status: "error",
+        payload: {
+          reason: args.reason,
+          mode: "model_context",
+          error: extractErrorText(e),
+        },
+      });
+      return null;
+    }
+  }
+
   private surfaceAutonomousError(sessionId: string, err: unknown): void {
     const msg = {
       id: randomUUID(),
@@ -1901,43 +1949,15 @@ export class Agent {
             };
           }
 
-          try {
-            const emergency = await this.emergencySummarizeHistory({
-              sessionId,
-              history: fallbackHistory,
-            });
-            const snapshotId = this.createContextSnapshot({
-              sessionId,
-              reason,
-              modelHistory: emergency.modelHistory,
-              canonicalHistory: history,
-              summaryText: emergency.summary,
-            });
-            return {
-              modelHistory: emergency.modelHistory,
-              compressed: true,
-              snapshotId,
-              compressionRequired,
-              estimatedTokens: this.estimateRequestTokens(
-                sessionId,
-                emergency.modelHistory,
-              ),
-              compressionThreshold: threshold,
-            };
-          } catch (e) {
-            this.reportTimelineEvent({
-              sessionId,
-              agentId: this.config.id,
-              eventType: "session.compression.emergency.failed",
-              source: "agent",
-              status: "error",
-              payload: {
-                reason,
-                mode: "model_context",
-                error: extractErrorText(e),
-              },
-            });
-          }
+          const emergency = await this.tryEmergencyPreparedHistory({
+            sessionId,
+            reason,
+            history: fallbackHistory,
+            canonicalHistory: history,
+            threshold,
+            compressionRequired,
+          });
+          if (emergency) return emergency;
         }
       }
       return {
@@ -1948,6 +1968,25 @@ export class Agent {
         estimatedTokens: lastEstimatedTokens,
         compressionThreshold: threshold,
       };
+    }
+
+    const postCompressionTokens = this.estimateRequestTokens(
+      sessionId,
+      currentHistory,
+    );
+    if (
+      compressionRequired &&
+      postCompressionTokens > this.fallbackHardLimitTokens(threshold)
+    ) {
+      const emergency = await this.tryEmergencyPreparedHistory({
+        sessionId,
+        reason,
+        history,
+        canonicalHistory: history,
+        threshold,
+        compressionRequired,
+      });
+      if (emergency) return emergency;
     }
 
     const snapshotId = this.createContextSnapshot({
@@ -1963,7 +2002,7 @@ export class Agent {
       compressed: true,
       snapshotId,
       compressionRequired,
-      estimatedTokens: lastEstimatedTokens,
+      estimatedTokens: postCompressionTokens,
       compressionThreshold: threshold,
     };
   }

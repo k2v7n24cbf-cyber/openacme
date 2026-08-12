@@ -1237,6 +1237,8 @@ Evidence:
 
 ### Slice 4.10: Operational Disable
 
+Status: done.
+
 Goal:
 
 - Add immediate disable controls at family, tool, generation, and config-scope
@@ -1263,6 +1265,20 @@ Validation:
 pnpm --filter @openacme/hosted-integrations test -- disable
 pnpm --filter @openacme/server test -- hosted-integrations
 ```
+
+Evidence:
+
+- Focused validation initially exposed stale package `dist` when server tests
+  were run before the hosted-integrations build completed; rerunning after the
+  build passed.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- disable`
+  `pnpm --filter @openacme/hosted-integrations test`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/server test -- hosted-integrations`
+  `pnpm --filter @openacme/server check-types`
+  `pnpm --filter @openacme/server build`
 
 ### Slice 4.11: Example Execution And Promotion Routes
 

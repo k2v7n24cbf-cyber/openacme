@@ -91,6 +91,18 @@ export {
   type ResolveHostedIntegrationPythonDependenciesResult,
 } from "./dependencies.js";
 export {
+  HostedIntegrationDisableTargetSchema,
+  HostedIntegrationDisablementSchema,
+  createFileHostedIntegrationDisablementStore,
+  disablementKey,
+  type FileHostedIntegrationDisablementStoreOptions,
+  type FindHostedIntegrationDisablementRequest,
+  type HostedIntegrationDisableTarget,
+  type HostedIntegrationDisablement,
+  type HostedIntegrationDisablementStore,
+  type SetHostedIntegrationDisablementRequest,
+} from "./disablements.js";
+export {
   createFileHostedIntegrationArtifactStore,
   type CompleteHostedIntegrationRunErrorRequest,
   type CompleteHostedIntegrationRunSuccessRequest,

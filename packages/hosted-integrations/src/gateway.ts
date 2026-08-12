@@ -15,6 +15,11 @@ import {
   createFileHostedIntegrationConfigScopeStore,
   type HostedIntegrationConfigScopeStore,
 } from "./config-scopes.js";
+import {
+  createFileHostedIntegrationDisablementStore,
+  type HostedIntegrationDisablement,
+  type HostedIntegrationDisablementStore,
+} from "./disablements.js";
 import { isNodeError, safePathSegment } from "./file-access.js";
 import {
   createFileHostedIntegrationGenerationStore,
@@ -50,6 +55,7 @@ export interface FileHostedIntegrationGatewayOptions {
   catalog?: HostedIntegrationCatalog;
   configScopes?: HostedIntegrationConfigScopeStore;
   secrets?: HostedIntegrationSecretStore;
+  disablements?: HostedIntegrationDisablementStore;
   generations?: HostedIntegrationGenerationStore;
   artifacts?: HostedIntegrationArtifactStore;
   executionLogs?: HostedIntegrationExecutionLogStore;
@@ -106,6 +112,7 @@ export interface HostedIntegrationGatewayError {
     | "timeout"
     | "tool_bug"
     | "tool_disabled"
+    | "operationally_disabled"
     | "idempotency_conflict";
   message: string;
   details?: JsonValue;
@@ -208,6 +215,9 @@ export function createFileHostedIntegrationGateway(
     createFileHostedIntegrationConfigScopeStore({ ...options, catalog });
   const secrets =
     options.secrets ?? createFileHostedIntegrationSecretStore(options);
+  const disablements =
+    options.disablements ??
+    createFileHostedIntegrationDisablementStore(options);
   const generations =
     options.generations ?? createFileHostedIntegrationGenerationStore(options);
   const artifacts =
@@ -222,6 +232,7 @@ export function createFileHostedIntegrationGateway(
     catalog,
     configScopes,
     secrets,
+    disablements,
     generations,
     artifacts,
     executionLogs,
@@ -238,6 +249,7 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
   private readonly catalog: HostedIntegrationCatalog;
   private readonly configScopes: HostedIntegrationConfigScopeStore;
   private readonly secrets: HostedIntegrationSecretStore;
+  private readonly disablements: HostedIntegrationDisablementStore;
   private readonly generations: HostedIntegrationGenerationStore;
   private readonly artifacts: HostedIntegrationArtifactStore;
   private readonly idempotency: HostedIntegrationIdempotencyStore;
@@ -249,6 +261,7 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
     catalog: HostedIntegrationCatalog;
     configScopes: HostedIntegrationConfigScopeStore;
     secrets: HostedIntegrationSecretStore;
+    disablements: HostedIntegrationDisablementStore;
     generations: HostedIntegrationGenerationStore;
     artifacts: HostedIntegrationArtifactStore;
     executionLogs: HostedIntegrationExecutionLogStore;
@@ -260,6 +273,7 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
     this.catalog = parts.catalog;
     this.configScopes = parts.configScopes;
     this.secrets = parts.secrets;
+    this.disablements = parts.disablements;
     this.generations = parts.generations;
     this.artifacts = parts.artifacts;
     this.executionLogs = parts.executionLogs;
@@ -283,6 +297,14 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
     }
     const toolClassification = tool.classification;
 
+    const familyOrToolDisablement = await this.disablements.findDisabled({
+      familyId,
+      toolName,
+    });
+    if (familyOrToolDisablement) {
+      return disabledFailure(familyOrToolDisablement);
+    }
+
     const policy = evaluateHostedIntegrationPolicy({
       actor: request.actor,
       action: "invoke",
@@ -304,6 +326,13 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
     if (!configScope || configScope.familyId !== familyId) {
       return failure("config_scope_not_found", "config scope was not found");
     }
+    const configScopeDisablement = await this.disablements.findDisabled({
+      familyId,
+      configScopeId: configScope.id,
+    });
+    if (configScopeDisablement) {
+      return disabledFailure(configScopeDisablement);
+    }
 
     const lease = await this.generations.beginInvocation({
       familyId,
@@ -316,6 +345,14 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
     if (!generation) {
       await this.generations.completeInvocation({ leaseId: lease.lease.id });
       return failure("generation_not_found", "generation was not found");
+    }
+    const generationDisablement = await this.disablements.findDisabled({
+      familyId,
+      generationId: generation.id,
+    });
+    if (generationDisablement) {
+      await this.generations.completeInvocation({ leaseId: lease.lease.id });
+      return disabledFailure(generationDisablement);
     }
     if (!generation.runtime) {
       await this.generations.completeInvocation({ leaseId: lease.lease.id });
@@ -659,6 +696,21 @@ function failure(
   message: string,
 ): InvokeHostedIntegrationResult {
   return { ok: false, error: { code, message } };
+}
+
+function disabledFailure(
+  disablement: HostedIntegrationDisablement,
+): InvokeHostedIntegrationResult {
+  return {
+    ok: false,
+    error: {
+      code: "operationally_disabled",
+      message:
+        disablement.reason ??
+        `hosted integration ${disablement.key} is disabled`,
+      details: { target: disablement.target },
+    },
+  };
 }
 
 function fingerprintInvocation(value: JsonValue): string {

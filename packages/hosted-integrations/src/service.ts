@@ -19,6 +19,10 @@ import {
   type HostedIntegrationConfigScopeStore,
 } from "./config-scopes.js";
 import {
+  createFileHostedIntegrationDisablementStore,
+  type HostedIntegrationDisablementStore,
+} from "./disablements.js";
+import {
   createFileHostedIntegrationDraftStore,
   type HostedIntegrationDraftStore,
 } from "./drafts.js";
@@ -71,6 +75,7 @@ export interface HostedIntegrationService {
   readonly configScopes: HostedIntegrationConfigScopeStore;
   readonly secrets: HostedIntegrationSecretStore;
   readonly approvals: HostedIntegrationApprovalStore;
+  readonly disablements: HostedIntegrationDisablementStore;
   readonly generations: HostedIntegrationGenerationStore;
   readonly artifacts: HostedIntegrationArtifactStore;
   readonly gateway: HostedIntegrationGateway;
@@ -115,6 +120,7 @@ export function createFileHostedIntegrationService(
   });
   const secrets = createFileHostedIntegrationSecretStore(options);
   const approvals = createFileHostedIntegrationApprovalStore(options);
+  const disablements = createFileHostedIntegrationDisablementStore(options);
   const generations = createFileHostedIntegrationGenerationStore({
     ...options,
     draftStore: drafts,
@@ -127,6 +133,7 @@ export function createFileHostedIntegrationService(
     secrets,
     generations,
     artifacts,
+    disablements,
   });
   return new FileHostedIntegrationService({
     catalog,
@@ -139,6 +146,7 @@ export function createFileHostedIntegrationService(
     configScopes,
     secrets,
     approvals,
+    disablements,
     generations,
     artifacts,
     gateway,
@@ -155,6 +163,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
   readonly configScopes: HostedIntegrationConfigScopeStore;
   readonly secrets: HostedIntegrationSecretStore;
   readonly approvals: HostedIntegrationApprovalStore;
+  readonly disablements: HostedIntegrationDisablementStore;
   readonly generations: HostedIntegrationGenerationStore;
   readonly artifacts: HostedIntegrationArtifactStore;
   readonly gateway: HostedIntegrationGateway;
@@ -172,6 +181,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     configScopes: HostedIntegrationConfigScopeStore;
     secrets: HostedIntegrationSecretStore;
     approvals: HostedIntegrationApprovalStore;
+    disablements: HostedIntegrationDisablementStore;
     generations: HostedIntegrationGenerationStore;
     artifacts: HostedIntegrationArtifactStore;
     gateway: HostedIntegrationGateway;
@@ -186,6 +196,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     this.configScopes = parts.configScopes;
     this.secrets = parts.secrets;
     this.approvals = parts.approvals;
+    this.disablements = parts.disablements;
     this.generations = parts.generations;
     this.artifacts = parts.artifacts;
     this.gateway = parts.gateway;

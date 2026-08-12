@@ -1105,6 +1105,74 @@ describe("hosted integrations generation routes", () => {
   });
 });
 
+describe("hosted integrations operational disablement routes", () => {
+  it("sets, lists, and enforces operational disablements", async () => {
+    writeFamily(
+      "qualys",
+      familyYaml("qualys", "Qualys", "qualys_count_assets"),
+      {
+        "qualys.py": pythonTool("return {'count': 2}"),
+      },
+    );
+    await promoteFamily("qualys");
+    await seedConfigScope("qualys", "qualys-test", "test");
+
+    let res = await req("/api/hosted-integrations/disablements", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actor: agentActor(),
+        disabled: true,
+        target: { level: "family", familyId: "qualys" },
+      }),
+    });
+    expect(res.status).toBe(403);
+
+    res = await req("/api/hosted-integrations/disablements", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actor: toolDeveloperActor(),
+        disabled: true,
+        reason: "maintenance",
+        target: { level: "family", familyId: "qualys" },
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      ok: true,
+      disablement: {
+        key: "family:qualys",
+        disabled: true,
+        target: { level: "family", familyId: "qualys" },
+        updatedBy: "agent:tool-developer",
+      },
+    });
+
+    res = await req("/api/hosted-integrations/disablements");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      disablements: [
+        {
+          key: "family:qualys",
+          disabled: true,
+        },
+      ],
+    });
+
+    res = await req("/api/hosted-integrations/invoke", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(allowedInvokeBody()),
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: { code: "operationally_disabled" },
+    });
+  });
+});
+
 function agentActor() {
   return { id: "agent:analyst", kind: "agent", roles: ["agent"] };
 }

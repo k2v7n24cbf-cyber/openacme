@@ -1,6 +1,7 @@
 import type { Context, Hono } from "hono";
 import {
   HostedIntegrationExampleSchema,
+  HostedIntegrationDisableTargetSchema,
   HostedIntegrationPolicyBindingSchema,
   HostedIntegrationPromotionApprovalTargetSchema,
   JsonObjectSchema,
@@ -179,6 +180,33 @@ export function registerHostedIntegrationRoutes(
       }
     },
   );
+
+  app.get("/api/hosted-integrations/disablements", async (c) => {
+    return c.json({
+      disablements: await service.disablements.listDisablements(),
+    });
+  });
+
+  app.put("/api/hosted-integrations/disablements", async (c) => {
+    try {
+      const body = await readJsonObject(c);
+      const actor = actorField(body);
+      if (!actor.roles.includes("tool_developer")) {
+        return c.json({ ok: false, error: { code: "policy_denied" } }, 403);
+      }
+      const disablement = await service.disablements.setDisabled({
+        target: HostedIntegrationDisableTargetSchema.parse(
+          objectField(body, "target"),
+        ),
+        disabled: booleanField(body, "disabled"),
+        reason: optionalStringField(body, "reason") ?? undefined,
+        updatedBy: actor.id,
+      });
+      return c.json({ ok: true, disablement });
+    } catch (error) {
+      return invalidRequest(c, error);
+    }
+  });
 
   app.get("/api/hosted-integrations/families", async (c) => {
     const families = await service.listFamilies();
@@ -619,6 +647,12 @@ function optionalBooleanField(
   return value;
 }
 
+function booleanField(body: JsonRecord, name: string): boolean {
+  const value = body[name];
+  if (typeof value !== "boolean") throw new Error(`${name} must be a boolean`);
+  return value;
+}
+
 function objectField(body: JsonRecord, name: string): JsonRecord {
   const value = body[name];
   if (!isRecord(value)) throw new Error(`${name} is required`);
@@ -729,6 +763,7 @@ function statusForGatewayError(
     case "policy_denied":
     case "approval_required":
     case "tool_disabled":
+    case "operationally_disabled":
       return 403;
     case "config_scope_not_found":
     case "family_not_found":

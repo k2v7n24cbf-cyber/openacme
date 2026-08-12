@@ -129,6 +129,12 @@ export interface ToolInfo {
   description: string;
   toolset: string;
   emoji?: string;
+  source?: {
+    kind: "hosted_integration";
+    familyId: string;
+    familyName: string;
+    generationId: string;
+  };
   /** Always-on tool merged into every agent regardless of the agent's
    *  `tools` config — hidden from the picker. */
   system?: boolean;

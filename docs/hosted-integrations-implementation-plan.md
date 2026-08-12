@@ -2156,6 +2156,37 @@ pnpm --filter web check-types
 pnpm --filter web test -- agents
 ```
 
+Status: Completed in local commit pending push.
+
+Implemented:
+
+- Added a web helper for Agent Settings tool grouping that preserves built-in
+  and MCP toolsets while grouping hosted integration tools under
+  `Hosted Integrations / <family>`.
+- Mirrored hosted integration tool source metadata in the web `ToolInfo` type.
+- Loaded sanitized hosted integration config scopes into the Agents page.
+- Wired hosted integration tool toggles to create/update/prune per-agent
+  `hostedIntegrationBindings` alongside the existing `tools` allowlist.
+- Added default config-scope selection for selected hosted integration tools;
+  unavailable hosted tools remain visible but disabled until a family config
+  scope exists.
+- Added a server route regression test proving `/api/agents/:id` persists
+  hosted integration access bindings from Agent Settings payloads.
+
+Green validation:
+
+```text
+pnpm --filter web test -- hosted-integration-agent-settings
+pnpm --filter web check-types
+pnpm --filter @openacme/server test -- app-routes
+pnpm --filter web test
+pnpm --filter @openacme/server check-types
+```
+
+Note: `pnpm --filter web test -- agents` currently has no matching test file in
+the repo and exits with `No test files found`; the new helper test plus full web
+test run cover this slice.
+
 ### Slice 8.2: Minimal Hosted Integrations Admin View
 
 Goal:

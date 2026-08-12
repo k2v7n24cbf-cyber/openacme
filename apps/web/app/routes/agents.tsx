@@ -66,6 +66,18 @@ import {
 import type { EmojiClickData } from "emoji-picker-react";
 import { DynamicIcon, iconNames, type IconName } from "lucide-react/dynamic";
 import { cn } from "@/app/lib/utils";
+import {
+  buildAgentSettingsHostedIntegrationBinding,
+  groupAgentSettingsTools,
+  hostedIntegrationScopesForTool,
+  isHostedIntegrationTool,
+  removeHostedIntegrationBinding,
+  sameHostedIntegrationBindings,
+  selectedHostedIntegrationBindings,
+  upsertHostedIntegrationBinding,
+  type AgentHostedIntegrationBinding,
+  type HostedIntegrationConfigScope,
+} from "@/app/lib/hosted-integration-agent-settings";
 import { usePublishCurrentView } from "@/app/lib/CurrentViewContext";
 import { Markdown } from "@/app/components/Markdown";
 import { MarkdownEditor } from "@/app/components/MarkdownEditor";
@@ -99,6 +111,7 @@ interface Agent {
   instantMessagesEnabled?: boolean;
   mcpServers?: Record<string, MCPServerConfigDto>;
   mcpDisabled?: string[];
+  hostedIntegrationBindings?: AgentHostedIntegrationBinding[];
   managed?: boolean;
   email?: { provider: "imap" | "gmail" | "microsoft"; address: string };
 }
@@ -178,6 +191,7 @@ interface FormState {
   instantMessagesEnabled: boolean;
   mcpServers: Record<string, MCPServerConfigDto>;
   mcpDisabled: string[];
+  hostedIntegrationBindings: AgentHostedIntegrationBinding[];
 }
 
 type ParallelSchedulingPolicy = "lane_first" | "chain_first";
@@ -203,6 +217,7 @@ const FALLBACK_FORM: FormState = {
   instantMessagesEnabled: true,
   mcpServers: {},
   mcpDisabled: [],
+  hostedIntegrationBindings: [],
 };
 
 const PARALLEL_SESSION_OPTIONS = [1, 2, 3, 4, 5] as const;
@@ -387,6 +402,9 @@ function AgentsPage() {
   const [globalMcp, setGlobalMcp] = useState<
     Record<string, MCPServerConfigDto>
   >({});
+  const [hostedConfigScopes, setHostedConfigScopes] = useState<
+    HostedIntegrationConfigScope[]
+  >([]);
   const [allSkills, setAllSkills] = useState<SkillIndexEntry[]>([]);
 
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
@@ -460,13 +478,23 @@ function AgentsPage() {
 
   const loadAll = async (signal?: AbortSignal) => {
     try {
-      const [agentsRes, providersRes, mcpRes, skillsRes, catalogRes] =
+      const [
+        agentsRes,
+        providersRes,
+        mcpRes,
+        skillsRes,
+        catalogRes,
+        hostedScopesRes,
+      ] =
         await Promise.all([
           fetch(`${API_BASE}/api/agents?summary=1`, { signal }),
           fetch(`${API_BASE}/api/models`, { signal }),
           fetch(`${API_BASE}/api/mcp/global`, { signal }),
           fetch(`${API_BASE}/api/skills`, { signal }),
           fetch(`${API_BASE}/api/agents/catalog`, { signal }),
+          fetch(`${API_BASE}/api/hosted-integrations/config-scopes`, {
+            signal,
+          }),
         ]);
       if (agentsRes.ok) setAgents(await agentsRes.json());
       if (providersRes.ok) {
@@ -483,6 +511,12 @@ function AgentsPage() {
       }
       if (catalogRes.ok) {
         setCatalogTemplates((await catalogRes.json()) as CatalogTemplateMeta[]);
+      }
+      if (hostedScopesRes.ok) {
+        const data = (await hostedScopesRes.json()) as {
+          configScopes?: HostedIntegrationConfigScope[];
+        };
+        setHostedConfigScopes(data.configScopes ?? []);
       }
     } catch (e) {
       if ((e as Error).name === "AbortError") return;
@@ -537,32 +571,32 @@ function AgentsPage() {
   );
 
   const toolsByToolset = useMemo(() => {
-    const map = new Map<string, ToolInfo[]>();
-    for (const t of tools) {
-      // Most system tools are always on for every agent. `agent_ask` is
-      // separately gated by agentAskEnabled and rendered as a system tool.
-      if (t.system) continue;
-      const list = map.get(t.toolset) ?? [];
-      list.push(t);
-      map.set(t.toolset, list);
-    }
-    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
+    return groupAgentSettingsTools(tools);
   }, [tools]);
 
   // ── Form helpers ─────────────────────────────────────────────────────────
-  const toggleTool = (name: string) => {
+  const toggleTool = (tool: ToolInfo) => {
     setFormData((prev) => ({
       ...prev,
-      tools: prev.tools.includes(name)
-        ? prev.tools.filter((t) => t !== name)
-        : [...prev.tools, name],
+      ...toggleToolSelection({
+        selected: prev.tools,
+        hostedIntegrationBindings: prev.hostedIntegrationBindings,
+        tool,
+        hostedConfigScopes,
+      }),
     }));
   };
 
-  const setToolGroup = (names: string[], checked: boolean) => {
+  const setToolGroup = (tools: ToolInfo[], checked: boolean) => {
     setFormData((prev) => ({
       ...prev,
-      tools: setGroupSelection(prev.tools, names, checked),
+      ...setToolGroupSelection({
+        selected: prev.tools,
+        hostedIntegrationBindings: prev.hostedIntegrationBindings,
+        tools,
+        checked,
+        hostedConfigScopes,
+      }),
     }));
   };
 
@@ -586,6 +620,11 @@ function AgentsPage() {
     instantMessagesEnabled: formData.instantMessagesEnabled,
     mcpServers: formData.mcpServers,
     mcpDisabled: formData.mcpDisabled,
+    hostedIntegrationBindings: selectedHostedIntegrationBindings(
+      formData.hostedIntegrationBindings,
+      formData.tools,
+      tools,
+    ),
   });
 
   const toggleSkill = (name: string) => {
@@ -748,6 +787,7 @@ function AgentsPage() {
       instantMessagesEnabled: selectedAgent.instantMessagesEnabled ?? true,
       mcpServers: selectedAgent.mcpServers ?? {},
       mcpDisabled: selectedAgent.mcpDisabled ?? [],
+      hostedIntegrationBindings: selectedAgent.hostedIntegrationBindings ?? [],
     });
   };
 
@@ -837,6 +877,7 @@ function AgentsPage() {
             instantMessagesEnabled: true,
             mcpServers: tpl.agentFields.mcpServers ?? {},
             mcpDisabled: tpl.agentFields.mcpDisabled ?? [],
+            hostedIntegrationBindings: [],
           });
         } catch {
           toast.error("Failed to load template");
@@ -906,6 +947,7 @@ function AgentsPage() {
               instantMessagesEnabled: full.instantMessagesEnabled ?? true,
               mcpServers: full.mcpServers ?? {},
               mcpDisabled: full.mcpDisabled ?? [],
+              hostedIntegrationBindings: full.hostedIntegrationBindings ?? [],
             });
           } catch (e) {
             if ((e as Error).name === "AbortError") return;
@@ -1061,6 +1103,7 @@ function AgentsPage() {
                 providers={providers}
                 allSkills={allSkills}
                 toolGroups={toolsByToolset}
+                hostedConfigScopes={hostedConfigScopes}
                 agentAskTool={agentAskTool}
                 onAgentUpdated={(updated) => {
                   setSelectedAgent(updated);
@@ -1191,8 +1234,27 @@ function AgentsPage() {
                       <ToolPicker
                         groups={toolsByToolset}
                         selected={formData.tools}
+                        hostedConfigScopes={hostedConfigScopes}
                         onToggle={toggleTool}
                         onSetGroup={setToolGroup}
+                      />
+                      <HostedIntegrationBindingsEditor
+                        tools={tools}
+                        selected={formData.tools}
+                        bindings={formData.hostedIntegrationBindings}
+                        hostedConfigScopes={hostedConfigScopes}
+                        onDefaultScopeChange={(tool, scopeId) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            hostedIntegrationBindings:
+                              updateHostedIntegrationDefaultScope({
+                                bindings: prev.hostedIntegrationBindings,
+                                tool,
+                                scopeId,
+                                hostedConfigScopes,
+                              }),
+                          }))
+                        }
                       />
                       <AgentAskToolPicker
                         tool={agentAskTool}
@@ -1489,13 +1551,15 @@ function AgentsPage() {
 function ToolPicker({
   groups,
   selected,
+  hostedConfigScopes,
   onToggle,
   onSetGroup,
 }: {
   groups: [string, ToolInfo[]][];
   selected: string[];
-  onToggle: (name: string) => void;
-  onSetGroup: (names: string[], checked: boolean) => void;
+  hostedConfigScopes: HostedIntegrationConfigScope[];
+  onToggle: (tool: ToolInfo) => void;
+  onSetGroup: (tools: ToolInfo[], checked: boolean) => void;
 }) {
   if (groups.length === 0) {
     return (
@@ -1522,6 +1586,12 @@ function ToolPicker({
             selected.includes(t.name),
           ).length;
           const allSelected = selectedInGroup === list.length;
+          const selectableTools = list.filter(
+            (tool) =>
+              !isHostedIntegrationTool(tool) ||
+              hostedIntegrationScopesForTool(tool, hostedConfigScopes).length >
+                0,
+          );
           return (
             <div key={toolset}>
               <div className="mb-2 flex items-center gap-2">
@@ -1537,10 +1607,11 @@ function ToolPicker({
                   type="button"
                   onClick={() =>
                     onSetGroup(
-                      list.map((t) => t.name),
+                      selectableTools,
                       !allSelected,
                     )
                   }
+                  disabled={selectableTools.length === 0}
                   className="ml-auto font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint underline-offset-2 transition-colors hover:text-ink hover:underline"
                 >
                   {allSelected ? "Clear all" : "Select all"}
@@ -1552,7 +1623,12 @@ function ToolPicker({
                     key={tool.name}
                     tool={tool}
                     checked={selected.includes(tool.name)}
-                    onClick={() => onToggle(tool.name)}
+                    disabled={
+                      isHostedIntegrationTool(tool) &&
+                      hostedIntegrationScopesForTool(tool, hostedConfigScopes)
+                        .length === 0
+                    }
+                    onClick={() => onToggle(tool)}
                   />
                 ))}
               </div>
@@ -1567,19 +1643,23 @@ function ToolPicker({
 function ToolToggle({
   tool,
   checked,
+  disabled = false,
   onClick,
 }: {
   tool: ToolInfo;
   checked: boolean;
+  disabled?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={onClick}
       aria-pressed={checked}
       className={cn(
         "group relative flex items-start gap-3 border border-paper-rule px-3 py-2 text-left transition-colors",
+        disabled && "cursor-not-allowed opacity-55",
         checked
           ? "bg-paper text-ink"
           : "bg-paper-sunk text-ink-soft hover:bg-paper hover:text-ink",
@@ -1601,7 +1681,7 @@ function ToolToggle({
           {tool.name}
         </div>
         <div className="line-clamp-2 text-[11px] text-ink-faint">
-          {tool.description}
+          {disabled ? "Unavailable until a config scope exists." : tool.description}
         </div>
       </div>
     </button>
@@ -1868,6 +1948,7 @@ function AgentDetail({
   providers,
   allSkills,
   toolGroups,
+  hostedConfigScopes,
   agentAskTool,
   tab,
   onTabChange,
@@ -1879,6 +1960,7 @@ function AgentDetail({
   providers: ProviderInfo[];
   allSkills: SkillIndexEntry[];
   toolGroups: [string, ToolInfo[]][];
+  hostedConfigScopes: HostedIntegrationConfigScope[];
   agentAskTool: ToolInfo;
   tab: AgentTab;
   onTabChange: (tab: AgentTab) => void;
@@ -2074,6 +2156,8 @@ function AgentDetail({
           <AgentToolsTab
             agent={agent}
             groups={toolGroups}
+            allTools={toolGroups.flatMap(([, list]) => list)}
+            hostedConfigScopes={hostedConfigScopes}
             agentAskTool={agentAskTool}
             onSaved={onAgentUpdated}
             onDraftChange={setTabSlice}
@@ -2518,52 +2602,245 @@ function useSliceSave(
   return { saving, save };
 }
 
-function setGroupSelection(
-  current: string[],
-  names: string[],
-  checked: boolean,
-): string[] {
-  if (!checked) return current.filter((t) => !names.includes(t));
-  return [...current, ...names.filter((n) => !current.includes(n))];
-}
-
 function sameStringSet(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
   const set = new Set(a);
   return b.every((x) => set.has(x));
 }
 
+function toggleToolSelection(input: {
+  selected: string[];
+  hostedIntegrationBindings: AgentHostedIntegrationBinding[];
+  tool: ToolInfo;
+  hostedConfigScopes: HostedIntegrationConfigScope[];
+}): {
+  selected: string[];
+  hostedIntegrationBindings: AgentHostedIntegrationBinding[];
+} {
+  const selected = input.selected.includes(input.tool.name)
+    ? input.selected.filter((toolName) => toolName !== input.tool.name)
+    : [...input.selected, input.tool.name];
+
+  if (!isHostedIntegrationTool(input.tool)) {
+    return {
+      selected,
+      hostedIntegrationBindings: input.hostedIntegrationBindings,
+    };
+  }
+
+  if (!selected.includes(input.tool.name)) {
+    return {
+      selected,
+      hostedIntegrationBindings: removeHostedIntegrationBinding(
+        input.hostedIntegrationBindings,
+        input.tool,
+      ),
+    };
+  }
+
+  const binding = buildAgentSettingsHostedIntegrationBinding({
+    tool: input.tool,
+    configScopes: input.hostedConfigScopes,
+  });
+  if (!binding) {
+    return {
+      selected: input.selected,
+      hostedIntegrationBindings: input.hostedIntegrationBindings,
+    };
+  }
+
+  return {
+    selected,
+    hostedIntegrationBindings: upsertHostedIntegrationBinding(
+      input.hostedIntegrationBindings,
+      binding,
+    ),
+  };
+}
+
+function setToolGroupSelection(input: {
+  selected: string[];
+  hostedIntegrationBindings: AgentHostedIntegrationBinding[];
+  tools: ToolInfo[];
+  checked: boolean;
+  hostedConfigScopes: HostedIntegrationConfigScope[];
+}): {
+  selected: string[];
+  hostedIntegrationBindings: AgentHostedIntegrationBinding[];
+} {
+  let selected = input.selected;
+  let hostedIntegrationBindings = input.hostedIntegrationBindings;
+  for (const tool of input.tools) {
+    const alreadySelected = selected.includes(tool.name);
+    if (input.checked && alreadySelected) continue;
+    if (!input.checked && !alreadySelected) continue;
+    const next = toggleToolSelection({
+      selected,
+      hostedIntegrationBindings,
+      tool,
+      hostedConfigScopes: input.hostedConfigScopes,
+    });
+    selected = next.selected;
+    hostedIntegrationBindings = next.hostedIntegrationBindings;
+  }
+  return { selected, hostedIntegrationBindings };
+}
+
+function updateHostedIntegrationDefaultScope(input: {
+  bindings: AgentHostedIntegrationBinding[];
+  tool: ToolInfo;
+  scopeId: string;
+  hostedConfigScopes: HostedIntegrationConfigScope[];
+}): AgentHostedIntegrationBinding[] {
+  const binding = buildAgentSettingsHostedIntegrationBinding({
+    tool: input.tool,
+    configScopes: input.hostedConfigScopes,
+    defaultConfigScopeId: input.scopeId,
+  });
+  if (!binding) return input.bindings;
+  return upsertHostedIntegrationBinding(input.bindings, binding);
+}
+
+function HostedIntegrationBindingsEditor({
+  tools,
+  selected,
+  bindings,
+  hostedConfigScopes,
+  onDefaultScopeChange,
+}: {
+  tools: ToolInfo[];
+  selected: string[];
+  bindings: AgentHostedIntegrationBinding[];
+  hostedConfigScopes: HostedIntegrationConfigScope[];
+  onDefaultScopeChange: (tool: ToolInfo, scopeId: string) => void;
+}) {
+  const selectedHostedTools = tools.filter(
+    (tool) => selected.includes(tool.name) && isHostedIntegrationTool(tool),
+  );
+  if (selectedHostedTools.length === 0) return null;
+
+  return (
+    <div className="grid gap-3 border-t border-paper-rule pt-4">
+      <div className="flex items-center justify-between">
+        <Label>Hosted integration access</Label>
+        <span className="font-mono text-[11px] tabular-nums text-ink-soft">
+          {selectedHostedTools.length}
+        </span>
+      </div>
+      <div className="grid gap-px">
+        {selectedHostedTools.map((tool) => {
+          const scopes = hostedIntegrationScopesForTool(
+            tool,
+            hostedConfigScopes,
+          );
+          const binding = bindings.find(
+            (candidate) =>
+              candidate.familyId === tool.source?.familyId &&
+              candidate.toolName === tool.name,
+          );
+          const value = binding?.defaultConfigScopeId ?? scopes[0]?.id ?? "";
+          return (
+            <div
+              key={tool.name}
+              className="grid gap-3 border border-paper-rule bg-paper px-3 py-3 md:grid-cols-[minmax(0,1fr)_minmax(220px,320px)]"
+            >
+              <div className="min-w-0">
+                <div className="truncate font-mono text-[12px] text-ink">
+                  {tool.name}
+                </div>
+                <div className="text-[11px] text-ink-faint">
+                  {tool.source?.familyName ?? tool.source?.familyId}
+                </div>
+              </div>
+              <Select
+                value={value}
+                onValueChange={(scopeId) => onDefaultScopeChange(tool, scopeId)}
+              >
+                <SelectTrigger aria-label={`${tool.name} config scope`}>
+                  <SelectValue placeholder="Select scope" />
+                </SelectTrigger>
+                <SelectContent>
+                  {scopes.map((scope) => (
+                    <SelectItem key={scope.id} value={scope.id}>
+                      {scope.id} · {scope.environment} · rev {scope.revision}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function AgentToolsTab({
   agent,
   groups,
+  allTools,
+  hostedConfigScopes,
   agentAskTool,
   onSaved,
   onDraftChange,
 }: {
   agent: Agent;
   groups: [string, ToolInfo[]][];
+  allTools: ToolInfo[];
+  hostedConfigScopes: HostedIntegrationConfigScope[];
   agentAskTool: ToolInfo;
   onSaved: (updated: Agent) => void;
   onDraftChange?: (slice: Partial<Agent>) => void;
 }) {
   const [selected, setSelected] = useState<string[]>(agent.tools);
+  const [hostedIntegrationBindings, setHostedIntegrationBindings] = useState<
+    AgentHostedIntegrationBinding[]
+  >(agent.hostedIntegrationBindings ?? []);
   const [agentAskEnabled, setAgentAskEnabled] = useState(
     agent.agentAskEnabled ?? true,
   );
   useEffect(() => {
     setSelected(agent.tools);
+    setHostedIntegrationBindings(agent.hostedIntegrationBindings ?? []);
     setAgentAskEnabled(agent.agentAskEnabled ?? true);
-  }, [agent.id, agent.tools, agent.agentAskEnabled]);
+  }, [
+    agent.id,
+    agent.tools,
+    agent.hostedIntegrationBindings,
+    agent.agentAskEnabled,
+  ]);
   useEffect(() => {
-    onDraftChange?.({ tools: selected, agentAskEnabled });
-  }, [selected, agentAskEnabled, onDraftChange]);
+    onDraftChange?.({
+      tools: selected,
+      hostedIntegrationBindings: selectedHostedIntegrationBindings(
+        hostedIntegrationBindings,
+        selected,
+        allTools,
+      ),
+      agentAskEnabled,
+    });
+  }, [
+    selected,
+    hostedIntegrationBindings,
+    allTools,
+    agentAskEnabled,
+    onDraftChange,
+  ]);
   const { saving, save } = useSliceSave(agent, onSaved);
   const savedAgentAskEnabled = agent.agentAskEnabled ?? true;
+  const selectedBindings = selectedHostedIntegrationBindings(
+    hostedIntegrationBindings,
+    selected,
+    allTools,
+  );
+  const savedBindings = agent.hostedIntegrationBindings ?? [];
   const dirty =
     !sameStringSet(selected, agent.tools) ||
+    !sameHostedIntegrationBindings(selectedBindings, savedBindings) ||
     agentAskEnabled !== savedAgentAskEnabled;
   const discard = () => {
     setSelected(agent.tools);
+    setHostedIntegrationBindings(agent.hostedIntegrationBindings ?? []);
     setAgentAskEnabled(savedAgentAskEnabled);
   };
 
@@ -2601,15 +2878,43 @@ function AgentToolsTab({
       <ToolPicker
         groups={groups}
         selected={selected}
-        onToggle={(name) =>
-          setSelected((prev) =>
-            prev.includes(name)
-              ? prev.filter((t) => t !== name)
-              : [...prev, name],
+        hostedConfigScopes={hostedConfigScopes}
+        onToggle={(tool) => {
+          const next = toggleToolSelection({
+            selected,
+            hostedIntegrationBindings,
+            tool,
+            hostedConfigScopes,
+          });
+          setSelected(next.selected);
+          setHostedIntegrationBindings(next.hostedIntegrationBindings);
+        }}
+        onSetGroup={(tools, checked) => {
+          const next = setToolGroupSelection({
+            selected,
+            hostedIntegrationBindings,
+            tools,
+            checked,
+            hostedConfigScopes,
+          });
+          setSelected(next.selected);
+          setHostedIntegrationBindings(next.hostedIntegrationBindings);
+        }}
+      />
+      <HostedIntegrationBindingsEditor
+        tools={allTools}
+        selected={selected}
+        bindings={hostedIntegrationBindings}
+        hostedConfigScopes={hostedConfigScopes}
+        onDefaultScopeChange={(tool, scopeId) =>
+          setHostedIntegrationBindings((prev) =>
+            updateHostedIntegrationDefaultScope({
+              bindings: prev,
+              tool,
+              scopeId,
+              hostedConfigScopes,
+            }),
           )
-        }
-        onSetGroup={(names, checked) =>
-          setSelected((prev) => setGroupSelection(prev, names, checked))
         }
       />
       <AgentAskToolPicker
@@ -2620,7 +2925,16 @@ function AgentToolsTab({
       <ConfigSaveBar
         dirty={dirty}
         saving={saving}
-        onSave={() => void save({ tools: selected, agentAskEnabled }, "Tools")}
+        onSave={() =>
+          void save(
+            {
+              tools: selected,
+              hostedIntegrationBindings: selectedBindings,
+              agentAskEnabled,
+            },
+            "Tools",
+          )
+        }
         onDiscard={discard}
       />
     </div>

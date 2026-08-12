@@ -351,6 +351,37 @@ describe("agents CRUD", () => {
     expect(manager.getAgent("helper").config.tools).not.toContain("agent_ask");
   });
 
+  it("persists hosted integration access bindings from agent settings", async () => {
+    await createAgent("helper", "Helper", {
+      tools: ["qualys_count_assets"],
+    });
+
+    const binding = {
+      familyId: "qualys",
+      toolName: "qualys_count_assets",
+      environment: "prod",
+      allowedConfigScopeIds: ["qualys-prod-readonly", "qualys-prod-secondary"],
+      defaultConfigScopeId: "qualys-prod-readonly",
+    };
+    let res = await req("/api/agents/helper", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ hostedIntegrationBindings: [binding] }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).hostedIntegrationBindings).toEqual([binding]);
+
+    res = await req("/api/agents/helper");
+    expect(res.status).toBe(200);
+    expect((await res.json()).hostedIntegrationBindings).toEqual([binding]);
+
+    const agentFile = path.join(dataDir, "agents", "helper", "AGENT.md");
+    expect(readFileSync(agentFile, "utf8")).toContain(
+      "hostedIntegrationBindings:",
+    );
+    expect(readFileSync(agentFile, "utf8")).not.toContain("secret-value");
+  });
+
   it("removes agent_ask from effective tools even when legacy frontmatter lists it", async () => {
     await createAgent("helper", "Helper", {
       agentAskEnabled: false,

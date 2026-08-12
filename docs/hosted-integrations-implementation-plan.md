@@ -1554,6 +1554,8 @@ Evidence:
 
 ### Slice 5.5: Hosted Integrations Development Skill
 
+Status: done.
+
 Goal:
 
 - Expand the bundled `hosted-integrations-development` skill.
@@ -1574,6 +1576,26 @@ Validation:
 ```text
 pnpm --filter @openacme/server test -- agent-catalog
 ```
+
+Evidence:
+
+- Red validation:
+  `pnpm --filter @openacme/server test -- agent-catalog` first failed because
+  the bundled skill still used the placeholder "Lifecycle guide" description
+  and did not include the lifecycle guardrails asserted by the managed-agent
+  install path.
+- Green validation:
+  `pnpm --filter @openacme/server test -- agent-catalog`
+  `pnpm --filter @openacme/skills check-types`
+  `pnpm --filter @openacme/skills build`
+  `pnpm --filter @openacme/server check-types`
+
+Implementation note:
+
+- Slice commits are made locally after focused validation. Pushes are reserved
+  for milestone or batch boundaries, risky transitions, long pauses/context
+  compaction, or explicit user request, because the pre-push hook runs the
+  expensive full build/e2e gate.
 
 ### Slice 5.6: Local Safe Hosted Tool Smoke
 

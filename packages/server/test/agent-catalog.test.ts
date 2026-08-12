@@ -255,6 +255,24 @@ describe("AgentManager.ensureManagedAgents", () => {
         path.join(dataDir, "skills", "hosted-integrations-development", "SKILL.md"),
       ),
     ).toBe(true);
+    const hostedIntegrationSkill = manager.skillRegistry.getSkill(
+      "hosted-integrations-development",
+    );
+    expect(hostedIntegrationSkill?.description).toContain(
+      "Lifecycle playbook",
+    );
+    expect(manager.skillRegistry.getIndexAsString()).toContain(
+      "- **hosted-integrations-development**: Lifecycle playbook",
+    );
+    expect(hostedIntegrationSkill?.body).toContain(
+      "## Request to promotion lifecycle",
+    );
+    expect(hostedIntegrationSkill?.body).toContain("lock TTL");
+    expect(hostedIntegrationSkill?.body).toContain("regression example");
+    expect(hostedIntegrationSkill?.body).toContain("debug run");
+    expect(hostedIntegrationSkill?.body).toContain(
+      "Do not read, request, or return secret values",
+    );
 
     // Resources copied
     expect(

@@ -1707,6 +1707,8 @@ Evidence:
 
 ### Slice 6.2: Failure Bucket Dedupe
 
+Status: done.
+
 Goal:
 
 - Create or update failure buckets for owner-actionable failures.
@@ -1729,6 +1731,17 @@ Validation:
 ```text
 pnpm --filter @openacme/hosted-integrations test -- failure-buckets
 ```
+
+Evidence:
+
+- Red validation:
+  `pnpm --filter @openacme/hosted-integrations test -- failure-buckets` first
+  failed because no failure bucket store/export existed.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- failure-buckets`
+  `pnpm --filter @openacme/hosted-integrations test -- execution-log`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
 
 ### Slice 6.3: Failure Bucket Routes And Tools
 

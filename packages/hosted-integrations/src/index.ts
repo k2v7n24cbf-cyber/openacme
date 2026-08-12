@@ -125,6 +125,14 @@ export {
   type HostedIntegrationFamilySummary,
 } from "./catalog.js";
 export {
+  createFileHostedIntegrationFailureBucketStore,
+  type FileHostedIntegrationFailureBucketStoreOptions,
+  type HostedIntegrationFailureBucketClassification,
+  type HostedIntegrationFailureBucketStore,
+  type RecordHostedIntegrationFailureRequest,
+  type RecordHostedIntegrationFailureResult,
+} from "./failure-buckets.js";
+export {
   createFileHostedIntegrationGenerationStore,
   type BeginHostedIntegrationInvocationRequest,
   type BeginHostedIntegrationInvocationResult,

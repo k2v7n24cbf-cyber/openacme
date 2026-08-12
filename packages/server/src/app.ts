@@ -317,6 +317,18 @@ export async function createApp(
   // ── Agents ──
   app.get("/api/agents", (c) => {
     const agents = manager.listAgents();
+    if (c.req.query("summary") === "1") {
+      return c.json(
+        agents.map(({ id, name, avatar, role, model, managed }) => ({
+          id,
+          name,
+          avatar,
+          role,
+          model,
+          managed,
+        })),
+      );
+    }
     return c.json(agents);
   });
 
@@ -409,8 +421,12 @@ export async function createApp(
   app.get("/api/sessions/:id/messages", (c) => {
     // Returns UIMessage[] verbatim — useChat consumes these directly via
     // setMessages on session change.
+    const sessionId = c.req.param("id");
+    if (!manager.sessionStore.get(sessionId)) {
+      return c.json({ error: "Session not found" }, 404);
+    }
     const messages = sanitizeStoredHistory(
-      manager.messageStore.getHistory(c.req.param("id")),
+      manager.messageStore.getHistory(sessionId),
     );
     return c.json(messages);
   });

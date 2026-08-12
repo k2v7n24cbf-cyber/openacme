@@ -271,6 +271,44 @@ describe("agents CRUD", () => {
     expect(list).toHaveLength(0);
   });
 
+  it("can list lightweight agent summaries without heavy prompt fields", async () => {
+    await createAgent("helper", "Helper", {
+      persona: "Long operating instructions",
+      tools: ["tool_a", "tool_b"],
+      skills: ["skill_a"],
+      role: "Helps with route tests",
+    });
+
+    let res = await req("/api/agents");
+    expect(res.status).toBe(200);
+    const full = (await res.json()) as Array<Record<string, unknown>>;
+    expect(full[0]).toMatchObject({
+      id: "helper",
+      persona: "Long operating instructions",
+      tools: ["tool_a", "tool_b"],
+      skills: ["skill_a"],
+    });
+
+    res = await req("/api/agents?summary=1");
+    expect(res.status).toBe(200);
+    const summary = (await res.json()) as Array<Record<string, unknown>>;
+    expect(summary).toEqual([
+      expect.objectContaining({
+        id: "helper",
+        name: "Helper",
+        role: "Helps with route tests",
+        model: expect.objectContaining({
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+        }),
+      }),
+    ]);
+    expect(summary[0]).not.toHaveProperty("persona");
+    expect(summary[0]).not.toHaveProperty("tools");
+    expect(summary[0]).not.toHaveProperty("skills");
+    expect(summary[0]).not.toHaveProperty("mcpServers");
+  });
+
   it("persists per-agent memory extraction setting", async () => {
     await createAgent();
 
@@ -600,6 +638,8 @@ describe("sessions", () => {
     });
     expect(res.status).toBe(200);
     res = await req(`/api/sessions/${session.id}`);
+    expect(res.status).toBe(404);
+    res = await req(`/api/sessions/${session.id}/messages`);
     expect(res.status).toBe(404);
   });
 

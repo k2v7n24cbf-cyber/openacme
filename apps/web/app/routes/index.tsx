@@ -245,6 +245,14 @@ function ChatPage() {
   const [messages, setMessages] = useState<OpenAcmeUIMessage[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  // True while we're fetching history for `activeSessionId`. The chat
+  // area uses this to suppress its empty-state flash between the
+  // synchronous `setMessages([])` and the async fetch resolution —
+  // otherwise opening a session briefly renders `ChatAgentReadyState`
+  // before the real messages land. Reset on every session change so a
+  // genuinely empty session (no messages at all) still shows the
+  // empty state after the fetch completes.
+  const [historyLoading, setHistoryLoading] = useState(false);
   // Messages the user sent while a turn was already streaming. They
   // live here (as floating chips above the input) until the next turn
   // fires and the server-side autonomous drain persists each one to
@@ -355,6 +363,20 @@ function ChatPage() {
     }
   }, []);
 
+  const clearMissingSession = useCallback(() => {
+    freshSessionIdRef.current = null;
+    activeSessionIdRef.current = "";
+    setActiveSessionId("");
+    setActiveSessionTitle(null);
+    setMessages([]);
+    setHistoryLoading(false);
+    void navigate({
+      to: "/",
+      search: (prev) => ({ agentFilter: prev.agentFilter }),
+      replace: true,
+    });
+  }, [navigate]);
+
   const loadAgents = useCallback(
     async (signal?: AbortSignal): Promise<Agent[] | null> => {
       try {
@@ -427,15 +449,6 @@ function ChatPage() {
     return entries.every(([, v]) => !v);
   }, [modelCatalog]);
 
-  // True while we're fetching history for `activeSessionId`. The chat
-  // area uses this to suppress its empty-state flash between the
-  // synchronous `setMessages([])` and the async fetch resolution —
-  // otherwise opening a session briefly renders `ChatAgentReadyState`
-  // before the real messages land. Reset on every session change so a
-  // genuinely empty session (no messages at all) still shows the
-  // empty state after the fetch completes.
-  const [historyLoading, setHistoryLoading] = useState(false);
-
   useEffect(() => {
     if (!activeSessionId) {
       setActiveSessionTitle(null);
@@ -447,7 +460,13 @@ function ChatPage() {
     if (freshSessionIdRef.current === activeSessionId) return;
     const ctrl = new AbortController();
     fetch(`${API_BASE}/api/sessions/${activeSessionId}`, { signal: ctrl.signal })
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => {
+        if (r.status === 404) {
+          clearMissingSession();
+          return null;
+        }
+        return r.ok ? r.json() : null;
+      })
       .then((data: { title?: string | null; agentId?: string } | null) => {
         if (!data) return;
         setActiveSessionTitle(data.title ?? null);
@@ -462,7 +481,7 @@ function ChatPage() {
         if ((e as Error).name === "AbortError") return;
       });
     return () => ctrl.abort();
-  }, [activeSessionId]);
+  }, [activeSessionId, clearMissingSession]);
 
   // Load history when session changes.
   useEffect(() => {
@@ -486,8 +505,16 @@ function ChatPage() {
     setHistoryLoading(true);
     const ctrl = new AbortController();
     fetch(`${API_BASE}/api/sessions/${activeSessionId}/messages`, { signal: ctrl.signal })
-      .then((r) => r.json())
+      .then((r) => {
+        if (r.status === 404) {
+          clearMissingSession();
+          return null;
+        }
+        if (!r.ok) throw new Error(r.statusText);
+        return r.json();
+      })
       .then((data: OpenAcmeUIMessage[]) => {
+        if (!data) return;
         setMessages(data);
         setHistoryLoading(false);
       })
@@ -497,7 +524,7 @@ function ChatPage() {
         toast.error("Failed to load messages");
       });
     return () => ctrl.abort();
-  }, [activeSessionId, setMessages]);
+  }, [activeSessionId, clearMissingSession, setMessages]);
 
   // Layout-effect (not useEffect) so the scroll lands BEFORE paint —
   // without this, opening a session paints scrollTop=0 for one frame

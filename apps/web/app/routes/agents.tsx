@@ -103,6 +103,11 @@ interface Agent {
   email?: { provider: "imap" | "gmail" | "microsoft"; address: string };
 }
 
+type AgentSummary = Pick<
+  Agent,
+  "id" | "name" | "avatar" | "role" | "model" | "managed"
+>;
+
 interface SkillIndexEntry {
   name: string;
   description: string;
@@ -376,7 +381,7 @@ function AgentsPage() {
   const urlImportTemplate = search["import"] ?? null;
   const detailTab: AgentTab = search.tab ?? "overview";
 
-  const [agents, setAgents] = useState<Agent[]>([]);
+  const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [tools, setTools] = useState<ToolInfo[]>([]);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [globalMcp, setGlobalMcp] = useState<
@@ -455,20 +460,15 @@ function AgentsPage() {
 
   const loadAll = async (signal?: AbortSignal) => {
     try {
-      const [agentsRes, toolsRes, providersRes, mcpRes, skillsRes, catalogRes] =
+      const [agentsRes, providersRes, mcpRes, skillsRes, catalogRes] =
         await Promise.all([
-          fetch(`${API_BASE}/api/agents`, { signal }),
-          fetch(`${API_BASE}/api/tools`, { signal }),
+          fetch(`${API_BASE}/api/agents?summary=1`, { signal }),
           fetch(`${API_BASE}/api/models`, { signal }),
           fetch(`${API_BASE}/api/mcp/global`, { signal }),
           fetch(`${API_BASE}/api/skills`, { signal }),
           fetch(`${API_BASE}/api/agents/catalog`, { signal }),
         ]);
       if (agentsRes.ok) setAgents(await agentsRes.json());
-      if (toolsRes.ok) {
-        const data = (await toolsRes.json()) as { tools: ToolInfo[] };
-        setTools(data.tools ?? []);
-      }
       if (providersRes.ok) {
         setProviders((await providersRes.json()) as ProviderInfo[]);
       }
@@ -492,9 +492,31 @@ function AgentsPage() {
     }
   };
 
+  useEffect(() => {
+    if (tools.length > 0) return;
+    if (!isCreating && !isEditing && detailTab !== "tools") return;
+    const ctrl = new AbortController();
+    void (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/tools`, {
+          signal: ctrl.signal,
+        });
+        if (res.ok) {
+          const data = (await res.json()) as { tools: ToolInfo[] };
+          setTools(data.tools ?? []);
+        }
+      } catch (e) {
+        if ((e as Error).name !== "AbortError") {
+          toast.error("Failed to load tools");
+        }
+      }
+    })();
+    return () => ctrl.abort();
+  }, [detailTab, isCreating, isEditing, tools.length]);
+
   const reloadAgents = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/agents`);
+      const res = await fetch(`${API_BASE}/api/agents?summary=1`);
       if (res.ok) setAgents(await res.json());
     } catch {
       /* handled by mount loader's toast */
@@ -848,32 +870,49 @@ function AgentsPage() {
     if (urlId) {
       const found = agents.find((a) => a.id === urlId);
       if (found) {
-        setSelectedAgent(found);
-        setIsCreating(false);
-        // View-first: don't auto-open into edit mode. The user clicks the
-        // "Edit" button when they want to change something.
-        setIsEditing(false);
-        setFormData({
-          id: found.id,
-          name: found.name,
-          avatar: found.avatar ?? "",
-          role: found.role ?? "",
-          provider: found.model.provider,
-          model: found.model.model,
-          auth: found.model.auth ?? "api_key",
-          cacheTtl: found.model.cacheTtl ?? "5m",
-          persona: found.persona,
-          tools: found.tools,
-          skills: found.skills ?? [],
-          memoryExtractionEnabled: found.memoryExtractionEnabled ?? true,
-          maxConcurrentSessions: found.maxConcurrentSessions ?? 1,
-          parallelSchedulingPolicy:
-            found.parallelSchedulingPolicy ?? "lane_first",
-          agentAskEnabled: found.agentAskEnabled ?? true,
-          instantMessagesEnabled: found.instantMessagesEnabled ?? true,
-          mcpServers: found.mcpServers ?? {},
-          mcpDisabled: found.mcpDisabled ?? [],
-        });
+        setSelectedAgent((prev) => (prev?.id === urlId ? prev : null));
+        const ctrl = new AbortController();
+        void (async () => {
+          try {
+            const res = await fetch(
+              `${API_BASE}/api/agents/${encodeURIComponent(urlId)}`,
+              { signal: ctrl.signal },
+            );
+            if (!res.ok) return;
+            const full = (await res.json()) as Agent;
+            setSelectedAgent(full);
+            setIsCreating(false);
+            // View-first: don't auto-open into edit mode. The user clicks the
+            // "Edit" button when they want to change something.
+            setIsEditing(false);
+            setFormData({
+              id: full.id,
+              name: full.name,
+              avatar: full.avatar ?? "",
+              role: full.role ?? "",
+              provider: full.model.provider,
+              model: full.model.model,
+              auth: full.model.auth ?? "api_key",
+              cacheTtl: full.model.cacheTtl ?? "5m",
+              persona: full.persona,
+              tools: full.tools,
+              skills: full.skills ?? [],
+              memoryExtractionEnabled:
+                full.memoryExtractionEnabled ?? true,
+              maxConcurrentSessions: full.maxConcurrentSessions ?? 1,
+              parallelSchedulingPolicy:
+                full.parallelSchedulingPolicy ?? "lane_first",
+              agentAskEnabled: full.agentAskEnabled ?? true,
+              instantMessagesEnabled: full.instantMessagesEnabled ?? true,
+              mcpServers: full.mcpServers ?? {},
+              mcpDisabled: full.mcpDisabled ?? [],
+            });
+          } catch (e) {
+            if ((e as Error).name === "AbortError") return;
+            toast.error("Failed to load agent");
+          }
+        })();
+        return () => ctrl.abort();
       } else if (agents.length > 0) {
         void navigate({ to: "/agents", replace: true });
       }
@@ -885,7 +924,7 @@ function AgentsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlId, urlCreate, urlImportTemplate, agents, providers, navigate]);
 
-  const selectAgent = (agent: Agent) =>
+  const selectAgent = (agent: AgentSummary) =>
     void navigate({ to: "/agents", search: { id: agent.id } });
   const startCreate = () => {
     // Catalog has at least one template → ask the user; otherwise jump

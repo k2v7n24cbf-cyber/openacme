@@ -93,3 +93,10 @@ export {
   type WriteHostedIntegrationDraftFileRequest,
   type WriteHostedIntegrationDraftFileResult,
 } from "./drafts.js";
+export {
+  createFileHostedIntegrationExampleRegistry,
+  type HostedIntegrationExampleRegistry,
+  type HostedIntegrationExampleRegistryOptions,
+  type UpsertHostedIntegrationExampleRequest,
+  type UpsertHostedIntegrationExampleResult,
+} from "./examples.js";

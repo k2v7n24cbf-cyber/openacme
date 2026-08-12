@@ -422,6 +422,20 @@ pnpm --filter @openacme/hosted-integrations test -- drafts
 
 ### Slice 2.3: Examples Registry
 
+Status: done.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/hosted-integrations test -- examples` failed before
+  implementation because `createFileHostedIntegrationExampleRegistry` was not
+  exported.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- examples`
+  `pnpm --filter @openacme/hosted-integrations test`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+
 Goal:
 
 - Define `examples.yaml` format.

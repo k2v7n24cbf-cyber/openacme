@@ -114,6 +114,13 @@ export {
   type HostedIntegrationProposedFamilySummary,
 } from "./proposed-family.js";
 export {
+  createFileHostedIntegrationConfigScopeStore,
+  type FileHostedIntegrationConfigScopeStoreOptions,
+  type HostedIntegrationConfigScopeStore,
+  type UpsertHostedIntegrationConfigScopeRequest,
+  type UpsertHostedIntegrationConfigScopeResult,
+} from "./config-scopes.js";
+export {
   createFileHostedIntegrationExampleRegistry,
   type HostedIntegrationExampleRegistry,
   type HostedIntegrationExampleRegistryOptions,

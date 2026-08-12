@@ -7,6 +7,10 @@ import {
   type HostedIntegrationFamilySummary,
 } from "./catalog.js";
 import {
+  createFileHostedIntegrationConfigScopeStore,
+  type HostedIntegrationConfigScopeStore,
+} from "./config-scopes.js";
+import {
   createFileHostedIntegrationDraftStore,
   type HostedIntegrationDraftStore,
 } from "./drafts.js";
@@ -44,6 +48,7 @@ export interface HostedIntegrationService {
   readonly examples: HostedIntegrationExampleRegistry;
   readonly validator: HostedIntegrationDraftValidator;
   readonly proposedFamilies: HostedIntegrationProposedFamilyManager;
+  readonly configScopes: HostedIntegrationConfigScopeStore;
   listFamilies(): Promise<HostedIntegrationManagementFamilySummary[]>;
   getFamily(
     familyId: HostedIntegrationFamilyId | string,
@@ -79,6 +84,10 @@ export function createFileHostedIntegrationService(
     lockStore: locks,
     draftStore: drafts,
   });
+  const configScopes = createFileHostedIntegrationConfigScopeStore({
+    ...options,
+    catalog,
+  });
   return new FileHostedIntegrationService({
     catalog,
     locks,
@@ -87,6 +96,7 @@ export function createFileHostedIntegrationService(
     examples,
     validator,
     proposedFamilies,
+    configScopes,
   });
 }
 
@@ -97,6 +107,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
   readonly examples: HostedIntegrationExampleRegistry;
   readonly validator: HostedIntegrationDraftValidator;
   readonly proposedFamilies: HostedIntegrationProposedFamilyManager;
+  readonly configScopes: HostedIntegrationConfigScopeStore;
 
   private readonly catalog: HostedIntegrationCatalog;
 
@@ -108,6 +119,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     examples: HostedIntegrationExampleRegistry;
     validator: HostedIntegrationDraftValidator;
     proposedFamilies: HostedIntegrationProposedFamilyManager;
+    configScopes: HostedIntegrationConfigScopeStore;
   }) {
     this.catalog = parts.catalog;
     this.locks = parts.locks;
@@ -116,6 +128,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     this.examples = parts.examples;
     this.validator = parts.validator;
     this.proposedFamilies = parts.proposedFamilies;
+    this.configScopes = parts.configScopes;
   }
 
   async start(): Promise<void> {

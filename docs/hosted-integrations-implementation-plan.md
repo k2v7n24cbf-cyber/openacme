@@ -616,6 +616,21 @@ Goal: establish the minimum security/config foundation before real invocation.
 
 ### Slice 3.1: Config Scope Store
 
+Status: done.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/hosted-integrations test -- config-scopes` failed
+  before implementation because
+  `createFileHostedIntegrationConfigScopeStore` did not exist.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- config-scopes`
+  `pnpm --filter @openacme/hosted-integrations test`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/server check-types`
+
 Goal:
 
 - Add sanitized config scope files under

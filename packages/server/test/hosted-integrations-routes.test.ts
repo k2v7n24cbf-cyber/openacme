@@ -23,6 +23,7 @@ import type { Hono } from "hono";
 let dataDir: string;
 let app: Hono;
 let manager: AgentManager;
+let runtime: Awaited<ReturnType<typeof createApp>>["runtime"];
 let closeApp: () => Promise<void>;
 let authToken: string;
 let generationCounter: number;
@@ -33,7 +34,7 @@ beforeEach(async () => {
     dataDir,
     model: { provider: "anthropic", model: "claude-sonnet-4-6" },
   });
-  ({ app, manager, close: closeApp } = await createApp(config));
+  ({ app, manager, runtime, close: closeApp } = await createApp(config));
   generationCounter = 0;
   const member = manager.authStore.createMember({
     email: "test@example.com",
@@ -111,6 +112,13 @@ tools:
       execution: sync
       approval: none
 `;
+}
+
+function asyncFamilyYaml(id: string, name: string, toolName: string): string {
+  return familyYaml(id, name, toolName).replace(
+    "      execution: sync",
+    "      execution: async",
+  );
 }
 
 function lifecycleFamilyYaml(): string {
@@ -850,6 +858,196 @@ describe("hosted integrations invocation routes", () => {
     expect(await res.json()).toMatchObject({
       ok: false,
       error: { code: "policy_denied" },
+    });
+  });
+
+  it("starts and manages async jobs with policy and idempotency enforcement", async () => {
+    writeFamily(
+      "qualys",
+      asyncFamilyYaml("qualys", "Qualys", "qualys_export_assets"),
+      {
+        "qualys.py": pythonTool("return {'queued': True}"),
+      },
+    );
+    await promoteFamily("qualys");
+    await seedConfigScope("qualys", "qualys-test", "test");
+
+    let res = await req("/api/hosted-integrations/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...allowedInvokeBody("qualys_export_assets"),
+        idempotencyKey: "async-key-1",
+      }),
+    });
+    expect(res.status).toBe(201);
+    const started = await res.json();
+    expect(started).toMatchObject({
+      ok: true,
+      replayed: false,
+      job: {
+        id: expect.any(String),
+        familyId: "qualys",
+        toolName: "qualys_export_assets",
+        status: "queued",
+        actorId: "agent:analyst",
+      },
+    });
+    const jobId = started.job.id as string;
+
+    res = await req("/api/hosted-integrations/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...allowedInvokeBody("qualys_export_assets"),
+        idempotencyKey: "async-key-1",
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      ok: true,
+      replayed: true,
+      job: { id: jobId },
+    });
+
+    res = await req("/api/hosted-integrations/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...allowedInvokeBody("qualys_export_assets"),
+        args: { different: true },
+        idempotencyKey: "async-key-1",
+      }),
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: { code: "idempotency_conflict" },
+    });
+
+    await runtime.hostedIntegrationService.jobs.markRunning({
+      jobId,
+      runId: "call_async_1",
+      progress: { phase: "exporting", percent: 50 },
+    });
+
+    res = await req(`/api/hosted-integrations/jobs/${jobId}`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      job: {
+        id: jobId,
+        status: "running",
+        progress: { phase: "exporting", percent: 50 },
+      },
+    });
+
+    res = await req(`/api/hosted-integrations/jobs/${jobId}/result`);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: { code: "not_ready" },
+    });
+
+    await runtime.hostedIntegrationService.jobs.completeJob({
+      jobId,
+      resultEnvelopeRef: "call_async_1/output.json",
+    });
+    res = await req(`/api/hosted-integrations/jobs/${jobId}/result`);
+    expect(res.status).toBe(200);
+    const result = await res.json();
+    expect(result).toEqual({
+      ok: true,
+      result_ref: "call_async_1/output.json",
+    });
+    expect(JSON.stringify(result)).not.toContain("super-secret");
+  });
+
+  it("rejects async job start for sync tools and unauthorized actors", async () => {
+    writeFamily(
+      "qualys",
+      familyYaml("qualys", "Qualys", "qualys_count_assets"),
+      {
+        "qualys.py": pythonTool("return {'count': 1}"),
+      },
+    );
+    await promoteFamily("qualys");
+    await seedConfigScope("qualys", "qualys-test", "test");
+
+    let res = await req("/api/hosted-integrations/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(allowedInvokeBody()),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: { code: "sync_only" },
+    });
+
+    writeFamily("jira", asyncFamilyYaml("jira", "Jira", "jira_export_issues"), {
+      "jira.py": pythonTool("return {'queued': True}"),
+    });
+    await promoteFamily("jira");
+    await seedConfigScope("jira", "jira-test", "test");
+
+    res = await req("/api/hosted-integrations/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...allowedInvokeBody("jira_export_issues", "jira"),
+        bindings: [],
+      }),
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: { code: "policy_denied" },
+    });
+  });
+
+  it("cancels only running async jobs", async () => {
+    writeFamily(
+      "qualys",
+      asyncFamilyYaml("qualys", "Qualys", "qualys_export_assets"),
+      {
+        "qualys.py": pythonTool("return {'queued': True}"),
+      },
+    );
+    await promoteFamily("qualys");
+    await seedConfigScope("qualys", "qualys-test", "test");
+
+    let res = await req("/api/hosted-integrations/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(allowedInvokeBody("qualys_export_assets")),
+    });
+    expect(res.status).toBe(201);
+    const jobId = ((await res.json()) as { job: { id: string } }).job.id;
+
+    res = await req(`/api/hosted-integrations/jobs/${jobId}/cancel`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ actor: agentActor() }),
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: { code: "not_running" },
+    });
+
+    await runtime.hostedIntegrationService.jobs.markRunning({
+      jobId,
+      runId: "call_async_1",
+    });
+    res = await req(`/api/hosted-integrations/jobs/${jobId}/cancel`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ actor: agentActor() }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      ok: true,
+      job: { id: jobId, status: "cancelled" },
     });
   });
 
@@ -1753,20 +1951,24 @@ async function createAgentViaRoutes(
   expect(res.status).toBe(201);
 }
 
-function allowedInvokeBody() {
+function allowedInvokeBody(
+  toolName = "qualys_count_assets",
+  familyId = "qualys",
+) {
+  const scopeId = `${familyId}-test`;
   return {
     actor: agentActor(),
-    familyId: "qualys",
-    toolName: "qualys_count_assets",
+    familyId,
+    toolName,
     environment: "test",
     args: {},
     bindings: [
       {
         agentId: "agent:analyst",
-        familyId: "qualys",
-        toolName: "qualys_count_assets",
-        allowedConfigScopeIds: ["qualys-test"],
-        defaultConfigScopeId: "qualys-test",
+        familyId,
+        toolName,
+        allowedConfigScopeIds: [scopeId],
+        defaultConfigScopeId: scopeId,
         environment: "test",
       },
     ],

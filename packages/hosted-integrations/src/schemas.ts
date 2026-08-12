@@ -409,6 +409,8 @@ export const HostedIntegrationJobSchema = z
     toolName: HostedIntegrationToolNameSchema,
     generationId: z.string().min(1),
     actorId: z.string().min(1),
+    idempotencyKey: z.string().min(1).optional(),
+    requestFingerprint: z.string().min(1).optional(),
     runId: z.string().min(1).optional(),
     status: z.enum(["queued", "running", "succeeded", "failed", "cancelled"]),
     progress: JsonObjectSchema.optional(),

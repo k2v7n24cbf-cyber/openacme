@@ -2035,6 +2035,38 @@ Validation:
 pnpm --filter @openacme/server test -- hosted-integrations
 ```
 
+Implementation notes:
+
+- Added HTTP job routes for async hosted tools:
+  `POST /api/hosted-integrations/jobs`,
+  `GET /api/hosted-integrations/jobs/:jobId`,
+  `POST /api/hosted-integrations/jobs/:jobId/cancel`, and
+  `GET /api/hosted-integrations/jobs/:jobId/result`.
+- Job start reuses hosted integration policy evaluation, config-scope
+  resolution, active generation resolution, and tool classification checks.
+  `execution: sync` tools return `sync_only` instead of enqueueing.
+- Async-start idempotency is persisted on the job record by
+  `idempotencyKey + requestFingerprint`: identical retries return the same job
+  as replayed, while mismatched retries return `idempotency_conflict`.
+- Public job responses hide idempotency key/fingerprint internals and result
+  reads return only `result_ref`.
+- This slice still does not run the background async worker; route tests drive
+  status/result transitions through the job-store port.
+
+Evidence:
+
+- Red validation:
+  `pnpm --filter @openacme/server test -- hosted-integrations-routes` first
+  failed because the job routes returned 404.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- jobs gateway`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/server test -- hosted-integrations-routes`
+  `pnpm --filter @openacme/server test -- hosted-integrations`
+  `pnpm --filter @openacme/server check-types`
+  `pnpm --filter @openacme/server build`
+
 ### Slice 7.3: Explicit Cache Contract
 
 Goal:

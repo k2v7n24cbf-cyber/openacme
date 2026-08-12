@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Context, Hono } from "hono";
@@ -10,6 +11,7 @@ import {
   HostedIntegrationPolicyBindingSchema,
   HostedIntegrationPromotionApprovalTargetSchema,
   JsonObjectSchema,
+  evaluateHostedIntegrationPolicy,
   evaluateHostedIntegrationPromotionApproval,
   isHostedIntegrationToolVisibleForSelection,
   type FamilyManifest,
@@ -19,6 +21,7 @@ import {
   type HostedIntegrationGatewayError,
   type HostedIntegrationGeneration,
   type HostedIntegrationHumanApprovalRecord,
+  type HostedIntegrationJob,
   type HostedIntegrationPolicyActor,
   type HostedIntegrationService,
 } from "@openacme/hosted-integrations";
@@ -60,6 +63,149 @@ export function registerHostedIntegrationRoutes(
     } catch (error) {
       return invalidRequest(c, error);
     }
+  });
+
+  app.post("/api/hosted-integrations/jobs", async (c) => {
+    try {
+      const body = await readJsonObject(c);
+      const actor = actorField(body);
+      const familyId = stringField(body, "familyId");
+      const toolName = stringField(body, "toolName");
+      const environment = stringField(body, "environment");
+      const args = JsonObjectSchema.parse(objectField(body, "args"));
+      const family = await service.getFamily(familyId);
+      const tool = family?.manifest.tools.find(
+        (candidate) => candidate.name === toolName,
+      );
+      if (!family || !tool || tool.lifecycle === "removed") {
+        return c.json({ ok: false, error: { code: "tool_not_found" } }, 404);
+      }
+      if (tool.lifecycle === "disabled") {
+        return c.json({ ok: false, error: { code: "tool_disabled" } }, 403);
+      }
+      if (tool.classification.execution !== "async") {
+        return c.json({ ok: false, error: { code: "sync_only" } }, 400);
+      }
+
+      const policy = evaluateHostedIntegrationPolicy({
+        actor,
+        action: "invoke",
+        familyId,
+        toolName,
+        operationClass: tool.classification.operation,
+        environment,
+        mode: "run",
+        requestedConfigScopeId:
+          optionalStringField(body, "requestedConfigScopeId") ?? undefined,
+        toolClassification: tool.classification,
+        bindings: policyBindingsField(body),
+        approvalGranted: optionalBooleanField(body, "approvalGranted"),
+      });
+      if (!policy.ok) {
+        return c.json(
+          {
+            ok: false,
+            error: { code: policy.reason, message: policy.message },
+          },
+          statusForGatewayError(policy.reason),
+        );
+      }
+      const configScope = await service.configScopes.getConfigScope(
+        policy.resolvedConfigScopeId ?? "",
+      );
+      if (!configScope || configScope.familyId !== familyId) {
+        return c.json(
+          { ok: false, error: { code: "config_scope_not_found" } },
+          404,
+        );
+      }
+
+      const generationId = optionalStringField(body, "generationId");
+      const generation = generationId
+        ? await service.generations.getGeneration(generationId)
+        : await service.generations.getActiveGeneration(familyId);
+      if (!generation) {
+        return c.json(
+          {
+            ok: false,
+            error: {
+              code: generationId
+                ? "generation_not_found"
+                : "no_active_generation",
+            },
+          },
+          404,
+        );
+      }
+      if (generation.familyId !== familyId || generation.status !== "active") {
+        return c.json({ ok: false, error: { code: "stale_generation" } }, 404);
+      }
+
+      const requestFingerprint = fingerprintJson({
+        actorId: actor.id,
+        familyId,
+        toolName,
+        generationId: generation.id,
+        configScopeId: configScope.id,
+        configRevision: configScope.revision,
+        environment,
+        args,
+      });
+      const started = await service.jobs.startJob({
+        familyId,
+        toolName,
+        generationId: generation.id,
+        actorId: actor.id,
+        executionMode: tool.classification.execution,
+        idempotencyKey:
+          optionalStringField(body, "idempotencyKey") ?? undefined,
+        requestFingerprint,
+      });
+      if (!started.ok) {
+        return c.json(
+          { ok: false, error: { code: started.reason } },
+          started.reason === "idempotency_conflict" ? 409 : 400,
+        );
+      }
+      return c.json(
+        { ok: true, replayed: started.replayed, job: publicJob(started.job) },
+        started.replayed ? 200 : 201,
+      );
+    } catch (error) {
+      return invalidRequest(c, error);
+    }
+  });
+
+  app.get("/api/hosted-integrations/jobs/:jobId", async (c) => {
+    const job = await service.jobs.getJob(c.req.param("jobId"));
+    if (!job) return c.json({ error: "not_found" }, 404);
+    return c.json({ job: publicJob(job) });
+  });
+
+  app.post("/api/hosted-integrations/jobs/:jobId/cancel", async (c) => {
+    try {
+      const actor = actorField(await readJsonObject(c));
+      const result = await service.jobs.cancelJob({
+        jobId: c.req.param("jobId"),
+        cancelledBy: actor.id,
+      });
+      if (result.ok) return c.json({ ok: true, job: publicJob(result.job) });
+      return c.json(
+        { ok: false, error: { code: result.reason } },
+        result.reason === "not_found" ? 404 : 409,
+      );
+    } catch (error) {
+      return invalidRequest(c, error);
+    }
+  });
+
+  app.get("/api/hosted-integrations/jobs/:jobId/result", async (c) => {
+    const result = await service.jobs.getResult(c.req.param("jobId"));
+    if (result.ok) return c.json(result);
+    return c.json(
+      { ok: false, error: { code: result.reason } },
+      result.reason === "not_found" ? 404 : 409,
+    );
   });
 
   app.post("/api/hosted-integrations/debug-runs", async (c) => {
@@ -974,6 +1120,43 @@ function statusForGatewayError(
     default:
       return 500;
   }
+}
+
+function publicJob(job: HostedIntegrationJob) {
+  return {
+    id: job.id,
+    familyId: job.familyId,
+    toolName: job.toolName,
+    generationId: job.generationId,
+    actorId: job.actorId,
+    runId: job.runId,
+    status: job.status,
+    progress: job.progress,
+    resultEnvelopeRef: job.resultEnvelopeRef,
+    error: job.error,
+    cancelledBy: job.cancelledBy,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+  };
+}
+
+function fingerprintJson(value: unknown): string {
+  return `sha256:${createHash("sha256")
+    .update(stableStringify(value))
+    .digest("hex")}`;
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+  if (isRecord(value)) {
+    return `{${Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => `${JSON.stringify(key)}:${stableStringify(child)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function canReadRun(

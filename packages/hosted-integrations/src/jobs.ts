@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isNodeError, safePathSegment } from "./file-access.js";
 import {
@@ -24,11 +24,13 @@ export interface StartHostedIntegrationJobRequest {
   generationId: string;
   actorId: string;
   executionMode: HostedIntegrationExecutionMode;
+  idempotencyKey?: string;
+  requestFingerprint?: string;
 }
 
 export type StartHostedIntegrationJobResult =
-  | { ok: true; job: HostedIntegrationJob }
-  | { ok: false; reason: "sync_only" };
+  | { ok: true; replayed: boolean; job: HostedIntegrationJob }
+  | { ok: false; reason: "sync_only" | "idempotency_conflict" };
 
 export interface MarkHostedIntegrationJobRunningRequest {
   jobId: string;
@@ -118,6 +120,20 @@ class FileHostedIntegrationJobStore implements HostedIntegrationJobStore {
     if (request.executionMode !== "async") {
       return { ok: false, reason: "sync_only" };
     }
+    if (request.idempotencyKey) {
+      const existing = await this.getJobByIdempotencyKey(
+        request.idempotencyKey,
+      );
+      if (existing) {
+        if (
+          existing.requestFingerprint !== request.requestFingerprint ||
+          !request.requestFingerprint
+        ) {
+          return { ok: false, reason: "idempotency_conflict" };
+        }
+        return { ok: true, replayed: true, job: existing };
+      }
+    }
     const now = this.now().toISOString();
     const job = HostedIntegrationJobSchema.parse({
       id: this.createId(),
@@ -125,12 +141,18 @@ class FileHostedIntegrationJobStore implements HostedIntegrationJobStore {
       toolName: HostedIntegrationToolNameSchema.parse(request.toolName),
       generationId: request.generationId,
       actorId: request.actorId,
+      ...(request.idempotencyKey
+        ? { idempotencyKey: request.idempotencyKey }
+        : {}),
+      ...(request.requestFingerprint
+        ? { requestFingerprint: request.requestFingerprint }
+        : {}),
       status: "queued",
       createdAt: now,
       updatedAt: now,
     });
     await this.writeJob(job);
-    return { ok: true, job };
+    return { ok: true, replayed: false, job };
   }
 
   async getJob(jobId: string): Promise<HostedIntegrationJob | null> {
@@ -250,6 +272,24 @@ class FileHostedIntegrationJobStore implements HostedIntegrationJobStore {
 
   private jobPath(jobId: string): string {
     return path.join(this.jobsDir, `${safePathSegment("jobId", jobId)}.json`);
+  }
+
+  private async getJobByIdempotencyKey(
+    idempotencyKey: string,
+  ): Promise<HostedIntegrationJob | null> {
+    let entries: string[];
+    try {
+      entries = await readdir(this.jobsDir);
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") return null;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (!entry.endsWith(".json")) continue;
+      const job = await this.getJob(entry.slice(0, -".json".length));
+      if (job?.idempotencyKey === idempotencyKey) return job;
+    }
+    return null;
   }
 }
 

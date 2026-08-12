@@ -2091,6 +2091,31 @@ Validation:
 pnpm --filter @openacme/hosted-integrations test -- cache-contract
 ```
 
+Implementation notes:
+
+- Added explicit `tool.cache` metadata for tools classified with
+  `freshness: cached` or `freshness: sync`.
+- `freshness: live` tools cannot declare cache metadata, which keeps the
+  platform from becoming an implicit response cache.
+- Cache paths resolve only under the family-owned `family_home` scope. Path
+  traversal or absolute escape attempts are rejected by validation.
+- The cache resolver uses family home directly and does not derive cache access
+  from the caller agent workspace.
+
+Evidence:
+
+- Red validation:
+  `pnpm --filter @openacme/hosted-integrations test -- cache-contract` first
+  failed because cache metadata was not part of the manifest schema,
+  freshness/cache validation did not exist, and the cache path resolver was not
+  exported.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- cache-contract`
+  `pnpm --filter @openacme/hosted-integrations test -- cache-contract validation schemas gateway`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/server check-types`
+
 ## Milestone 8: UI Integration
 
 Goal: expose hosted integrations without redesigning Agent Settings.

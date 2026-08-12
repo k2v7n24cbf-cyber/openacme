@@ -98,6 +98,18 @@ export type HostedIntegrationToolClassification = z.infer<
   typeof HostedIntegrationToolClassificationSchema
 >;
 
+export const HostedIntegrationToolCacheSchema = z
+  .object({
+    scope: z.literal("family_home"),
+    path: z.string().min(1),
+    description: z.string().min(1).optional(),
+    ttlMs: z.number().int().positive().optional(),
+  })
+  .strict();
+export type HostedIntegrationToolCache = z.infer<
+  typeof HostedIntegrationToolCacheSchema
+>;
+
 export const HostedIntegrationRuntimePolicySchema = z
   .object({
     filesystem: z.enum(["run_dir_only", "run_dir_and_family_home"]),
@@ -180,6 +192,7 @@ export const HostedIntegrationToolSpecSchema = z
     lifecycle: HostedIntegrationToolLifecycleSchema,
     inputSchema: JsonObjectSchema,
     classification: HostedIntegrationToolClassificationSchema,
+    cache: HostedIntegrationToolCacheSchema.optional(),
     runtime: HostedIntegrationRuntimeSettingsSchema.partial().optional(),
   })
   .strict();

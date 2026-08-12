@@ -6,6 +6,7 @@ import {
   type FamilyManifest,
 } from "./schemas.js";
 import type { HostedIntegrationCatalog } from "./catalog.js";
+import { resolveHostedIntegrationCachePath } from "./cache.js";
 import { resolveHostedIntegrationPythonDependencies } from "./dependencies.js";
 import type { HostedIntegrationDraftStore } from "./drafts.js";
 
@@ -80,6 +81,7 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
     }
 
     this.validateUniqueToolNames(manifest, diagnostics);
+    this.validateCacheContract(manifest, diagnostics);
     await this.validateRequiredFiles(draftId, manifest, diagnostics);
     this.validateDependencyPolicy(manifest, diagnostics);
     await this.validateBreakingToolRemoval(manifest, diagnostics);
@@ -178,6 +180,49 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
       manifest.runtime,
     );
     if (!resolved.ok) diagnostics.push(...resolved.diagnostics);
+  }
+
+  private validateCacheContract(
+    manifest: FamilyManifest,
+    diagnostics: HostedIntegrationValidationDiagnostic[],
+  ): void {
+    manifest.tools.forEach((tool, index) => {
+      const path = `$.tools.${index}.cache`;
+      const freshness = tool.classification.freshness;
+      if (freshness === "live" && tool.cache) {
+        diagnostics.push(
+          errorDiagnostic(
+            "cache_not_allowed",
+            path,
+            "live tools cannot declare cache metadata",
+          ),
+        );
+      }
+      if ((freshness === "cached" || freshness === "sync") && !tool.cache) {
+        diagnostics.push(
+          errorDiagnostic(
+            "cache_metadata_required",
+            path,
+            `${freshness} tools must declare family-home cache metadata`,
+          ),
+        );
+      }
+      if (!tool.cache) return;
+      try {
+        resolveHostedIntegrationCachePath({
+          familyHome: "/family-home",
+          cache: tool.cache,
+        });
+      } catch (error) {
+        diagnostics.push(
+          errorDiagnostic(
+            "cache_path_invalid",
+            `${path}.path`,
+            error instanceof Error ? error.message : String(error),
+          ),
+        );
+      }
+    });
   }
 
   private async validateBreakingToolRemoval(

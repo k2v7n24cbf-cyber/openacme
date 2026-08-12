@@ -30,6 +30,7 @@ export {
   HostedIntegrationRuntimeSettingsSchema,
   HostedIntegrationSourceRevisionSchema,
   HostedIntegrationToolClassificationSchema,
+  HostedIntegrationToolCacheSchema,
   HostedIntegrationToolLifecycleSchema,
   HostedIntegrationToolNameSchema,
   HostedIntegrationToolSpecSchema,
@@ -66,12 +67,14 @@ export {
   type HostedIntegrationRuntimeSettings,
   type HostedIntegrationSourceRevision,
   type HostedIntegrationToolClassification,
+  type HostedIntegrationToolCache,
   type HostedIntegrationToolLifecycle,
   type HostedIntegrationToolName,
   type HostedIntegrationToolSpec,
   type JsonObject,
   type JsonValue,
 } from "./schemas.js";
+export { resolveHostedIntegrationCachePath } from "./cache.js";
 export {
   createFileHostedIntegrationJobStore,
   type CancelHostedIntegrationJobRequest,

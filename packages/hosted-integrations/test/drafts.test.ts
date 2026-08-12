@@ -140,6 +140,13 @@ describe("file-backed hosted integration draft store", () => {
     await expect(
       draftStore.readDraftFile({ draftId: "draft_1", path: "qualys.py" }),
     ).resolves.toEqual({ ok: true, content: "def run(): pass\n" });
+    await expect(draftStore.listDraftFiles("draft_1")).resolves.toEqual({
+      ok: true,
+      files: [
+        { path: "family.yaml", size: 11 },
+        { path: "qualys.py", size: 16 },
+      ],
+    });
     await expect(
       draftStore.readDraftFile({
         draftId: "draft_1",

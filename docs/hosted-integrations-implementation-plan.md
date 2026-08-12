@@ -505,6 +505,20 @@ pnpm --filter @openacme/hosted-integrations test -- validation
 
 ### Slice 2.5: Draft Control Plane Routes
 
+Status: done.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/server test -- hosted-integrations` failed before
+  implementation because the new draft control-plane routes returned 404.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/server test -- hosted-integrations`
+  `pnpm --filter @openacme/server check-types`
+
 Goal:
 
 - Add lock, draft, file, example, and validation API routes:

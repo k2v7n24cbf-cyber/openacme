@@ -11,6 +11,13 @@ import {
   createFileHostedIntegrationLockStore,
   type HostedIntegrationLockStore,
 } from "./locks.js";
+import {
+  isNodeError,
+  listFilesUnderRoot,
+  resolveInsideRoot,
+  safePathSegment,
+  type HostedIntegrationFileEntry,
+} from "./file-access.js";
 
 export interface FileHostedIntegrationDraftStoreOptions {
   dataDir: string;
@@ -36,6 +43,10 @@ export interface ReadHostedIntegrationDraftFileRequest {
 
 export type ReadHostedIntegrationDraftFileResult =
   | { ok: true; content: string }
+  | { ok: false; reason: "not_found" };
+
+export type ListHostedIntegrationDraftFilesResult =
+  | { ok: true; files: HostedIntegrationFileEntry[] }
   | { ok: false; reason: "not_found" };
 
 export interface WriteHostedIntegrationDraftFileRequest {
@@ -64,6 +75,9 @@ export interface HostedIntegrationDraftStore {
     request: CreateHostedIntegrationDraftRequest,
   ): Promise<CreateHostedIntegrationDraftResult>;
   getDraft(draftId: string): Promise<HostedIntegrationDraft | null>;
+  listDraftFiles(
+    draftId: string,
+  ): Promise<ListHostedIntegrationDraftFilesResult>;
   readDraftFile(
     request: ReadHostedIntegrationDraftFileRequest,
   ): Promise<ReadHostedIntegrationDraftFileResult>;
@@ -160,6 +174,24 @@ class FileHostedIntegrationDraftStore implements HostedIntegrationDraftStore {
     return HostedIntegrationDraftSchema.parse(JSON.parse(raw));
   }
 
+  async listDraftFiles(
+    draftId: string,
+  ): Promise<ListHostedIntegrationDraftFilesResult> {
+    const draft = await this.getDraft(draftId);
+    if (!draft) return { ok: false, reason: "not_found" };
+    try {
+      return {
+        ok: true,
+        files: await listFilesUnderRoot(this.draftFilesRoot(draft.id)),
+      };
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") {
+        return { ok: false, reason: "not_found" };
+      }
+      throw error;
+    }
+  }
+
   async readDraftFile(
     request: ReadHostedIntegrationDraftFileRequest,
   ): Promise<ReadHostedIntegrationDraftFileResult> {
@@ -169,6 +201,7 @@ class FileHostedIntegrationDraftStore implements HostedIntegrationDraftStore {
     const resolved = resolveInsideRoot(
       this.draftFilesRoot(draft.id),
       request.path,
+      "draft root",
     );
     try {
       return { ok: true, content: await readFile(resolved, "utf-8") };
@@ -192,6 +225,7 @@ class FileHostedIntegrationDraftStore implements HostedIntegrationDraftStore {
     const resolved = resolveInsideRoot(
       this.draftFilesRoot(draft.id),
       request.path,
+      "draft root",
     );
     await mkdir(path.dirname(resolved), { recursive: true });
     await writeFile(resolved, request.content, "utf-8");
@@ -211,6 +245,7 @@ class FileHostedIntegrationDraftStore implements HostedIntegrationDraftStore {
     const resolved = resolveInsideRoot(
       this.draftFilesRoot(draft.id),
       request.path,
+      "draft root",
     );
     try {
       await unlink(resolved);
@@ -271,41 +306,6 @@ class FileHostedIntegrationDraftStore implements HostedIntegrationDraftStore {
   }
 }
 
-function resolveInsideRoot(root: string, requestedPath: string): string {
-  if (!requestedPath || path.isAbsolute(requestedPath)) {
-    throw new Error("path escapes draft root");
-  }
-  const absoluteRoot = path.resolve(root);
-  const resolved = path.resolve(absoluteRoot, requestedPath);
-  const relative = path.relative(absoluteRoot, resolved);
-  if (
-    relative === "" ||
-    relative.startsWith("..") ||
-    path.isAbsolute(relative)
-  ) {
-    throw new Error("path escapes draft root");
-  }
-  return resolved;
-}
-
-function safePathSegment(name: string, value: string): string {
-  if (
-    !value ||
-    value === "." ||
-    value === ".." ||
-    value.includes("/") ||
-    value.includes("\\") ||
-    path.isAbsolute(value)
-  ) {
-    throw new Error(`${name} must be a safe path segment`);
-  }
-  return value;
-}
-
 function assertNonEmpty(name: string, value: string): void {
   if (!value) throw new Error(`${name} is required`);
-}
-
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && "code" in error;
 }

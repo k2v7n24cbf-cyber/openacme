@@ -88,11 +88,21 @@ export {
   type DeleteHostedIntegrationDraftFileResult,
   type FileHostedIntegrationDraftStoreOptions,
   type HostedIntegrationDraftStore,
+  type ListHostedIntegrationDraftFilesResult,
   type ReadHostedIntegrationDraftFileRequest,
   type ReadHostedIntegrationDraftFileResult,
   type WriteHostedIntegrationDraftFileRequest,
   type WriteHostedIntegrationDraftFileResult,
 } from "./drafts.js";
+export {
+  createFileHostedIntegrationSourceFileStore,
+  type FileHostedIntegrationSourceFileStoreOptions,
+  type HostedIntegrationSourceFileStore,
+  type ListHostedIntegrationSourceFilesResult,
+  type ReadHostedIntegrationSourceFileRequest,
+  type ReadHostedIntegrationSourceFileResult,
+} from "./source-files.js";
+export { type HostedIntegrationFileEntry } from "./file-access.js";
 export {
   createFileHostedIntegrationExampleRegistry,
   type HostedIntegrationExampleRegistry,

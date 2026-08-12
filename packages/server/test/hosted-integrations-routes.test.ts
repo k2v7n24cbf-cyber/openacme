@@ -40,7 +40,11 @@ function req(p: string, init: RequestInit = {}): Promise<Response> {
   return app.request(`http://127.0.0.1${p}`, { ...init, headers });
 }
 
-function writeFamily(familyId: string, yaml: string): void {
+function writeFamily(
+  familyId: string,
+  yaml: string,
+  files: Record<string, string> = {},
+): void {
   const dir = path.join(
     dataDir,
     "hosted-integrations",
@@ -50,6 +54,11 @@ function writeFamily(familyId: string, yaml: string): void {
   );
   mkdirSync(dir, { recursive: true });
   writeFileSync(path.join(dir, "family.yaml"), yaml);
+  for (const [relPath, content] of Object.entries(files)) {
+    const filePath = path.join(dir, relPath);
+    mkdirSync(path.dirname(filePath), { recursive: true });
+    writeFileSync(filePath, content);
+  }
 }
 
 function familyYaml(id: string, name: string, toolName: string): string {
@@ -156,5 +165,203 @@ describe("hosted integrations read-only routes", () => {
     res = await req("/api/hosted-integrations/families");
     expect(res.status).toBe(200);
     expect(JSON.stringify(await res.json())).not.toContain("SECRET_TOKEN");
+  });
+});
+
+describe("hosted integrations draft control plane routes", () => {
+  it("manages family locks and reads canonical source files path-safely", async () => {
+    writeFamily(
+      "qualys",
+      familyYaml("qualys", "Qualys", "qualys_count_assets"),
+      {
+        "qualys.py": "def run():\n    return {'ok': True}\n",
+        "docs/readme.md": "# Qualys\n",
+      },
+    );
+
+    let res = await req("/api/hosted-integrations/families/qualys/lock", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        lockedBy: "agent:tool-developer",
+        ttlMs: 60_000,
+      }),
+    });
+    expect(res.status).toBe(201);
+    const lockBody = await res.json();
+    expect(lockBody).toMatchObject({
+      lock: {
+        familyId: "qualys",
+        lockedBy: "agent:tool-developer",
+      },
+    });
+    const lockId = lockBody.lock.id as string;
+
+    res = await req("/api/hosted-integrations/families/qualys/source/files");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      files: [
+        { path: "docs/readme.md" },
+        { path: "family.yaml" },
+        { path: "qualys.py" },
+      ],
+    });
+
+    res = await req(
+      "/api/hosted-integrations/families/qualys/source/files/qualys.py",
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      path: "qualys.py",
+      content: "def run():\n    return {'ok': True}\n",
+    });
+
+    res = await req(
+      "/api/hosted-integrations/families/qualys/source/files/..%2Fsecret.txt",
+    );
+    expect(res.status).toBe(400);
+
+    res = await req(`/api/hosted-integrations/locks/${lockId}/renew`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        lockedBy: "agent:tool-developer",
+        ttlMs: 120_000,
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ lock: { id: lockId } });
+
+    res = await req(`/api/hosted-integrations/locks/${lockId}`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ lockedBy: "agent:other" }),
+    });
+    expect(res.status).toBe(409);
+
+    res = await req(`/api/hosted-integrations/locks/${lockId}`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ lockedBy: "agent:tool-developer" }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+  });
+
+  it("creates drafts, edits files with the active lock, upserts examples, and validates", async () => {
+    writeFamily(
+      "qualys",
+      familyYaml("qualys", "Qualys", "qualys_count_assets"),
+      {
+        "qualys.py": "def run():\n    return {'ok': True}\n",
+      },
+    );
+
+    let res = await req("/api/hosted-integrations/families/qualys/lock", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        lockedBy: "agent:tool-developer",
+        ttlMs: 60_000,
+      }),
+    });
+    const lockId = ((await res.json()) as { lock: { id: string } }).lock.id;
+
+    res = await req("/api/hosted-integrations/families/qualys/drafts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ lockId, sourceRevisionId: "source_rev_1" }),
+    });
+    expect(res.status).toBe(201);
+    const draftId = ((await res.json()) as { draft: { id: string } }).draft.id;
+
+    res = await req(`/api/hosted-integrations/drafts/${draftId}`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      draft: { id: draftId, familyId: "qualys", lockId },
+    });
+
+    res = await req(`/api/hosted-integrations/drafts/${draftId}/files`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      files: [{ path: "family.yaml" }, { path: "qualys.py" }],
+    });
+
+    res = await req(
+      `/api/hosted-integrations/drafts/${draftId}/files/qualys.py`,
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          lockId,
+          content: "def run():\n    return {'changed': True}\n",
+        }),
+      },
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+
+    res = await req(
+      `/api/hosted-integrations/drafts/${draftId}/files/..%2Fmetadata.json`,
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ lockId, content: "bad" }),
+      },
+    );
+    expect(res.status).toBe(400);
+
+    res = await req(
+      `/api/hosted-integrations/drafts/${draftId}/files/qualys.py`,
+      {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ lockId: "lock_wrong" }),
+      },
+    );
+    expect(res.status).toBe(409);
+
+    res = await req(
+      `/api/hosted-integrations/drafts/${draftId}/files/qualys.py`,
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          lockId,
+          content: "def run():\n    return {'ok': True}\n",
+        }),
+      },
+    );
+    expect(res.status).toBe(200);
+
+    res = await req(`/api/hosted-integrations/drafts/${draftId}/examples`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        lockId,
+        example: {
+          id: "smoke_count",
+          familyId: "qualys",
+          toolName: "qualys_count_assets",
+          category: "smoke",
+          args: {},
+          expected: { count: 0 },
+        },
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+
+    res = await req(`/api/hosted-integrations/drafts/${draftId}/examples`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      examples: [{ id: "smoke_count", toolName: "qualys_count_assets" }],
+    });
+
+    res = await req(`/api/hosted-integrations/drafts/${draftId}/validate`, {
+      method: "POST",
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, diagnostics: [] });
   });
 });

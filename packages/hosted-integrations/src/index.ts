@@ -100,3 +100,10 @@ export {
   type UpsertHostedIntegrationExampleRequest,
   type UpsertHostedIntegrationExampleResult,
 } from "./examples.js";
+export {
+  createFileHostedIntegrationDraftValidator,
+  type HostedIntegrationDraftValidator,
+  type HostedIntegrationDraftValidatorOptions,
+  type HostedIntegrationValidationDiagnostic,
+  type HostedIntegrationValidationResult,
+} from "./validation.js";

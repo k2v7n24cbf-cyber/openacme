@@ -462,6 +462,20 @@ pnpm --filter @openacme/hosted-integrations test -- examples
 
 ### Slice 2.4: Draft Validation Contract
 
+Status: done.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/hosted-integrations test -- validation` failed
+  before implementation because `createFileHostedIntegrationDraftValidator` was
+  not exported.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- validation`
+  `pnpm --filter @openacme/hosted-integrations test`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+
 Goal:
 
 - Add `validateDraft(draftId)`.

@@ -32,6 +32,7 @@ import {
   type HostedIntegrationIdempotencyRecord,
   type HostedIntegrationPolicyBinding,
   type HostedIntegrationToolClassification,
+  type HostedIntegrationToolSpec,
   type JsonObject,
   type JsonValue,
 } from "./schemas.js";
@@ -104,6 +105,7 @@ export interface HostedIntegrationGatewayError {
     | "runtime_error"
     | "timeout"
     | "tool_bug"
+    | "tool_disabled"
     | "idempotency_conflict";
   message: string;
   details?: JsonValue;
@@ -173,34 +175,34 @@ export interface CompleteHostedIntegrationIdempotencyRequest {
   now: string;
 }
 
-const ExecutionLogEntrySchema: z.ZodType<HostedIntegrationExecutionLogEntry> =
-  z
-    .object({
-      runId: z.string().min(1),
-      familyId: HostedIntegrationFamilyIdSchema,
-      toolName: HostedIntegrationToolNameSchema,
-      generationId: z.string().min(1),
-      actorId: z.string().min(1),
-      configScopeId: z.string().min(1),
-      configRevision: z.number().int().positive(),
-      status: z.enum(["running", "succeeded", "failed"]),
-      startedAt: z.string().datetime({ offset: true }),
-      endedAt: z.string().datetime({ offset: true }).optional(),
-      resultEnvelopeRef: z.string().min(1).optional(),
-      error: z
-        .object({
-          code: z.string().min(1),
-          message: z.string().min(1),
-          details: z.lazy(() => z.any()).optional(),
-        })
-        .optional(),
-    })
-    .strict() as z.ZodType<HostedIntegrationExecutionLogEntry>;
+const ExecutionLogEntrySchema: z.ZodType<HostedIntegrationExecutionLogEntry> = z
+  .object({
+    runId: z.string().min(1),
+    familyId: HostedIntegrationFamilyIdSchema,
+    toolName: HostedIntegrationToolNameSchema,
+    generationId: z.string().min(1),
+    actorId: z.string().min(1),
+    configScopeId: z.string().min(1),
+    configRevision: z.number().int().positive(),
+    status: z.enum(["running", "succeeded", "failed"]),
+    startedAt: z.string().datetime({ offset: true }),
+    endedAt: z.string().datetime({ offset: true }).optional(),
+    resultEnvelopeRef: z.string().min(1).optional(),
+    error: z
+      .object({
+        code: z.string().min(1),
+        message: z.string().min(1),
+        details: z.lazy(() => z.any()).optional(),
+      })
+      .optional(),
+  })
+  .strict() as z.ZodType<HostedIntegrationExecutionLogEntry>;
 
 export function createFileHostedIntegrationGateway(
   options: FileHostedIntegrationGatewayOptions,
 ): HostedIntegrationGateway {
-  const catalog = options.catalog ?? createFileHostedIntegrationCatalog(options);
+  const catalog =
+    options.catalog ?? createFileHostedIntegrationCatalog(options);
   const configScopes =
     options.configScopes ??
     createFileHostedIntegrationConfigScopeStore({ ...options, catalog });
@@ -272,13 +274,14 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
     const familyId = HostedIntegrationFamilyIdSchema.parse(request.familyId);
     const toolName = HostedIntegrationToolNameSchema.parse(request.toolName);
     const args = JsonObjectSchema.parse(request.args);
-    const toolClassification = await this.getToolClassification(
-      familyId,
-      toolName,
-    );
-    if (!toolClassification) {
+    const tool = await this.getTool(familyId, toolName);
+    if (!tool || tool.lifecycle === "removed") {
       return failure("tool_not_found", `tool ${toolName} was not found`);
     }
+    if (tool.lifecycle === "disabled") {
+      return failure("tool_disabled", `tool ${toolName} is disabled`);
+    }
+    const toolClassification = tool.classification;
 
     const policy = evaluateHostedIntegrationPolicy({
       actor: request.actor,
@@ -443,15 +446,16 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
     }
   }
 
-  private async getToolClassification(
+  private async getTool(
     familyId: string,
     toolName: string,
-  ): Promise<HostedIntegrationToolClassification | null> {
+  ): Promise<HostedIntegrationToolSpec | null> {
     const family = await this.catalog.getFamily(familyId);
-    const tool = family?.manifest.tools.find((candidate) => {
-      return candidate.name === toolName;
-    });
-    return tool?.classification ?? null;
+    return (
+      family?.manifest.tools.find((candidate) => {
+        return candidate.name === toolName;
+      }) ?? null
+    );
   }
 
   private async failRun(args: {
@@ -481,9 +485,7 @@ export function createFileHostedIntegrationExecutionLogStore(options: {
   return new FileHostedIntegrationExecutionLogStore(options.dataDir);
 }
 
-class FileHostedIntegrationExecutionLogStore
-  implements HostedIntegrationExecutionLogStore
-{
+class FileHostedIntegrationExecutionLogStore implements HostedIntegrationExecutionLogStore {
   private readonly logsDir: string;
 
   constructor(dataDir: string) {
@@ -503,7 +505,9 @@ class FileHostedIntegrationExecutionLogStore
   ): Promise<void> {
     const existing = await this.getRunLog(runId);
     if (!existing) throw new Error(`execution log ${runId} not found`);
-    await this.writeLog(ExecutionLogEntrySchema.parse({ ...existing, ...update }));
+    await this.writeLog(
+      ExecutionLogEntrySchema.parse({ ...existing, ...update }),
+    );
   }
 
   async getRunLog(
@@ -530,10 +534,7 @@ class FileHostedIntegrationExecutionLogStore
   }
 
   private logPath(runId: string): string {
-    return path.join(
-      this.logsDir,
-      `${safePathSegment("runId", runId)}.json`,
-    );
+    return path.join(this.logsDir, `${safePathSegment("runId", runId)}.json`);
   }
 }
 
@@ -543,9 +544,7 @@ export function createFileHostedIntegrationIdempotencyStore(options: {
   return new FileHostedIntegrationIdempotencyStore(options.dataDir);
 }
 
-class FileHostedIntegrationIdempotencyStore
-  implements HostedIntegrationIdempotencyStore
-{
+class FileHostedIntegrationIdempotencyStore implements HostedIntegrationIdempotencyStore {
   private readonly recordsDir: string;
 
   constructor(dataDir: string) {

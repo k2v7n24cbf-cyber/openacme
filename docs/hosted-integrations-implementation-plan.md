@@ -1187,6 +1187,8 @@ Evidence:
 
 ### Slice 4.9: Deprecation And Removal Policy
 
+Status: done.
+
 Goal:
 
 - Implement tool lifecycle states:
@@ -1213,8 +1215,25 @@ Validation:
 
 ```text
 pnpm --filter @openacme/hosted-integrations test -- deprecation
-pnpm --filter @openacme/tools test -- hosted-integrations
+pnpm --filter @openacme/server test -- hosted-integrations
 ```
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/hosted-integrations test -- deprecation` failed
+  while tightening the hidden/deprecated selection fixture.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- deprecation`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/server test -- hosted-integrations`
+  `pnpm --filter @openacme/server check-types`
+  `pnpm --filter @openacme/server build`
+- Checked planned tools-package command:
+  `pnpm --filter @openacme/tools test -- hosted-integrations` currently has no
+  matching test files, so the picker/tool-surface assertion lives in the server
+  route suite for this slice.
 
 ### Slice 4.10: Operational Disable
 

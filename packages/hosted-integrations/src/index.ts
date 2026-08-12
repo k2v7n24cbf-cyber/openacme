@@ -30,6 +30,7 @@ export {
   HostedIntegrationRuntimeSettingsSchema,
   HostedIntegrationSourceRevisionSchema,
   HostedIntegrationToolClassificationSchema,
+  HostedIntegrationToolLifecycleSchema,
   HostedIntegrationToolNameSchema,
   HostedIntegrationToolSpecSchema,
   JsonObjectSchema,
@@ -65,6 +66,7 @@ export {
   type HostedIntegrationRuntimeSettings,
   type HostedIntegrationSourceRevision,
   type HostedIntegrationToolClassification,
+  type HostedIntegrationToolLifecycle,
   type HostedIntegrationToolName,
   type HostedIntegrationToolSpec,
   type JsonObject,
@@ -103,6 +105,7 @@ export {
 } from "./artifacts.js";
 export {
   createFileHostedIntegrationCatalog,
+  isHostedIntegrationToolVisibleForSelection,
   type FileHostedIntegrationCatalogOptions,
   type HostedIntegrationCatalog,
   type HostedIntegrationCatalogDiagnostic,

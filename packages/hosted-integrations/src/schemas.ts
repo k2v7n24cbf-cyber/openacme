@@ -78,6 +78,13 @@ export type HostedIntegrationApproval = z.infer<
   typeof HostedIntegrationApprovalSchema
 >;
 
+export const HostedIntegrationToolLifecycleSchema = z
+  .enum(["active", "deprecated", "hidden", "disabled", "removed"])
+  .default("active");
+export type HostedIntegrationToolLifecycle = z.infer<
+  typeof HostedIntegrationToolLifecycleSchema
+>;
+
 export const HostedIntegrationToolClassificationSchema = z
   .object({
     operation: HostedIntegrationOperationSchema,
@@ -106,9 +113,7 @@ export type HostedIntegrationRuntimePolicy = z.infer<
 
 export const HostedIntegrationPythonDependencySchema = z
   .object({
-    name: z
-      .string()
-      .regex(/^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/),
+    name: z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/),
     version: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9.!+_*-]*$/),
   })
   .strict();
@@ -172,6 +177,7 @@ export const HostedIntegrationToolSpecSchema = z
     name: HostedIntegrationToolNameSchema,
     title: z.string().min(1),
     description: z.string().min(1),
+    lifecycle: HostedIntegrationToolLifecycleSchema,
     inputSchema: JsonObjectSchema,
     classification: HostedIntegrationToolClassificationSchema,
     runtime: HostedIntegrationRuntimeSettingsSchema.partial().optional(),
@@ -244,7 +250,8 @@ export const HostedIntegrationGenerationSchema = z
     promotedAt: IsoTimestampSchema,
     promotedBy: z.string().min(1),
     runtime: HostedIntegrationRuntimeSettingsSchema.optional(),
-    dependencyResolution: HostedIntegrationDependencyResolutionSchema.optional(),
+    dependencyResolution:
+      HostedIntegrationDependencyResolutionSchema.optional(),
     provenance: z
       .lazy(() => HostedIntegrationGenerationProvenanceSchema)
       .optional(),
@@ -315,7 +322,8 @@ export const HostedIntegrationGenerationProvenanceSchema = z
       diagnostics: z.array(JsonObjectSchema).default([]),
     }),
     approval: HostedIntegrationHumanApprovalRecordSchema.optional(),
-    dependencyResolution: HostedIntegrationDependencyResolutionSchema.optional(),
+    dependencyResolution:
+      HostedIntegrationDependencyResolutionSchema.optional(),
   })
   .strict();
 export type HostedIntegrationGenerationProvenance = z.infer<

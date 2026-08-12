@@ -8,6 +8,7 @@ import {
   type FamilyManifest,
   type HostedIntegrationFamilyId,
   type HostedIntegrationToolName,
+  type HostedIntegrationToolSpec,
 } from "./schemas.js";
 
 export interface HostedIntegrationActiveFamilySummary {
@@ -186,11 +187,19 @@ function detailFromManifest(
       id: manifest.id,
       name: manifest.name,
       version: manifest.version,
-      toolNames: manifest.tools.map((tool) => tool.name),
+      toolNames: manifest.tools
+        .filter(isHostedIntegrationToolVisibleForSelection)
+        .map((tool) => tool.name),
       status: "active",
     },
     manifest,
   };
+}
+
+export function isHostedIntegrationToolVisibleForSelection(
+  tool: HostedIntegrationToolSpec,
+): boolean {
+  return tool.lifecycle === "active" || tool.lifecycle === "deprecated";
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

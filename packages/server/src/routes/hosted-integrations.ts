@@ -4,6 +4,7 @@ import {
   HostedIntegrationPolicyBindingSchema,
   HostedIntegrationPromotionApprovalTargetSchema,
   JsonObjectSchema,
+  isHostedIntegrationToolVisibleForSelection,
   type HostedIntegrationExecutionLogEntry,
   type HostedIntegrationGeneration,
   type HostedIntegrationPolicyActor,
@@ -217,7 +218,11 @@ export function registerHostedIntegrationRoutes(
   app.get("/api/hosted-integrations/families/:family/tools", async (c) => {
     const family = await service.getFamily(c.req.param("family"));
     if (!family) return c.json({ error: "not_found" }, 404);
-    return c.json({ tools: family.manifest.tools });
+    return c.json({
+      tools: family.manifest.tools.filter(
+        isHostedIntegrationToolVisibleForSelection,
+      ),
+    });
   });
 
   app.post("/api/hosted-integrations/families/:family/lock", async (c) => {
@@ -723,6 +728,7 @@ function statusForGatewayError(
   switch (code) {
     case "policy_denied":
     case "approval_required":
+    case "tool_disabled":
       return 403;
     case "config_scope_not_found":
     case "family_not_found":

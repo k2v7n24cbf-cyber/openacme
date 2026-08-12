@@ -112,6 +112,71 @@ tools:
 `;
 }
 
+function lifecycleFamilyYaml(): string {
+  return `
+id: qualys
+name: Qualys
+version: 1
+runtime:
+  language: python
+  entrypoint: qualys.py
+  defaultTimeoutMs: 30000
+  inlineResultTokenLimit: 8000
+  maxConcurrency: 2
+  runtimePolicy:
+    filesystem: run_dir_and_family_home
+    processEnv: tool_context_only
+    subprocess: denied
+    network: declared_egress
+  dependencyPolicy:
+    installDuringInvocation: false
+    allowedPackages: []
+tools:
+  - name: qualys_count_assets
+    title: Count assets
+    description: Count assets matching a query.
+    lifecycle: hidden
+    inputSchema:
+      type: object
+      properties: {}
+      additionalProperties: false
+    classification:
+      operation: read
+      freshness: live
+      idempotency: idempotent
+      execution: sync
+      approval: none
+  - name: qualys_list_assets
+    title: List assets
+    description: List assets matching a query.
+    lifecycle: deprecated
+    inputSchema:
+      type: object
+      properties: {}
+      additionalProperties: false
+    classification:
+      operation: read
+      freshness: live
+      idempotency: idempotent
+      execution: sync
+      approval: none
+  - name: qualys_delete_asset
+    title: Delete asset
+    description: Delete one asset.
+    lifecycle: removed
+    inputSchema:
+      type: object
+      properties: {}
+      additionalProperties: false
+    classification:
+      operation: destructive
+      freshness: live
+      idempotency: non_idempotent
+      execution: sync
+      approval: human
+`;
+}
+
 describe("hosted integrations read-only routes", () => {
   it("lists families from the hosted integrations source catalog", async () => {
     writeFamily("splunk", familyYaml("splunk", "Splunk", "splunk_search"));
@@ -171,6 +236,32 @@ describe("hosted integrations read-only routes", () => {
         {
           name: "qualys_count_assets",
           classification: { operation: "read" },
+        },
+      ],
+    });
+  });
+
+  it("omits hidden and removed hosted tools from new selection routes", async () => {
+    writeFamily("qualys", lifecycleFamilyYaml());
+
+    let res = await req("/api/hosted-integrations/families");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      families: [
+        {
+          id: "qualys",
+          toolNames: ["qualys_list_assets"],
+        },
+      ],
+    });
+
+    res = await req("/api/hosted-integrations/families/qualys/tools");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      tools: [
+        {
+          name: "qualys_list_assets",
+          lifecycle: "deprecated",
         },
       ],
     });

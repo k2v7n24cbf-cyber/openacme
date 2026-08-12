@@ -189,6 +189,7 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
 
     const nextToolNames = new Set(manifest.tools.map((tool) => tool.name));
     for (const sourceTool of source.manifest.tools) {
+      if (sourceTool.lifecycle === "removed") continue;
       if (nextToolNames.has(sourceTool.name)) continue;
       diagnostics.push(
         errorDiagnostic(

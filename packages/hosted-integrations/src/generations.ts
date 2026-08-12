@@ -33,12 +33,28 @@ const ActiveGenerationPointerSchema = z
     updatedBy: z.string().min(1),
   })
   .strict();
+const GenerationStatusStateSchema = z
+  .object({
+    generationId: z.string().min(1),
+    status: z.enum(["active", "draining", "retired", "disabled"]),
+    updatedAt: z.string().datetime({ offset: true }),
+    updatedBy: z.string().min(1),
+  })
+  .strict();
+
+export interface HostedIntegrationRegistryRefreshEvent {
+  familyId: HostedIntegrationFamilyId;
+  generationId: string;
+  reason: "promote" | "rollback";
+  toolNames: string[];
+}
 
 export interface FileHostedIntegrationGenerationStoreOptions {
   dataDir: string;
   draftStore?: HostedIntegrationDraftStore;
   now?: () => Date;
   createId?: () => string;
+  onRegistryRefresh?: (event: HostedIntegrationRegistryRefreshEvent) => void;
 }
 
 export interface PromoteHostedIntegrationDraftRequest {
@@ -63,6 +79,32 @@ export type RollbackHostedIntegrationGenerationResult =
   | { ok: true; activeGeneration: HostedIntegrationGeneration }
   | { ok: false; reason: "generation_not_found" | "family_mismatch" };
 
+export interface BeginHostedIntegrationInvocationRequest {
+  familyId: HostedIntegrationFamilyId | string;
+  generationId?: string;
+}
+
+export interface HostedIntegrationInvocationLease {
+  id: string;
+  familyId: HostedIntegrationFamilyId;
+  generationId: string;
+  startedAt: string;
+}
+
+export type BeginHostedIntegrationInvocationResult =
+  | { ok: true; lease: HostedIntegrationInvocationLease }
+  | {
+      ok: false;
+      reason:
+        | "no_active_generation"
+        | "generation_not_found"
+        | "stale_generation";
+    };
+
+export interface CompleteHostedIntegrationInvocationRequest {
+  leaseId: string;
+}
+
 export interface HostedIntegrationGenerationStore {
   promoteDraft(
     request: PromoteHostedIntegrationDraftRequest,
@@ -73,6 +115,12 @@ export interface HostedIntegrationGenerationStore {
   getActiveGeneration(
     familyId: HostedIntegrationFamilyId | string,
   ): Promise<HostedIntegrationGeneration | null>;
+  beginInvocation(
+    request: BeginHostedIntegrationInvocationRequest,
+  ): Promise<BeginHostedIntegrationInvocationResult>;
+  completeInvocation(
+    request: CompleteHostedIntegrationInvocationRequest,
+  ): Promise<void>;
   rollback(
     request: RollbackHostedIntegrationGenerationRequest,
   ): Promise<RollbackHostedIntegrationGenerationResult>;
@@ -88,6 +136,7 @@ export function createFileHostedIntegrationGenerationStore(
       createFileHostedIntegrationDraftStore({ dataDir: options.dataDir }),
     now: options.now ?? (() => new Date()),
     createId: options.createId ?? (() => `gen_${randomUUID()}`),
+    onRegistryRefresh: options.onRegistryRefresh ?? (() => {}),
   });
 }
 
@@ -99,12 +148,18 @@ class FileHostedIntegrationGenerationStore
   private readonly draftStore: HostedIntegrationDraftStore;
   private readonly now: () => Date;
   private readonly createId: () => string;
+  private readonly onRegistryRefresh: (
+    event: HostedIntegrationRegistryRefreshEvent,
+  ) => void;
+  private readonly inflightByGeneration = new Map<string, number>();
+  private readonly leaseToGeneration = new Map<string, string>();
 
   constructor(parts: {
     dataDir: string;
     draftStore: HostedIntegrationDraftStore;
     now: () => Date;
     createId: () => string;
+    onRegistryRefresh: (event: HostedIntegrationRegistryRefreshEvent) => void;
   }) {
     this.generationsDir = path.join(
       parts.dataDir,
@@ -115,6 +170,7 @@ class FileHostedIntegrationGenerationStore
     this.draftStore = parts.draftStore;
     this.now = parts.now;
     this.createId = parts.createId;
+    this.onRegistryRefresh = parts.onRegistryRefresh;
   }
 
   async promoteDraft(
@@ -127,6 +183,7 @@ class FileHostedIntegrationGenerationStore
     if (!draft) return { ok: false, reason: "draft_not_found" };
 
     const generationId = this.createId();
+    const previousActive = await this.getActiveGeneration(draft.familyId);
     const finalRoot = this.generationRoot(generationId);
     const tmpRoot = `${finalRoot}.${process.pid}.${Date.now()}.tmp`;
     const filesRoot = path.join(tmpRoot, "files");
@@ -184,11 +241,26 @@ class FileHostedIntegrationGenerationStore
       );
       await mkdir(this.generationsDir, { recursive: true });
       await rename(tmpRoot, finalRoot);
+      await this.writeGenerationStatus({
+        generationId: generation.id,
+        status: "active",
+        updatedAt: now,
+        updatedBy: request.promotedBy,
+      });
+      if (previousActive && previousActive.id !== generation.id) {
+        await this.writeRetirementStatus(previousActive.id, request.promotedBy);
+      }
       await this.writeActivePointer({
         familyId: generation.familyId,
         generationId: generation.id,
         updatedAt: now,
         updatedBy: request.promotedBy,
+      });
+      this.onRegistryRefresh({
+        familyId: generation.familyId,
+        generationId: generation.id,
+        reason: "promote",
+        toolNames: manifest?.tools.map((tool) => tool.name) ?? [],
       });
       return { ok: true, generation };
     } catch (error) {
@@ -201,7 +273,7 @@ class FileHostedIntegrationGenerationStore
     generationId: string,
   ): Promise<HostedIntegrationGeneration | null> {
     try {
-      return HostedIntegrationGenerationSchema.parse(
+      const generation = HostedIntegrationGenerationSchema.parse(
         JSON.parse(
           await readFile(
             path.join(this.generationRoot(generationId), "metadata.json"),
@@ -209,6 +281,8 @@ class FileHostedIntegrationGenerationStore
           ),
         ),
       );
+      const status = await this.readGenerationStatus(generation.id);
+      return status ? { ...generation, status: status.status } : generation;
     } catch (error) {
       if (isNodeError(error) && error.code === "ENOENT") return null;
       throw error;
@@ -232,6 +306,69 @@ class FileHostedIntegrationGenerationStore
     }
   }
 
+  async beginInvocation(
+    request: BeginHostedIntegrationInvocationRequest,
+  ): Promise<BeginHostedIntegrationInvocationResult> {
+    const familyId = HostedIntegrationFamilyIdSchema.parse(request.familyId);
+    const generation = request.generationId
+      ? await this.getGeneration(request.generationId)
+      : await this.getActiveGeneration(familyId);
+    if (!generation) {
+      return {
+        ok: false,
+        reason: request.generationId
+          ? "generation_not_found"
+          : "no_active_generation",
+      };
+    }
+    if (
+      generation.familyId !== familyId ||
+      generation.status === "retired" ||
+      generation.status === "disabled"
+    ) {
+      return { ok: false, reason: "stale_generation" };
+    }
+
+    const lease: HostedIntegrationInvocationLease = {
+      id: `lease_${randomUUID()}`,
+      familyId,
+      generationId: generation.id,
+      startedAt: this.now().toISOString(),
+    };
+    this.leaseToGeneration.set(lease.id, lease.generationId);
+    this.inflightByGeneration.set(
+      lease.generationId,
+      (this.inflightByGeneration.get(lease.generationId) ?? 0) + 1,
+    );
+    return { ok: true, lease };
+  }
+
+  async completeInvocation(
+    request: CompleteHostedIntegrationInvocationRequest,
+  ): Promise<void> {
+    const generationId = this.leaseToGeneration.get(request.leaseId);
+    if (!generationId) return;
+    this.leaseToGeneration.delete(request.leaseId);
+    const nextCount = Math.max(
+      0,
+      (this.inflightByGeneration.get(generationId) ?? 0) - 1,
+    );
+    if (nextCount === 0) {
+      this.inflightByGeneration.delete(generationId);
+      const state = await this.readGenerationStatus(generationId);
+      if (state?.status === "draining") {
+        await this.writeGenerationStatus({
+          generationId,
+          status: "retired",
+          updatedAt: this.now().toISOString(),
+          updatedBy: "system:draining",
+        });
+      }
+      return;
+    }
+    this.inflightByGeneration.set(generationId, nextCount);
+  }
+
   async rollback(
     request: RollbackHostedIntegrationGenerationRequest,
   ): Promise<RollbackHostedIntegrationGenerationResult> {
@@ -241,13 +378,45 @@ class FileHostedIntegrationGenerationStore
     if (generation.familyId !== familyId) {
       return { ok: false, reason: "family_mismatch" };
     }
+    const previousActive = await this.getActiveGeneration(familyId);
+    const now = this.now().toISOString();
+    await this.writeGenerationStatus({
+      generationId: generation.id,
+      status: "active",
+      updatedAt: now,
+      updatedBy: request.rolledBackBy,
+    });
+    if (previousActive && previousActive.id !== generation.id) {
+      await this.writeRetirementStatus(previousActive.id, request.rolledBackBy);
+    }
     await this.writeActivePointer({
       familyId,
       generationId: generation.id,
-      updatedAt: this.now().toISOString(),
+      updatedAt: now,
       updatedBy: request.rolledBackBy,
     });
+    this.onRegistryRefresh({
+      familyId,
+      generationId: generation.id,
+      reason: "rollback",
+      toolNames: await this.readGenerationToolNames(generation.id),
+    });
     return { ok: true, activeGeneration: generation };
+  }
+
+  private async writeRetirementStatus(
+    generationId: string,
+    updatedBy: string,
+  ): Promise<void> {
+    await this.writeGenerationStatus({
+      generationId,
+      status:
+        (this.inflightByGeneration.get(generationId) ?? 0) > 0
+          ? "draining"
+          : "retired",
+      updatedAt: this.now().toISOString(),
+      updatedBy,
+    });
   }
 
   private async writeActivePointer(
@@ -259,6 +428,57 @@ class FileHostedIntegrationGenerationStore
     const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
     await writeFile(tmpPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf-8");
     await rename(tmpPath, filePath);
+  }
+
+  private async writeGenerationStatus(
+    state: z.infer<typeof GenerationStatusStateSchema>,
+  ): Promise<void> {
+    const parsed = GenerationStatusStateSchema.parse(state);
+    await mkdir(this.stateDir(), { recursive: true });
+    const filePath = this.generationStatusPath(parsed.generationId);
+    const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+    await writeFile(tmpPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf-8");
+    await rename(tmpPath, filePath);
+  }
+
+  private async readGenerationStatus(generationId: string) {
+    try {
+      return GenerationStatusStateSchema.parse(
+        JSON.parse(
+          await readFile(this.generationStatusPath(generationId), "utf-8"),
+        ),
+      );
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") return null;
+      throw error;
+    }
+  }
+
+  private async readGenerationToolNames(
+    generationId: string,
+  ): Promise<string[]> {
+    const manifestFile = await readFile(
+      resolveInsideRoot(
+        path.join(this.generationRoot(generationId), "files"),
+        MANIFEST_FILE,
+        "generation files root",
+      ),
+      "utf-8",
+    );
+    return FamilyManifestSchema.parse(parseYaml(manifestFile)).tools.map(
+      (tool) => tool.name,
+    );
+  }
+
+  private stateDir(): string {
+    return path.join(this.generationsDir, "state");
+  }
+
+  private generationStatusPath(generationId: string): string {
+    return path.join(
+      this.stateDir(),
+      `${safePathSegment("generationId", generationId)}.json`,
+    );
   }
 
   private generationRoot(generationId: string): string {

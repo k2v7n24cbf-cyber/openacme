@@ -86,8 +86,13 @@ export {
 } from "./catalog.js";
 export {
   createFileHostedIntegrationGenerationStore,
+  type BeginHostedIntegrationInvocationRequest,
+  type BeginHostedIntegrationInvocationResult,
+  type CompleteHostedIntegrationInvocationRequest,
   type FileHostedIntegrationGenerationStoreOptions,
   type HostedIntegrationGenerationStore,
+  type HostedIntegrationInvocationLease,
+  type HostedIntegrationRegistryRefreshEvent,
   type PromoteHostedIntegrationDraftRequest,
   type PromoteHostedIntegrationDraftResult,
   type RollbackHostedIntegrationGenerationRequest,

@@ -884,6 +884,21 @@ pnpm --filter @openacme/hosted-integrations test -- generations
 
 ### Slice 4.2: Request Draining
 
+Status: done.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/hosted-integrations test -- draining` failed
+  before implementation because invocation leases and registry-refresh events
+  did not exist.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- draining`
+  `pnpm --filter @openacme/hosted-integrations test`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/server check-types`
+
 Goal:
 
 - Add generation references and inflight counts.

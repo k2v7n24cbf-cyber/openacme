@@ -31,6 +31,10 @@ import {
   type HostedIntegrationGenerationStore,
 } from "./generations.js";
 import {
+  createFileHostedIntegrationGateway,
+  type HostedIntegrationGateway,
+} from "./gateway.js";
+import {
   createFileHostedIntegrationLockStore,
   type HostedIntegrationLockStore,
 } from "./locks.js";
@@ -69,6 +73,7 @@ export interface HostedIntegrationService {
   readonly approvals: HostedIntegrationApprovalStore;
   readonly generations: HostedIntegrationGenerationStore;
   readonly artifacts: HostedIntegrationArtifactStore;
+  readonly gateway: HostedIntegrationGateway;
   listFamilies(): Promise<HostedIntegrationManagementFamilySummary[]>;
   getFamily(
     familyId: HostedIntegrationFamilyId | string,
@@ -115,6 +120,14 @@ export function createFileHostedIntegrationService(
     draftStore: drafts,
   });
   const artifacts = createFileHostedIntegrationArtifactStore(options);
+  const gateway = createFileHostedIntegrationGateway({
+    ...options,
+    catalog,
+    configScopes,
+    secrets,
+    generations,
+    artifacts,
+  });
   return new FileHostedIntegrationService({
     catalog,
     locks,
@@ -128,6 +141,7 @@ export function createFileHostedIntegrationService(
     approvals,
     generations,
     artifacts,
+    gateway,
   });
 }
 
@@ -143,6 +157,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
   readonly approvals: HostedIntegrationApprovalStore;
   readonly generations: HostedIntegrationGenerationStore;
   readonly artifacts: HostedIntegrationArtifactStore;
+  readonly gateway: HostedIntegrationGateway;
 
   private readonly catalog: HostedIntegrationCatalog;
 
@@ -159,6 +174,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     approvals: HostedIntegrationApprovalStore;
     generations: HostedIntegrationGenerationStore;
     artifacts: HostedIntegrationArtifactStore;
+    gateway: HostedIntegrationGateway;
   }) {
     this.catalog = parts.catalog;
     this.locks = parts.locks;
@@ -172,6 +188,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     this.approvals = parts.approvals;
     this.generations = parts.generations;
     this.artifacts = parts.artifacts;
+    this.gateway = parts.gateway;
   }
 
   async start(): Promise<void> {

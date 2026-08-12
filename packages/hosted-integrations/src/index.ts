@@ -124,6 +124,22 @@ export {
   type RollbackHostedIntegrationGenerationResult,
 } from "./generations.js";
 export {
+  createFileHostedIntegrationExecutionLogStore,
+  createFileHostedIntegrationGateway,
+  createFileHostedIntegrationIdempotencyStore,
+  type CompleteHostedIntegrationIdempotencyRequest,
+  type FileHostedIntegrationGatewayOptions,
+  type HostedIntegrationExecutionLogEntry,
+  type HostedIntegrationExecutionLogStore,
+  type HostedIntegrationGateway,
+  type HostedIntegrationGatewayError,
+  type HostedIntegrationIdempotencyStore,
+  type InvokeHostedIntegrationRequest,
+  type InvokeHostedIntegrationResult,
+  type ReserveHostedIntegrationIdempotencyRequest,
+  type ReserveHostedIntegrationIdempotencyResult,
+} from "./gateway.js";
+export {
   createFileHostedIntegrationService,
   type FileHostedIntegrationServiceOptions,
   type HostedIntegrationManagementFamilySummary,

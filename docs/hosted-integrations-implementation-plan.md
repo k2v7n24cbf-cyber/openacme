@@ -1081,6 +1081,19 @@ Validation:
 pnpm --filter @openacme/hosted-integrations test -- gateway
 ```
 
+Status: done.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/hosted-integrations test -- gateway` failed because `createFileHostedIntegrationGateway` did not exist.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- gateway`
+  `pnpm --filter @openacme/hosted-integrations test`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/server check-types`
+
 ### Slice 4.7: Invocation, Run, Artifact, And Debug Routes
 
 Goal:

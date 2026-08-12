@@ -289,6 +289,22 @@ pnpm --filter @openacme/server check-types
 
 ### Slice 1.4: Server Binding And Lifecycle Skeleton
 
+Status: done.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/server test -- runtime` failed before implementation
+  because `ServerRuntime` did not expose `hostedIntegrationService` and
+  `createApp` ignored the injected hosted integrations service.
+- Green validation:
+  `pnpm --filter @openacme/server test -- runtime`
+  `pnpm --filter @openacme/server test -- hosted-integrations`
+  `pnpm --filter @openacme/server check-types`
+  `pnpm --filter @openacme/hosted-integrations test`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+
 Goal:
 
 - Instantiate hosted integrations through a server-owned manager/service using

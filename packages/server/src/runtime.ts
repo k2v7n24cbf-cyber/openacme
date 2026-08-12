@@ -4,6 +4,10 @@ import type { ModelResolver } from "@openacme/agent-core";
 import path from "node:path";
 import { WorkflowManager } from "@openacme/workflows";
 import {
+  createFileHostedIntegrationService,
+  type HostedIntegrationService,
+} from "@openacme/hosted-integrations";
+import {
   createDatabase,
   createWorkflowStore,
   type WorkflowStore,
@@ -27,6 +31,7 @@ export interface ServerRuntimeOptions {
   workflowExecutionPorts?: WorkflowExecutionPorts;
   workflowDispatcherIntervalMs?: number;
   workflowDispatcherNow?: () => Date;
+  hostedIntegrationService?: HostedIntegrationService;
 }
 
 export class ServerRuntime {
@@ -37,6 +42,7 @@ export class ServerRuntime {
   readonly workflowMcpRuntime: WorkflowMcpRuntime;
   readonly workflowPythonRuntime: WorkflowPythonRuntime;
   readonly workflowExecutionPorts: WorkflowExecutionPorts;
+  readonly hostedIntegrationService: HostedIntegrationService;
   private readonly workflowDb: ReturnType<typeof createDatabase>;
   private readonly workflowDispatcherIntervalMs: number;
   private readonly workflowDispatcherNow: () => Date;
@@ -53,6 +59,9 @@ export class ServerRuntime {
     this.workflowAgentRuntime = new WorkflowAgentRuntime(this.agentManager);
     this.workflowMcpRuntime = new WorkflowMcpRuntime(config);
     this.workflowPythonRuntime = new WorkflowPythonRuntime(config);
+    this.hostedIntegrationService =
+      opts?.hostedIntegrationService ??
+      createFileHostedIntegrationService({ dataDir: config.dataDir });
     this.workflowExecutionPorts = {
       agent: this.workflowAgentRuntime,
       mcp: this.workflowMcpRuntime,
@@ -68,6 +77,10 @@ export class ServerRuntime {
 
   async initWorkflowMCP(): Promise<void> {
     await this.workflowMcpRuntime.initialize();
+  }
+
+  async startHostedIntegrations(): Promise<void> {
+    await this.hostedIntegrationService.start();
   }
 
   async dispatchDueScheduledWorkflowTriggers(
@@ -116,6 +129,7 @@ export class ServerRuntime {
       this.agentManager.close(),
       this.workflowManager.close(),
       this.workflowMcpRuntime.close(),
+      this.hostedIntegrationService.close(),
     ]);
     this.workflowDb.close();
   }

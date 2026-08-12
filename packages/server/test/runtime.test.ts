@@ -1,9 +1,10 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfigSchema } from "@openacme/config";
 import { WorkflowManager } from "@openacme/workflows";
+import type { HostedIntegrationService } from "@openacme/hosted-integrations";
 import { createApp } from "../src/app.js";
 import { ServerRuntime } from "../src/runtime.js";
 
@@ -35,6 +36,7 @@ describe("ServerRuntime", () => {
     expect(runtime.workflowExecutionPorts.python).toBe(
       runtime.workflowPythonRuntime,
     );
+    expect(await runtime.hostedIntegrationService.listFamilies()).toEqual([]);
 
     await runtime.close();
   });
@@ -104,6 +106,54 @@ describe("ServerRuntime", () => {
     expect(runtime.isWorkflowDispatcherRunning()).toBe(false);
 
     await runtime.close();
+  });
+
+  it("closes the hosted integrations service through app shutdown", async () => {
+    const hostedIntegrationService: HostedIntegrationService = {
+      listFamilies: async () => [
+        {
+          id: "runtime_fake",
+          name: "Runtime Fake",
+          version: 1,
+          toolNames: ["runtime_fake_echo"],
+        },
+      ],
+      getFamily: async () => null,
+      getDiagnostics: async () => [],
+      start: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    };
+
+    const { app, manager, close } = await createApp(tempConfig(), {
+      hostedIntegrationService,
+    });
+    const member = manager.authStore.createMember({
+      email: "test@example.com",
+      password: "test-password-123",
+    });
+    const authToken = manager.authStore.createSession(member.id).token;
+    const res = await app.request(
+      "http://127.0.0.1/api/hosted-integrations/families",
+      {
+        headers: { host: "127.0.0.1", authorization: `Bearer ${authToken}` },
+      },
+    );
+
+    expect(res.status).toBe(200);
+    expect(hostedIntegrationService.start).toHaveBeenCalledOnce();
+    expect(await res.json()).toEqual({
+      families: [
+        {
+          id: "runtime_fake",
+          name: "Runtime Fake",
+          version: 1,
+          toolNames: ["runtime_fake_echo"],
+        },
+      ],
+    });
+
+    await close();
+    expect(hostedIntegrationService.close).toHaveBeenCalledOnce();
   });
 });
 

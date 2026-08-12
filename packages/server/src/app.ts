@@ -18,11 +18,10 @@ import {
   extractStatusCode,
   finalizeOrphanToolParts,
   sanitizeStoredHistory,
-  type ModelResolver,
   type OpenAcmeUIMessage,
 } from "@openacme/agent-core";
 import { AgentManager } from "./agent-manager.js";
-import { ServerRuntime } from "./runtime.js";
+import { ServerRuntime, type ServerRuntimeOptions } from "./runtime.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { registerAuthRoutes, registerMemberRoutes } from "./routes/auth.js";
 import {
@@ -46,7 +45,6 @@ import { registerSessionTimelineRoutes } from "./routes/session-timeline.js";
 import { registerWorkflowRoutes } from "./routes/workflows.js";
 import { registerHostedIntegrationRoutes } from "./routes/hosted-integrations.js";
 import { SkillHub, HubError } from "@openacme/skills";
-import { createFileHostedIntegrationCatalog } from "@openacme/hosted-integrations";
 import {
   AgentDefinitionSchema,
   MCPServerConfigSchema,
@@ -163,13 +161,7 @@ export interface ConfigModelUpdateResponse {
  */
 export async function createApp(
   config: Config,
-  opts?: {
-    resolveModel?: ModelResolver;
-    tickIntervalMs?: number;
-    workflowExecutionPorts?: import("@openacme/workflows").WorkflowExecutionPorts;
-    workflowDispatcherIntervalMs?: number;
-    workflowDispatcherNow?: () => Date;
-  },
+  opts?: ServerRuntimeOptions,
 ): Promise<{
   app: Hono;
   manager: AgentManager;
@@ -178,6 +170,7 @@ export async function createApp(
 }> {
   const app = new Hono();
   const runtime = new ServerRuntime(config, opts);
+  await runtime.startHostedIntegrations();
   const manager = runtime.agentManager;
 
   type ActiveTurn = {
@@ -293,12 +286,7 @@ export async function createApp(
   // Usage ledger reads: summary / series / breakdown / heatmap / events.
   registerUsageRoutes(app, manager);
 
-  // Hosted integrations read-only control plane surface. Later slices move
-  // lifecycle ownership behind a server-managed service; routes stay thin.
-  registerHostedIntegrationRoutes(
-    app,
-    createFileHostedIntegrationCatalog({ dataDir: config.dataDir }),
-  );
+  registerHostedIntegrationRoutes(app, runtime.hostedIntegrationService);
 
   // Health check
   app.get("/api/health", (c) =>

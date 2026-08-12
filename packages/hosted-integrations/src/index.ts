@@ -62,3 +62,8 @@ export {
   type HostedIntegrationFamilyDetail,
   type HostedIntegrationFamilySummary,
 } from "./catalog.js";
+export {
+  createFileHostedIntegrationService,
+  type FileHostedIntegrationServiceOptions,
+  type HostedIntegrationService,
+} from "./service.js";

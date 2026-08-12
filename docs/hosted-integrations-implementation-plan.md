@@ -52,6 +52,33 @@ The MVP is complete when:
    local test environment through the real hosted integration API/tool path,
    not only through unit tests.
 
+## Dogfood Acceptance
+
+Status: done.
+
+Evidence:
+
+- Added `packages/server/test/e2e/hosted-integrations-dogfood.e2e.ts`.
+- Proves Tool Developer is materialized as a platform-managed agent and can
+  load `$hosted-integrations-development` through a real `/api/chat` turn.
+- Proves Tool Developer can create a new hosted integration family, patch
+  source, register safe examples, validate, run an example, promote, and release
+  the lock through `hosted_integration_*` management tools reached from chat.
+- Proves promoted hosted integration tools surface through `/api/tools` and can
+  be invoked by a separate consumer agent through Agent Settings
+  `hostedIntegrationBindings`.
+- Proves Agent Settings access policy blocks a second agent that has the hosted
+  tool name but no hosted integration binding.
+- Proves a code-level consumer failure creates a failure bucket; Tool Developer
+  can assign it, create a repair draft, add a regression example, promote the
+  fix, and close the bucket through chat-driven management tool calls.
+- The dogfood uses the real Hono server, `/api/chat`, agent context, tool
+  registry, hosted integration gateway, execution logs, artifacts, and
+  file-backed test environment. It uses the deterministic e2e stub model rather
+  than an external LLM so the acceptance is repeatable and offline.
+- Green validation:
+  `OPENACME_DATA_DIR=/Users/alenbohcelyan/.openamce-hosted-integrations-test-env OPENACME_E2E_PORT=3466 pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/hosted-integrations-dogfood.e2e.ts`
+
 ## Non-Goals For MVP
 
 - TypeScript hosted integration family runtime

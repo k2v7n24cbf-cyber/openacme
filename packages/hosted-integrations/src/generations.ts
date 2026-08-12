@@ -8,6 +8,7 @@ import {
   createFileHostedIntegrationDraftStore,
   type HostedIntegrationDraftStore,
 } from "./drafts.js";
+import { resolveHostedIntegrationPythonDependencies } from "./dependencies.js";
 import {
   isNodeError,
   resolveInsideRoot,
@@ -216,6 +217,13 @@ class FileHostedIntegrationGenerationStore
       }
 
       const manifest = await readManifestFromDraft(this.draftStore, draft.id);
+      const dependencyResolution = manifest
+        ? resolveHostedIntegrationPythonDependencies(manifest.runtime)
+        : null;
+      if (dependencyResolution && !dependencyResolution.ok) {
+        await rm(tmpRoot, { recursive: true, force: true });
+        return { ok: false, reason: "invalid_validation" };
+      }
       const now = this.now().toISOString();
       const generation = HostedIntegrationGenerationSchema.parse({
         id: generationId,
@@ -225,12 +233,14 @@ class FileHostedIntegrationGenerationStore
         promotedAt: now,
         promotedBy: request.promotedBy,
         runtime: manifest?.runtime,
+        dependencyResolution: dependencyResolution?.dependencyResolution,
         provenance: buildHostedIntegrationGenerationProvenance({
           draftId: draft.id,
           draftRevisionId: request.draftRevisionId ?? draft.updatedAt,
           promotedBy: request.promotedBy,
           validation: request.validation,
           approval: request.approval,
+          dependencyResolution: dependencyResolution?.dependencyResolution,
         }),
       });
 

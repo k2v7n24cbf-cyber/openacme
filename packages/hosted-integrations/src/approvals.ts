@@ -7,6 +7,7 @@ import {
   HostedIntegrationHumanApprovalRecordSchema,
   HostedIntegrationPromotionApprovalTargetSchema,
   type HostedIntegrationApprovalActor,
+  type HostedIntegrationDependencyResolution,
   type HostedIntegrationGenerationProvenance,
   type HostedIntegrationHumanApprovalRecord,
   type HostedIntegrationPromotionApprovalTarget,
@@ -60,6 +61,7 @@ export interface BuildHostedIntegrationGenerationProvenanceInput {
   promotedBy: string;
   validation: HostedIntegrationValidationResult;
   approval?: HostedIntegrationHumanApprovalRecord;
+  dependencyResolution?: HostedIntegrationDependencyResolution;
 }
 
 export function createFileHostedIntegrationApprovalStore(
@@ -113,6 +115,7 @@ export function buildHostedIntegrationGenerationProvenance(
     promotedBy: input.promotedBy,
     validation: input.validation,
     approval: input.approval,
+    dependencyResolution: input.dependencyResolution,
   });
 }
 

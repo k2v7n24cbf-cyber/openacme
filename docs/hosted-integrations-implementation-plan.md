@@ -988,6 +988,19 @@ Validation:
 pnpm --filter @openacme/hosted-integrations test -- dependencies
 ```
 
+Status: done.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/hosted-integrations test -- dependencies` failed because `runtime.dependencies` was not a manifest contract and promoted generations had no `dependencyResolution`.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- dependencies`
+  `pnpm --filter @openacme/hosted-integrations test`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/server check-types`
+
 ### Slice 4.5: Python Family Runtime V0
 
 Goal:

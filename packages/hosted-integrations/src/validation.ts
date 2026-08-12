@@ -6,6 +6,7 @@ import {
   type FamilyManifest,
 } from "./schemas.js";
 import type { HostedIntegrationCatalog } from "./catalog.js";
+import { resolveHostedIntegrationPythonDependencies } from "./dependencies.js";
 import type { HostedIntegrationDraftStore } from "./drafts.js";
 
 const MANIFEST_FILE = "family.yaml";
@@ -80,6 +81,7 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
 
     this.validateUniqueToolNames(manifest, diagnostics);
     await this.validateRequiredFiles(draftId, manifest, diagnostics);
+    this.validateDependencyPolicy(manifest, diagnostics);
     await this.validateBreakingToolRemoval(manifest, diagnostics);
     await this.validateExamples(draftId, manifest, diagnostics);
 
@@ -166,6 +168,16 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
         ),
       );
     }
+  }
+
+  private validateDependencyPolicy(
+    manifest: FamilyManifest,
+    diagnostics: HostedIntegrationValidationDiagnostic[],
+  ): void {
+    const resolved = resolveHostedIntegrationPythonDependencies(
+      manifest.runtime,
+    );
+    if (!resolved.ok) diagnostics.push(...resolved.diagnostics);
   }
 
   private async validateBreakingToolRemoval(

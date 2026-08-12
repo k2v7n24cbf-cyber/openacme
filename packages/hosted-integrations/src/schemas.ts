@@ -104,6 +104,42 @@ export type HostedIntegrationRuntimePolicy = z.infer<
   typeof HostedIntegrationRuntimePolicySchema
 >;
 
+export const HostedIntegrationPythonDependencySchema = z
+  .object({
+    name: z
+      .string()
+      .regex(/^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/),
+    version: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9.!+_*-]*$/),
+  })
+  .strict();
+export type HostedIntegrationPythonDependency = z.infer<
+  typeof HostedIntegrationPythonDependencySchema
+>;
+
+export const HostedIntegrationResolvedPythonDependencySchema = z
+  .object({
+    name: z.string().min(1),
+    normalizedName: z.string().min(1),
+    version: z.string().min(1),
+    requirement: z.string().min(1),
+  })
+  .strict();
+export type HostedIntegrationResolvedPythonDependency = z.infer<
+  typeof HostedIntegrationResolvedPythonDependencySchema
+>;
+
+export const HostedIntegrationDependencyResolutionSchema = z
+  .object({
+    language: z.literal("python"),
+    installDuringInvocation: z.literal(false),
+    dependencies: z.array(HostedIntegrationResolvedPythonDependencySchema),
+    digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  })
+  .strict();
+export type HostedIntegrationDependencyResolution = z.infer<
+  typeof HostedIntegrationDependencyResolutionSchema
+>;
+
 export const HostedIntegrationDependencyPolicySchema = z
   .object({
     installDuringInvocation: z.literal(false),
@@ -122,6 +158,7 @@ export const HostedIntegrationRuntimeSettingsSchema = z
     defaultTimeoutMs: z.number().int().positive(),
     inlineResultTokenLimit: z.number().int().positive(),
     maxConcurrency: z.number().int().positive(),
+    dependencies: z.array(HostedIntegrationPythonDependencySchema).default([]),
     runtimePolicy: HostedIntegrationRuntimePolicySchema,
     dependencyPolicy: HostedIntegrationDependencyPolicySchema,
   })
@@ -207,6 +244,7 @@ export const HostedIntegrationGenerationSchema = z
     promotedAt: IsoTimestampSchema,
     promotedBy: z.string().min(1),
     runtime: HostedIntegrationRuntimeSettingsSchema.optional(),
+    dependencyResolution: HostedIntegrationDependencyResolutionSchema.optional(),
     provenance: z
       .lazy(() => HostedIntegrationGenerationProvenanceSchema)
       .optional(),
@@ -277,6 +315,7 @@ export const HostedIntegrationGenerationProvenanceSchema = z
       diagnostics: z.array(JsonObjectSchema).default([]),
     }),
     approval: HostedIntegrationHumanApprovalRecordSchema.optional(),
+    dependencyResolution: HostedIntegrationDependencyResolutionSchema.optional(),
   })
   .strict();
 export type HostedIntegrationGenerationProvenance = z.infer<

@@ -435,8 +435,16 @@ part of generation validation, not ad hoc runtime setup.
 MVP dependency rules:
 
 - dependencies are declared at the family or generation level
+- V0 dependency declarations are exact Python pins under
+  `runtime.dependencies`: `{ name, version }`
+- `dependency_policy.allowedPackages` is an explicit allow-list; an empty list
+  means the family may not declare package dependencies
 - dependency installation happens in the build/validation sandbox
-- promoted generations pin the resolved dependency set
+- promoted generations pin the resolved dependency set in
+  `dependencyResolution`, including normalized package names, exact
+  requirements, and a deterministic digest
+- promotion provenance stores the same `dependencyResolution` so dependency
+  changes are reviewable across generations
 - runtime workers execute from the promoted generation artifact, not from a
   mutable development environment
 - adding or changing dependencies is treated as a higher-risk non-destructive

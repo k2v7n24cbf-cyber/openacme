@@ -207,10 +207,80 @@ export const HostedIntegrationGenerationSchema = z
     promotedAt: IsoTimestampSchema,
     promotedBy: z.string().min(1),
     runtime: HostedIntegrationRuntimeSettingsSchema.optional(),
+    provenance: z
+      .lazy(() => HostedIntegrationGenerationProvenanceSchema)
+      .optional(),
   })
   .strict();
 export type HostedIntegrationGeneration = z.infer<
   typeof HostedIntegrationGenerationSchema
+>;
+
+export const HostedIntegrationApprovalActorSchema = z
+  .object({
+    id: z.string().min(1),
+    kind: z.enum(["agent", "human", "system"]),
+    email: z.string().email().optional(),
+  })
+  .strict();
+export type HostedIntegrationApprovalActor = z.infer<
+  typeof HostedIntegrationApprovalActorSchema
+>;
+
+export const HostedIntegrationPromotionApprovalTargetSchema = z
+  .object({
+    familyId: HostedIntegrationFamilyIdSchema,
+    draftId: z.string().min(1),
+    draftRevisionId: z.string().min(1),
+    operation: z.literal("promote"),
+    operationClass: z.enum(["read", "write", "destructive"]),
+    toolNames: z.array(HostedIntegrationToolNameSchema).default([]),
+    destructiveToolNames: z.array(HostedIntegrationToolNameSchema).default([]),
+  })
+  .strict();
+export type HostedIntegrationPromotionApprovalTarget = z.infer<
+  typeof HostedIntegrationPromotionApprovalTargetSchema
+>;
+
+export const HostedIntegrationHumanApprovalRecordSchema = z
+  .object({
+    id: z.string().min(1),
+    familyId: HostedIntegrationFamilyIdSchema,
+    draftId: z.string().min(1),
+    draftRevisionId: z.string().min(1),
+    operation: z.literal("promote"),
+    operationClass: z.enum(["read", "write", "destructive"]),
+    approvedBy: z.string().min(1),
+    approvedByEmail: z.string().email().optional(),
+    approvedAt: IsoTimestampSchema,
+    target: z
+      .object({
+        toolNames: z.array(HostedIntegrationToolNameSchema).default([]),
+        destructiveToolNames: z
+          .array(HostedIntegrationToolNameSchema)
+          .default([]),
+      })
+      .strict(),
+  })
+  .strict();
+export type HostedIntegrationHumanApprovalRecord = z.infer<
+  typeof HostedIntegrationHumanApprovalRecordSchema
+>;
+
+export const HostedIntegrationGenerationProvenanceSchema = z
+  .object({
+    draftId: z.string().min(1),
+    draftRevisionId: z.string().min(1),
+    promotedBy: z.string().min(1),
+    validation: z.object({
+      ok: z.boolean(),
+      diagnostics: z.array(JsonObjectSchema).default([]),
+    }),
+    approval: HostedIntegrationHumanApprovalRecordSchema.optional(),
+  })
+  .strict();
+export type HostedIntegrationGenerationProvenance = z.infer<
+  typeof HostedIntegrationGenerationProvenanceSchema
 >;
 
 export const HostedIntegrationConfigScopeSchema = z

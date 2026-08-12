@@ -603,3 +603,53 @@ describe("hosted integrations config scope and secret routes", () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe("hosted integrations approval routes", () => {
+  it("creates human approval records and rejects requests without a human session", async () => {
+    let res = await req("/api/hosted-integrations/approvals", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        target: {
+          familyId: "qualys",
+          draftId: "draft_123",
+          draftRevisionId: "draft_rev_1",
+          operation: "promote",
+          operationClass: "destructive",
+          toolNames: ["qualys_delete_asset"],
+          destructiveToolNames: ["qualys_delete_asset"],
+        },
+      }),
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body).toMatchObject({
+      approval: {
+        familyId: "qualys",
+        draftId: "draft_123",
+        draftRevisionId: "draft_rev_1",
+        operation: "promote",
+        operationClass: "destructive",
+        approvedByEmail: "test@example.com",
+        target: {
+          destructiveToolNames: ["qualys_delete_asset"],
+        },
+      },
+    });
+
+    res = await req("/api/hosted-integrations/approvals", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "" },
+      body: JSON.stringify({
+        target: {
+          familyId: "qualys",
+          draftId: "draft_123",
+          draftRevisionId: "draft_rev_1",
+          operation: "promote",
+          operationClass: "destructive",
+        },
+      }),
+    });
+    expect(res.status).toBe(401);
+  });
+});

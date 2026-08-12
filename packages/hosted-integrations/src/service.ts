@@ -1,4 +1,8 @@
 import {
+  createFileHostedIntegrationApprovalStore,
+  type HostedIntegrationApprovalStore,
+} from "./approvals.js";
+import {
   createFileHostedIntegrationCatalog,
   type FileHostedIntegrationCatalogOptions,
   type HostedIntegrationCatalog,
@@ -54,6 +58,7 @@ export interface HostedIntegrationService {
   readonly proposedFamilies: HostedIntegrationProposedFamilyManager;
   readonly configScopes: HostedIntegrationConfigScopeStore;
   readonly secrets: HostedIntegrationSecretStore;
+  readonly approvals: HostedIntegrationApprovalStore;
   listFamilies(): Promise<HostedIntegrationManagementFamilySummary[]>;
   getFamily(
     familyId: HostedIntegrationFamilyId | string,
@@ -94,6 +99,7 @@ export function createFileHostedIntegrationService(
     catalog,
   });
   const secrets = createFileHostedIntegrationSecretStore(options);
+  const approvals = createFileHostedIntegrationApprovalStore(options);
   return new FileHostedIntegrationService({
     catalog,
     locks,
@@ -104,6 +110,7 @@ export function createFileHostedIntegrationService(
     proposedFamilies,
     configScopes,
     secrets,
+    approvals,
   });
 }
 
@@ -116,6 +123,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
   readonly proposedFamilies: HostedIntegrationProposedFamilyManager;
   readonly configScopes: HostedIntegrationConfigScopeStore;
   readonly secrets: HostedIntegrationSecretStore;
+  readonly approvals: HostedIntegrationApprovalStore;
 
   private readonly catalog: HostedIntegrationCatalog;
 
@@ -129,6 +137,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     proposedFamilies: HostedIntegrationProposedFamilyManager;
     configScopes: HostedIntegrationConfigScopeStore;
     secrets: HostedIntegrationSecretStore;
+    approvals: HostedIntegrationApprovalStore;
   }) {
     this.catalog = parts.catalog;
     this.locks = parts.locks;
@@ -139,6 +148,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     this.proposedFamilies = parts.proposedFamilies;
     this.configScopes = parts.configScopes;
     this.secrets = parts.secrets;
+    this.approvals = parts.approvals;
   }
 
   async start(): Promise<void> {

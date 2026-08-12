@@ -1,6 +1,7 @@
 import type { Context, Hono } from "hono";
 import {
   HostedIntegrationExampleSchema,
+  HostedIntegrationPromotionApprovalTargetSchema,
   JsonObjectSchema,
   type HostedIntegrationService,
 } from "@openacme/hosted-integrations";
@@ -297,6 +298,31 @@ export function registerHostedIntegrationRoutes(
       return c.json(
         await service.validator.validateDraft(c.req.param("draftId")),
       );
+    } catch (error) {
+      return invalidRequest(c, error);
+    }
+  });
+
+  app.post("/api/hosted-integrations/approvals", async (c) => {
+    const member = options.authStore
+      ? resolveMember(c, options.authStore)
+      : null;
+    if (!member) return c.json({ error: "Unauthorized" }, 401);
+
+    try {
+      const body = await readJsonObject(c);
+      const result = await service.approvals.createApproval({
+        actor: {
+          id: member.id,
+          kind: "human",
+          email: member.email,
+        },
+        target: HostedIntegrationPromotionApprovalTargetSchema.parse(
+          objectField(body, "target"),
+        ),
+      });
+      if (result.ok) return c.json({ approval: result.approval }, 201);
+      return c.json({ error: result.reason }, 403);
     } catch (error) {
       return invalidRequest(c, error);
     }

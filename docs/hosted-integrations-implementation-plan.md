@@ -793,6 +793,24 @@ pnpm --filter @openacme/server test -- hosted-integrations
 
 ### Slice 3.5: Human Approval Gate MVP
 
+Status: done.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/hosted-integrations test -- approvals` failed
+  before implementation because the approval store, evaluator, and provenance
+  builder did not exist.
+  `pnpm --filter @openacme/server test -- hosted-integrations` then failed
+  before the approval route existed.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- approvals`
+  `pnpm --filter @openacme/hosted-integrations test`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/server test -- hosted-integrations`
+  `pnpm --filter @openacme/server check-types`
+
 Goal:
 
 - Represent human approval as a human-authenticated UI/API action.

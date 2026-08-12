@@ -173,6 +173,17 @@ export {
   type HostedIntegrationProposedFamilySummary,
 } from "./proposed-family.js";
 export {
+  HostedIntegrationPythonRuntime,
+  type HostedIntegrationPythonCallToolRequest,
+  type HostedIntegrationPythonCallToolResult,
+  type HostedIntegrationPythonListToolsResult,
+  type HostedIntegrationPythonRuntimeError,
+  type HostedIntegrationPythonRuntimeErrorCode,
+  type HostedIntegrationPythonRuntimeOptions,
+  type HostedIntegrationPythonRuntimeRequestBase,
+  type HostedIntegrationToolContext,
+} from "./python-runtime.js";
+export {
   createFileHostedIntegrationConfigScopeStore,
   type FileHostedIntegrationConfigScopeStoreOptions,
   type HostedIntegrationConfigScopeStore,

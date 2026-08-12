@@ -1031,6 +1031,19 @@ Validation:
 pnpm --filter @openacme/hosted-integrations test -- python-runtime
 ```
 
+Status: done.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/hosted-integrations test -- python-runtime` failed because `HostedIntegrationPythonRuntime` did not exist.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- python-runtime`
+  `pnpm --filter @openacme/hosted-integrations test`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/server check-types`
+
 ### Slice 4.6: Hosted Integration Gateway MVP
 
 Goal:

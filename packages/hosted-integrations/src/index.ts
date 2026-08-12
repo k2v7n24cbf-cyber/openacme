@@ -54,3 +54,11 @@ export {
   type JsonObject,
   type JsonValue,
 } from "./schemas.js";
+export {
+  createFileHostedIntegrationCatalog,
+  type FileHostedIntegrationCatalogOptions,
+  type HostedIntegrationCatalog,
+  type HostedIntegrationCatalogDiagnostic,
+  type HostedIntegrationFamilyDetail,
+  type HostedIntegrationFamilySummary,
+} from "./catalog.js";

@@ -204,6 +204,19 @@ pnpm --filter @openacme/hosted-integrations check-types
 
 ### Slice 1.2: File-Backed Source Catalog
 
+Status: done.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/hosted-integrations test -- catalog` failed before
+  implementation because `createFileHostedIntegrationCatalog` was not exported.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- catalog`
+  `pnpm --filter @openacme/hosted-integrations test`
+  `pnpm --filter @openacme/hosted-integrations check-types`
+  `pnpm --filter @openacme/hosted-integrations build`
+
 Goal:
 
 - Load hosted integration family manifests from

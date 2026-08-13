@@ -96,7 +96,7 @@ interface Agent {
   name: string;
   avatar?: string;
   role: string;
-  model: {
+  model?: {
     provider: string;
     model: string;
     auth?: "api_key" | "oauth";
@@ -220,6 +220,22 @@ const FALLBACK_FORM: FormState = {
   mcpDisabled: [],
   hostedIntegrationBindings: [],
 };
+
+function effectiveAgentModel(agent: {
+  model?: Agent["model"];
+}): NonNullable<Agent["model"]> {
+  return {
+    provider: agent.model?.provider ?? FALLBACK_FORM.provider,
+    model: agent.model?.model ?? FALLBACK_FORM.model,
+    auth: agent.model?.auth ?? FALLBACK_FORM.auth,
+    cacheTtl: agent.model?.cacheTtl ?? FALLBACK_FORM.cacheTtl,
+  };
+}
+
+function agentModelLabel(agent: { model?: Agent["model"] }): string {
+  const model = effectiveAgentModel(agent);
+  return model.model ? `${model.provider}/${model.model}` : model.provider;
+}
 
 const PARALLEL_SESSION_OPTIONS = [1, 2, 3, 4, 5] as const;
 const PARALLEL_SCHEDULING_POLICIES: Array<{
@@ -795,10 +811,10 @@ function AgentsPage() {
       name: selectedAgent.name,
       avatar: selectedAgent.avatar ?? "",
       role: selectedAgent.role ?? "",
-      provider: selectedAgent.model.provider,
-      model: selectedAgent.model.model,
-      auth: selectedAgent.model.auth ?? "api_key",
-      cacheTtl: selectedAgent.model.cacheTtl ?? "5m",
+      provider: effectiveAgentModel(selectedAgent).provider,
+      model: effectiveAgentModel(selectedAgent).model,
+      auth: effectiveAgentModel(selectedAgent).auth ?? "api_key",
+      cacheTtl: effectiveAgentModel(selectedAgent).cacheTtl ?? "5m",
       persona: selectedAgent.persona,
       tools: selectedAgent.tools,
       skills: selectedAgent.skills ?? [],
@@ -954,10 +970,10 @@ function AgentsPage() {
               name: full.name,
               avatar: full.avatar ?? "",
               role: full.role ?? "",
-              provider: full.model.provider,
-              model: full.model.model,
-              auth: full.model.auth ?? "api_key",
-              cacheTtl: full.model.cacheTtl ?? "5m",
+              provider: effectiveAgentModel(full).provider,
+              model: effectiveAgentModel(full).model,
+              auth: effectiveAgentModel(full).auth ?? "api_key",
+              cacheTtl: effectiveAgentModel(full).cacheTtl ?? "5m",
               persona: full.persona,
               tools: full.tools,
               skills: full.skills ?? [],
@@ -1079,9 +1095,9 @@ function AgentsPage() {
                     ) : (
                       <div
                         className="truncate font-mono text-[11px] tabular-nums text-ink-faint"
-                        title={`${agent.model.provider}/${agent.model.model}`}
+                        title={agentModelLabel(agent)}
                       >
-                        {agent.model.provider}/{agent.model.model}
+                        {agentModelLabel(agent)}
                       </div>
                     )}
                   </div>
@@ -1945,15 +1961,16 @@ interface AgentDraft {
 }
 
 function draftFromAgent(agent: Agent): AgentDraft {
+  const model = effectiveAgentModel(agent);
   return {
     name: agent.name,
     avatar: agent.avatar ?? "",
     role: agent.role ?? "",
     persona: agent.persona,
-    provider: agent.model.provider,
-    model: agent.model.model,
-    auth: agent.model.auth ?? "api_key",
-    cacheTtl: agent.model.cacheTtl ?? "5m",
+    provider: model.provider,
+    model: model.model,
+    auth: model.auth ?? "api_key",
+    cacheTtl: model.cacheTtl ?? "5m",
     memoryExtractionEnabled: agent.memoryExtractionEnabled ?? true,
     maxConcurrentSessions: agent.maxConcurrentSessions ?? 1,
     parallelSchedulingPolicy: agent.parallelSchedulingPolicy ?? "lane_first",
@@ -2011,7 +2028,7 @@ function AgentDetail({
       role: draft.role,
       persona: draft.persona,
       model: {
-        ...agent.model,
+        ...effectiveAgentModel(agent),
         provider: draft.provider,
         model: draft.model,
         auth: draft.auth,
@@ -2090,7 +2107,7 @@ function AgentDetail({
             </span>
             <span className="text-ink-faint">·</span>
             <span className="font-mono text-[11px] tabular-nums text-ink-soft">
-              {agent.model.provider}/{agent.model.model}
+              {agentModelLabel(agent)}
             </span>
           </div>
         </div>

@@ -29,6 +29,10 @@ This plan implements the architecture in
 - Use file-backed persistence through package-level store ports for the MVP.
   This keeps the first implementation fast and makes a later SQLite-backed store
   a port swap, not a product redesign.
+- Do not implement hosted integration discovery as continuous filesystem
+  scanning. File-backed stores may persist source/generation artifacts, but the
+  runtime registry must use explicit indexes, active-generation pointers,
+  source revision records, and promotion/rollback refresh events.
 - Do not implement canary promotion in the MVP.
 - Do not let agents read or write secret values.
 
@@ -2895,6 +2899,12 @@ Architecture contract:
   hosted config scopes and human-owned secrets, not process-global env reads.
 - Explicit cache behavior may be recreated only for tools whose legacy behavior
   was explicitly cache/sync oriented.
+- Managed hosted source must not be embedded as static package code for real
+  families. Agents manage source through the hosted integration source/draft
+  store; promotion copies a validated snapshot into an immutable generation.
+- Runtime and `/api/tools` registry refresh must be event/index driven. Startup
+  may read the active generation index, but it must not recursively scan source
+  trees or generation directories on every request or refresh.
 - Live target-system validation is optional per family until credentials are
   configured; every family still needs mock/parity examples that exercise real
   hosted runtime code, not generated placeholders.

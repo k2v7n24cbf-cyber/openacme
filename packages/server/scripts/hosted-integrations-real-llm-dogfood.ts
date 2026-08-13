@@ -290,6 +290,24 @@ async function runDogfood(): Promise<void> {
     );
     failureBucketId = stringField(buckets, "buckets.0.id");
 
+    const repairTask = await waitForRepairTask(failureBucketId);
+    expectObject(repairTask, {
+      assignee: "tool-developer",
+      created_by: "system:hosted-integrations",
+      status: "open",
+    });
+    const repairTaskBody =
+      typeof repairTask.body === "string" ? repairTask.body : "";
+    if (
+      !repairTaskBody.includes(`bucket_id: ${failureBucketId}`) ||
+      !repairTaskBody.includes(`family_id: ${familyId}`) ||
+      !repairTaskBody.includes(`tool_name: ${flakyTool}`)
+    ) {
+      throw new Error(
+        `repair task body did not reference bucket: ${repairTaskBody}`,
+      );
+    }
+
     await expectOk(
       askForTool(
         "tool-developer",
@@ -383,6 +401,25 @@ async function runDogfood(): Promise<void> {
       "hosted_integration_promote",
     );
     const repairGenerationId = stringField(repaired, "generation.id");
+
+    const debugRun = await askForTool(
+      "tool-developer",
+      promptForTool("hosted_integration_debug_run", {
+        family_id: familyId,
+        tool_name: flakyTool,
+        environment: "test",
+        config_scope_id: scopeId,
+        args: { mode: "fail" },
+        generation_id: repairGenerationId,
+        operation_class: "read",
+      }),
+      "hosted_integration_debug_run",
+    );
+    expectObject(debugRun, {
+      ok: true,
+      generationId: repairGenerationId,
+      envelope: { ok: true, result: { recovered: true } },
+    });
 
     const closed = await askForTool(
       "tool-developer",
@@ -530,6 +567,37 @@ async function getJson(pathname: string): Promise<unknown> {
   const res = await req(pathname);
   if (!res.ok) throw new Error(`GET ${pathname} failed ${res.status}`);
   return res.json();
+}
+
+async function waitForRepairTask(
+  bucketId: string,
+): Promise<Record<string, unknown>> {
+  const marker = `openacme:hosted-integration-repair-bucket=${bucketId}`;
+  const deadline = Date.now() + 30_000;
+  for (;;) {
+    const listed = (await getJson(
+      [
+        "/api/tasks?assignee=tool-developer",
+        "created_by=system%3Ahosted-integrations",
+        "status=open",
+      ].join("&"),
+    )) as { tasks?: Array<Record<string, unknown>> };
+    for (const task of listed.tasks ?? []) {
+      const id = task.id;
+      if (typeof id !== "string") continue;
+      const detail = (await getJson(`/api/tasks/${id}`)) as {
+        task?: Record<string, unknown>;
+      };
+      const body = detail.task?.body;
+      if (typeof body === "string" && body.includes(marker)) {
+        return detail.task;
+      }
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`Timed out waiting for repair task ${marker}`);
+    }
+    await sleep(250);
+  }
 }
 
 function parseToolPartOutput(part: Record<string, unknown>): Record<string, unknown> {

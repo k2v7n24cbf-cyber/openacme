@@ -69,9 +69,11 @@ Evidence:
   `hostedIntegrationBindings`.
 - Proves Agent Settings access policy blocks a second agent that has the hosted
   tool name but no hosted integration binding.
-- Proves a code-level consumer failure creates a failure bucket; Tool Developer
-  can assign it, create a repair draft, add a regression example, promote the
-  fix, and close the bucket through chat-driven management tool calls.
+- Proves a code-level consumer failure creates a failure bucket and an open
+  repair task assigned to Tool Developer; Tool Developer can inspect/assign the
+  bucket, create a repair draft, add a regression example, promote the fix, run
+  a debug invocation against the repaired generation, and close the bucket
+  through chat-driven management tool calls.
 - The dogfood uses the real Hono server, `/api/chat`, agent context, tool
   registry, hosted integration gateway, execution logs, artifacts, and
   file-backed test environment. It uses the deterministic e2e stub model rather

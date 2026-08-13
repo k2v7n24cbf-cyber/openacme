@@ -282,6 +282,21 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     });
     failureBucketId = stringField(buckets, "buckets.0.id");
 
+    await waitUntil(
+      async () => repairTasksForBucket(failureBucketId).length === 1,
+      { timeoutMs: 10_000, intervalMs: 100 },
+    );
+    const repairTask = repairTasksForBucket(failureBucketId)[0];
+    expect(repairTask).toMatchObject({
+      assignee: "tool-developer",
+      created_by: "system:hosted-integrations",
+      status: "open",
+    });
+    expect(repairTask?.title).toContain(`${familyId}/${flakyTool}`);
+    expect(repairTask?.body).toContain(`bucket_id: ${failureBucketId}`);
+    expect(repairTask?.body).toContain(`family_id: ${familyId}`);
+    expect(repairTask?.body).toContain(`tool_name: ${flakyTool}`);
+
     await expect(
       chatTool(
         "tool-developer",
@@ -370,6 +385,26 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     });
     const repairGenerationId = stringField(repairPromotion, "generation.id");
 
+    const debugRun = await chatTool(
+      "tool-developer",
+      "debug run repaired dogfood flaky tool",
+      "hosted_integration_debug_run",
+      {
+        family_id: familyId,
+        tool_name: flakyTool,
+        environment: "test",
+        config_scope_id: scopeId,
+        args: { mode: "fail" },
+        generation_id: repairGenerationId,
+        operation_class: "read",
+      },
+    );
+    expect(debugRun).toMatchObject({
+      ok: true,
+      generationId: repairGenerationId,
+      envelope: { ok: true, result: { recovered: true } },
+    });
+
     await expect(
       chatTool(
         "tool-developer",
@@ -420,6 +455,13 @@ async function chatTool(
   );
   expect(output, `missing output for ${toolName}`).toBeTruthy();
   return output!;
+}
+
+function repairTasksForBucket(bucketId: string) {
+  const marker = `openacme:hosted-integration-repair-bucket=${bucketId}`;
+  return srv.manager.taskStore
+    .list({ assignee: "tool-developer" })
+    .filter((task) => task.body.includes(marker));
 }
 
 function parseToolPartOutput(

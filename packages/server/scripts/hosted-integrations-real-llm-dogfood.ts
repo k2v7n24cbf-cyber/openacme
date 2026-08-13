@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { serve, type ServerType } from "@hono/node-server";
 import { loadConfig } from "@openacme/config";
+import { buildHostedIntegrationManagedToolName } from "@openacme/hosted-integrations";
 import { createApp } from "../src/app.js";
 
 const dataDir =
@@ -15,8 +16,15 @@ const deniedId = `real-dogfood-denied-${suffix}`;
 const echoTool = `real_echo_${suffix}`;
 const largeTool = `real_large_${suffix}`;
 const flakyTool = `real_flaky_${suffix}`;
+const managedEchoTool = managedToolName(echoTool);
+const managedLargeTool = managedToolName(largeTool);
+const managedFlakyTool = managedToolName(flakyTool);
 const modelToolDeadlineMs =
   positiveInteger(process.env["OPENACME_E2E_TOOL_TIMEOUT_MS"]) ?? 480_000;
+const modelToolAttemptDeadlineMs =
+  positiveInteger(process.env["OPENACME_E2E_TOOL_ATTEMPT_TIMEOUT_MS"]) ?? 120_000;
+const modelToolMaxAttempts =
+  positiveInteger(process.env["OPENACME_E2E_TOOL_MAX_ATTEMPTS"]) ?? 3;
 const editLockTtlMs =
   positiveInteger(process.env["OPENACME_E2E_LOCK_TTL_MS"]) ?? 900_000;
 
@@ -27,6 +35,8 @@ let lockId = "";
 let draftId = "";
 let generationId = "";
 let failureBucketId = "";
+
+installDogfoodAbortGuards();
 
 async function main(): Promise<void> {
   process.env["OPENACME_DATA_DIR"] = dataDir;
@@ -73,9 +83,9 @@ async function main(): Promise<void> {
     await runDogfood();
     console.log(JSON.stringify({ status: "pass" }));
   } finally {
-    await sleep(5_000);
-    await new Promise<void>((resolve) => server?.close(() => resolve()));
+    await sleep(16_000);
     await close();
+    await closeServer();
   }
 }
 
@@ -269,10 +279,10 @@ async function runDogfood(): Promise<void> {
     const echo = await askForTool(
       consumerId,
       [
-        `Use the hosted integration tool \`${echoTool}\` to echo "real consumer".`,
+        `Use the hosted integration tool \`${managedEchoTool}\` to echo "real consumer".`,
         "Call the tool exactly once with the required JSON argument.",
       ].join("\n"),
-      echoTool,
+      managedEchoTool,
     );
     expectObject(echo, {
       ok: true,
@@ -283,10 +293,10 @@ async function runDogfood(): Promise<void> {
     const large = await askForTool(
       consumerId,
       [
-        `Use the hosted integration tool \`${largeTool}\` with repeat 150.`,
+        `Use the hosted integration tool \`${managedLargeTool}\` with repeat 150.`,
         "Call the tool exactly once with the required JSON argument.",
       ].join("\n"),
-      largeTool,
+      managedLargeTool,
     );
     expectObject(large, {
       ok: true,
@@ -332,16 +342,16 @@ async function runDogfood(): Promise<void> {
     await createAgent(deniedId, "Real Dogfood Denied", {
       role: "Attempts hosted integration use without a binding.",
       persona: "Use the requested hosted integration tool.",
-      tools: [echoTool],
+      tools: [managedEchoTool],
       hostedIntegrationBindings: [],
     });
     const denied = await askForTool(
       deniedId,
       [
-        `Try to call hosted integration tool \`${echoTool}\` with text "blocked".`,
+        `Try to call hosted integration tool \`${managedEchoTool}\` with text "blocked".`,
         "Call the tool exactly once.",
       ].join("\n"),
-      echoTool,
+      managedEchoTool,
     );
     expectObject(denied, { ok: false, error: { code: "policy_denied" } });
   });
@@ -350,10 +360,10 @@ async function runDogfood(): Promise<void> {
     const failed = await askForTool(
       consumerId,
       [
-        `Call hosted integration tool \`${flakyTool}\` with mode "fail".`,
+        `Call hosted integration tool \`${managedFlakyTool}\` with mode "fail".`,
         "This should fail; do not retry.",
       ].join("\n"),
-      flakyTool,
+      managedFlakyTool,
     );
     expectObject(failed, { ok: false });
     if (JSON.stringify(failed).includes("Traceback")) {
@@ -605,27 +615,68 @@ async function askForTool(
   prompt: string,
   expectedTool: string,
 ): Promise<Record<string, unknown>> {
+  const errors: string[] = [];
+  for (let attempt = 1; attempt <= modelToolMaxAttempts; attempt += 1) {
+    try {
+      return await askForToolAttempt(agentId, prompt, expectedTool, attempt);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      errors.push(`attempt ${attempt}: ${message}`);
+      if (attempt === modelToolMaxAttempts) {
+        throw new Error(errors.join("\n"));
+      }
+      console.warn(
+        JSON.stringify({
+          status: "retrying_tool_call",
+          expectedTool,
+          attempt,
+          message,
+        }),
+      );
+    }
+  }
+  throw new Error(`unreachable askForTool retry state for ${expectedTool}`);
+}
+
+async function askForToolAttempt(
+  agentId: string,
+  prompt: string,
+  expectedTool: string,
+  attempt: number,
+): Promise<Record<string, unknown>> {
   const sessionId = randomUUID();
-  const res = await req("/api/chat", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      agentId,
-      sessionId,
-      messages: [
-        {
-          id: randomUUID(),
-          role: "user",
-          parts: [{ type: "text", text: prompt }],
-        },
-      ],
-    }),
-  });
+  const attemptDeadlineMs = Math.min(
+    modelToolDeadlineMs,
+    modelToolAttemptDeadlineMs,
+  );
+  const chatCtrl = new AbortController();
+  const chatTimer = setTimeout(() => chatCtrl.abort(), attemptDeadlineMs);
+  let res: Response;
+  try {
+    res = await req("/api/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      signal: chatCtrl.signal,
+      body: JSON.stringify({
+        agentId,
+        sessionId,
+        messages: [
+          {
+            id: randomUUID(),
+            role: "user",
+            parts: [{ type: "text", text: prompt }],
+          },
+        ],
+      }),
+    });
+  } finally {
+    clearTimeout(chatTimer);
+  }
   if (res.status !== 200) {
     throw new Error(`POST /api/chat failed ${res.status}: ${await res.text()}`);
   }
 
-  const deadline = Date.now() + modelToolDeadlineMs;
+  const deadline = Date.now() + attemptDeadlineMs;
   let lastAssistantText = "";
   for (;;) {
     const messages = (await getJson(
@@ -649,11 +700,49 @@ async function askForTool(
     }
     if (Date.now() > deadline) {
       throw new Error(
-        `Timed out waiting for ${expectedTool}. Last assistant text: ${lastAssistantText}`,
+        `Timed out waiting for ${expectedTool} on attempt ${attempt}. Last assistant text: ${lastAssistantText}`,
       );
     }
     await sleep(500);
   }
+}
+
+function installDogfoodAbortGuards(): void {
+  const report = (kind: string, reason: unknown) => {
+    console.warn(
+      JSON.stringify({
+        status: "ignored_dogfood_abort",
+        kind,
+        message: abortErrorMessage(reason),
+      }),
+    );
+  };
+  process.on("unhandledRejection", (reason) => {
+    if (isAbortError(reason)) {
+      report("unhandledRejection", reason);
+      return;
+    }
+    throw reason;
+  });
+  process.on("uncaughtException", (error) => {
+    if (isAbortError(error)) {
+      report("uncaughtException", error);
+      return;
+    }
+    throw error;
+  });
+}
+
+function isAbortError(value: unknown): boolean {
+  if (!(value instanceof Error)) return false;
+  return (
+    value.name === "AbortError" ||
+    value.message.toLowerCase().includes("operation was aborted")
+  );
+}
+
+function abortErrorMessage(value: unknown): string {
+  return value instanceof Error ? value.message : String(value);
 }
 
 async function createConsumerAgent(id: string, tools: string[]): Promise<void> {
@@ -661,7 +750,7 @@ async function createConsumerAgent(id: string, tools: string[]): Promise<void> {
     role: "Consumes real LLM dogfood hosted integrations.",
     persona:
       "When asked to use a hosted integration, call the requested tool exactly once with the requested arguments.",
-    tools,
+    tools: tools.map(managedToolName),
     hostedIntegrationBindings: tools.map((toolName) => ({
       familyId,
       toolName,
@@ -670,6 +759,10 @@ async function createConsumerAgent(id: string, tools: string[]): Promise<void> {
       environment: "test",
     })),
   });
+}
+
+function managedToolName(toolName: string): string {
+  return buildHostedIntegrationManagedToolName({ familyId, toolName });
 }
 
 async function createAgent(
@@ -709,6 +802,30 @@ async function req(pathname: string, init: RequestInit = {}): Promise<Response> 
   headers.set("host", "127.0.0.1");
   headers.set("authorization", `Bearer ${authToken}`);
   return fetch(`${baseUrl}${pathname}`, { ...init, headers });
+}
+
+async function closeServer(): Promise<void> {
+  const activeServer = server;
+  server = null;
+  if (!activeServer) return;
+  const closer = activeServer as ServerType & {
+    closeAllConnections?: () => void;
+    closeIdleConnections?: () => void;
+    unref?: () => void;
+  };
+  const closed = new Promise<void>((resolve, reject) => {
+    activeServer.close((error?: Error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+  const forced = sleep(1_000).then(() => {
+    closer.closeIdleConnections?.();
+    closer.closeAllConnections?.();
+    closer.unref?.();
+  });
+  await Promise.race([closed, forced]);
+  await Promise.race([closed, sleep(1_000)]);
 }
 
 async function getJson(pathname: string): Promise<unknown> {

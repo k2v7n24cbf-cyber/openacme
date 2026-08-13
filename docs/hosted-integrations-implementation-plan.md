@@ -2433,8 +2433,9 @@ Evidence:
   seeded Splunk, Microsoft Graph, MDE, and defender-alert placeholder tools
   from the hosted integrations architecture notes.
 - Preserved legacy external MCP names as
-  `mcp_integration-hub__<legacyToolName>` while keeping hosted tool names equal
-  to the legacy native tool names where valid.
+  `mcp_integration-hub__<legacyToolName>`. This early migration inventory kept
+  hosted registry names equal to legacy native tool names; Milestone 11
+  supersedes that target with managed canonical registry names.
 - Captured family-level config keys and human-managed secret refs for migration
   into config scopes.
 - Green validation:
@@ -2562,7 +2563,10 @@ pnpm --filter @openacme/hosted-integrations test -- migration
 
 ### Slice 10.4: Cut Over Agent Tooling
 
-Status: done.
+Status: superseded by Milestone 11 naming-boundary hardening.
+
+The evidence below records the earlier implementation state. It is no longer
+the target naming contract.
 
 Evidence:
 
@@ -2598,7 +2602,8 @@ Non-goals:
 
 TDD:
 
-- migrated hosted integration tools appear without `mcp_<server>__` names
+- migrated hosted integration tools appeared without `mcp_<server>__` names in
+  the earlier native-name cutover view
 - old MCP tool registrations can be disabled without removing hosted tools
 - agents configured for hosted tools receive hosted schemas
 
@@ -2607,6 +2612,259 @@ Validation:
 ```text
 pnpm --filter @openacme/server test -- hosted-integrations
 pnpm --filter @openacme/tools test -- hosted-integrations
+```
+
+## Milestone 11: Managed Tool Naming Boundary
+
+Goal: make hosted integration tools and remote MCP tools independent at the
+canonical tool-name boundary. Agent Settings, access policy, model-facing tool
+schemas, run logs, and migration/cutover behavior must not rely on native
+hosted tool names colliding with remote MCP names.
+
+Architecture contract:
+
+- family manifests keep family-native tool names, such as `splunk_search`
+- registry-facing hosted tools use `managed_<family>__<tool>`
+- managed canonical names must satisfy the model-provider tool/function name
+  pattern and length cap; invalid pairs fail validation instead of being
+  truncated, hashed, aliased, or rewritten
+- remote MCP tools keep `mcp_<server>__<tool>`
+- Agent Settings stores and enables canonical registry names
+- registry `ToolInfo.source` for hosted integrations carries the native
+  `source.toolName` as well as `familyId`, `familyName`, and `generationId`
+- hosted integration bindings still store `familyId`, family-native `toolName`,
+  config scopes, environment, and policy data
+- the registry adapter maps canonical managed names back to
+  `familyId/toolName/generationId` before dispatch
+- direct `/api/hosted-integrations/*` control-plane calls keep using
+  family-native `toolName` inside their family context
+- hosted integration management-tool parameters keep using family-native
+  `tool_name`
+- remote MCP entries must never enable managed hosted tools
+- managed hosted entries must never enable remote MCP tools
+- migration `replaces` metadata is operational metadata only, not an
+  authorization alias
+
+Non-goals:
+
+- No live integration-hub sync/cutover in this milestone.
+- No compatibility alias that accepts both old native hosted names and new
+  managed names in Agent Settings.
+- No removal of remote MCP registrations.
+- No Agent Settings redesign beyond presenting the corrected canonical names.
+
+### Slice 11.1: Naming Contract And Registry Adapter
+
+Status: done.
+
+Evidence:
+
+- Added provider-safe managed hosted tool naming helpers in
+  `@openacme/hosted-integrations`.
+- Registered hosted integration tools as `managed_<family>__<tool>` while
+  preserving native family tool names in source metadata and gateway dispatch.
+- Extended hosted `ToolSource` metadata with native `source.toolName`.
+- Routed hosted registry invocations with both `canonicalToolName` and native
+  `toolName`.
+- Removed default legacy integration-hub hiding from `/api/tools` and
+  model-facing tool emission.
+- Proved managed hosted tools and remote MCP tools coexist as independent
+  registry surfaces.
+- Proved stale native hosted tool names are removed during managed-name refresh
+  so cached agents are evicted across the rename transition.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- naming`
+  `pnpm --filter @openacme/tools test -- hosted-integrations`
+  `pnpm --filter @openacme/server test -- tools-hosted-integrations`
+  `pnpm --filter @openacme/agent-core check-types`
+
+Goal:
+
+- Add a single hosted integration canonical-name helper in
+  `@openacme/hosted-integrations` or the thin tools adapter.
+- Register hosted integration tools as `managed_<family>__<tool>`.
+- Reject provider-incompatible managed canonical names during validation or
+  registry sync; do not introduce generated aliases.
+- Preserve family-native names in manifests, examples, generations, gateway
+  calls, direct Hosted Integrations API calls, async jobs, disablements, run
+  logs, artifacts, and failure buckets.
+- Extend hosted `ToolSource` metadata with the family-native tool name so UI
+  and runtime policy do not reverse-engineer it from the managed canonical
+  name.
+- Carry both `canonicalToolName` and family-native `toolName` through the
+  hosted registry adapter invocation request.
+- Remove hardcoded legacy integration-hub hiding from default `/api/tools` and
+  model-facing emission paths.
+
+TDD:
+
+- canonical helper builds and parses `managed_<family>__<tool>`
+- invalid family/tool segments are rejected
+- provider-incompatible managed canonical names, including over-length names,
+  are rejected with actionable diagnostics
+- canonical parser preserves family ids with hyphens and native tool names with
+  underscores
+- hosted registry adapter exposes managed names but dispatches native
+  `familyId/toolName`
+- hosted registry adapter rejects canonical collisions without treating native
+  name matches as cross-layer replacements
+- `ToolInfo.source.toolName` is present for hosted tools returned by
+  `/api/tools`
+- raw remote MCP and managed hosted tools can coexist in `/api/tools`
+- no view-level hiding occurs without an explicit future cutover option
+- registry observation spans record the managed canonical tool name while
+  hosted execution logs record `familyId` plus native `toolName`
+- registry refresh evicts cached agents for both removed native hosted names
+  and newly registered managed canonical names during the rename transition
+
+Validation:
+
+```text
+pnpm --filter @openacme/hosted-integrations test -- naming
+pnpm --filter @openacme/tools test -- hosted-integrations
+pnpm --filter @openacme/server test -- tools-hosted-integrations
+pnpm --filter @openacme/agent-core check-types
+```
+
+### Slice 11.2: Agent Settings And Policy Boundary
+
+Status: done.
+
+Evidence:
+
+- Updated Agent Settings helpers to store hosted integration selections in
+  `agent.tools` with managed canonical names while preserving hosted bindings
+  as family-native `familyId/toolName` records.
+- Updated hosted registry/runtime policy tests so `managed_*` hosted selections
+  and `mcp_*` remote MCP selections do not satisfy each other.
+- Added native-name diagnostics for hosted integration management tools and
+  direct hosted control-plane calls where `tool_name` must stay family-native.
+- Updated Tool Developer Agent skill coverage so developer-facing lifecycle
+  guidance names the native-vs-managed boundary explicitly.
+- Updated safe-tools and hosted-integrations dogfood fixtures so consumer
+  agents call promoted hosted tools through managed canonical registry names.
+- Real LLM dogfood passed the skill, create/promote, consumer invocation,
+  access-denial, and failure-bucket repair scenarios in the test data dir
+  `/Users/alenbohcelyan/.openamce-hosted-integrations-test-env`.
+- Real LLM dogfood exits cleanly after emitting `{"status":"pass"}`; the
+  harness closes app runtime first, then bounds HTTP server cleanup, and logs
+  dogfood-only abort noise instead of crashing on provider/timeout aborts.
+- Green validation:
+  `pnpm --filter web test -- hosted-integration-agent-settings`
+  `pnpm --filter @openacme/config test -- agent-store`
+  `pnpm --filter @openacme/server test -- hosted-integrations`
+  `pnpm --filter @openacme/server test -- tools-hosted-integrations`
+  `pnpm --filter @openacme/server test -- agent-catalog`
+  `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/hosted-integrations-dogfood.e2e.ts`
+  `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/hosted-integrations-safe-tools.e2e.ts`
+  `pnpm --filter @openacme/server check-types`
+
+Goal:
+
+- Store managed hosted tool selections in `agent.tools` using canonical
+  `managed_<family>__<tool>` names.
+- Keep hosted integration bindings keyed by family-native
+  `familyId/toolName`.
+- Enforce that a selected remote MCP name cannot satisfy a hosted integration
+  binding and that a selected managed hosted name cannot satisfy an MCP tool.
+- Update API route tests and dogfood fixtures to use managed canonical names
+  for model-facing calls.
+- Update the real LLM dogfood script so the developer-created native family
+  tools are consumed through managed canonical registry names.
+- Update Agent Settings web helpers so binding creation, default-scope editing,
+  and stale-binding pruning use `tool.source.toolName`, not the managed
+  canonical `tool.name`.
+- Update config schema tests to preserve hosted bindings as family-native
+  `familyId/toolName` records while `agent.tools` stores managed canonical
+  names.
+- Update the Tool Developer Agent skill so it explicitly says management-tool
+  `tool_name`, manifest names, examples, debug runs, and failure-bucket
+  references are family-native names, while Agent Settings/model-facing tools
+  use managed canonical names.
+
+TDD:
+
+- consumer agent with `managed_splunk__splunk_search` and a matching hosted
+  binding can invoke the hosted tool
+- consumer agent with only `mcp_integration-hub__splunk_search` cannot invoke
+  the hosted tool
+- consumer agent with only `managed_splunk__splunk_search` cannot invoke the
+  remote MCP tool
+- denied hosted binding still returns normalized `policy_denied`
+- `/api/tools` shows MCP and managed hosted entries as separate surfaces
+- Agent Settings selecting `managed_qualys__qualys_count_assets` stores
+  `agent.tools=["managed_qualys__qualys_count_assets"]` and a hosted binding
+  with `toolName="qualys_count_assets"`
+- direct `/api/hosted-integrations/invoke`, jobs, and debug runs continue to
+  accept family-native `toolName`, not managed canonical names
+- `hosted_integration_*` management tools reject or clearly diagnose managed
+  canonical names where family-native `tool_name` is required
+- Tool Developer Agent skill tests cover the native-vs-managed naming guidance
+
+Validation:
+
+```text
+pnpm --filter web test -- hosted-integration-agent-settings
+pnpm --filter @openacme/config test -- agent-store
+pnpm --filter @openacme/server test -- hosted-integrations
+pnpm --filter @openacme/server test -- tools-hosted-integrations
+pnpm --filter @openacme/server test -- agent-catalog
+pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/hosted-integrations-dogfood.e2e.ts
+pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/hosted-integrations-safe-tools.e2e.ts
+pnpm --filter @openacme/server check-types
+OPENACME_DATA_DIR=/Users/alenbohcelyan/.openamce-hosted-integrations-test-env OPENACME_E2E_PORT=3466 pnpm --filter @openacme/server dogfood:hosted-integrations:real-llm
+```
+
+### Slice 11.3: Migration Metadata Without Authorization Aliases
+
+Status: done.
+
+Evidence:
+
+- Added managed hosted canonical replacement metadata to legacy
+  integration-hub migration inventory entries.
+- Added migrated-family metadata for `managedToolNames` and explicit
+  legacy-MCP-to-managed-hosted replacement mappings.
+- Kept generated family manifests, examples, runtime execution, cache metadata,
+  and promoted generation tool names family-native.
+- Validation now rejects malformed managed hosted names, malformed legacy MCP
+  names, duplicate native hosted targets, and duplicate managed hosted targets.
+- Server policy tests still prove replacement metadata is not an authorization
+  alias: a remote MCP-only selection cannot invoke a managed hosted tool.
+- Green validation:
+  `pnpm --filter @openacme/hosted-integrations test -- migration`
+  `pnpm --filter @openacme/hosted-integrations build`
+  `pnpm --filter @openacme/tools check-types`
+  `pnpm --filter @openacme/server test -- tools-hosted-integrations`
+  `pnpm --filter @openacme/server check-types`
+
+Goal:
+
+- Add explicit migration metadata that can state
+  `managed_<family>__<tool>` replaces `mcp_<server>__<tool>`.
+- Keep replacement metadata out of dispatch and access policy.
+- Update integration-hub migration fixtures so hosted migrated tool names are
+  managed canonical names at registry/UI boundaries while source/runtime names
+  stay native.
+- Add parity tests that prove replacement metadata can be displayed or queried
+  without hiding, enabling, or redirecting either tool.
+
+TDD:
+
+- migration inventory records both legacy MCP canonical name and managed
+  hosted canonical name
+- replacement metadata rejects malformed MCP or managed names
+- migration fixtures promote native family tools and expose managed registry
+  names
+- replacement metadata does not change agent allowlists or gateway policy
+
+Validation:
+
+```text
+pnpm --filter @openacme/hosted-integrations test -- migration
+pnpm --filter @openacme/server test -- tools-hosted-integrations
+pnpm --filter @openacme/tools check-types
+pnpm --filter @openacme/server check-types
 ```
 
 ## First Implementation Slice

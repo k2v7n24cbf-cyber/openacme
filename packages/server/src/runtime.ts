@@ -13,6 +13,7 @@ import {
   HostedIntegrationPolicyBindingSchema,
   evaluateHostedIntegrationPromotionApproval,
   isHostedIntegrationToolVisibleForSelection,
+  parseHostedIntegrationManagedToolName,
   type FamilyManifest,
   type HostedIntegrationDraft,
   type HostedIntegrationExample,
@@ -172,7 +173,7 @@ export class ServerRuntime {
         },
       };
     }
-    if (!def.tools.includes(request.toolName)) {
+    if (!def.tools.includes(request.canonicalToolName)) {
       return {
         ok: false,
         error: {
@@ -231,6 +232,7 @@ export class ServerRuntime {
       error,
       familyId: request.familyId,
       toolName: request.toolName,
+      canonicalToolName: request.canonicalToolName,
       generationId: request.generationId,
     });
   }
@@ -284,7 +286,7 @@ export class ServerRuntime {
             {
               familyId: stringParam(p, "family_id"),
               name: stringParam(p, "name"),
-              toolName: stringParam(p, "tool_name"),
+              toolName: nativeHostedIntegrationToolNameParam(p, "tool_name"),
               lockedBy: request.actorId,
               ttlMs: positiveIntegerParam(p, "ttl_ms") ?? 30 * 60 * 1000,
             },
@@ -620,7 +622,7 @@ export class ServerRuntime {
       return { ok: false, error: { code: "approval_required" } };
     }
     const familyId = stringParam(p, "family_id");
-    const toolName = stringParam(p, "tool_name");
+    const toolName = nativeHostedIntegrationToolNameParam(p, "tool_name");
     const configScopeId = stringParam(p, "config_scope_id");
     return this.hostedIntegrationService.gateway.invoke({
       actor: { id: request.actorId, kind: "agent", roles: ["tool_developer"] },
@@ -1141,6 +1143,19 @@ function stringParam(params: Record<string, unknown>, name: string): string {
   const value = params[name];
   if (typeof value !== "string" || value.length === 0) {
     throw new Error(`${name} is required`);
+  }
+  return value;
+}
+
+function nativeHostedIntegrationToolNameParam(
+  params: Record<string, unknown>,
+  name: string,
+): string {
+  const value = stringParam(params, name);
+  if (parseHostedIntegrationManagedToolName(value)) {
+    throw new Error(
+      `${name} must be a family-native hosted integration tool name, not a managed canonical registry name`,
+    );
   }
   return value;
 }

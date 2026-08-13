@@ -133,6 +133,7 @@ export interface ToolInfo {
     kind: "hosted_integration";
     familyId: string;
     familyName: string;
+    toolName: string;
     generationId: string;
   };
   /** Always-on tool merged into every agent regardless of the agent's

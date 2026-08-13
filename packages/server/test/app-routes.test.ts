@@ -353,7 +353,7 @@ describe("agents CRUD", () => {
 
   it("persists hosted integration access bindings from agent settings", async () => {
     await createAgent("helper", "Helper", {
-      tools: ["qualys_count_assets"],
+      tools: ["managed_qualys__qualys_count_assets"],
     });
 
     const binding = {

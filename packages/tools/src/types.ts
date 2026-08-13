@@ -46,6 +46,7 @@ export type ToolSource = {
   kind: "hosted_integration";
   familyId: string;
   familyName: string;
+  toolName: string;
   generationId: string;
 };
 

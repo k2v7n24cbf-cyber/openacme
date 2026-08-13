@@ -873,9 +873,7 @@ export class Agent {
     const effectiveToolNames = opts.toolFilter
       ? this.config.tools.filter((t) => opts.toolFilter!.has(t))
       : this.config.tools;
-    const tools = this.toolRegistry.getVercelTools(new Set(effectiveToolNames), {
-      hideLegacyIntegrationHubMcpTools: true,
-    });
+    const tools = this.toolRegistry.getVercelTools(new Set(effectiveToolNames));
 
     // ALS: tool handlers read sessionId/agentId/workspaceDir without arg-threading.
     toolCallContext.enterWith({
@@ -2206,9 +2204,7 @@ export class Agent {
     const effectiveToolNames = options.toolFilter
       ? this.config.tools.filter((toolName) => options.toolFilter!.has(toolName))
       : this.config.tools;
-    const tools = this.toolRegistry.getVercelTools(new Set(effectiveToolNames), {
-      hideLegacyIntegrationHubMcpTools: true,
-    });
+    const tools = this.toolRegistry.getVercelTools(new Set(effectiveToolNames));
     chars += JSON.stringify(tools).length;
     return Math.floor(chars / 4) + imageTokens;
   }

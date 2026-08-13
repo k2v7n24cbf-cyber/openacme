@@ -28,11 +28,8 @@ import {
 const log = createLogger("tools.registry");
 
 const SYSTEM_TOOL_SET = new Set<string>(SYSTEM_TOOLS);
-const LEGACY_INTEGRATION_HUB_MCP_PREFIX = "mcp_integration-hub__";
 
-export interface ToolRegistryViewOptions {
-  hideLegacyIntegrationHubMcpTools?: boolean;
-}
+export type ToolRegistryViewOptions = Record<string, never>;
 
 function runtimeLabel(entry: ToolEntry): "daemon" | "worker" {
   return entry.runtime ?? "daemon";
@@ -569,28 +566,10 @@ export class ToolRegistry {
   }
 
   private visibleEntries(options: ToolRegistryViewOptions): ToolEntry[] {
-    const entries = [...this._tools.values()];
-    if (!options.hideLegacyIntegrationHubMcpTools) return entries;
-    const hostedToolNames = new Set(
-      entries
-        .filter((entry) => entry.source?.kind === "hosted_integration")
-        .map((entry) => entry.name)
-    );
-    return entries.filter((entry) => {
-      const hostedReplacementName = legacyIntegrationHubReplacementName(entry);
-      return (
-        hostedReplacementName === null ||
-        !hostedToolNames.has(hostedReplacementName)
-      );
-    });
+    void options;
+    return [...this._tools.values()];
   }
 }
 
 /** Module-level singleton */
 export const registry = new ToolRegistry();
-
-function legacyIntegrationHubReplacementName(entry: ToolEntry): string | null {
-  if (!entry.name.startsWith(LEGACY_INTEGRATION_HUB_MCP_PREFIX)) return null;
-  if (entry.toolset !== "mcp-integration-hub") return null;
-  return entry.name.slice(LEGACY_INTEGRATION_HUB_MCP_PREFIX.length);
-}

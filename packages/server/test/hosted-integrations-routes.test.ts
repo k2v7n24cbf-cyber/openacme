@@ -1786,7 +1786,9 @@ describe("hosted integrations example execution and promotion routes", () => {
   });
 
   it("refreshes /api/tools and evicts affected agents after promotion", async () => {
-    await createAgentViaRoutes("qualys-agent", ["qualys_count_assets"]);
+    await createAgentViaRoutes("qualys-agent", [
+      "managed_qualys__qualys_count_assets",
+    ]);
     const cachedAgent = manager.getAgent("qualys-agent");
     const { draftId, lockId } = await createDraftViaRoutes(
       pythonTool("return {'count': 4}"),
@@ -1812,14 +1814,17 @@ describe("hosted integrations example execution and promotion routes", () => {
     };
     expect(toolsBody.toolsets).toContain("hosted-integrations");
     expect(
-      toolsBody.tools.find((tool) => tool.name === "qualys_count_assets"),
+      toolsBody.tools.find(
+        (tool) => tool.name === "managed_qualys__qualys_count_assets",
+      ),
     ).toMatchObject({
-      name: "qualys_count_assets",
+      name: "managed_qualys__qualys_count_assets",
       toolset: "hosted-integrations",
       source: {
         kind: "hosted_integration",
         familyId: "qualys",
         familyName: "Qualys",
+        toolName: "qualys_count_assets",
         generationId: generation.id,
       },
     });

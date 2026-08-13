@@ -50,6 +50,18 @@ describe("legacy integration-hub migration inventory", () => {
     ).toEqual(expect.arrayContaining([...EXPECTED_LEGACY_INTEGRATION_HUB_TOOL_NAMES]));
   });
 
+  it("records explicit legacy MCP to managed hosted replacement metadata", () => {
+    for (const entry of LEGACY_INTEGRATION_HUB_INVENTORY.tools) {
+      expect(entry.legacyMcpToolName).toBe(
+        `mcp_integration-hub__${entry.legacyToolName}`,
+      );
+      expect(entry.managedHostedToolName).toBe(
+        `managed_${entry.familyId}__${entry.hostedToolName}`,
+      );
+      expect(entry.managedHostedToolName).not.toBe(entry.legacyMcpToolName);
+    }
+  });
+
   it("maps env requirements to config keys and secret refs", () => {
     for (const family of LEGACY_INTEGRATION_HUB_INVENTORY.families) {
       expect([...family.configKeys, ...family.secretRefs].length).toBeGreaterThan(0);
@@ -68,12 +80,14 @@ describe("legacy integration-hub migration inventory", () => {
           legacyToolName: "tool_a",
           legacyMcpToolName: "mcp_integration-hub__tool_a",
           hostedToolName: "duplicate_target",
+          managedHostedToolName: "managed_qualys__duplicate_target",
         },
         {
           ...LEGACY_INTEGRATION_HUB_INVENTORY.tools[1]!,
           legacyToolName: "tool_b",
           legacyMcpToolName: "mcp_integration-hub__tool_b",
           hostedToolName: "duplicate_target",
+          managedHostedToolName: "managed_qualys__duplicate_target",
         },
       ],
     };
@@ -89,6 +103,32 @@ describe("legacy integration-hub migration inventory", () => {
       diagnostics: [
         "missing legacy tool: missing_tool",
         "duplicate hosted tool: duplicate_target",
+        "duplicate managed hosted tool: managed_qualys__duplicate_target",
+      ],
+    });
+  });
+
+  it("rejects malformed legacy MCP and managed hosted names", () => {
+    const inventory: LegacyIntegrationHubInventory = {
+      ...LEGACY_INTEGRATION_HUB_INVENTORY,
+      tools: [
+        {
+          ...LEGACY_INTEGRATION_HUB_INVENTORY.tools[0]!,
+          legacyToolName: "tool_a",
+          legacyMcpToolName: "managed_qualys__tool_a",
+          hostedToolName: "tool_a",
+          managedHostedToolName: "mcp_integration-hub__tool_a",
+        },
+      ],
+    };
+
+    expect(
+      validateLegacyIntegrationHubMigrationInventory(inventory, ["tool_a"]),
+    ).toEqual({
+      ok: false,
+      diagnostics: [
+        "invalid managed hosted tool name: mcp_integration-hub__tool_a",
+        "invalid mcp name: managed_qualys__tool_a",
       ],
     });
   });
@@ -114,6 +154,19 @@ describe("legacy integration-hub first migrated family", () => {
     expect(generation.tools?.map((tool) => tool.name)).toEqual(
       FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY.migratedToolNames,
     );
+    expect(FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY.managedToolNames).toEqual([
+      "managed_splunk__splunk_search",
+    ]);
+    expect(
+      FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY.replacementMappings,
+    ).toEqual([
+      {
+        familyId: "splunk",
+        hostedToolName: "splunk_search",
+        legacyMcpToolName: "mcp_integration-hub__splunk_search",
+        managedHostedToolName: "managed_splunk__splunk_search",
+      },
+    ]);
   });
 
   it("runs migrated examples through the hosted integration runtime", async () => {
@@ -222,6 +275,17 @@ describe("legacy integration-hub migrated security families", () => {
       expect(generation.tools?.map((tool) => tool.name)).toEqual(
         fixture.migratedToolNames,
       );
+      expect(fixture.managedToolNames).toEqual(
+        fixture.replacementMappings.map(
+          (mapping) => mapping.managedHostedToolName,
+        ),
+      );
+      expect(fixture.replacementMappings.map((mapping) => mapping.hostedToolName)).toEqual(
+        fixture.migratedToolNames,
+      );
+      expect(
+        fixture.replacementMappings.map((mapping) => mapping.legacyMcpToolName),
+      ).toEqual(fixture.legacyMcpToolNames);
     }
   });
 

@@ -1,3 +1,8 @@
+import {
+  buildHostedIntegrationManagedToolName,
+  HostedIntegrationManagedToolNameSchema,
+  parseHostedIntegrationManagedToolName,
+} from "./naming.js";
 import { HostedIntegrationToolNameSchema } from "./schemas.js";
 import type { HostedIntegrationExample } from "./schemas.js";
 
@@ -7,6 +12,7 @@ export interface LegacyIntegrationHubToolInventoryEntry {
   legacyToolName: string;
   legacyMcpToolName: string;
   hostedToolName: string;
+  managedHostedToolName: string;
   operation: "read" | "write" | "destructive";
   freshness: "live" | "cached" | "sync";
   resultBehavior: "inline" | "result_file" | "cache_workspace";
@@ -38,11 +44,20 @@ export interface ValidateMigrationInventoryResult {
   diagnostics: string[];
 }
 
+export interface LegacyIntegrationHubReplacementMapping {
+  familyId: string;
+  hostedToolName: string;
+  legacyMcpToolName: string;
+  managedHostedToolName: string;
+}
+
 export interface LegacyIntegrationHubMigratedFamilyFixture {
   familyId: string;
   familyName: string;
   migratedToolNames: string[];
+  managedToolNames: string[];
   legacyMcpToolNames: string[];
+  replacementMappings: LegacyIntegrationHubReplacementMapping[];
   configKeys: string[];
   secretRefs: string[];
   sourceFiles: Record<string, string>;
@@ -196,7 +211,20 @@ export const FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY: LegacyIntegrationHubM
     familyId: "splunk",
     familyName: "Splunk",
     migratedToolNames: ["splunk_search"],
+    managedToolNames: [
+      buildHostedIntegrationManagedToolName({
+        familyId: "splunk",
+        toolName: "splunk_search",
+      }),
+    ],
     legacyMcpToolNames: ["mcp_integration-hub__splunk_search"],
+    replacementMappings: [
+      replacementMapping(
+        "splunk",
+        "splunk_search",
+        "mcp_integration-hub__splunk_search",
+      ),
+    ],
     configKeys: ["SPLUNK_BASE_URL"],
     secretRefs: ["SPLUNK_TOKEN"],
     sourceFiles: {
@@ -254,6 +282,26 @@ export function validateLegacyIntegrationHubMigrationInventory(
     if (!HostedIntegrationToolNameSchema.safeParse(entry.hostedToolName).success) {
       diagnostics.push(`invalid hosted tool name: ${entry.hostedToolName}`);
     }
+    const parsedManaged = parseHostedIntegrationManagedToolName(
+      entry.managedHostedToolName,
+    );
+    if (
+      !HostedIntegrationManagedToolNameSchema.safeParse(
+        entry.managedHostedToolName,
+      ).success ||
+      !parsedManaged
+    ) {
+      diagnostics.push(
+        `invalid managed hosted tool name: ${entry.managedHostedToolName}`,
+      );
+    } else if (
+      parsedManaged.familyId !== entry.familyId ||
+      parsedManaged.toolName !== entry.hostedToolName
+    ) {
+      diagnostics.push(
+        `managed hosted tool name mismatch: ${entry.managedHostedToolName}`,
+      );
+    }
     if (
       entry.legacyMcpToolName !==
       `mcp_${entry.legacyServerName}__${entry.legacyToolName}`
@@ -268,6 +316,11 @@ export function validateLegacyIntegrationHubMigrationInventory(
     inventory.tools.map((entry) => entry.hostedToolName),
   )) {
     diagnostics.push(`duplicate hosted tool: ${duplicate}`);
+  }
+  for (const duplicate of duplicates(
+    inventory.tools.map((entry) => entry.managedHostedToolName),
+  )) {
+    diagnostics.push(`duplicate managed hosted tool: ${duplicate}`);
   }
   return { ok: diagnostics.length === 0, diagnostics };
 }
@@ -303,6 +356,10 @@ function tool(
     legacyToolName,
     legacyMcpToolName: `mcp_${LEGACY_SERVER_NAME}__${legacyToolName}`,
     hostedToolName: legacyToolName,
+    managedHostedToolName: buildHostedIntegrationManagedToolName({
+      familyId,
+      toolName: legacyToolName,
+    }),
     operation: opts.operation ?? "read",
     freshness: opts.freshness ?? "live",
     resultBehavior: opts.resultBehavior ?? "inline",
@@ -319,6 +376,22 @@ function duplicates(values: string[]): string[] {
     seen.add(value);
   }
   return [...repeated].sort();
+}
+
+function replacementMapping(
+  familyId: string,
+  hostedToolName: string,
+  legacyMcpToolName: string,
+): LegacyIntegrationHubReplacementMapping {
+  return {
+    familyId,
+    hostedToolName,
+    legacyMcpToolName,
+    managedHostedToolName: buildHostedIntegrationManagedToolName({
+      familyId,
+      toolName: hostedToolName,
+    }),
+  };
 }
 
 function buildMigratedFamilyFixture(
@@ -340,7 +413,15 @@ function buildMigratedFamilyFixture(
     familyId,
     familyName,
     migratedToolNames: tools.map((entry) => entry.hostedToolName),
+    managedToolNames: tools.map((entry) => entry.managedHostedToolName),
     legacyMcpToolNames: tools.map((entry) => entry.legacyMcpToolName),
+    replacementMappings: tools.map((entry) =>
+      replacementMapping(
+        entry.familyId,
+        entry.hostedToolName,
+        entry.legacyMcpToolName,
+      ),
+    ),
     configKeys: familyEntry.configKeys,
     secretRefs: familyEntry.secretRefs,
     sourceFiles: {

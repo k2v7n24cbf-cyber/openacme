@@ -1,6 +1,6 @@
 # Hosted Integrations Architecture
 
-Last revised: 2026-08-12.
+Last revised: 2026-08-13.
 
 ## Goal
 
@@ -111,21 +111,70 @@ ToolRegistry
   -> model receives tool schemas
 ```
 
-MCP tools keep their existing names, for example:
+MCP tools keep their existing canonical names, for example:
 
 ```text
 mcp_<server>__<tool>
 ```
 
-Hosted integration tools use their family-native names:
+Hosted integration tools use managed canonical names:
 
 ```text
-qualys_count_assets
-qualys_list_assets
-splunk_search
-msgraph_get
-mde_get
+managed_<family>__<tool>
+managed_qualys__qualys_count_assets
+managed_qualys__qualys_list_assets
+managed_splunk__splunk_search
+managed_msgraph__msgraph_get
+managed_mde__mde_get
 ```
+
+Managed canonical names must be valid model-provider tool/function names. The
+canonical-name helper owns the provider-compatible pattern and length cap. It
+must reject a family/tool pair that cannot be exposed safely instead of
+silently truncating, hashing, aliasing, or rewriting the public tool name.
+Family ids may contain hyphens, native tool names may contain underscores, and
+the `__` separator keeps parsing unambiguous.
+
+The family manifest still owns family-native tool names. The managed prefix is
+added only at the OpenAcme tool registry boundary. Runtime, examples, generation
+metadata, direct Hosted Integrations API calls, async jobs, disablements,
+execution logs, failure buckets, artifacts, and family source keep the
+family-native tool name plus the family id. Agent Settings, model-facing tool
+schemas, and registry dispatch use the managed canonical name.
+
+Registry metadata for a hosted integration tool must carry both names:
+
+```text
+name: managed_splunk__splunk_search
+source.familyId: splunk
+source.toolName: splunk_search
+source.generationId: gen_...
+```
+
+The registry adapter maps the managed canonical name selected by an agent back
+to the family-native `source.toolName` before invoking the Hosted Integration
+Gateway. Policy checks use the managed canonical name for `agent.tools` and the
+family-native name for hosted integration bindings.
+
+Hosted integration management tools remain family-scoped. Their `family_id`,
+`tool_name`, example, debug-run, and failure-bucket parameters use
+family-native tool names, not managed canonical names. The Tool Developer Agent
+skill must teach this distinction explicitly so developer agents do not put
+`managed_<family>__<tool>` names into family manifests, examples, debug runs, or
+bindings.
+
+Remote MCP tools and managed hosted integration tools are independent tool
+surfaces. A remote MCP allowlist entry must not enable a managed tool, and a
+managed allowlist entry must not enable a remote MCP tool. Migration metadata
+may declare that a managed tool replaces a legacy MCP tool, for example:
+
+```text
+managed_splunk__splunk_search replaces mcp_integration-hub__splunk_search
+```
+
+That relationship is operational metadata for UI, parity checks, and cutover
+planning. It is not an authorization alias and must not rewrite agent settings
+or model-facing tool selections implicitly.
 
 The UI should group hosted integration tools separately from built-in tools and
 MCP tools:

@@ -216,7 +216,7 @@ describe("file-based AgentStore (folder + AGENT.md)", () => {
     const store = createAgentStore(dir);
     const agent = {
       ...makeAgent("hosted"),
-      tools: ["qualys_count_assets"],
+      tools: ["managed_qualys__qualys_count_assets"],
       hostedIntegrationBindings: [
         {
           familyId: "qualys",

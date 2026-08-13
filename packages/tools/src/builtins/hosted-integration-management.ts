@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseHostedIntegrationManagedToolName } from "@openacme/hosted-integrations";
 import { registry } from "../registry.js";
 import { getCurrentAgentId } from "../session-context.js";
 
@@ -58,6 +59,10 @@ const JsonObjectParam = z.record(z.string(), z.unknown());
 const OptionalPositiveInteger = z.number().int().positive().nullable().optional();
 const OptionalStringParam = z.string().min(1).nullable().optional();
 const FamilyId = z.string().min(1);
+const NativeToolName = z.string().min(1).refine(
+  (value) => parseHostedIntegrationManagedToolName(value) === null,
+  "must be a family-native hosted integration tool name, not a managed canonical registry name",
+);
 const DraftId = z.string().min(1);
 const LockId = z.string().min(1);
 const GenerationId = z.string().min(1);
@@ -68,7 +73,7 @@ const ExampleParam = z
   .object({
     id: z.string().min(1),
     familyId: FamilyId,
-    toolName: z.string().min(1),
+    toolName: NativeToolName,
     category: z.enum([
       "smoke",
       "live_safe",
@@ -99,7 +104,7 @@ const definitions: Array<{
       .object({
         family_id: FamilyId,
         name: z.string().min(1),
-        tool_name: z.string().min(1),
+        tool_name: NativeToolName,
         ttl_ms: OptionalPositiveInteger,
       })
       .strict(),
@@ -242,7 +247,7 @@ const definitions: Array<{
     parameters: z
       .object({
         family_id: FamilyId,
-        tool_name: z.string().min(1),
+        tool_name: NativeToolName,
         environment: z.string().min(1),
         config_scope_id: z.string().min(1),
         args: JsonObjectParam.default({}),

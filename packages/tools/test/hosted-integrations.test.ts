@@ -16,18 +16,19 @@ describe("hosted integration tool registry adapter", () => {
 
     expect(result).toEqual({
       ok: true,
-      registeredToolNames: ["qualys_count_assets"],
+      registeredToolNames: ["managed_qualys__qualys_count_assets"],
       removedToolNames: [],
     });
     expect(registry.getInfo()).toEqual([
       {
-        name: "qualys_count_assets",
+        name: "managed_qualys__qualys_count_assets",
         description: "Count Qualys assets.",
         toolset: "hosted-integrations",
         source: {
           kind: "hosted_integration",
           familyId: "qualys",
           familyName: "Qualys",
+          toolName: "qualys_count_assets",
           generationId: "gen_1",
         },
       },
@@ -37,7 +38,7 @@ describe("hosted integration tool registry adapter", () => {
   it("rejects collisions with non-hosted tools", () => {
     const registry = new ToolRegistry();
     registry.register({
-      name: "qualys_count_assets",
+      name: "managed_qualys__qualys_count_assets",
       toolset: "filesystem",
       description: "Existing tool.",
       parameters: z.object({}),
@@ -51,10 +52,12 @@ describe("hosted integration tool registry adapter", () => {
     expect(adapter.syncFamily(activeQualysSnapshot("gen_1"))).toEqual({
       ok: false,
       reason: "tool_name_collision",
-      toolName: "qualys_count_assets",
+      toolName: "managed_qualys__qualys_count_assets",
       existingToolset: "filesystem",
     });
-    expect(registry.get("qualys_count_assets")?.toolset).toBe("filesystem");
+    expect(registry.get("managed_qualys__qualys_count_assets")?.toolset).toBe(
+      "filesystem",
+    );
   });
 
   it("refreshes entries while existing generated tool objects keep their generation", async () => {
@@ -71,11 +74,13 @@ describe("hosted integration tool registry adapter", () => {
       },
     });
     expect(adapter.syncFamily(activeQualysSnapshot("gen_1")).ok).toBe(true);
-    const oldTools = registry.getVercelTools(new Set(["qualys_count_assets"]));
+    const oldTools = registry.getVercelTools(
+      new Set(["managed_qualys__qualys_count_assets"]),
+    );
 
     expect(adapter.syncFamily(activeQualysSnapshot("gen_2")).ok).toBe(true);
     const freshTools = registry.getVercelTools(
-      new Set(["qualys_count_assets"]),
+      new Set(["managed_qualys__qualys_count_assets"]),
     );
 
     await toolCallContext.run(
@@ -85,8 +90,8 @@ describe("hosted integration tool registry adapter", () => {
         workspaceDir: "/tmp/openacme-test",
       },
       async () => {
-        await executeTool(oldTools.qualys_count_assets, {});
-        await executeTool(freshTools.qualys_count_assets, {});
+        await executeTool(oldTools.managed_qualys__qualys_count_assets, {});
+        await executeTool(freshTools.managed_qualys__qualys_count_assets, {});
       },
     );
 
@@ -96,7 +101,7 @@ describe("hosted integration tool registry adapter", () => {
     ]);
   });
 
-  it("hides legacy integration-hub MCP tools when hosted replacements exist", () => {
+  it("keeps legacy integration-hub MCP tools independent from managed hosted tools", () => {
     const registry = new ToolRegistry();
     registry.register({
       name: "mcp_integration-hub__qualys_count_assets",
@@ -119,30 +124,55 @@ describe("hosted integration tool registry adapter", () => {
     expect(adapter.syncFamily(activeQualysSnapshot("gen_1")).ok).toBe(true);
 
     expect(registry.getInfo().map((tool) => tool.name)).toEqual([
-      "qualys_count_assets",
+      "managed_qualys__qualys_count_assets",
       "mcp_integration-hub__legacy_only",
       "mcp_integration-hub__qualys_count_assets",
     ]);
-    const cutoverView = { hideLegacyIntegrationHubMcpTools: true };
-    expect(registry.getInfo(cutoverView).map((tool) => tool.name)).toEqual([
-      "qualys_count_assets",
-      "mcp_integration-hub__legacy_only",
-    ]);
-    expect(registry.getToolsets(cutoverView)).toEqual([
+    expect(registry.getToolsets()).toEqual([
       "hosted-integrations",
       "mcp-integration-hub",
     ]);
     expect(
       Object.keys(
-        registry.getVercelTools(
-          new Set([
-            "qualys_count_assets",
-            "mcp_integration-hub__qualys_count_assets",
-          ]),
-          cutoverView,
-        ),
+        registry.getVercelTools(new Set([
+          "managed_qualys__qualys_count_assets",
+          "mcp_integration-hub__qualys_count_assets",
+        ])),
       ),
-    ).toEqual(["qualys_count_assets"]);
+    ).toEqual([
+      "managed_qualys__qualys_count_assets",
+      "mcp_integration-hub__qualys_count_assets",
+    ]);
+  });
+
+  it("removes stale native hosted names during managed-name refresh", () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: "qualys_count_assets",
+      toolset: "hosted-integrations",
+      description: "Previously native hosted tool.",
+      parameters: z.object({}),
+      source: {
+        kind: "hosted_integration",
+        familyId: "qualys",
+        familyName: "Qualys",
+        toolName: "qualys_count_assets",
+        generationId: "gen_0",
+      },
+      handler: async () => "{}",
+    });
+    const adapter = new HostedIntegrationToolRegistryAdapter({
+      registry,
+      invoke: async () => "{}",
+    });
+
+    expect(adapter.syncFamily(activeQualysSnapshot("gen_1"))).toEqual({
+      ok: true,
+      registeredToolNames: ["managed_qualys__qualys_count_assets"],
+      removedToolNames: ["qualys_count_assets"],
+    });
+    expect(registry.get("qualys_count_assets")).toBeUndefined();
+    expect(registry.get("managed_qualys__qualys_count_assets")).toBeDefined();
   });
 });
 

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { buildHostedIntegrationManagedToolName } from "@openacme/hosted-integrations";
 import { startE2EServer, type E2EServer } from "./support/harness.js";
 import { makeClient, waitUntil } from "./support/client.js";
 
@@ -13,6 +14,10 @@ const echoTool = `dogfood_echo_${suffix}`;
 const sumTool = `dogfood_sum_${suffix}`;
 const largeTool = `dogfood_large_${suffix}`;
 const flakyTool = `dogfood_flaky_${suffix}`;
+const managedEchoTool = managedToolName(echoTool);
+const managedSumTool = managedToolName(sumTool);
+const managedLargeTool = managedToolName(largeTool);
+const managedFlakyTool = managedToolName(flakyTool);
 
 let lockId = "";
 let draftId = "";
@@ -249,16 +254,24 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     });
 
     const toolsBody = await c.json("/api/tools");
-    for (const toolName of [echoTool, sumTool, largeTool, flakyTool]) {
+    for (const [nativeToolName, canonicalToolName] of [
+      [echoTool, managedEchoTool],
+      [sumTool, managedSumTool],
+      [largeTool, managedLargeTool],
+      [flakyTool, managedFlakyTool],
+    ] as const) {
       expect(
-        toolsBody.tools.find((tool: { name: string }) => tool.name === toolName),
+        toolsBody.tools.find(
+          (tool: { name: string }) => tool.name === canonicalToolName,
+        ),
       ).toMatchObject({
-        name: toolName,
+        name: canonicalToolName,
         toolset: "hosted-integrations",
         source: {
           kind: "hosted_integration",
           familyId,
           familyName: "Dogfood Tools",
+          toolName: nativeToolName,
           generationId,
         },
       });
@@ -271,9 +284,14 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       flakyTool,
     ]);
 
-    const echo = await chatTool("dogfood-consumer", "use dogfood echo", echoTool, {
-      text: "consumer path",
-    });
+    const echo = await chatTool(
+      "dogfood-consumer",
+      "use dogfood echo",
+      managedEchoTool,
+      {
+        text: "consumer path",
+      },
+    );
     expect(echo).toMatchObject({
       ok: true,
       replayed: false,
@@ -284,7 +302,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     const large = await chatTool(
       "dogfood-consumer",
       "use dogfood large response",
-      largeTool,
+      managedLargeTool,
       { repeat: 150 },
     );
     expect(large).toMatchObject({
@@ -338,14 +356,14 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     await c.createAgent("dogfood-denied", "Dogfood Denied", {
       role: "Attempts hosted integration use without a binding.",
       persona: "Try to use the hosted integration.",
-      tools: [echoTool],
+      tools: [managedEchoTool],
       hostedIntegrationBindings: [],
     });
 
     const denied = await chatTool(
       "dogfood-denied",
       "attempt dogfood echo without binding",
-      echoTool,
+      managedEchoTool,
       { text: "should not run" },
     );
     expect(denied).toMatchObject({
@@ -358,7 +376,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     const failed = await chatTool(
       "dogfood-consumer",
       "trigger the dogfood flaky failure",
-      flakyTool,
+      managedFlakyTool,
       { mode: "fail" },
     );
     expect(failed).toMatchObject({
@@ -648,7 +666,7 @@ async function createConsumerAgent(id: string, tools: string[]): Promise<void> {
   await c.createAgent(id, id, {
     role: "Consumes dogfood hosted integrations.",
     persona: "Use hosted integrations when asked.",
-    tools,
+    tools: tools.map(managedToolName),
     hostedIntegrationBindings: tools.map((toolName) => ({
       familyId,
       toolName,
@@ -657,6 +675,10 @@ async function createConsumerAgent(id: string, tools: string[]): Promise<void> {
       environment: "test",
     })),
   });
+}
+
+function managedToolName(toolName: string): string {
+  return buildHostedIntegrationManagedToolName({ familyId, toolName });
 }
 
 async function configureScope(): Promise<void> {

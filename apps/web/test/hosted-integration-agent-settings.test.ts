@@ -12,13 +12,14 @@ import {
 import type { ToolInfo } from "@/app/lib/types";
 
 const hostedTool: ToolInfo = {
-  name: "qualys_count_assets",
+  name: "managed_qualys__qualys_count_assets",
   description: "Count assets.",
   toolset: "hosted-integrations",
   source: {
     kind: "hosted_integration",
     familyId: "qualys",
     familyName: "Qualys",
+    toolName: "qualys_count_assets",
     generationId: "gen_1",
   },
 };
@@ -127,7 +128,7 @@ describe("hosted integration agent settings helpers", () => {
     expect(
       selectedHostedIntegrationBindings(
         bindings,
-        ["read_file", "qualys_count_assets"],
+        ["read_file", "managed_qualys__qualys_count_assets"],
         [builtinTool, hostedTool],
       ),
     ).toEqual([bindings[0]]);

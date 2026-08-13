@@ -74,6 +74,16 @@ export {
   type JsonObject,
   type JsonValue,
 } from "./schemas.js";
+export {
+  buildHostedIntegrationManagedToolName,
+  parseHostedIntegrationManagedToolName,
+  HostedIntegrationManagedToolNameSchema,
+  HOSTED_INTEGRATION_MANAGED_TOOL_NAME_MAX_LENGTH,
+  HOSTED_INTEGRATION_MANAGED_TOOL_PREFIX,
+  HOSTED_INTEGRATION_MANAGED_TOOL_SEPARATOR,
+  type HostedIntegrationManagedToolName,
+  type HostedIntegrationManagedToolNameParts,
+} from "./naming.js";
 export { resolveHostedIntegrationCachePath } from "./cache.js";
 export {
   createFileHostedIntegrationJobStore,

@@ -39,6 +39,11 @@ Classify the request before editing:
 - Use hosted integration management tools instead of generic filesystem access.
 - Work at the tool-family level. A family is the unit of source, shared helper
   code, manifest, runtime settings, examples, generations, and workspace home.
+- Keep native and managed tool names separate. Family manifests, examples,
+  debug runs, failure buckets, and all `hosted_integration_*` management-tool
+  `tool_name` parameters use the family-native name such as `splunk_search`.
+  Agent Settings and model-facing invocation tools use the managed canonical
+  registry name such as `managed_splunk__splunk_search`.
 - Acquire a family lock before editing. Respect the lock owner and lock TTL; if
   a lock is held by another actor, stop and report the holder and expiry.
 - Do not read, request, or return secret values. Human operators own secret

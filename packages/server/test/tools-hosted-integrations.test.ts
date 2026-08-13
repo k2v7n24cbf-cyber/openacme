@@ -16,6 +16,7 @@ import { createApp } from "../src/app.js";
 
 let dataDir: string | null = null;
 let closeApp: (() => Promise<void>) | null = null;
+const MANAGED_QUALYS_COUNT_ASSETS = "managed_qualys__qualys_count_assets";
 
 afterEach(async () => {
   await closeApp?.();
@@ -94,14 +95,15 @@ describe("/api/tools hosted integration surfacing", () => {
     };
     expect(body.toolsets).toContain("hosted-integrations");
     expect(
-      body.tools.find((tool) => tool.name === "qualys_count_assets"),
+      body.tools.find((tool) => tool.name === MANAGED_QUALYS_COUNT_ASSETS),
     ).toMatchObject({
-      name: "qualys_count_assets",
+      name: MANAGED_QUALYS_COUNT_ASSETS,
       toolset: "hosted-integrations",
       source: {
         kind: "hosted_integration",
         familyId: "qualys",
         familyName: "Qualys",
+        toolName: "qualys_count_assets",
         generationId: "gen_1",
       },
     });
@@ -109,7 +111,7 @@ describe("/api/tools hosted integration surfacing", () => {
       body.tools.some(
         (tool) => tool.name === "mcp_integration-hub__qualys_count_assets",
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("invokes selected hosted integration tools through the gateway using the agent default config scope", async () => {
@@ -160,7 +162,7 @@ describe("/api/tools hosted integration surfacing", () => {
         role: "",
         model: { provider: "anthropic", model: "claude-sonnet-4-6" },
         persona: "Use hosted integrations.",
-        tools: ["qualys_count_assets"],
+        tools: [MANAGED_QUALYS_COUNT_ASSETS],
         hostedIntegrationBindings: [
           {
             familyId: "qualys",
@@ -174,7 +176,7 @@ describe("/api/tools hosted integration surfacing", () => {
     );
 
     const tools = toolRegistry.getVercelTools(
-      new Set(["qualys_count_assets"]),
+      new Set([MANAGED_QUALYS_COUNT_ASSETS]),
     ) as Record<
       string,
       { execute: (args: Record<string, unknown>) => Promise<string> }
@@ -185,7 +187,7 @@ describe("/api/tools hosted integration surfacing", () => {
         sessionId: "session_1",
         workspaceDir: path.join(dataDir, "agents", "analyst", "workspace"),
       },
-      () => tools.qualys_count_assets!.execute({}),
+      () => tools[MANAGED_QUALYS_COUNT_ASSETS]!.execute({}),
     );
 
     const parsed = JSON.parse(output);
@@ -223,15 +225,49 @@ describe("/api/tools hosted integration surfacing", () => {
         ],
       }),
     );
+    await manager.createAgent(
+      AgentDefinitionSchema.parse({
+        id: "mcp-only",
+        name: "MCP Only",
+        role: "",
+        model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+        persona: "Only has the legacy MCP surface.",
+        tools: ["mcp_integration-hub__qualys_count_assets"],
+        hostedIntegrationBindings: [
+          {
+            familyId: "qualys",
+            toolName: "qualys_count_assets",
+            allowedConfigScopeIds: ["qualys-prod"],
+            defaultConfigScopeId: "qualys-prod",
+            environment: "prod",
+          },
+        ],
+      }),
+    );
     const deniedOutput = await toolCallContext.run(
       {
         agentId: "blocked",
         sessionId: "session_2",
         workspaceDir: path.join(dataDir, "agents", "blocked", "workspace"),
       },
-      () => tools.qualys_count_assets!.execute({}),
+      () => tools[MANAGED_QUALYS_COUNT_ASSETS]!.execute({}),
     );
     expect(JSON.parse(deniedOutput)).toMatchObject({
+      ok: false,
+      error: {
+        code: "policy_denied",
+        message: "hosted integration tool is not enabled for agent",
+      },
+    });
+    const mcpOnlyOutput = await toolCallContext.run(
+      {
+        agentId: "mcp-only",
+        sessionId: "session_3",
+        workspaceDir: path.join(dataDir, "agents", "mcp-only", "workspace"),
+      },
+      () => tools[MANAGED_QUALYS_COUNT_ASSETS]!.execute({}),
+    );
+    expect(JSON.parse(mcpOnlyOutput)).toMatchObject({
       ok: false,
       error: {
         code: "policy_denied",
@@ -295,7 +331,7 @@ describe("/api/tools hosted integration surfacing", () => {
         role: "",
         model: { provider: "anthropic", model: "claude-sonnet-4-6" },
         persona: "Use hosted integrations.",
-        tools: ["qualys_count_assets"],
+        tools: [MANAGED_QUALYS_COUNT_ASSETS],
         hostedIntegrationBindings: [
           {
             familyId: "qualys",
@@ -309,7 +345,7 @@ describe("/api/tools hosted integration surfacing", () => {
     );
 
     const tools = toolRegistry.getVercelTools(
-      new Set(["qualys_count_assets"]),
+      new Set([MANAGED_QUALYS_COUNT_ASSETS]),
     ) as Record<
       string,
       { execute: (args: Record<string, unknown>) => Promise<string> }
@@ -320,7 +356,7 @@ describe("/api/tools hosted integration surfacing", () => {
         sessionId: "session_1",
         workspaceDir: path.join(dataDir, "agents", "analyst", "workspace"),
       },
-      () => tools.qualys_count_assets!.execute({}),
+      () => tools[MANAGED_QUALYS_COUNT_ASSETS]!.execute({}),
     );
 
     expect(JSON.parse(output)).toEqual({
@@ -328,6 +364,7 @@ describe("/api/tools hosted integration surfacing", () => {
       error: { code: "tool_failed", message: "tool failed" },
       familyId: "qualys",
       toolName: "qualys_count_assets",
+      canonicalToolName: MANAGED_QUALYS_COUNT_ASSETS,
       generationId: "gen_1",
     });
     expect(output).not.toContain("bucket");
@@ -424,6 +461,7 @@ describe("/api/tools hosted integration surfacing", () => {
     const { manager, close } = await createApp(config);
     closeApp = close;
     const managementToolNames = [
+      "hosted_integration_family_create",
       "hosted_integration_lock_acquire",
       "hosted_integration_draft_create",
       "hosted_integration_draft_patch",
@@ -464,6 +502,21 @@ describe("/api/tools hosted integration surfacing", () => {
           () => tools[name]!.execute(args),
         ),
       );
+
+    await expect(
+      call("hosted_integration_family_create", {
+        family_id: "bad-family",
+        name: "Bad Family",
+        tool_name: "managed_qualys__qualys_count_assets",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "runtime_error",
+        message:
+          "tool_name must be a family-native hosted integration tool name, not a managed canonical registry name",
+      },
+    });
 
     const lock = await call("hosted_integration_lock_acquire", {
       family_id: "qualys",
@@ -528,11 +581,13 @@ describe("/api/tools hosted integration surfacing", () => {
     });
 
     expect(
-      toolRegistry.getInfo().find((tool) => tool.name === "qualys_count_assets")
-        ?.source,
+      toolRegistry
+        .getInfo()
+        .find((tool) => tool.name === MANAGED_QUALYS_COUNT_ASSETS)?.source,
     ).toMatchObject({
       kind: "hosted_integration",
       familyId: "qualys",
+      toolName: "qualys_count_assets",
       generationId: promoted.generation.id,
     });
   });

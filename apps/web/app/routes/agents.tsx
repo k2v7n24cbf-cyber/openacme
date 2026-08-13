@@ -69,6 +69,7 @@ import { cn } from "@/app/lib/utils";
 import {
   buildAgentSettingsHostedIntegrationBinding,
   groupAgentSettingsTools,
+  hostedIntegrationNativeToolName,
   hostedIntegrationScopesForTool,
   isHostedIntegrationTool,
   removeHostedIntegrationBinding,
@@ -2736,7 +2737,7 @@ function HostedIntegrationBindingsEditor({
           const binding = bindings.find(
             (candidate) =>
               candidate.familyId === tool.source?.familyId &&
-              candidate.toolName === tool.name,
+              candidate.toolName === hostedIntegrationNativeToolName(tool),
           );
           const value = binding?.defaultConfigScopeId ?? scopes[0]?.id ?? "";
           return (

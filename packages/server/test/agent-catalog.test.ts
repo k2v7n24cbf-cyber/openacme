@@ -276,6 +276,12 @@ describe("AgentManager.ensureManagedAgents", () => {
     expect(hostedIntegrationSkill?.body).toContain("regression example");
     expect(hostedIntegrationSkill?.body).toContain("debug run");
     expect(hostedIntegrationSkill?.body).toContain(
+      "family-native name such as `splunk_search`",
+    );
+    expect(hostedIntegrationSkill?.body).toContain(
+      "managed_splunk__splunk_search",
+    );
+    expect(hostedIntegrationSkill?.body).toContain(
       "Do not read, request, or return secret values",
     );
 

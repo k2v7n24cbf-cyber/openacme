@@ -42,6 +42,7 @@
     "@openacme/db": "workspace:*",
     "@openacme/browser": "workspace:*",
     "@openacme/email": "workspace:*",
+    "@openacme/hosted-integrations": "workspace:*",
     "@openacme/memory": "workspace:*",
     "@openacme/tasks": "workspace:*",
     "jimp": "^1.6.0",

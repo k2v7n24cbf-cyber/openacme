@@ -23,6 +23,12 @@ export function isHostedIntegrationTool(tool: ToolInfo): boolean {
   return tool.source?.kind === "hosted_integration";
 }
 
+export function hostedIntegrationNativeToolName(tool: ToolInfo): string | null {
+  return tool.source?.kind === "hosted_integration"
+    ? tool.source.toolName
+    : null;
+}
+
 export function agentSettingsToolGroupLabel(tool: ToolInfo): string {
   if (isHostedIntegrationTool(tool)) {
     return `Hosted Integrations / ${tool.source?.familyName ?? tool.toolset}`;
@@ -65,7 +71,8 @@ export function buildAgentSettingsHostedIntegrationBinding(input: {
   defaultConfigScopeId?: string;
 }): AgentHostedIntegrationBinding | null {
   const familyId = input.tool.source?.familyId;
-  if (!familyId) return null;
+  const toolName = hostedIntegrationNativeToolName(input.tool);
+  if (!familyId || !toolName) return null;
   const scopes = hostedIntegrationScopesForTool(input.tool, input.configScopes);
   const defaultScope =
     scopes.find((scope) => scope.id === input.defaultConfigScopeId) ??
@@ -76,7 +83,7 @@ export function buildAgentSettingsHostedIntegrationBinding(input: {
     .map((scope) => scope.id);
   return {
     familyId,
-    toolName: input.tool.name,
+    toolName,
     allowedConfigScopeIds,
     defaultConfigScopeId: defaultScope.id,
     environment: defaultScope.environment,
@@ -105,10 +112,11 @@ export function removeHostedIntegrationBinding(
   tool: ToolInfo,
 ): AgentHostedIntegrationBinding[] {
   const familyId = tool.source?.familyId;
-  if (!familyId) return bindings;
+  const toolName = hostedIntegrationNativeToolName(tool);
+  if (!familyId || !toolName) return bindings;
   return bindings.filter(
     (binding) =>
-      binding.familyId !== familyId || binding.toolName !== tool.name,
+      binding.familyId !== familyId || binding.toolName !== toolName,
   );
 }
 
@@ -121,7 +129,7 @@ export function selectedHostedIntegrationBindings(
   const hostedToolKeys = new Set(
     tools
       .filter((tool) => selected.has(tool.name) && isHostedIntegrationTool(tool))
-      .map((tool) => `${tool.source?.familyId}:${tool.name}`),
+      .map((tool) => `${tool.source?.familyId}:${hostedIntegrationNativeToolName(tool)}`),
   );
   return bindings.filter((binding) =>
     hostedToolKeys.has(`${binding.familyId}:${binding.toolName}`),

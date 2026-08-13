@@ -166,6 +166,38 @@ async function runDogfood(): Promise<void> {
       );
     }
 
+    const source = await askForTool(
+      "tool-developer",
+      promptForTool("hosted_integration_source_read", {
+        family_id: null,
+        draft_id: draftId,
+        path: "family.yaml",
+      }),
+      "hosted_integration_source_read",
+    );
+    expectObject(source, { ok: true, path: "family.yaml" });
+    assertIncludes(source, "content", `id: ${familyId}`);
+
+    const draft = await askForTool(
+      "tool-developer",
+      promptForTool("hosted_integration_draft_get", {
+        draft_id: draftId,
+        path: null,
+      }),
+      "hosted_integration_draft_get",
+    );
+    expectObject(draft, { ok: true, draft: { id: draftId, familyId } });
+
+    const listedExamples = await askForTool(
+      "tool-developer",
+      promptForTool("hosted_integration_example_list", {
+        draft_id: draftId,
+      }),
+      "hosted_integration_example_list",
+    );
+    assertJsonIncludes(listedExamples, "echo_smoke");
+    assertJsonIncludes(listedExamples, "flaky_smoke");
+
     await expectOk(
       askForTool(
         "tool-developer",
@@ -213,6 +245,25 @@ async function runDogfood(): Promise<void> {
 
   await scenario("consumer-agent-invokes-promoted-tools", async () => {
     await configureScope();
+    const configScopes = await askForTool(
+      "tool-developer",
+      promptForTool("hosted_integration_config_scope_list", {}),
+      "hosted_integration_config_scope_list",
+    );
+    assertJsonIncludes(configScopes, scopeId);
+
+    const configScope = await askForTool(
+      "tool-developer",
+      promptForTool("hosted_integration_config_scope_get", {
+        scope_id: scopeId,
+      }),
+      "hosted_integration_config_scope_get",
+    );
+    expectObject(configScope, {
+      ok: true,
+      configScope: { id: scopeId, familyId, environment: "test" },
+    });
+
     await createConsumerAgent(consumerId, [echoTool, largeTool, flakyTool]);
 
     const echo = await askForTool(
@@ -247,6 +298,34 @@ async function runDogfood(): Promise<void> {
     if (JSON.stringify(large.envelope).includes("REAL-DOGFOOD-LARGE-")) {
       throw new Error("large response did not spill to an artifact");
     }
+    const largeRunId = stringField(large, "envelope.result_ref.run_id");
+
+    const run = await askForTool(
+      "tool-developer",
+      promptForTool("hosted_integration_run_get", { run_id: largeRunId }),
+      "hosted_integration_run_get",
+    );
+    expectObject(run, {
+      ok: true,
+      run: {
+        runId: largeRunId,
+        familyId,
+        toolName: largeTool,
+        actorId: consumerId,
+        status: "succeeded",
+      },
+    });
+
+    const artifact = await askForTool(
+      "tool-developer",
+      promptForTool("hosted_integration_artifact_get", {
+        run_id: largeRunId,
+        name: "output.json",
+      }),
+      "hosted_integration_artifact_get",
+    );
+    expectObject(artifact, { ok: true, runId: largeRunId, name: "output.json" });
+    assertIncludes(artifact, "content", "REAL-DOGFOOD-LARGE-");
   });
 
   await scenario("agent-settings-access-policy-denies-unbound-agent", async () => {
@@ -329,6 +408,17 @@ async function runDogfood(): Promise<void> {
     );
     const repairLockId = stringField(repairLock, "lock.id");
 
+    await expectOk(
+      askForTool(
+        "tool-developer",
+        promptForTool("hosted_integration_lock_renew", {
+          lock_id: repairLockId,
+          ttl_ms: editLockTtlMs,
+        }),
+        "hosted_integration_lock_renew",
+      ),
+    );
+
     const repairDraft = await askForTool(
       "tool-developer",
       [
@@ -342,6 +432,30 @@ async function runDogfood(): Promise<void> {
       "hosted_integration_draft_create",
     );
     const repairDraftId = stringField(repairDraft, "draft.id");
+
+    await expectOk(
+      askForTool(
+        "tool-developer",
+        promptForTool("hosted_integration_draft_patch", {
+          draft_id: repairDraftId,
+          lock_id: repairLockId,
+          path: "scratch.txt",
+          content: "temporary repair note\n",
+        }),
+        "hosted_integration_draft_patch",
+      ),
+    );
+    await expectOk(
+      askForTool(
+        "tool-developer",
+        promptForTool("hosted_integration_draft_delete", {
+          draft_id: repairDraftId,
+          lock_id: repairLockId,
+          path: "scratch.txt",
+        }),
+        "hosted_integration_draft_delete",
+      ),
+    );
 
     await expectOk(
       askForTool(
@@ -434,6 +548,40 @@ async function runDogfood(): Promise<void> {
     expectObject(closed, {
       ok: true,
       bucket: { id: failureBucketId, status: "closed" },
+    });
+
+    const generations = await askForTool(
+      "tool-developer",
+      promptForTool("hosted_integration_generation_list", {
+        family_id: familyId,
+      }),
+      "hosted_integration_generation_list",
+    );
+    assertJsonIncludes(generations, generationId);
+    assertJsonIncludes(generations, repairGenerationId);
+
+    const generation = await askForTool(
+      "tool-developer",
+      promptForTool("hosted_integration_generation_get", {
+        generation_id: repairGenerationId,
+      }),
+      "hosted_integration_generation_get",
+    );
+    expectObject(generation, {
+      ok: true,
+      generation: { id: repairGenerationId, familyId },
+    });
+
+    const rollback = await askForTool(
+      "tool-developer",
+      promptForTool("hosted_integration_generation_rollback", {
+        generation_id: generationId,
+      }),
+      "hosted_integration_generation_rollback",
+    );
+    expectObject(rollback, {
+      ok: true,
+      activeGeneration: { id: generationId, familyId, status: "active" },
     });
   });
 }
@@ -635,6 +783,25 @@ function expectObject(
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function assertIncludes(
+  value: Record<string, unknown>,
+  field: string,
+  expected: string,
+): void {
+  const actual = value[field];
+  if (typeof actual !== "string" || !actual.includes(expected)) {
+    throw new Error(
+      `expected ${field} to include ${JSON.stringify(expected)}: ${JSON.stringify(value)}`,
+    );
+  }
+}
+
+function assertJsonIncludes(value: unknown, expected: string): void {
+  if (!JSON.stringify(value).includes(expected)) {
+    throw new Error(`expected JSON to include ${expected}: ${JSON.stringify(value)}`);
+  }
 }
 
 function stringField(value: Record<string, unknown>, dottedPath: string): string {

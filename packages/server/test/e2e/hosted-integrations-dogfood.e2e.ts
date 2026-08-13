@@ -142,6 +142,46 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     await expect(
       chatTool(
         "tool-developer",
+        "inspect dogfood draft source",
+        "hosted_integration_source_read",
+        { draft_id: draftId, path: "family.yaml" },
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      path: "family.yaml",
+      content: expect.stringContaining(`id: ${familyId}`),
+    });
+
+    await expect(
+      chatTool(
+        "tool-developer",
+        "inspect dogfood draft metadata",
+        "hosted_integration_draft_get",
+        { draft_id: draftId },
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      draft: { id: draftId, familyId },
+    });
+
+    await expect(
+      chatTool(
+        "tool-developer",
+        "list dogfood draft examples",
+        "hosted_integration_example_list",
+        { draft_id: draftId },
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      examples: expect.arrayContaining([
+        expect.objectContaining({ id: "echo_smoke", toolName: echoTool }),
+        expect.objectContaining({ id: "flaky_smoke", toolName: flakyTool }),
+      ]),
+    });
+
+    await expect(
+      chatTool(
+        "tool-developer",
         "validate the dogfood draft",
         "hosted_integration_validate",
         { draft_id: draftId },
@@ -183,6 +223,31 @@ describe("hosted integrations agent dogfood (e2e)", () => {
 
   it("surfaces promoted tools and lets a consumer agent invoke them through chat", async () => {
     await configureScope();
+    await expect(
+      chatTool(
+        "tool-developer",
+        "list dogfood config scopes",
+        "hosted_integration_config_scope_list",
+        {},
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      configScopes: expect.arrayContaining([
+        expect.objectContaining({ id: scopeId, familyId, environment: "test" }),
+      ]),
+    });
+    await expect(
+      chatTool(
+        "tool-developer",
+        "inspect dogfood config scope",
+        "hosted_integration_config_scope_get",
+        { scope_id: scopeId },
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      configScope: { id: scopeId, familyId, environment: "test" },
+    });
+
     const toolsBody = await c.json("/api/tools");
     for (const toolName of [echoTool, sumTool, largeTool, flakyTool]) {
       expect(
@@ -235,6 +300,38 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       },
     });
     expect(JSON.stringify(large.envelope)).not.toContain("DOGFOOD-LARGE-");
+    const largeRunId = stringField(large, "envelope.result_ref.run_id");
+
+    await expect(
+      chatTool(
+        "tool-developer",
+        "inspect dogfood large run",
+        "hosted_integration_run_get",
+        { run_id: largeRunId },
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      run: {
+        runId: largeRunId,
+        familyId,
+        toolName: largeTool,
+        actorId: "dogfood-consumer",
+        status: "succeeded",
+      },
+    });
+
+    const artifact = await chatTool(
+      "tool-developer",
+      "read dogfood large artifact",
+      "hosted_integration_artifact_get",
+      { run_id: largeRunId, name: "output.json" },
+    );
+    expect(artifact).toMatchObject({
+      ok: true,
+      runId: largeRunId,
+      name: "output.json",
+    });
+    expect(String(artifact.content)).toContain("DOGFOOD-LARGE-");
   });
 
   it("enforces hosted integration access from Agent Settings bindings", async () => {
@@ -318,6 +415,18 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     expect(repairLock).toMatchObject({ ok: true, lock: { familyId } });
     const repairLockId = stringField(repairLock, "lock.id");
 
+    await expect(
+      chatTool(
+        "tool-developer",
+        "renew dogfood repair lock",
+        "hosted_integration_lock_renew",
+        { lock_id: repairLockId, ttl_ms: 180_000 },
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      lock: { id: repairLockId, familyId },
+    });
+
     const repairDraft = await chatTool(
       "tool-developer",
       "create dogfood repair draft",
@@ -326,6 +435,29 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     );
     expect(repairDraft).toMatchObject({ ok: true, draft: { familyId } });
     const repairDraftId = stringField(repairDraft, "draft.id");
+
+    await expect(
+      chatTool(
+        "tool-developer",
+        "patch temporary dogfood repair note",
+        "hosted_integration_draft_patch",
+        {
+          draft_id: repairDraftId,
+          lock_id: repairLockId,
+          path: "scratch.txt",
+          content: "temporary repair note\n",
+        },
+      ),
+    ).resolves.toMatchObject({ ok: true });
+
+    await expect(
+      chatTool(
+        "tool-developer",
+        "delete temporary dogfood repair note",
+        "hosted_integration_draft_delete",
+        { draft_id: repairDraftId, lock_id: repairLockId, path: "scratch.txt" },
+      ),
+    ).resolves.toMatchObject({ ok: true });
 
     await expect(
       chatTool(
@@ -420,6 +552,45 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     ).resolves.toMatchObject({
       ok: true,
       bucket: { id: failureBucketId, status: "closed" },
+    });
+
+    await expect(
+      chatTool(
+        "tool-developer",
+        "list dogfood generations",
+        "hosted_integration_generation_list",
+        { family_id: familyId },
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      generations: expect.arrayContaining([
+        expect.objectContaining({ id: generationId, familyId }),
+        expect.objectContaining({ id: repairGenerationId, familyId }),
+      ]),
+    });
+
+    await expect(
+      chatTool(
+        "tool-developer",
+        "inspect repaired dogfood generation",
+        "hosted_integration_generation_get",
+        { generation_id: repairGenerationId },
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      generation: { id: repairGenerationId, familyId },
+    });
+
+    await expect(
+      chatTool(
+        "tool-developer",
+        "rollback dogfood family to original generation",
+        "hosted_integration_generation_rollback",
+        { generation_id: generationId },
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      activeGeneration: { id: generationId, familyId, status: "active" },
     });
   });
 });

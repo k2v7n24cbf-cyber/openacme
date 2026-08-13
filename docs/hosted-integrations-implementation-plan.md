@@ -64,6 +64,11 @@ Evidence:
 - Proves Tool Developer can create a new hosted integration family, patch
   source, register safe examples, validate, run an example, promote, and release
   the lock through `hosted_integration_*` management tools reached from chat.
+- Proves Tool Developer can inspect lifecycle state through management tools:
+  source files, draft metadata, registered examples, config scopes, execution
+  logs, artifacts, generations, and generation rollback.
+- Proves lock renewal and draft file deletion are covered through the same
+  chat-driven lifecycle path before repair promotion.
 - Proves promoted hosted integration tools surface through `/api/tools` and can
   be invoked by a separate consumer agent through Agent Settings
   `hostedIntegrationBindings`.

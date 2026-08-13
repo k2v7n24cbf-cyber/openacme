@@ -15,6 +15,8 @@ import {
   createFileHostedIntegrationSecretStore,
   EXPECTED_LEGACY_INTEGRATION_HUB_TOOL_NAMES,
   FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY,
+  LEGACY_INTEGRATION_HUB_FIVE_READONLY_SYNC_TOOL_NAMES,
+  LEGACY_INTEGRATION_HUB_FIVE_READONLY_TOOL_SYNC_FAMILY,
   LEGACY_INTEGRATION_HUB_INCIDENT_SOURCE,
   LEGACY_INTEGRATION_HUB_INVENTORY,
   LEGACY_INTEGRATION_HUB_MIGRATED_SECURITY_FAMILIES,
@@ -254,6 +256,73 @@ describe("legacy integration-hub first migrated family", () => {
 });
 
 describe("legacy integration-hub migrated security families", () => {
+  it("syncs a five-tool read-only Qualys pilot as managed hosted tools", async () => {
+    const fixture = LEGACY_INTEGRATION_HUB_FIVE_READONLY_TOOL_SYNC_FAMILY;
+    expect(fixture.familyId).toBe("qualys");
+    expect(fixture.migratedToolNames).toEqual([
+      ...LEGACY_INTEGRATION_HUB_FIVE_READONLY_SYNC_TOOL_NAMES,
+    ]);
+    expect(fixture.managedToolNames).toEqual(
+      fixture.migratedToolNames.map(
+        (toolName) => `managed_qualys__${toolName}`,
+      ),
+    );
+    expect(fixture.legacyMcpToolNames).toEqual(
+      fixture.migratedToolNames.map(
+        (toolName) => `mcp_integration-hub__${toolName}`,
+      ),
+    );
+    expect(fixture.examples.map((example) => example.toolName)).toEqual(
+      fixture.migratedToolNames,
+    );
+
+    await seedMigratedSourceFamily(fixture);
+    const { draftId, lockId } = await createMigratedDraft(fixture);
+    await registerMigratedExamples(draftId, lockId, fixture);
+    const validation = await createFileHostedIntegrationDraftValidator({
+      draftStore: createDraftStore(fixture),
+      catalog: createFileHostedIntegrationCatalog({ dataDir }),
+    }).validateDraft(draftId);
+    expect(validation).toEqual({ ok: true, diagnostics: [] });
+
+    const generation = await promoteDraft(draftId, validation, fixture);
+    expect(generation.tools?.map((tool) => tool.name)).toEqual(
+      fixture.migratedToolNames,
+    );
+
+    await seedQualysConfig();
+    const gateway = createGateway();
+    for (const example of fixture.examples) {
+      const result = await gateway.invoke({
+        actor: migrationActor,
+        familyId: "qualys",
+        toolName: example.toolName,
+        generationId: generation.id,
+        environment: "test",
+        args: example.args,
+        bindings: [
+          {
+            agentId: migrationActor.id,
+            familyId: "qualys",
+            toolName: example.toolName,
+            allowedConfigScopeIds: ["qualys-test"],
+            defaultConfigScopeId: "qualys-test",
+            environment: "test",
+          },
+        ],
+      });
+      if (!result.ok) throw new Error(JSON.stringify(result));
+      expect(result.envelope).toMatchObject({
+        ok: true,
+        result: {
+          migrated: true,
+          tool: example.toolName,
+          uses_explicit_cache: false,
+        },
+      });
+    }
+  }, 30_000);
+
   it("validates and promotes every migrated security family fixture", async () => {
     expect(
       LEGACY_INTEGRATION_HUB_MIGRATED_SECURITY_FAMILIES.map(
@@ -443,6 +512,27 @@ async function seedSplunkConfig(): Promise<void> {
   }).writeHumanOwnedSecrets({
     scopeId: "splunk-test",
     secrets: { token: "raw-token-secret" },
+    updatedBy: "human:operator",
+  });
+}
+
+async function seedQualysConfig(): Promise<void> {
+  await createFileHostedIntegrationConfigScopeStore({
+    dataDir,
+    now: () => new Date(nowMs),
+  }).upsertConfigScope({
+    scopeId: "qualys-test",
+    familyId: "qualys",
+    environment: "test",
+    config: { endpoint: "https://qualys.example.test" },
+    secrets: { apiToken: { configured: true } },
+    updatedBy: "human:operator",
+  });
+  await createFileHostedIntegrationSecretStore({
+    dataDir,
+  }).writeHumanOwnedSecrets({
+    scopeId: "qualys-test",
+    secrets: { apiToken: "raw-token-secret" },
     updatedBy: "human:operator",
   });
 }

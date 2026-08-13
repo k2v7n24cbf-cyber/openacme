@@ -143,6 +143,14 @@ const QUALYS_TOOL_NAMES = [
   "qualys_vmdr_virtual_host_list",
 ] as const;
 
+export const LEGACY_INTEGRATION_HUB_FIVE_READONLY_SYNC_TOOL_NAMES = [
+  "qualys_gav_asset_count",
+  "qualys_gav_asset_search",
+  "qualys_cloud_agent_hostasset_count",
+  "qualys_cloud_agent_hostasset_search",
+  "qualys_vmdr_host_list",
+] as const;
+
 export const EXPECTED_LEGACY_INTEGRATION_HUB_TOOL_NAMES = [
   ...QUALYS_TOOL_NAMES,
   "splunk_search",
@@ -267,6 +275,12 @@ export const LEGACY_INTEGRATION_HUB_MIGRATED_SECURITY_FAMILIES: LegacyIntegratio
       "defender_alert.py",
     ),
   ];
+
+export const LEGACY_INTEGRATION_HUB_FIVE_READONLY_TOOL_SYNC_FAMILY: LegacyIntegrationHubMigratedFamilyFixture =
+  buildMigratedFamilyFixture("qualys", "Qualys", "qualys.py", {
+    toolNames: LEGACY_INTEGRATION_HUB_FIVE_READONLY_SYNC_TOOL_NAMES,
+    examplesForEveryTool: true,
+  });
 
 export function validateLegacyIntegrationHubMigrationInventory(
   inventory: LegacyIntegrationHubInventory,
@@ -398,17 +412,44 @@ function buildMigratedFamilyFixture(
   familyId: string,
   familyName: string,
   entrypoint: string,
+  options: {
+    toolNames?: readonly string[];
+    examplesForEveryTool?: boolean;
+  } = {},
 ): LegacyIntegrationHubMigratedFamilyFixture {
   const familyEntry = LEGACY_INTEGRATION_HUB_INVENTORY.families.find(
     (candidate) => candidate.familyId === familyId,
   );
   if (!familyEntry) throw new Error(`missing migration family: ${familyId}`);
+  const selectedToolNames = options.toolNames
+    ? new Set(options.toolNames)
+    : null;
   const tools = LEGACY_INTEGRATION_HUB_INVENTORY.tools.filter(
-    (entry) => entry.familyId === familyId,
+    (entry) =>
+      entry.familyId === familyId &&
+      (!selectedToolNames || selectedToolNames.has(entry.hostedToolName)),
   );
   if (tools.length === 0) {
     throw new Error(`missing migration tools for family: ${familyId}`);
   }
+  if (selectedToolNames && tools.length !== selectedToolNames.size) {
+    const found = new Set(tools.map((entry) => entry.hostedToolName));
+    const missing = [...selectedToolNames].filter((toolName) => !found.has(toolName));
+    throw new Error(
+      `missing migration tools for family ${familyId}: ${missing.join(", ")}`,
+    );
+  }
+  if (options.toolNames) {
+    const order = new Map(
+      options.toolNames.map((toolName, index) => [toolName, index]),
+    );
+    tools.sort(
+      (left, right) =>
+        (order.get(left.hostedToolName) ?? Number.MAX_SAFE_INTEGER) -
+        (order.get(right.hostedToolName) ?? Number.MAX_SAFE_INTEGER),
+    );
+  }
+  const exampleTools = options.examplesForEveryTool ? tools : [tools[0]!];
   return {
     familyId,
     familyName,
@@ -428,19 +469,17 @@ function buildMigratedFamilyFixture(
       "family.yaml": generatedFamilyYaml(familyId, familyName, entrypoint, tools),
       [entrypoint]: generatedPythonSource(tools),
     },
-    examples: [
-      {
-        id: `${familyId.replaceAll("-", "_")}_migration_smoke`,
-        familyId,
-        toolName: tools[0]!.hostedToolName,
-        category: "mock_only",
-        args: {},
-        expected: {
-          migrated: true,
-          tool: tools[0]!.hostedToolName,
-        },
+    examples: exampleTools.map((entry) => ({
+      id: `${entry.hostedToolName}_migration_smoke`,
+      familyId,
+      toolName: entry.hostedToolName,
+      category: "mock_only",
+      args: {},
+      expected: {
+        migrated: true,
+        tool: entry.hostedToolName,
       },
-    ],
+    })),
     regressionExamples: [],
   };
 }
@@ -520,8 +559,8 @@ def call_tool(name, args, context):
         "migrated": True,
         "tool": name,
         "args": args,
-        "family_id": context["familyId"],
-        "generation_id": context["generationId"],
+        "family_id": context["family_id"],
+        "generation_id": context["generation_id"],
         "uses_explicit_cache": name in CACHE_TOOLS,
         "auth_configured": bool(context.get("secrets")),
     }

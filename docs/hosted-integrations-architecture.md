@@ -176,6 +176,15 @@ That relationship is operational metadata for UI, parity checks, and cutover
 planning. It is not an authorization alias and must not rewrite agent settings
 or model-facing tool selections implicitly.
 
+Integration-hub conversion is additive until a later decommission milestone is
+explicitly approved. Porting a legacy `integration-hub` tool to a managed
+hosted tool must not delete the legacy source, remove the remote MCP server, or
+hide the remote MCP tool. The converted hosted tool appears as a separate
+managed registry entry, and agents opt in by selecting that managed tool plus a
+hosted integration binding/config scope. Parity reports may recommend a
+replacement, but the platform must not silently rewrite
+`mcp_integration-hub__<tool>` selections to `managed_<family>__<tool>`.
+
 The UI should group hosted integration tools separately from built-in tools and
 MCP tools:
 

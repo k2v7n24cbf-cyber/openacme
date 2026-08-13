@@ -10,6 +10,8 @@ import {
   createFileHostedIntegrationGenerationStore,
   createFileHostedIntegrationLockStore,
   createFileHostedIntegrationSecretStore,
+  LEGACY_INTEGRATION_HUB_FIVE_READONLY_TOOL_SYNC_FAMILY,
+  type LegacyIntegrationHubMigratedFamilyFixture,
 } from "@openacme/hosted-integrations";
 import { registry as toolRegistry, toolCallContext } from "@openacme/tools";
 import { createApp } from "../src/app.js";
@@ -112,6 +114,195 @@ describe("/api/tools hosted integration surfacing", () => {
         (tool) => tool.name === "mcp_integration-hub__qualys_count_assets",
       ),
     ).toBe(true);
+  });
+
+  it("syncs a five-tool integration-hub read-only pilot without hiding remote MCP tools", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "openacme-tools-hosted-"));
+    const fixture = LEGACY_INTEGRATION_HUB_FIVE_READONLY_TOOL_SYNC_FAMILY;
+    writeFixtureFamily(dataDir, fixture);
+    const locks = createFileHostedIntegrationLockStore({
+      dataDir,
+      createId: () => "lock_1",
+    });
+    await locks.acquireLock({
+      familyId: "qualys",
+      lockedBy: "agent:tool-developer",
+      ttlMs: 60_000,
+    });
+    const drafts = createFileHostedIntegrationDraftStore({
+      dataDir,
+      lockStore: locks,
+      createId: () => "draft_1",
+    });
+    const draft = await drafts.createDraftFromFiles({
+      familyId: "qualys",
+      lockId: "lock_1",
+      sourceRevisionId: "source_rev_5_tool_sync",
+      files: fixture.sourceFiles,
+    });
+    expect(draft.ok).toBe(true);
+    const promoted = await createFileHostedIntegrationGenerationStore({
+      dataDir,
+      draftStore: drafts,
+      createId: () => "gen_5_tool_sync",
+    }).promoteDraft({
+      draftId: "draft_1",
+      promotedBy: "agent:tool-developer",
+      validation: { ok: true, diagnostics: [] },
+    });
+    expect(promoted.ok).toBe(true);
+    await seedConfigScope(dataDir);
+
+    const config = ConfigSchema.parse({
+      dataDir,
+      model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+    });
+    const { app, manager, close } = await createApp(config);
+    closeApp = close;
+    const member = manager.authStore.createMember({
+      email: "pilot@example.com",
+      password: "test-password-123",
+    });
+    const authToken = manager.authStore.createSession(member.id).token;
+    for (const name of fixture.legacyMcpToolNames) {
+      toolRegistry.register({
+        name,
+        toolset: "mcp-integration-hub",
+        description: `Legacy integration-hub ${name}`,
+        parameters: z.object({}),
+        handler: async () => "{}",
+      });
+    }
+
+    try {
+      const res = await app.request("http://127.0.0.1/api/tools", {
+        headers: { host: "127.0.0.1", authorization: `Bearer ${authToken}` },
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        tools: Array<{
+          name: string;
+          toolset: string;
+          source?: { kind: string; familyId?: string; toolName?: string };
+        }>;
+      };
+
+      for (const [index, nativeToolName] of fixture.migratedToolNames.entries()) {
+        const managedToolName = fixture.managedToolNames[index]!;
+        const legacyMcpToolName = fixture.legacyMcpToolNames[index]!;
+        expect(
+          body.tools.find((tool) => tool.name === managedToolName),
+        ).toMatchObject({
+          name: managedToolName,
+          toolset: "hosted-integrations",
+          source: {
+            kind: "hosted_integration",
+            familyId: "qualys",
+            toolName: nativeToolName,
+          },
+        });
+        expect(
+          body.tools.find((tool) => tool.name === legacyMcpToolName),
+        ).toMatchObject({
+          name: legacyMcpToolName,
+          toolset: "mcp-integration-hub",
+        });
+      }
+
+      await manager.createAgent(
+        AgentDefinitionSchema.parse({
+          id: "pilot-analyst",
+          name: "Pilot Analyst",
+          role: "",
+          model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+          persona: "Use managed hosted integration pilot tools.",
+          tools: fixture.managedToolNames,
+          hostedIntegrationBindings: fixture.migratedToolNames.map((toolName) => ({
+            familyId: "qualys",
+            toolName,
+            allowedConfigScopeIds: ["qualys-prod"],
+            defaultConfigScopeId: "qualys-prod",
+            environment: "prod",
+          })),
+        }),
+      );
+      await manager.createAgent(
+        AgentDefinitionSchema.parse({
+          id: "pilot-mcp-only",
+          name: "Pilot MCP Only",
+          role: "",
+          model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+          persona: "Only has legacy MCP integration-hub tools.",
+          tools: fixture.legacyMcpToolNames,
+          hostedIntegrationBindings: fixture.migratedToolNames.map((toolName) => ({
+            familyId: "qualys",
+            toolName,
+            allowedConfigScopeIds: ["qualys-prod"],
+            defaultConfigScopeId: "qualys-prod",
+            environment: "prod",
+          })),
+        }),
+      );
+
+      const tools = toolRegistry.getVercelTools(
+        new Set(fixture.managedToolNames),
+      ) as Record<
+        string,
+        { execute: (args: Record<string, unknown>) => Promise<string> }
+      >;
+      for (const [index, managedToolName] of fixture.managedToolNames.entries()) {
+        const output = await toolCallContext.run(
+          {
+            agentId: "pilot-analyst",
+            sessionId: `session_pilot_${index}`,
+            workspaceDir: path.join(
+              dataDir,
+              "agents",
+              "pilot-analyst",
+              "workspace",
+            ),
+          },
+          () => tools[managedToolName]!.execute({ pilot: true }),
+        );
+        const parsed = JSON.parse(output);
+        expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
+        expect(parsed).toMatchObject({
+          ok: true,
+          generationId: "gen_5_tool_sync",
+          envelope: {
+            ok: true,
+            result: {
+              migrated: true,
+              tool: fixture.migratedToolNames[index],
+              args: { pilot: true },
+              auth_configured: true,
+            },
+          },
+        });
+      }
+
+      const deniedOutput = await toolCallContext.run(
+        {
+          agentId: "pilot-mcp-only",
+          sessionId: "session_pilot_denied",
+          workspaceDir: path.join(
+            dataDir,
+            "agents",
+            "pilot-mcp-only",
+            "workspace",
+          ),
+        },
+        () => tools[fixture.managedToolNames[0]!]!.execute({}),
+      );
+      expect(JSON.parse(deniedOutput)).toMatchObject({
+        ok: false,
+        error: { code: "policy_denied" },
+      });
+    } finally {
+      for (const name of fixture.legacyMcpToolNames) {
+        toolRegistry.deregister(name);
+      }
+    }
   });
 
   it("invokes selected hosted integration tools through the gateway using the agent default config scope", async () => {
@@ -798,6 +989,23 @@ function writeFamily(root: string, source?: string): void {
         "",
       ].join("\n"),
   );
+}
+
+function writeFixtureFamily(
+  root: string,
+  fixture: LegacyIntegrationHubMigratedFamilyFixture,
+): void {
+  const dir = path.join(
+    root,
+    "hosted-integrations",
+    "source",
+    "families",
+    fixture.familyId,
+  );
+  mkdirSync(dir, { recursive: true });
+  for (const [filePath, content] of Object.entries(fixture.sourceFiles)) {
+    writeFileSync(path.join(dir, filePath), content);
+  }
 }
 
 async function seedConfigScope(root: string): Promise<void> {

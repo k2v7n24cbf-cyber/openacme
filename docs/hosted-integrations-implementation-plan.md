@@ -2867,6 +2867,280 @@ pnpm --filter @openacme/tools check-types
 pnpm --filter @openacme/server check-types
 ```
 
+## Milestone 12: Convert Integration-Hub To Managed Hosted Tools
+
+Goal: port the real legacy `integration-hub` tool implementations into managed
+hosted integration families while keeping the existing remote MCP
+`integration-hub` server available. This milestone is conversion and parity,
+not deletion or forced cutover.
+
+Architecture contract:
+
+- Do not delete the legacy `integration-hub` source, MCP server registration,
+  or remote MCP tool surface in this milestone.
+- Managed hosted tools are added alongside remote MCP tools as independent
+  registry entries using `managed_<family>__<tool>`.
+- Legacy remote MCP entries keep `mcp_integration-hub__<tool>`.
+- Replacement metadata may say a managed hosted tool replaces a remote MCP
+  tool, but this remains operational metadata and never becomes an
+  authorization alias.
+- Port real tool code family by family from the legacy integration-hub source
+  into hosted integration family source. Generated migration fixtures are not
+  enough for this milestone.
+- Hosted family manifests, examples, debug runs, failure buckets, logs, and
+  config-scope bindings keep family-native tool names.
+- Agent Settings can enable managed hosted replacements explicitly, per agent,
+  through the existing managed hosted tool policy path.
+- The conversion must preserve existing env/config/secret behavior through
+  hosted config scopes and human-owned secrets, not process-global env reads.
+- Explicit cache behavior may be recreated only for tools whose legacy behavior
+  was explicitly cache/sync oriented.
+- Live target-system validation is optional per family until credentials are
+  configured; every family still needs mock/parity examples that exercise real
+  hosted runtime code, not generated placeholders.
+
+Non-goals:
+
+- No deletion of `integration-hub`.
+- No hidden rewrite from `mcp_integration-hub__*` to `managed_*`.
+- No compatibility alias that lets an MCP allowlist invoke managed hosted
+  tools.
+- No all-at-once cutover.
+- No canary promotion redesign.
+- No broad new integration capability beyond preserving the legacy tool
+  behavior.
+
+### Slice 12.0: Five Read-Only Managed Sync Pilot
+
+Status: done.
+
+Evidence:
+
+- Added a bounded Qualys pilot fixture for five read-only legacy
+  `integration-hub` tools:
+  `qualys_gav_asset_count`, `qualys_gav_asset_search`,
+  `qualys_cloud_agent_hostasset_count`,
+  `qualys_cloud_agent_hostasset_search`, and `qualys_vmdr_host_list`.
+- The pilot exposes the managed hosted names `managed_qualys__<tool>` while
+  preserving the legacy remote MCP names `mcp_integration-hub__<tool>` as
+  separate migration metadata.
+- The pilot intentionally uses generated hosted source because Slice 12.1 has
+  not yet frozen the authoritative legacy `integration-hub` source tree. This
+  proves the managed sync surface, not source-backed parity.
+- `packages/hosted-integrations/test/migration.test.ts` proves all five tools
+  validate, register examples, promote, and invoke through the hosted gateway
+  with an explicit Qualys config scope.
+- `packages/server/test/tools-hosted-integrations.test.ts` proves `/api/tools`
+  shows the five managed hosted tools without hiding same-target remote MCP
+  tools, and proves a remote MCP-only agent cannot invoke the managed hosted
+  names.
+
+TDD:
+
+- fixture metadata must preserve native tool order and expose one example per
+  pilot tool
+- hosted gateway invocation must require explicit config-scope policy binding
+- managed hosted tool names and remote MCP names must coexist in `/api/tools`
+- `mcp_integration-hub__*` selections must not authorize
+  `managed_qualys__*` invocation
+
+Validation:
+
+```text
+pnpm --filter @openacme/hosted-integrations test -- migration
+pnpm --filter @openacme/hosted-integrations build
+pnpm --filter @openacme/server test -- tools-hosted-integrations
+```
+
+### Slice 12.1: Locate And Freeze Legacy Integration-Hub Source
+
+Status: planned.
+
+Goal:
+
+- Locate the authoritative legacy `integration-hub` source tree and record the
+  exact source revision or external path used for conversion.
+- Replace placeholder/source-unavailable assumptions in the migration inventory
+  with source-backed metadata where source is available.
+- Freeze the conversion contract for each family: legacy source files, tool
+  schemas, env vars, secrets, result-file behavior, cache behavior, destructive
+  classification, and known examples/incidents.
+
+TDD:
+
+- inventory validation fails when an expected legacy tool has no source-backed
+  conversion record unless explicitly marked unavailable with a reason
+- every source-backed tool maps exactly one
+  `mcp_integration-hub__<tool>` name to one managed hosted canonical name
+- env vars are classified as hosted config keys or human-owned secret refs
+- destructive/write tools cannot be marked read-only during conversion
+
+Validation:
+
+```text
+pnpm --filter @openacme/hosted-integrations test -- migration
+pnpm --filter @openacme/hosted-integrations check-types
+```
+
+### Slice 12.2: Port Splunk As The First Real Source-Backed Family
+
+Status: planned.
+
+Goal:
+
+- Replace the generated Splunk migration fixture with real hosted integration
+  source ported from legacy `integration-hub`.
+- Keep the remote MCP `mcp_integration-hub__splunk_search` visible and
+  independent while exposing `managed_splunk__splunk_search`.
+- Preserve legacy request shape, config/secret mapping, result-file behavior,
+  and sanitized error behavior.
+
+TDD:
+
+- real Splunk hosted source validates and promotes without generated placeholder
+  code
+- mock example exercises the real ported `splunk_search` implementation
+- large Splunk results spill to hosted run artifacts
+- caller-facing failures are sanitized and create hosted failure buckets
+- remote MCP-only agent selection cannot invoke the managed Splunk tool
+- managed Splunk agent selection cannot invoke the remote MCP tool
+
+Validation:
+
+```text
+pnpm --filter @openacme/hosted-integrations test -- migration
+pnpm --filter @openacme/server test -- tools-hosted-integrations
+pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/hosted-integrations-dogfood.e2e.ts
+```
+
+### Slice 12.3: Port Qualys Read-Only Families In Batches
+
+Status: planned.
+
+Goal:
+
+- Port Qualys read-only/search/list/count/fetch tools from legacy
+  `integration-hub` into the `qualys` hosted family in small batches.
+- Preserve native tool names and managed registry names:
+  `qualys_*` inside family source and `managed_qualys__qualys_*` at registry
+  boundaries.
+- Preserve result-file and explicit-cache behavior for the Qualys tools that
+  used it.
+
+TDD:
+
+- each batch has source-backed examples for every ported tool
+- manifest validation rejects missing examples for newly ported active tools
+- mock HTTP fixtures prove request path, query/body shape, and result shaping
+  match legacy behavior
+- artifact-producing tools spill through hosted artifacts
+- cache tools use family home explicitly and do not read or write the caller
+  agent workspace
+- access policy denies unbound agents for every managed Qualys batch
+
+Validation:
+
+```text
+pnpm --filter @openacme/hosted-integrations test -- migration qualys
+pnpm --filter @openacme/server test -- hosted-integrations
+pnpm --filter @openacme/tools test -- hosted-integrations
+```
+
+### Slice 12.4: Port Remaining Security Families
+
+Status: planned.
+
+Goal:
+
+- Port Microsoft Graph, Microsoft Defender for Endpoint, and Defender Alert
+  legacy tools into hosted families using the same source-backed pattern.
+- Preserve OAuth/client credential config mapping through hosted config scopes
+  and human-owned secrets.
+- Keep remote MCP tools visible until parity is accepted.
+
+TDD:
+
+- every family has real source-backed hosted implementation, not generated
+  placeholder source
+- mock examples cover success, provider error, auth/config missing, and large
+  response paths where applicable
+- managed and remote MCP tool surfaces remain independent in `/api/tools`
+- failure buckets are bucketized by unique hosted error type and route repair
+  tasks to Tool Developer
+
+Validation:
+
+```text
+pnpm --filter @openacme/hosted-integrations test -- migration
+pnpm --filter @openacme/server test -- hosted-integrations
+pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/hosted-integrations-dogfood.e2e.ts
+```
+
+### Slice 12.5: Parity Report And Agent Opt-In Migration
+
+Status: planned.
+
+Goal:
+
+- Add an operator-visible parity report that compares legacy remote MCP tools
+  and managed hosted replacements without hiding either surface.
+- Support explicit per-agent opt-in migration in Agent Settings from
+  `mcp_integration-hub__<tool>` selections to the corresponding
+  `managed_<family>__<tool>` selections and hosted bindings.
+- Keep migration reversible by leaving the legacy MCP selections and server
+  registration intact until a later, separately approved decommission
+  milestone.
+
+TDD:
+
+- parity report lists legacy MCP name, managed hosted name, family, native tool
+  name, source-backed status, examples, validation status, and latest run
+  health
+- migration preview shows exact `agent.tools` and hosted binding changes before
+  applying
+- applying migration never grants a managed hosted tool without an explicit
+  hosted binding and config scope
+- rollback restores the previous agent tool selection without deleting hosted
+  source or legacy MCP config
+
+Validation:
+
+```text
+pnpm --filter web test -- hosted-integration-agent-settings
+pnpm --filter @openacme/server test -- hosted-integrations
+pnpm --filter @openacme/config test -- agent-store
+```
+
+### Slice 12.6: Optional Live Parity Validation
+
+Status: planned.
+
+Goal:
+
+- When target-system credentials are configured in the local test environment,
+  run live safe parity checks against selected legacy remote MCP tools and
+  managed hosted tools.
+- Store live parity results as evidence without making CI depend on external
+  target systems.
+
+TDD:
+
+- live parity runner skips with explicit diagnostics when credentials or remote
+  MCP server config are absent
+- when configured, runner invokes the legacy MCP tool and managed hosted tool
+  with equivalent safe read-only inputs
+- sanitized result comparison records match/mismatch, artifact references, run
+  ids, and failure bucket ids
+- live parity never writes target-system state unless the tool is explicitly
+  classified as write/destructive and separately approved
+
+Validation:
+
+```text
+OPENACME_DATA_DIR=/Users/alenbohcelyan/.openamce-hosted-integrations-test-env pnpm --filter @openacme/server integration-hub:parity
+pnpm --filter @openacme/server test -- hosted-integrations
+```
+
 ## First Implementation Slice
 
 Start with Slice 1.1.

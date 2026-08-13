@@ -389,6 +389,27 @@ export const Route = createFileRoute("/agents")({
   component: AgentsPage,
 });
 
+function dedupeTools(tools: ToolInfo[]): ToolInfo[] {
+  const seen = new Set<string>();
+  return tools.filter((tool) => {
+    if (seen.has(tool.name)) return false;
+    seen.add(tool.name);
+    return true;
+  });
+}
+
+function dedupeHostedIntegrationConfigScopes(
+  scopes: HostedIntegrationConfigScope[],
+): HostedIntegrationConfigScope[] {
+  const seen = new Set<string>();
+  return scopes.filter((scope) => {
+    const key = `${scope.familyId}:${scope.id}:${scope.environment}:${scope.revision}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function AgentsPage() {
   const navigate = useNavigate();
   const search = Route.useSearch();
@@ -486,17 +507,16 @@ function AgentsPage() {
         skillsRes,
         catalogRes,
         hostedScopesRes,
-      ] =
-        await Promise.all([
-          fetch(`${API_BASE}/api/agents?summary=1`, { signal }),
-          fetch(`${API_BASE}/api/models`, { signal }),
-          fetch(`${API_BASE}/api/mcp/global`, { signal }),
-          fetch(`${API_BASE}/api/skills`, { signal }),
-          fetch(`${API_BASE}/api/agents/catalog`, { signal }),
-          fetch(`${API_BASE}/api/hosted-integrations/config-scopes`, {
-            signal,
-          }),
-        ]);
+      ] = await Promise.all([
+        fetch(`${API_BASE}/api/agents?summary=1`, { signal }),
+        fetch(`${API_BASE}/api/models`, { signal }),
+        fetch(`${API_BASE}/api/mcp/global`, { signal }),
+        fetch(`${API_BASE}/api/skills`, { signal }),
+        fetch(`${API_BASE}/api/agents/catalog`, { signal }),
+        fetch(`${API_BASE}/api/hosted-integrations/config-scopes`, {
+          signal,
+        }),
+      ]);
       if (agentsRes.ok) setAgents(await agentsRes.json());
       if (providersRes.ok) {
         setProviders((await providersRes.json()) as ProviderInfo[]);
@@ -517,7 +537,9 @@ function AgentsPage() {
         const data = (await hostedScopesRes.json()) as {
           configScopes?: HostedIntegrationConfigScope[];
         };
-        setHostedConfigScopes(data.configScopes ?? []);
+        setHostedConfigScopes(
+          dedupeHostedIntegrationConfigScopes(data.configScopes ?? []),
+        );
       }
     } catch (e) {
       if ((e as Error).name === "AbortError") return;
@@ -538,7 +560,7 @@ function AgentsPage() {
         });
         if (res.ok) {
           const data = (await res.json()) as { tools: ToolInfo[] };
-          setTools(data.tools ?? []);
+          setTools(dedupeTools(data.tools ?? []));
         }
       } catch (e) {
         if ((e as Error).name !== "AbortError") {
@@ -939,8 +961,7 @@ function AgentsPage() {
               persona: full.persona,
               tools: full.tools,
               skills: full.skills ?? [],
-              memoryExtractionEnabled:
-                full.memoryExtractionEnabled ?? true,
+              memoryExtractionEnabled: full.memoryExtractionEnabled ?? true,
               maxConcurrentSessions: full.maxConcurrentSessions ?? 1,
               parallelSchedulingPolicy:
                 full.parallelSchedulingPolicy ?? "lane_first",
@@ -1606,12 +1627,7 @@ function ToolPicker({
                 )}
                 <button
                   type="button"
-                  onClick={() =>
-                    onSetGroup(
-                      selectableTools,
-                      !allSelected,
-                    )
-                  }
+                  onClick={() => onSetGroup(selectableTools, !allSelected)}
                   disabled={selectableTools.length === 0}
                   className="ml-auto font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint underline-offset-2 transition-colors hover:text-ink hover:underline"
                 >
@@ -1682,7 +1698,9 @@ function ToolToggle({
           {tool.name}
         </div>
         <div className="line-clamp-2 text-[11px] text-ink-faint">
-          {disabled ? "Unavailable until a config scope exists." : tool.description}
+          {disabled
+            ? "Unavailable until a config scope exists."
+            : tool.description}
         </div>
       </div>
     </button>
@@ -1981,6 +1999,10 @@ function AgentDetail({
   // reset when the tab or agent changes so a stale slice can't leak across.
   const [tabSlice, setTabSlice] = useState<Partial<Agent>>({});
   useEffect(() => setTabSlice({}), [tab, agent.id]);
+  const allTools = useMemo(
+    () => toolGroups.flatMap(([, list]) => list),
+    [toolGroups],
+  );
   const liveAgent = useMemo<Agent>(
     () => ({
       ...agent,
@@ -2157,7 +2179,7 @@ function AgentDetail({
           <AgentToolsTab
             agent={agent}
             groups={toolGroups}
-            allTools={toolGroups.flatMap(([, list]) => list)}
+            allTools={allTools}
             hostedConfigScopes={hostedConfigScopes}
             agentAskTool={agentAskTool}
             onSaved={onAgentUpdated}
@@ -2762,7 +2784,10 @@ function HostedIntegrationBindingsEditor({
                 </SelectTrigger>
                 <SelectContent>
                   {scopes.map((scope) => (
-                    <SelectItem key={scope.id} value={scope.id}>
+                    <SelectItem
+                      key={`${scope.familyId}:${scope.id}:${scope.environment}:${scope.revision}`}
+                      value={scope.id}
+                    >
                       {scope.id} · {scope.environment} · rev {scope.revision}
                     </SelectItem>
                   ))}

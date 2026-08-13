@@ -34,37 +34,43 @@ describe("AgentManager.importAgentFromTemplate (bundled Software Engineer)", () 
   });
 
   it("imports Software Engineer, installs the bundled skill, copies resources", async () => {
-    const result = await manager.importAgentFromTemplate("software-engineer", {});
+    const result = await manager.importAgentFromTemplate(
+      "software-engineer",
+      {},
+    );
 
     expect(result.agent.id).toBe("software-engineer");
     expect(result.agent.name).toBe("Software Engineer");
     expect(result.manifest.agent.id).toBe("software-engineer");
-    expect(result.manifest.agent.resourceFiles.length).toBeGreaterThanOrEqual(1);
+    expect(result.manifest.agent.resourceFiles.length).toBeGreaterThanOrEqual(
+      1,
+    );
     const styleGuide = result.manifest.agent.resourceFiles.find(
-      (r) => r.relPath === "style-guide.md"
+      (r) => r.relPath === "style-guide.md",
     );
     expect(styleGuide).toBeDefined();
 
     // Skill: auto-installed via the builtin source
     const skill = result.manifest.workforce.skills.find(
-      (s) => s.name === "coding-conventions"
+      (s) => s.name === "coding-conventions",
     );
     expect(skill?.action).toBe("installed");
-    expect(existsSync(path.join(dataDir, "skills", "coding-conventions", "SKILL.md")))
-      .toBe(true);
+    expect(
+      existsSync(
+        path.join(dataDir, "skills", "coding-conventions", "SKILL.md"),
+      ),
+    ).toBe(true);
 
     // Agent folder shape
     const agentDir = path.join(dataDir, "agents", "software-engineer");
     expect(existsSync(path.join(agentDir, "AGENT.md"))).toBe(true);
     expect(existsSync(path.join(agentDir, "workspace"))).toBe(true);
-    expect(existsSync(path.join(agentDir, "resources", "style-guide.md")))
-      .toBe(true);
+    expect(existsSync(path.join(agentDir, "resources", "style-guide.md"))).toBe(
+      true,
+    );
 
     // Imported AGENT.md is pristine — no template_* keys leaked into frontmatter
-    const agentMd = readFileSync(
-      path.join(agentDir, "AGENT.md"),
-      "utf-8"
-    );
+    const agentMd = readFileSync(path.join(agentDir, "AGENT.md"), "utf-8");
     expect(agentMd).not.toContain("template_id:");
     expect(agentMd).not.toContain("default_id_hint:");
     expect(agentMd).not.toContain("bundled_skills:");
@@ -79,13 +85,13 @@ describe("AgentManager.importAgentFromTemplate (bundled Software Engineer)", () 
     expect(mcp.filesystem).toBeDefined();
     expect(mcp.filesystem?.command).toBe("npx");
     const mcpAdded = result.manifest.workforce.mcpServers.find(
-      (m) => m.name === "filesystem"
+      (m) => m.name === "filesystem",
     );
     expect(mcpAdded?.action).toBe("added");
 
     // Resource file is a byte-for-byte copy of the template
     const dst = readFileSync(
-      path.join(agentDir, "resources", "style-guide.md")
+      path.join(agentDir, "resources", "style-guide.md"),
     );
     expect(dst.length).toBeGreaterThan(0);
   });
@@ -114,8 +120,14 @@ describe("AgentManager.importAgentFromTemplate (bundled Software Engineer)", () 
     expect(b.manifest.agent.resourceFiles.length).toBeGreaterThanOrEqual(1);
     expect(
       existsSync(
-        path.join(dataDir, "agents", "software-engineer-2", "resources", "style-guide.md")
-      )
+        path.join(
+          dataDir,
+          "agents",
+          "software-engineer-2",
+          "resources",
+          "style-guide.md",
+        ),
+      ),
     ).toBe(true);
   });
 
@@ -127,7 +139,7 @@ describe("AgentManager.importAgentFromTemplate (bundled Software Engineer)", () 
     expect(r.agent.id).toBe("backend-coder");
     expect(r.agent.name).toBe("Backend Coder");
     expect(
-      existsSync(path.join(dataDir, "agents", "backend-coder", "AGENT.md"))
+      existsSync(path.join(dataDir, "agents", "backend-coder", "AGENT.md")),
     ).toBe(true);
   });
 
@@ -136,13 +148,13 @@ describe("AgentManager.importAgentFromTemplate (bundled Software Engineer)", () 
     await expect(
       manager.importAgentFromTemplate("software-engineer", {
         idOverride: "software-engineer",
-      })
+      }),
     ).rejects.toThrow(/already exists/);
   });
 
   it("rejects unknown template ids", async () => {
     await expect(
-      manager.importAgentFromTemplate("nonexistent", {})
+      manager.importAgentFromTemplate("nonexistent", {}),
     ).rejects.toThrow(/template not found/i);
   });
 
@@ -171,7 +183,7 @@ describe("AgentManager.importAgentFromTemplate (bundled Software Engineer)", () 
       dataDir,
       "agents",
       "software-engineer",
-      "AGENT.md"
+      "AGENT.md",
     );
     const orig = readFileSync(filePath, "utf-8");
     const tampered = orig.replace("---\n", "---\nid: imposter\n");
@@ -179,10 +191,12 @@ describe("AgentManager.importAgentFromTemplate (bundled Software Engineer)", () 
 
     // Re-list — the agent should still report id "software-engineer" from
     // its folder, not the bogus frontmatter id.
-    const fresh = new AgentManager(ConfigSchema.parse({
-      dataDir,
-      model: { provider: "anthropic", model: "claude-sonnet-4-6" },
-    }));
+    const fresh = new AgentManager(
+      ConfigSchema.parse({
+        dataDir,
+        model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+      }),
+    );
     try {
       const agents = fresh.listAgents();
       const swe = agents.find((a) => a.id === "software-engineer");
@@ -204,10 +218,12 @@ describe("AgentManager.ensureManagedAgents", () => {
 
   beforeEach(() => {
     dataDir = mkdtempSync(path.join(tmpdir(), "openacme-acme-"));
-    manager = new AgentManager(ConfigSchema.parse({
-      dataDir,
-      model: { provider: "anthropic", model: "claude-sonnet-4-6" },
-    }));
+    manager = new AgentManager(
+      ConfigSchema.parse({
+        dataDir,
+        model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+      }),
+    );
   });
 
   afterEach(async () => {
@@ -229,7 +245,9 @@ describe("AgentManager.ensureManagedAgents", () => {
     expect(acme.id).toBe("acme");
     expect(acme.name).toBe("Acme");
     expect(acme.managed).toBe(true);
-    const toolDeveloper = agents.find((agent) => agent.id === "tool-developer")!;
+    const toolDeveloper = agents.find(
+      (agent) => agent.id === "tool-developer",
+    )!;
     expect(toolDeveloper.name).toBe("Tool Developer");
     expect(toolDeveloper.managed).toBe(true);
     expect(toolDeveloper.tools).toEqual(
@@ -238,8 +256,12 @@ describe("AgentManager.ensureManagedAgents", () => {
     expect(toolDeveloper.skills).toEqual(["hosted-integrations-development"]);
 
     // Agent folder
-    expect(existsSync(path.join(dataDir, "agents", "acme", "AGENT.md"))).toBe(true);
-    expect(existsSync(path.join(dataDir, "agents", "acme", "workspace"))).toBe(true);
+    expect(existsSync(path.join(dataDir, "agents", "acme", "AGENT.md"))).toBe(
+      true,
+    );
+    expect(existsSync(path.join(dataDir, "agents", "acme", "workspace"))).toBe(
+      true,
+    );
     expect(
       existsSync(path.join(dataDir, "agents", "tool-developer", "AGENT.md")),
     ).toBe(true);
@@ -248,8 +270,9 @@ describe("AgentManager.ensureManagedAgents", () => {
     ).toBe(true);
 
     // Bundled skill landed
-    expect(existsSync(path.join(dataDir, "skills", "openacme-platform", "SKILL.md")))
-      .toBe(true);
+    expect(
+      existsSync(path.join(dataDir, "skills", "openacme-platform", "SKILL.md")),
+    ).toBe(true);
     const platformSkill = manager.skillRegistry.getSkill("openacme-platform");
     expect(platformSkill?.body).toContain("$hosted-integrations-development");
     expect(platformSkill?.body).toContain(
@@ -257,15 +280,18 @@ describe("AgentManager.ensureManagedAgents", () => {
     );
     expect(
       existsSync(
-        path.join(dataDir, "skills", "hosted-integrations-development", "SKILL.md"),
+        path.join(
+          dataDir,
+          "skills",
+          "hosted-integrations-development",
+          "SKILL.md",
+        ),
       ),
     ).toBe(true);
     const hostedIntegrationSkill = manager.skillRegistry.getSkill(
       "hosted-integrations-development",
     );
-    expect(hostedIntegrationSkill?.description).toContain(
-      "Lifecycle playbook",
-    );
+    expect(hostedIntegrationSkill?.description).toContain("Lifecycle playbook");
     expect(manager.skillRegistry.getIndexAsString()).toContain(
       "- **hosted-integrations-development**: Lifecycle playbook",
     );
@@ -279,6 +305,9 @@ describe("AgentManager.ensureManagedAgents", () => {
       "family-native name such as `splunk_search`",
     );
     expect(hostedIntegrationSkill?.body).toContain(
+      "Do not delegate hosted integration source edits",
+    );
+    expect(hostedIntegrationSkill?.body).toContain(
       "managed_splunk__splunk_search",
     );
     expect(hostedIntegrationSkill?.body).toContain(
@@ -287,52 +316,73 @@ describe("AgentManager.ensureManagedAgents", () => {
 
     // Resources copied
     expect(
-      existsSync(path.join(dataDir, "agents", "acme", "resources", "example-agent.md"))
+      existsSync(
+        path.join(dataDir, "agents", "acme", "resources", "example-agent.md"),
+      ),
     ).toBe(true);
     expect(
-      existsSync(path.join(dataDir, "agents", "acme", "resources", "example-skill.md"))
+      existsSync(
+        path.join(dataDir, "agents", "acme", "resources", "example-skill.md"),
+      ),
     ).toBe(true);
     expect(
-      existsSync(path.join(dataDir, "agents", "acme", "resources", "example-mcp.md"))
+      existsSync(
+        path.join(dataDir, "agents", "acme", "resources", "example-mcp.md"),
+      ),
     ).toBe(true);
     expect(
-      existsSync(path.join(dataDir, "agents", "acme", "resources", "cli-commands.md"))
+      existsSync(
+        path.join(dataDir, "agents", "acme", "resources", "cli-commands.md"),
+      ),
     ).toBe(true);
     expect(
-      existsSync(path.join(dataDir, "agents", "acme", "resources", "onboarding-task.md"))
+      existsSync(
+        path.join(dataDir, "agents", "acme", "resources", "onboarding-task.md"),
+      ),
     ).toBe(true);
   });
 
   it("is idempotent — second call does not duplicate the agent", async () => {
     await manager.ensureManagedAgents();
     await manager.ensureManagedAgents();
-    expect(manager.listAgents().map((agent) => agent.id).sort()).toEqual([
-      "acme",
-      "tool-developer",
-    ]);
+    expect(
+      manager
+        .listAgents()
+        .map((agent) => agent.id)
+        .sort(),
+    ).toEqual(["acme", "tool-developer"]);
   });
 
   it("installs managed agents even when other unmanaged agents exist", async () => {
     // Pretend a user-added agent showed up before first boot materialization.
     await manager.importAgentFromTemplate("software-engineer", {});
-    expect(manager.listAgents().map((a) => a.id)).toEqual(["software-engineer"]);
+    expect(manager.listAgents().map((a) => a.id)).toEqual([
+      "software-engineer",
+    ]);
 
     await manager.ensureManagedAgents();
 
     // The gate is per-template: empty managed slots install even though another
     // agent already exists.
-    const ids = manager.listAgents().map((a) => a.id).sort();
+    const ids = manager
+      .listAgents()
+      .map((a) => a.id)
+      .sort();
     expect(ids).toEqual(["acme", "software-engineer", "tool-developer"]);
     expect(existsSync(path.join(dataDir, "agents", "acme"))).toBe(true);
-    expect(existsSync(path.join(dataDir, "agents", "tool-developer"))).toBe(true);
+    expect(existsSync(path.join(dataDir, "agents", "tool-developer"))).toBe(
+      true,
+    );
   });
 
   it("rejects mutations on a managed agent", async () => {
     await manager.ensureManagedAgents();
     await expect(
-      manager.updateAgent("acme", { persona: "hacked" })
+      manager.updateAgent("acme", { persona: "hacked" }),
     ).rejects.toThrow(/platform-managed/);
-    await expect(manager.deleteAgent("acme")).rejects.toThrow(/platform-managed/);
+    await expect(manager.deleteAgent("acme")).rejects.toThrow(
+      /platform-managed/,
+    );
     await expect(
       manager.updateAgent("tool-developer", { persona: "hacked" }),
     ).rejects.toThrow(/platform-managed/);

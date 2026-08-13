@@ -357,15 +357,17 @@ export class ServerRuntime {
       case "hosted_integration_draft_get":
         return this.readHostedIntegrationDraft(p);
       case "hosted_integration_draft_patch": {
+        const patch = await this.applyHostedIntegrationDraftPatch(p);
+        if (!patch.ok) return patch;
         const result =
           await this.hostedIntegrationService.drafts.writeDraftFile({
             draftId: stringParam(p, "draft_id"),
             lockId: stringParam(p, "lock_id"),
             path: stringParam(p, "path"),
-            content: stringParam(p, "content"),
+            content: patch.content,
           });
         return result.ok
-          ? { ok: true }
+          ? { ok: true, mode: patch.mode }
           : { ok: false, error: { code: result.reason } };
       }
       case "hosted_integration_draft_delete": {
@@ -560,7 +562,11 @@ export class ServerRuntime {
           },
         );
         return result.ok
-          ? { ok: true, path: filePath, content: result.content }
+          ? {
+              ok: true,
+              path: filePath,
+              ...sourceContentWindow(result.content, params),
+            }
           : { ok: false, error: { code: result.reason } };
       }
       return this.readHostedIntegrationDraft({ draft_id: draftId });
@@ -574,7 +580,11 @@ export class ServerRuntime {
           path: filePath,
         });
       return result.ok
-        ? { ok: true, path: filePath, content: result.content }
+        ? {
+            ok: true,
+            path: filePath,
+            ...sourceContentWindow(result.content, params),
+          }
         : { ok: false, error: { code: result.reason } };
     }
     const family = await this.hostedIntegrationService.getFamily(familyId);
@@ -599,7 +609,11 @@ export class ServerRuntime {
         path: filePath,
       });
       return result.ok
-        ? { ok: true, path: filePath, content: result.content }
+        ? {
+            ok: true,
+            path: filePath,
+            ...sourceContentWindow(result.content, params),
+          }
         : { ok: false, error: { code: result.reason } };
     }
     const draft = await this.hostedIntegrationService.drafts.getDraft(draftId);
@@ -610,6 +624,112 @@ export class ServerRuntime {
       ok: true,
       draft,
       files: files.ok ? files.files : [],
+    };
+  }
+
+  private async applyHostedIntegrationDraftPatch(
+    params: Record<string, unknown>,
+  ): Promise<
+    | {
+        ok: true;
+        mode: "replace_file" | "replace_text" | "insert_after";
+        content: string;
+      }
+    | { ok: false; error: { code: string; message: string } }
+  > {
+    const mode =
+      optionalStringParam(params, "mode") ??
+      (hasOwn(params, "content") ? "replace_file" : null);
+    if (mode === "replace_file") {
+      return { ok: true, mode, content: stringParam(params, "content") };
+    }
+    if (mode !== "replace_text" && mode !== "insert_after") {
+      return {
+        ok: false,
+        error: {
+          code: "bad_arguments",
+          message:
+            "mode must be replace_file, replace_text, or insert_after; replace_file requires content.",
+        },
+      };
+    }
+
+    const current = await this.hostedIntegrationService.drafts.readDraftFile({
+      draftId: stringParam(params, "draft_id"),
+      path: stringParam(params, "path"),
+    });
+    if (!current.ok) {
+      return {
+        ok: false,
+        error: {
+          code: current.reason,
+          message: "draft file could not be read before patching",
+        },
+      };
+    }
+
+    if (mode === "replace_text") {
+      const oldText = stringParam(params, "old_text");
+      const newText = stringParam(params, "new_text");
+      const first = current.content.indexOf(oldText);
+      if (first === -1) {
+        return {
+          ok: false,
+          error: {
+            code: "old_text_not_found",
+            message: "old_text was not found in the draft file",
+          },
+        };
+      }
+      if (current.content.indexOf(oldText, first + oldText.length) !== -1) {
+        return {
+          ok: false,
+          error: {
+            code: "old_text_not_unique",
+            message:
+              "old_text matched more than once; provide a larger unique block",
+          },
+        };
+      }
+      return {
+        ok: true,
+        mode,
+        content:
+          current.content.slice(0, first) +
+          newText +
+          current.content.slice(first + oldText.length),
+      };
+    }
+
+    const anchorText = stringParam(params, "anchor_text");
+    const insertText = stringParam(params, "insert_text");
+    const first = current.content.indexOf(anchorText);
+    if (first === -1) {
+      return {
+        ok: false,
+        error: {
+          code: "anchor_text_not_found",
+          message: "anchor_text was not found in the draft file",
+        },
+      };
+    }
+    if (current.content.indexOf(anchorText, first + anchorText.length) !== -1) {
+      return {
+        ok: false,
+        error: {
+          code: "anchor_text_not_unique",
+          message:
+            "anchor_text matched more than once; provide a larger unique block",
+        },
+      };
+    }
+    return {
+      ok: true,
+      mode,
+      content:
+        current.content.slice(0, first + anchorText.length) +
+        insertText +
+        current.content.slice(first + anchorText.length),
     };
   }
 
@@ -1137,6 +1257,48 @@ function hostedIntegrationRuntimeError(error: {
     message: error.message,
     ...(error.details === undefined ? {} : { details: error.details }),
   };
+}
+
+function sourceContentWindow(
+  content: string,
+  params: Record<string, unknown>,
+): {
+  content: string;
+  totalLines: number;
+  startLine: number;
+  endLine: number;
+  truncated: boolean;
+} {
+  const lines = content.split("\n");
+  const totalLines = lines.length;
+  const requestedStart = positiveIntegerParam(params, "start_line") ?? 1;
+  const maxLines = positiveIntegerParam(params, "max_lines");
+  if (maxLines === null && requestedStart === 1) {
+    return {
+      content,
+      totalLines,
+      startLine: 1,
+      endLine: totalLines,
+      truncated: false,
+    };
+  }
+  const startLine = Math.min(requestedStart, Math.max(totalLines, 1));
+  const startIndex = startLine - 1;
+  const endExclusive =
+    maxLines === null
+      ? totalLines
+      : Math.min(totalLines, startIndex + maxLines);
+  return {
+    content: lines.slice(startIndex, endExclusive).join("\n"),
+    totalLines,
+    startLine,
+    endLine: endExclusive,
+    truncated: startIndex > 0 || endExclusive < totalLines,
+  };
+}
+
+function hasOwn(obj: object, key: PropertyKey): boolean {
+  return Object.prototype.hasOwnProperty.call(obj, key);
 }
 
 function stringParam(params: Record<string, unknown>, name: string): string {

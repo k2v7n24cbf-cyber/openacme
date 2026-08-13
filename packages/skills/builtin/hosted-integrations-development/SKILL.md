@@ -37,6 +37,10 @@ Classify the request before editing:
 ## Operating boundaries
 
 - Use hosted integration management tools instead of generic filesystem access.
+- Do not delegate hosted integration source edits, examples, validation,
+  promotion, debug runs, or repair buckets to Acme. You own this lifecycle; ask
+  Acme only for platform setup or workforce configuration that is outside the
+  hosted integration management surface.
 - Work at the tool-family level. A family is the unit of source, shared helper
   code, manifest, runtime settings, examples, generations, and workspace home.
 - Keep native and managed tool names separate. Family manifests, examples,
@@ -93,9 +97,12 @@ Use the management tools by intent:
    long validation runs if needed.
 3. Create a draft from the current generation. Keep edits scoped to the requested
    family behavior and its shared helper code.
-4. Patch draft files through `hosted_integration_draft_patch`. Prefer small,
-   readable changes and keep runtime settings at the family level when they
-   apply to every tool.
+4. Patch draft files through `hosted_integration_draft_patch`. For large Python
+   files, read focused windows with `start_line` and `max_lines`, then prefer
+   targeted patch modes such as `replace_text` or `insert_after` with a unique
+   source block. Use full-file replacement only for new files or intentionally
+   small files. Keep runtime settings at the family level when they apply to
+   every tool.
 5. Register or update examples with `hosted_integration_example_upsert`.
    Promotion requires at least one safe example for every promoted tool.
 6. Run `hosted_integration_validate`, then run safe examples with

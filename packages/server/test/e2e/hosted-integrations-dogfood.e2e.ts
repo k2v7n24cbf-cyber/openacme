@@ -480,16 +480,38 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     await expect(
       chatTool(
         "tool-developer",
-        "patch flaky dogfood repair",
+        "inspect the flaky dogfood repair source window",
+        "hosted_integration_source_read",
+        {
+          draft_id: repairDraftId,
+          path: "dogfood_tools.py",
+          start_line: 15,
+          max_lines: 8,
+        },
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      path: "dogfood_tools.py",
+      content: expect.stringContaining("dogfood_unique_failure_marker"),
+      truncated: true,
+    });
+
+    await expect(
+      chatTool(
+        "tool-developer",
+        "patch flaky dogfood repair with a targeted source replacement",
         "hosted_integration_draft_patch",
         {
           draft_id: repairDraftId,
           lock_id: repairLockId,
           path: "dogfood_tools.py",
-          content: toolsPython(true),
+          mode: "replace_text",
+          old_text:
+            "            raise RuntimeError('dogfood_unique_failure_marker')",
+          new_text: "            return {'recovered': True}",
         },
       ),
-    ).resolves.toMatchObject({ ok: true });
+    ).resolves.toMatchObject({ ok: true, mode: "replace_text" });
 
     await expect(
       chatTool(
@@ -657,7 +679,8 @@ function parseToolPartOutput(
   part: Record<string, unknown>,
 ): Record<string, unknown> {
   const raw = part["output"] ?? part["result"] ?? part["content"];
-  if (typeof raw === "string") return JSON.parse(raw) as Record<string, unknown>;
+  if (typeof raw === "string")
+    return JSON.parse(raw) as Record<string, unknown>;
   if (raw && typeof raw === "object") return raw as Record<string, unknown>;
   throw new Error(`tool output is not JSON object: ${JSON.stringify(part)}`);
 }
@@ -696,7 +719,10 @@ async function configureScope(): Promise<void> {
   expect(res.status).toBe(200);
 }
 
-function stringField(value: Record<string, unknown>, dottedPath: string): string {
+function stringField(
+  value: Record<string, unknown>,
+  dottedPath: string,
+): string {
   let current: unknown = value;
   for (const key of dottedPath.split(".")) {
     if (/^\d+$/.test(key)) {
@@ -709,7 +735,9 @@ function stringField(value: Record<string, unknown>, dottedPath: string): string
     }
   }
   if (typeof current !== "string" || current.length === 0) {
-    throw new Error(`expected string at ${dottedPath}: ${JSON.stringify(value)}`);
+    throw new Error(
+      `expected string at ${dottedPath}: ${JSON.stringify(value)}`,
+    );
   }
   return current;
 }

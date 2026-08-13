@@ -179,6 +179,60 @@ describe("hosted integration management tools", () => {
     ]);
   });
 
+  it("delegates source windows and targeted draft patch modes", async () => {
+    const calls: HostedIntegrationManagementRequest[] = [];
+    bindHostedIntegrationManagement({
+      invoke: async (request) => {
+        calls.push(request);
+        return { ok: true };
+      },
+    });
+
+    await expect(
+      runTool(
+        "hosted_integration_source_read",
+        {
+          family_id: "qualys",
+          path: "qualys.py",
+          start_line: 40,
+          max_lines: 20,
+        },
+        "tool-developer",
+      ),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      runTool(
+        "hosted_integration_draft_patch",
+        {
+          draft_id: "draft_1",
+          lock_id: "lock_1",
+          path: "qualys.py",
+          mode: "replace_text",
+          old_text: "return {'count': 1}",
+          new_text: "return {'count': 2}",
+        },
+        "tool-developer",
+      ),
+    ).resolves.toEqual({ ok: true });
+
+    expect(calls.map((call) => call.params)).toEqual([
+      {
+        family_id: "qualys",
+        path: "qualys.py",
+        start_line: 40,
+        max_lines: 20,
+      },
+      {
+        draft_id: "draft_1",
+        lock_id: "lock_1",
+        path: "qualys.py",
+        mode: "replace_text",
+        old_text: "return {'count': 1}",
+        new_text: "return {'count': 2}",
+      },
+    ]);
+  });
+
   it("redacts secret-shaped keys and values from management tool responses", async () => {
     bindHostedIntegrationManagement({
       invoke: async () => ({

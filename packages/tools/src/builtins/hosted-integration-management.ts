@@ -56,18 +56,34 @@ export function bindHostedIntegrationManagement(
 }
 
 const JsonObjectParam = z.record(z.string(), z.unknown());
-const OptionalPositiveInteger = z.number().int().positive().nullable().optional();
+const OptionalPositiveInteger = z
+  .number()
+  .int()
+  .positive()
+  .nullable()
+  .optional();
 const OptionalStringParam = z.string().min(1).nullable().optional();
 const FamilyId = z.string().min(1);
-const NativeToolName = z.string().min(1).refine(
-  (value) => parseHostedIntegrationManagedToolName(value) === null,
-  "must be a family-native hosted integration tool name, not a managed canonical registry name",
-);
+const NativeToolName = z
+  .string()
+  .min(1)
+  .refine(
+    (value) => parseHostedIntegrationManagedToolName(value) === null,
+    "must be a family-native hosted integration tool name, not a managed canonical registry name",
+  );
 const DraftId = z.string().min(1);
 const LockId = z.string().min(1);
 const GenerationId = z.string().min(1);
 const RunId = z.string().min(1);
 const BucketId = z.string().min(1);
+const SourceReadStartLine = z.number().int().positive().nullable().optional();
+const SourceReadMaxLines = z
+  .number()
+  .int()
+  .positive()
+  .max(1_000)
+  .nullable()
+  .optional();
 
 const ExampleParam = z
   .object({
@@ -118,6 +134,8 @@ const definitions: Array<{
         family_id: FamilyId.nullable().optional(),
         draft_id: DraftId.nullable().optional(),
         path: OptionalStringParam,
+        start_line: SourceReadStartLine,
+        max_lines: SourceReadMaxLines,
       })
       .strict(),
   },
@@ -154,17 +172,33 @@ const definitions: Array<{
   {
     name: "hosted_integration_draft_get",
     description: "Inspect a hosted integration draft or one draft source file.",
-    parameters: z.object({ draft_id: DraftId, path: OptionalStringParam }).strict(),
+    parameters: z
+      .object({
+        draft_id: DraftId,
+        path: OptionalStringParam,
+        start_line: SourceReadStartLine,
+        max_lines: SourceReadMaxLines,
+      })
+      .strict(),
   },
   {
     name: "hosted_integration_draft_patch",
-    description: "Write a source file in a locked hosted integration draft.",
+    description:
+      "Patch a source file in a locked hosted integration draft. Defaults to full-file replace; use replace_text or insert_after for large files.",
     parameters: z
       .object({
         draft_id: DraftId,
         lock_id: LockId,
         path: z.string().min(1),
-        content: z.string(),
+        mode: z
+          .enum(["replace_file", "replace_text", "insert_after"])
+          .nullable()
+          .optional(),
+        content: z.string().nullable().optional(),
+        old_text: z.string().nullable().optional(),
+        new_text: z.string().nullable().optional(),
+        anchor_text: z.string().nullable().optional(),
+        insert_text: z.string().nullable().optional(),
       })
       .strict(),
   },
@@ -215,7 +249,9 @@ const definitions: Array<{
   {
     name: "hosted_integration_generation_list",
     description: "List hosted integration generations.",
-    parameters: z.object({ family_id: FamilyId.nullable().optional() }).strict(),
+    parameters: z
+      .object({ family_id: FamilyId.nullable().optional() })
+      .strict(),
   },
   {
     name: "hosted_integration_generation_get",
@@ -272,7 +308,9 @@ const definitions: Array<{
   {
     name: "hosted_integration_failure_bucket_list",
     description: "List hosted integration failure buckets assigned for repair.",
-    parameters: z.object({ family_id: FamilyId.nullable().optional() }).strict(),
+    parameters: z
+      .object({ family_id: FamilyId.nullable().optional() })
+      .strict(),
   },
   {
     name: "hosted_integration_failure_bucket_get",

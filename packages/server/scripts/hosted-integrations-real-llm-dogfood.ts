@@ -22,7 +22,8 @@ const managedFlakyTool = managedToolName(flakyTool);
 const modelToolDeadlineMs =
   positiveInteger(process.env["OPENACME_E2E_TOOL_TIMEOUT_MS"]) ?? 480_000;
 const modelToolAttemptDeadlineMs =
-  positiveInteger(process.env["OPENACME_E2E_TOOL_ATTEMPT_TIMEOUT_MS"]) ?? 120_000;
+  positiveInteger(process.env["OPENACME_E2E_TOOL_ATTEMPT_TIMEOUT_MS"]) ??
+  120_000;
 const modelToolMaxAttempts =
   positiveInteger(process.env["OPENACME_E2E_TOOL_MAX_ATTEMPTS"]) ?? 3;
 const editLockTtlMs =
@@ -90,22 +91,22 @@ async function main(): Promise<void> {
 }
 
 async function runDogfood(): Promise<void> {
-  await scenario(
-    "tool-developer-skill",
-    async () => {
-      const skill = await askForTool(
-        "tool-developer",
-        [
-          "Load the hosted integration lifecycle instructions.",
-          "Call `skill_view` exactly once with this JSON argument:",
-          jsonBlock({ name: "hosted-integrations-development" }),
-          "After the tool result, give a one sentence confirmation.",
-        ].join("\n"),
-        "skill_view",
-      );
-      expectObject(skill, { success: true, name: "hosted-integrations-development" });
-    },
-  );
+  await scenario("tool-developer-skill", async () => {
+    const skill = await askForTool(
+      "tool-developer",
+      [
+        "Load the hosted integration lifecycle instructions.",
+        "Call `skill_view` exactly once with this JSON argument:",
+        jsonBlock({ name: "hosted-integrations-development" }),
+        "After the tool result, give a one sentence confirmation.",
+      ].join("\n"),
+      "skill_view",
+    );
+    expectObject(skill, {
+      success: true,
+      name: "hosted-integrations-development",
+    });
+  });
 
   await scenario("tool-developer-create-and-promote", async () => {
     const created = await askForTool(
@@ -241,7 +242,10 @@ async function runDogfood(): Promise<void> {
       ].join("\n"),
       "hosted_integration_promote",
     );
-    expectObject(promoted, { ok: true, generation: { familyId, status: "active" } });
+    expectObject(promoted, {
+      ok: true,
+      generation: { familyId, status: "active" },
+    });
     generationId = stringField(promoted, "generation.id");
 
     await expectOk(
@@ -334,27 +338,34 @@ async function runDogfood(): Promise<void> {
       }),
       "hosted_integration_artifact_get",
     );
-    expectObject(artifact, { ok: true, runId: largeRunId, name: "output.json" });
+    expectObject(artifact, {
+      ok: true,
+      runId: largeRunId,
+      name: "output.json",
+    });
     assertIncludes(artifact, "content", "REAL-DOGFOOD-LARGE-");
   });
 
-  await scenario("agent-settings-access-policy-denies-unbound-agent", async () => {
-    await createAgent(deniedId, "Real Dogfood Denied", {
-      role: "Attempts hosted integration use without a binding.",
-      persona: "Use the requested hosted integration tool.",
-      tools: [managedEchoTool],
-      hostedIntegrationBindings: [],
-    });
-    const denied = await askForTool(
-      deniedId,
-      [
-        `Try to call hosted integration tool \`${managedEchoTool}\` with text "blocked".`,
-        "Call the tool exactly once.",
-      ].join("\n"),
-      managedEchoTool,
-    );
-    expectObject(denied, { ok: false, error: { code: "policy_denied" } });
-  });
+  await scenario(
+    "agent-settings-access-policy-denies-unbound-agent",
+    async () => {
+      await createAgent(deniedId, "Real Dogfood Denied", {
+        role: "Attempts hosted integration use without a binding.",
+        persona: "Use the requested hosted integration tool.",
+        tools: [managedEchoTool],
+        hostedIntegrationBindings: [],
+      });
+      const denied = await askForTool(
+        deniedId,
+        [
+          `Try to call hosted integration tool \`${managedEchoTool}\` with text "blocked".`,
+          "Call the tool exactly once.",
+        ].join("\n"),
+        managedEchoTool,
+      );
+      expectObject(denied, { ok: false, error: { code: "policy_denied" } });
+    },
+  );
 
   await scenario("failure-bucket-repair-loop", async () => {
     const failed = await askForTool(
@@ -467,6 +478,27 @@ async function runDogfood(): Promise<void> {
       ),
     );
 
+    const repairSourceWindow = await askForTool(
+      "tool-developer",
+      promptForTool("hosted_integration_source_read", {
+        draft_id: repairDraftId,
+        path: "real_dogfood_tools.py",
+        start_line: 12,
+        max_lines: 8,
+      }),
+      "hosted_integration_source_read",
+    );
+    expectObject(repairSourceWindow, {
+      ok: true,
+      path: "real_dogfood_tools.py",
+      truncated: true,
+    });
+    assertIncludes(
+      repairSourceWindow,
+      "content",
+      "real_dogfood_unique_failure_marker",
+    );
+
     await expectOk(
       askForTool(
         "tool-developer",
@@ -474,7 +506,10 @@ async function runDogfood(): Promise<void> {
           draft_id: repairDraftId,
           lock_id: repairLockId,
           path: "real_dogfood_tools.py",
-          content: toolsPython(true),
+          mode: "replace_text",
+          old_text:
+            "            raise RuntimeError('real_dogfood_unique_failure_marker')",
+          new_text: "            return {'recovered': True}",
         }),
         "hosted_integration_draft_patch",
       ),
@@ -602,7 +637,10 @@ async function scenario(name: string, fn: () => Promise<void>): Promise<void> {
   console.log(JSON.stringify({ scenario: name, status: "pass" }));
 }
 
-function promptForTool(toolName: string, args: Record<string, unknown>): string {
+function promptForTool(
+  toolName: string,
+  args: Record<string, unknown>,
+): string {
   return [
     `Call \`${toolName}\` exactly once with this JSON argument:`,
     jsonBlock(args),
@@ -682,14 +720,15 @@ async function askForToolAttempt(
     const messages = (await getJson(
       `/api/sessions/${sessionId}/messages`,
     )) as Array<{ role: string; parts: Array<Record<string, unknown>> }>;
-    const assistants = messages.filter((message) => message.role === "assistant");
+    const assistants = messages.filter(
+      (message) => message.role === "assistant",
+    );
     const assistant = assistants[assistants.length - 1];
     if (assistant) {
       lastAssistantText = textFromParts(assistant.parts);
       const part = assistant.parts.find(
         (p) =>
-          p?.type === `tool-${expectedTool}` &&
-          p.state === "output-available",
+          p?.type === `tool-${expectedTool}` && p.state === "output-available",
       );
       if (part) return parseToolPartOutput(part);
       if (lastAssistantText.trim()) {
@@ -776,7 +815,9 @@ async function createAgent(
     body: JSON.stringify({ id, name, ...extra }),
   });
   if (res.status !== 201) {
-    throw new Error(`create agent ${id} failed ${res.status}: ${await res.text()}`);
+    throw new Error(
+      `create agent ${id} failed ${res.status}: ${await res.text()}`,
+    );
   }
 }
 
@@ -797,7 +838,10 @@ async function configureScope(): Promise<void> {
   }
 }
 
-async function req(pathname: string, init: RequestInit = {}): Promise<Response> {
+async function req(
+  pathname: string,
+  init: RequestInit = {},
+): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set("host", "127.0.0.1");
   headers.set("authorization", `Bearer ${authToken}`);
@@ -865,9 +909,12 @@ async function waitForRepairTask(
   }
 }
 
-function parseToolPartOutput(part: Record<string, unknown>): Record<string, unknown> {
+function parseToolPartOutput(
+  part: Record<string, unknown>,
+): Record<string, unknown> {
   const raw = part["output"] ?? part["result"] ?? part["content"];
-  if (typeof raw === "string") return JSON.parse(raw) as Record<string, unknown>;
+  if (typeof raw === "string")
+    return JSON.parse(raw) as Record<string, unknown>;
   if (raw && typeof raw === "object") return raw as Record<string, unknown>;
   throw new Error(`tool output is not JSON object: ${JSON.stringify(part)}`);
 }
@@ -884,7 +931,9 @@ function expectObject(
     const actualValue = actual[key];
     if (isPlainObject(expectedValue)) {
       if (!isPlainObject(actualValue)) {
-        throw new Error(`expected ${key} to be object: ${JSON.stringify(actual)}`);
+        throw new Error(
+          `expected ${key} to be object: ${JSON.stringify(actual)}`,
+        );
       }
       expectObject(
         actualValue as Record<string, unknown>,
@@ -917,11 +966,16 @@ function assertIncludes(
 
 function assertJsonIncludes(value: unknown, expected: string): void {
   if (!JSON.stringify(value).includes(expected)) {
-    throw new Error(`expected JSON to include ${expected}: ${JSON.stringify(value)}`);
+    throw new Error(
+      `expected JSON to include ${expected}: ${JSON.stringify(value)}`,
+    );
   }
 }
 
-function stringField(value: Record<string, unknown>, dottedPath: string): string {
+function stringField(
+  value: Record<string, unknown>,
+  dottedPath: string,
+): string {
   let current: unknown = value;
   for (const key of dottedPath.split(".")) {
     if (/^\d+$/.test(key)) {
@@ -934,7 +988,9 @@ function stringField(value: Record<string, unknown>, dottedPath: string): string
     }
   }
   if (typeof current !== "string" || current.length === 0) {
-    throw new Error(`expected string at ${dottedPath}: ${JSON.stringify(value)}`);
+    throw new Error(
+      `expected string at ${dottedPath}: ${JSON.stringify(value)}`,
+    );
   }
   return current;
 }
@@ -972,9 +1028,27 @@ function familyYaml(): string {
     "    allowedPackages: []",
     "    deniedPackages: []",
     "tools:",
-    toolYaml(echoTool, "Real Echo", "Echoes text for real LLM dogfood.", "text", "string"),
-    toolYaml(largeTool, "Real Large", "Returns a large payload to verify artifacts.", "repeat", "number"),
-    toolYaml(flakyTool, "Real Flaky", "Fails on demand so repair flow can be tested.", "mode", "string"),
+    toolYaml(
+      echoTool,
+      "Real Echo",
+      "Echoes text for real LLM dogfood.",
+      "text",
+      "string",
+    ),
+    toolYaml(
+      largeTool,
+      "Real Large",
+      "Returns a large payload to verify artifacts.",
+      "repeat",
+      "number",
+    ),
+    toolYaml(
+      flakyTool,
+      "Real Flaky",
+      "Fails on demand so repair flow can be tested.",
+      "mode",
+      "string",
+    ),
     "",
   ].join("\n");
 }

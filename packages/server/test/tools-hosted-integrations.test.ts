@@ -187,7 +187,10 @@ describe("/api/tools hosted integration surfacing", () => {
         }>;
       };
 
-      for (const [index, nativeToolName] of fixture.migratedToolNames.entries()) {
+      for (const [
+        index,
+        nativeToolName,
+      ] of fixture.migratedToolNames.entries()) {
         const managedToolName = fixture.managedToolNames[index]!;
         const legacyMcpToolName = fixture.legacyMcpToolNames[index]!;
         expect(
@@ -217,13 +220,15 @@ describe("/api/tools hosted integration surfacing", () => {
           model: { provider: "anthropic", model: "claude-sonnet-4-6" },
           persona: "Use managed hosted integration pilot tools.",
           tools: fixture.managedToolNames,
-          hostedIntegrationBindings: fixture.migratedToolNames.map((toolName) => ({
-            familyId: "qualys",
-            toolName,
-            allowedConfigScopeIds: ["qualys-prod"],
-            defaultConfigScopeId: "qualys-prod",
-            environment: "prod",
-          })),
+          hostedIntegrationBindings: fixture.migratedToolNames.map(
+            (toolName) => ({
+              familyId: "qualys",
+              toolName,
+              allowedConfigScopeIds: ["qualys-prod"],
+              defaultConfigScopeId: "qualys-prod",
+              environment: "prod",
+            }),
+          ),
         }),
       );
       await manager.createAgent(
@@ -234,13 +239,15 @@ describe("/api/tools hosted integration surfacing", () => {
           model: { provider: "anthropic", model: "claude-sonnet-4-6" },
           persona: "Only has legacy MCP integration-hub tools.",
           tools: fixture.legacyMcpToolNames,
-          hostedIntegrationBindings: fixture.migratedToolNames.map((toolName) => ({
-            familyId: "qualys",
-            toolName,
-            allowedConfigScopeIds: ["qualys-prod"],
-            defaultConfigScopeId: "qualys-prod",
-            environment: "prod",
-          })),
+          hostedIntegrationBindings: fixture.migratedToolNames.map(
+            (toolName) => ({
+              familyId: "qualys",
+              toolName,
+              allowedConfigScopeIds: ["qualys-prod"],
+              defaultConfigScopeId: "qualys-prod",
+              environment: "prod",
+            }),
+          ),
         }),
       );
 
@@ -250,7 +257,10 @@ describe("/api/tools hosted integration surfacing", () => {
         string,
         { execute: (args: Record<string, unknown>) => Promise<string> }
       >;
-      for (const [index, managedToolName] of fixture.managedToolNames.entries()) {
+      for (const [
+        index,
+        managedToolName,
+      ] of fixture.managedToolNames.entries()) {
         const output = await toolCallContext.run(
           {
             agentId: "pilot-analyst",
@@ -653,6 +663,7 @@ describe("/api/tools hosted integration surfacing", () => {
     closeApp = close;
     const managementToolNames = [
       "hosted_integration_family_create",
+      "hosted_integration_source_read",
       "hosted_integration_lock_acquire",
       "hosted_integration_draft_create",
       "hosted_integration_draft_patch",
@@ -723,17 +734,53 @@ describe("/api/tools hosted integration surfacing", () => {
     expect(draft).toMatchObject({ ok: true, draft: { familyId: "qualys" } });
 
     await expect(
+      call("hosted_integration_source_read", {
+        draft_id: draft.draft.id,
+        path: "qualys.py",
+        start_line: 2,
+        max_lines: 3,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      path: "qualys.py",
+      content: [
+        "    return {",
+        "        'count': 1,",
+        "        'endpoint': ctx['config']['endpoint'],",
+      ].join("\n"),
+      totalLines: 7,
+      startLine: 2,
+      endLine: 4,
+      truncated: true,
+    });
+
+    await expect(
       call("hosted_integration_draft_patch", {
         draft_id: draft.draft.id,
         lock_id: lock.lock.id,
         path: "qualys.py",
-        content: [
-          "def call_tool(name, args, ctx):",
-          "    return {'count': 7, 'mode': 'draft-example'}",
-          "",
+        mode: "replace_text",
+        old_text: [
+          "    return {",
+          "        'count': 1,",
+          "        'endpoint': ctx['config']['endpoint'],",
+          "        'ready': ctx['secrets']['apiToken'] == 'raw-token-123',",
+          "    }",
         ].join("\n"),
+        new_text: "    return {'count': 7, 'mode': 'draft-example'}",
       }),
-    ).resolves.toMatchObject({ ok: true });
+    ).resolves.toMatchObject({ ok: true, mode: "replace_text" });
+
+    await expect(
+      call("hosted_integration_draft_patch", {
+        draft_id: draft.draft.id,
+        lock_id: lock.lock.id,
+        path: "qualys.py",
+        mode: "insert_after",
+        anchor_text: "def call_tool(name, args, ctx):",
+        insert_text: "\n    # patched through targeted management edit",
+      }),
+    ).resolves.toMatchObject({ ok: true, mode: "insert_after" });
 
     await expect(
       call("hosted_integration_example_upsert", {

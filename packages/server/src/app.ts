@@ -2369,6 +2369,7 @@ async function runChatTurn(args: {
             try {
               manager.broadcaster.broadcast(sessionId, {
                 kind: "messages_appended",
+                transient: true,
                 messages: [
                   {
                     id: m.id,

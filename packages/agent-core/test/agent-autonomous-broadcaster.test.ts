@@ -118,31 +118,26 @@ function nextTurn(): Promise<void> {
 }
 
 describe("Agent.runAutonomous broadcaster fanout", () => {
-  it("handles fanout reader failures locally without unhandled rejection", async () => {
+  it("propagates fanout reader failures to the autonomous turn", async () => {
     const { agent, sessionStore, messageStore } = makeAgent();
     sessionStore.create("agent-a", { id: "session-a" });
     const unhandled: unknown[] = [];
     const onUnhandled = (reason: unknown) => unhandled.push(reason);
     process.on("unhandledRejection", onUnhandled);
+    const upstreamError = new Error("broadcaster fanout read failed");
     vi.spyOn(agent, "runStream").mockResolvedValue(
-      streamResultWithRejectingBroadcastBranch(
-        new Error("broadcaster fanout read failed")
-      )
+      streamResultWithRejectingBroadcastBranch(upstreamError)
     );
 
     try {
-      const result = await agent.runAutonomous({ sessionId: "session-a" });
+      await expect(
+        agent.runAutonomous({ sessionId: "session-a" })
+      ).rejects.toThrow("broadcaster fanout read failed");
       await nextTurn();
       await nextTurn();
 
-      expect(result.assistant.parts).toEqual([
-        { type: "text", text: "done", state: "done" },
-      ]);
-      expect(messageStore.getHistory("session-a")).toContainEqual(
-        expect.objectContaining({
-          id: "assistant-1",
-          role: "assistant",
-        })
+      expect(messageStore.getHistory("session-a")).not.toContainEqual(
+        expect.objectContaining({ id: "assistant-1", role: "assistant" })
       );
       expect(unhandled).toEqual([]);
     } finally {

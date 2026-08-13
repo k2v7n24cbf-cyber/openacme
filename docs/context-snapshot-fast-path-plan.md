@@ -393,4 +393,14 @@ These are real risks but should not block Milestone 1.
 - Memory-only flush age/size policy during long reuse runs.
 - Tool result preview/reference policy for remote MCP outputs.
 - Runtime tool schema scoping beyond current `toolFilter` cases.
+- Interactive chat provider watchdog: if a main chat turn produces no visible
+  response or stream progress for about 5 minutes, assume the provider request
+  is unlikely to recover; abort the stuck attempt, close the turn timeline with
+  an error, and retry when the failure is classified as transient, such as
+  `other side closed`, reset/timeout, overloaded, or 5xx.
+- Model turn lifecycle debt: interactive and autonomous turns should not own
+  separate provider stream, timeout, retry, usage, and timeline orchestration.
+  The durable architecture should extract a shared model-turn runner; interactive
+  should mostly differ by browser live-broadcast policy, while autonomous should
+  mostly differ by task-state policy.
 - Retiring or replacing legacy rename-swap `Agent.compress()`.

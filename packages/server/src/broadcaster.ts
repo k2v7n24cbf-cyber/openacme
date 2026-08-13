@@ -45,6 +45,10 @@ export type SessionBroadcastEvent =
         parts: unknown[];
         metadata?: unknown;
       }>;
+      /** True for in-flight assistant snapshots that help late-joining
+       *  subscribers catch up. Final persisted messages omit this so
+       *  clients can distinguish canonical rows from streaming previews. */
+      transient?: boolean;
     }
   | {
       kind: "session_state";

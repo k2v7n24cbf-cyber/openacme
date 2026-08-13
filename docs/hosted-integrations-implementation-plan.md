@@ -2954,7 +2954,8 @@ pnpm --filter @openacme/server test -- tools-hosted-integrations
 
 ### Slice 12.1: Locate And Freeze Legacy Integration-Hub Source
 
-Status: planned.
+Status: done for the Qualys pilot; remaining families continue through their
+own port slices.
 
 Goal:
 
@@ -2981,6 +2982,17 @@ Validation:
 pnpm --filter @openacme/hosted-integrations test -- migration
 pnpm --filter @openacme/hosted-integrations check-types
 ```
+
+Evidence:
+
+- Frozen Qualys source path:
+  `tmp/openacme-realdata-test-20260724-103001/agents/mcp-server-admin-and-developer/workspace/src/integration_hub/integrations/qualys`.
+- Qualys inventory now records `QUALYS_VM_URL` and `QUALYS_GATEWAY_URL` as
+  hosted config keys, and `QUALYS_USERNAME` and `QUALYS_PASSWORD` as
+  human-owned secret refs.
+- The source-backed Qualys hosted family reads credentials and endpoints only
+  from ToolContext config/secrets. The ported Python source intentionally does
+  not read process env directly.
 
 ### Slice 12.2: Port Splunk As The First Real Source-Backed Family
 
@@ -3031,8 +3043,10 @@ TDD:
 
 - each batch has source-backed examples for every ported tool
 - manifest validation rejects missing examples for newly ported active tools
-- mock HTTP fixtures prove request path, query/body shape, and result shaping
-  match legacy behavior
+- bounded live-safe examples prove request path, query/body semantics, and
+  result shaping against the real target API when credentials are configured
+- unit tests may assert source/runtime contracts without standing up fake
+  target APIs for Qualys live validation
 - artifact-producing tools spill through hosted artifacts
 - cache tools use family home explicitly and do not read or write the caller
   agent workspace
@@ -3045,6 +3059,52 @@ pnpm --filter @openacme/hosted-integrations test -- migration qualys
 pnpm --filter @openacme/server test -- hosted-integrations
 pnpm --filter @openacme/tools test -- hosted-integrations
 ```
+
+#### Slice 12.3.1: First Five Qualys Read-Only Source-Backed Batch
+
+Status: done.
+
+Goal:
+
+- Replace the Slice 12.0 generated five-tool Qualys pilot with source-backed
+  hosted family source ported from legacy `integration-hub`.
+- Keep this batch read-only and bounded:
+  `qualys_gav_asset_count`, `qualys_gav_asset_search`,
+  `qualys_cloud_agent_hostasset_count`,
+  `qualys_cloud_agent_hostasset_search`, and `qualys_vmdr_host_list`.
+- Preserve the managed/remote naming boundary:
+  `managed_qualys__<tool>` never aliases or enables
+  `mcp_integration-hub__<tool>`.
+
+TDD:
+
+- generated placeholder source is not used for the source-backed fixture
+- each of the five tools has a `live_safe` example with bounded pagination or
+  count-only behavior
+- Cloud Agent tools add the `asset.trackingMethod EQUALS QAGENT` GAV filter
+  instead of sending `tracking_method` to VMDR Host List
+- VMDR Host List rejects `tracking_method` input before credentials or network
+  are touched
+- live validation must hit real Qualys APIs; no localhost/mock Qualys server is
+  acceptable for this batch
+
+Validation:
+
+```text
+pnpm --filter @openacme/hosted-integrations check-types
+pnpm --filter @openacme/hosted-integrations test -- test/migration.test.ts
+OPENACME_LIVE_QUALYS=1 pnpm --filter @openacme/hosted-integrations test -- test/migration.test.ts -t "live Qualys"
+```
+
+Evidence:
+
+- The live run loaded the existing prod `integration-hub` Qualys env block from
+  `/Users/alenbohcelyan/.openacme/mcp.json` into the test process with values
+  suppressed from logs.
+- `QUALYS_GATEWAY_URL` was not configured, so the hosted Qualys source derived
+  the Gateway URL from `QUALYS_VM_URL`, matching the legacy client behavior.
+- The latest live Qualys test passed in 23.09s and invoked all five tools through the
+  hosted gateway against real Qualys APIs.
 
 ### Slice 12.4: Port Remaining Security Families
 

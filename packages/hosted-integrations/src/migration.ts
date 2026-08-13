@@ -3,6 +3,11 @@ import {
   HostedIntegrationManagedToolNameSchema,
   parseHostedIntegrationManagedToolName,
 } from "./naming.js";
+import {
+  LEGACY_INTEGRATION_HUB_QUALYS_SOURCE_PATH,
+  qualysFiveReadOnlySourceBackedFamilyYaml,
+  qualysFiveReadOnlySourceBackedPythonSource,
+} from "./legacy-qualys-source.js";
 import { HostedIntegrationToolNameSchema } from "./schemas.js";
 import type { HostedIntegrationExample } from "./schemas.js";
 
@@ -167,7 +172,15 @@ export const LEGACY_INTEGRATION_HUB_INVENTORY: LegacyIntegrationHubInventory = {
       "The current worktree does not contain workspace/src/integration_hub; seed inventory is based on hosted integration architecture docs and installed Qualys toolkit references.",
   },
   families: [
-    family("qualys", ["QUALYS_BASE_URL"], ["QUALYS_USERNAME", "QUALYS_PASSWORD"]),
+    family(
+      "qualys",
+      ["QUALYS_VM_URL", "QUALYS_GATEWAY_URL"],
+      ["QUALYS_USERNAME", "QUALYS_PASSWORD"],
+      {
+        sourceStatus: "documented",
+        sourcePaths: [LEGACY_INTEGRATION_HUB_QUALYS_SOURCE_PATH],
+      },
+    ),
     family("splunk", ["SPLUNK_BASE_URL"], ["SPLUNK_TOKEN"]),
     family(
       "msgraph",
@@ -185,12 +198,13 @@ export const LEGACY_INTEGRATION_HUB_INVENTORY: LegacyIntegrationHubInventory = {
     ...QUALYS_TOOL_NAMES.map((toolName) =>
       tool("qualys", toolName, {
         freshness: toolName.startsWith("qualys_cache_") ? "cached" : "live",
-        resultBehavior: toolName.includes("download") || toolName.includes("fetch")
-          ? "result_file"
-          : toolName.startsWith("qualys_cache_")
-            ? "cache_workspace"
-            : "inline",
-        configKeys: ["QUALYS_BASE_URL"],
+        resultBehavior:
+          toolName.includes("download") || toolName.includes("fetch")
+            ? "result_file"
+            : toolName.startsWith("qualys_cache_")
+              ? "cache_workspace"
+              : "inline",
+        configKeys: ["QUALYS_VM_URL", "QUALYS_GATEWAY_URL"],
         secretRefs: ["QUALYS_USERNAME", "QUALYS_PASSWORD"],
       }),
     ),
@@ -268,7 +282,11 @@ export const LEGACY_INTEGRATION_HUB_MIGRATED_SECURITY_FAMILIES: LegacyIntegratio
     buildMigratedFamilyFixture("qualys", "Qualys", "qualys.py"),
     FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY,
     buildMigratedFamilyFixture("msgraph", "Microsoft Graph", "msgraph.py"),
-    buildMigratedFamilyFixture("mde", "Microsoft Defender for Endpoint", "mde.py"),
+    buildMigratedFamilyFixture(
+      "mde",
+      "Microsoft Defender for Endpoint",
+      "mde.py",
+    ),
     buildMigratedFamilyFixture(
       "defender-alert",
       "Defender Alert",
@@ -282,18 +300,118 @@ export const LEGACY_INTEGRATION_HUB_FIVE_READONLY_TOOL_SYNC_FAMILY: LegacyIntegr
     examplesForEveryTool: true,
   });
 
+export const LEGACY_INTEGRATION_HUB_FIVE_READONLY_SOURCE_BACKED_FAMILY: LegacyIntegrationHubMigratedFamilyFixture =
+  {
+    ...buildMigratedFamilyFixture("qualys", "Qualys", "qualys.py", {
+      toolNames: LEGACY_INTEGRATION_HUB_FIVE_READONLY_SYNC_TOOL_NAMES,
+      examplesForEveryTool: true,
+    }),
+    sourceFiles: {
+      "family.yaml": qualysFiveReadOnlySourceBackedFamilyYaml(),
+      "qualys.py": qualysFiveReadOnlySourceBackedPythonSource(),
+    },
+    examples: [
+      {
+        id: "qualys_gav_asset_count_source_backed",
+        familyId: "qualys",
+        toolName: "qualys_gav_asset_count",
+        category: "live_safe",
+        args: {
+          asset_last_updated: "2026-08-01T00:00Z",
+          filter_body: {
+            filters: [
+              {
+                field: "operatingSystem.category1",
+                operator: "EQUALS",
+                value: "Server",
+              },
+            ],
+          },
+        },
+        expected: { used_filter_body: true },
+      },
+      {
+        id: "qualys_gav_asset_search_source_backed",
+        familyId: "qualys",
+        toolName: "qualys_gav_asset_search",
+        category: "live_safe",
+        args: {
+          page_size: 2,
+          max_pages: 1,
+          include_fields: ["assetId", "assetName", "agentId"],
+          filter_body: {
+            filters: [
+              {
+                field: "operatingSystem.category1",
+                operator: "EQUALS",
+                value: "Linux",
+              },
+            ],
+          },
+        },
+        expected: { pages_fetched: 1 },
+      },
+      {
+        id: "qualys_cloud_agent_hostasset_count_source_backed",
+        familyId: "qualys",
+        toolName: "qualys_cloud_agent_hostasset_count",
+        category: "live_safe",
+        args: {
+          filter_body: {
+            filters: [
+              {
+                field: "agent.lastCheckedIn",
+                operator: "LESS_THAN_EQUAL",
+                value: "2026-07-01T00:00Z",
+              },
+            ],
+          },
+        },
+        expected: { used_filter_body: true },
+      },
+      {
+        id: "qualys_cloud_agent_hostasset_search_source_backed",
+        familyId: "qualys",
+        toolName: "qualys_cloud_agent_hostasset_search",
+        category: "live_safe",
+        args: {
+          page_size: 2,
+          max_pages: 1,
+          include_fields: ["assetId", "assetName", "agentId"],
+        },
+        expected: { pages_fetched: 1 },
+      },
+      {
+        id: "qualys_vmdr_host_list_source_backed",
+        familyId: "qualys",
+        toolName: "qualys_vmdr_host_list",
+        category: "live_safe",
+        args: {
+          truncation_limit: 2,
+          max_pages: 1,
+          params: { host_metadata: "all" },
+        },
+        expected: { pages_fetched: 1 },
+      },
+    ],
+  };
+
 export function validateLegacyIntegrationHubMigrationInventory(
   inventory: LegacyIntegrationHubInventory,
-  expectedToolNames: readonly string[] =
-    EXPECTED_LEGACY_INTEGRATION_HUB_TOOL_NAMES,
+  expectedToolNames: readonly string[] = EXPECTED_LEGACY_INTEGRATION_HUB_TOOL_NAMES,
 ): ValidateMigrationInventoryResult {
   const diagnostics: string[] = [];
-  const legacyNames = new Set(inventory.tools.map((entry) => entry.legacyToolName));
+  const legacyNames = new Set(
+    inventory.tools.map((entry) => entry.legacyToolName),
+  );
   for (const expected of expectedToolNames) {
-    if (!legacyNames.has(expected)) diagnostics.push(`missing legacy tool: ${expected}`);
+    if (!legacyNames.has(expected))
+      diagnostics.push(`missing legacy tool: ${expected}`);
   }
   for (const entry of inventory.tools) {
-    if (!HostedIntegrationToolNameSchema.safeParse(entry.hostedToolName).success) {
+    if (
+      !HostedIntegrationToolNameSchema.safeParse(entry.hostedToolName).success
+    ) {
       diagnostics.push(`invalid hosted tool name: ${entry.hostedToolName}`);
     }
     const parsedManaged = parseHostedIntegrationManagedToolName(
@@ -343,11 +461,17 @@ function family(
   familyId: string,
   configKeys: string[],
   secretRefs: string[],
+  options: {
+    sourceStatus?: LegacyIntegrationHubFamilyInventoryEntry["sourceStatus"];
+    sourcePaths?: string[];
+  } = {},
 ): LegacyIntegrationHubFamilyInventoryEntry {
   return {
     familyId,
-    sourceStatus: "external_source_unavailable",
-    sourcePaths: [`workspace/src/integration_hub/integrations/${familyId}/`],
+    sourceStatus: options.sourceStatus ?? "external_source_unavailable",
+    sourcePaths: options.sourcePaths ?? [
+      `workspace/src/integration_hub/integrations/${familyId}/`,
+    ],
     configKeys,
     secretRefs,
   };
@@ -434,7 +558,9 @@ function buildMigratedFamilyFixture(
   }
   if (selectedToolNames && tools.length !== selectedToolNames.size) {
     const found = new Set(tools.map((entry) => entry.hostedToolName));
-    const missing = [...selectedToolNames].filter((toolName) => !found.has(toolName));
+    const missing = [...selectedToolNames].filter(
+      (toolName) => !found.has(toolName),
+    );
     throw new Error(
       `missing migration tools for family ${familyId}: ${missing.join(", ")}`,
     );
@@ -466,7 +592,12 @@ function buildMigratedFamilyFixture(
     configKeys: familyEntry.configKeys,
     secretRefs: familyEntry.secretRefs,
     sourceFiles: {
-      "family.yaml": generatedFamilyYaml(familyId, familyName, entrypoint, tools),
+      "family.yaml": generatedFamilyYaml(
+        familyId,
+        familyName,
+        entrypoint,
+        tools,
+      ),
       [entrypoint]: generatedPythonSource(tools),
     },
     examples: exampleTools.map((entry) => ({
@@ -540,10 +671,16 @@ ${cacheYaml}`;
 function generatedPythonSource(
   tools: LegacyIntegrationHubToolInventoryEntry[],
 ): string {
-  return `TOOL_NAMES = ${JSON.stringify(tools.map((entry) => entry.hostedToolName), null, 4)}
+  return `TOOL_NAMES = ${JSON.stringify(
+    tools.map((entry) => entry.hostedToolName),
+    null,
+    4,
+  )}
 CACHE_TOOLS = ${JSON.stringify(
     tools
-      .filter((entry) => entry.freshness === "cached" || entry.freshness === "sync")
+      .filter(
+        (entry) => entry.freshness === "cached" || entry.freshness === "sync",
+      )
       .map((entry) => entry.hostedToolName),
     null,
     4,

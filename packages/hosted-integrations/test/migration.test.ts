@@ -15,6 +15,7 @@ import {
   createFileHostedIntegrationSecretStore,
   EXPECTED_LEGACY_INTEGRATION_HUB_TOOL_NAMES,
   FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY,
+  LEGACY_INTEGRATION_HUB_FIVE_READONLY_SOURCE_BACKED_FAMILY,
   LEGACY_INTEGRATION_HUB_FIVE_READONLY_SYNC_TOOL_NAMES,
   LEGACY_INTEGRATION_HUB_FIVE_READONLY_TOOL_SYNC_FAMILY,
   LEGACY_INTEGRATION_HUB_INCIDENT_SOURCE,
@@ -49,7 +50,9 @@ describe("legacy integration-hub migration inventory", () => {
       LEGACY_INTEGRATION_HUB_INVENTORY.tools.map(
         (entry) => entry.legacyToolName,
       ),
-    ).toEqual(expect.arrayContaining([...EXPECTED_LEGACY_INTEGRATION_HUB_TOOL_NAMES]));
+    ).toEqual(
+      expect.arrayContaining([...EXPECTED_LEGACY_INTEGRATION_HUB_TOOL_NAMES]),
+    );
   });
 
   it("records explicit legacy MCP to managed hosted replacement metadata", () => {
@@ -66,10 +69,14 @@ describe("legacy integration-hub migration inventory", () => {
 
   it("maps env requirements to config keys and secret refs", () => {
     for (const family of LEGACY_INTEGRATION_HUB_INVENTORY.families) {
-      expect([...family.configKeys, ...family.secretRefs].length).toBeGreaterThan(0);
+      expect(
+        [...family.configKeys, ...family.secretRefs].length,
+      ).toBeGreaterThan(0);
     }
     for (const entry of LEGACY_INTEGRATION_HUB_INVENTORY.tools) {
-      expect([...entry.configKeys, ...entry.secretRefs].length).toBeGreaterThan(0);
+      expect([...entry.configKeys, ...entry.secretRefs].length).toBeGreaterThan(
+        0,
+      );
     }
   });
 
@@ -156,9 +163,9 @@ describe("legacy integration-hub first migrated family", () => {
     expect(generation.tools?.map((tool) => tool.name)).toEqual(
       FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY.migratedToolNames,
     );
-    expect(FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY.managedToolNames).toEqual([
-      "managed_splunk__splunk_search",
-    ]);
+    expect(
+      FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY.managedToolNames,
+    ).toEqual(["managed_splunk__splunk_search"]);
     expect(
       FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY.replacementMappings,
     ).toEqual([
@@ -228,7 +235,8 @@ describe("legacy integration-hub first migrated family", () => {
       generationId: generation.id,
     });
 
-    if (!result.ok || result.replayed) throw new Error("migration invoke failed");
+    if (!result.ok || result.replayed)
+      throw new Error("migration invoke failed");
     expect(result.envelope).toMatchObject({
       ok: true,
       result_ref: {
@@ -323,6 +331,123 @@ describe("legacy integration-hub migrated security families", () => {
     }
   }, 30_000);
 
+  const liveQualysTest =
+    process.env.OPENACME_LIVE_QUALYS === "1" ? it : it.skip;
+
+  liveQualysTest(
+    "ports the five-tool Qualys pilot through live Qualys APIs",
+    async () => {
+      const liveConfig = readLiveQualysConfig();
+      const fixture = LEGACY_INTEGRATION_HUB_FIVE_READONLY_SOURCE_BACKED_FAMILY;
+      expect(fixture.migratedToolNames).toEqual([
+        ...LEGACY_INTEGRATION_HUB_FIVE_READONLY_SYNC_TOOL_NAMES,
+      ]);
+      expect(fixture.sourceFiles["qualys.py"]).toContain("class QualysClient");
+      expect(fixture.sourceFiles["qualys.py"]).toContain(
+        "asset.trackingMethod",
+      );
+      expect(fixture.sourceFiles["qualys.py"]).not.toContain("os.environ");
+
+      await seedMigratedSourceFamily(fixture);
+      const { draftId, lockId } = await createMigratedDraft(fixture);
+      await registerMigratedExamples(draftId, lockId, fixture);
+      const validation = await createFileHostedIntegrationDraftValidator({
+        draftStore: createDraftStore(fixture),
+        catalog: createFileHostedIntegrationCatalog({ dataDir }),
+      }).validateDraft(draftId);
+      expect(validation).toEqual({ ok: true, diagnostics: [] });
+      const generation = await promoteDraft(draftId, validation, fixture);
+      await seedLiveQualysConfig(liveConfig);
+
+      const gateway = createGateway();
+      const results = new Map<
+        string,
+        Awaited<ReturnType<typeof gateway.invoke>>
+      >();
+      for (const example of fixture.examples) {
+        const result = await gateway.invoke({
+          actor: migrationActor,
+          familyId: "qualys",
+          toolName: example.toolName,
+          generationId: generation.id,
+          environment: "test",
+          args: example.args,
+          bindings: [liveQualysBinding(example.toolName)],
+        });
+        if (!result.ok) throw new Error(JSON.stringify(result));
+        results.set(example.toolName, result);
+      }
+
+      expect(
+        results.get("qualys_gav_asset_count")?.envelope.result,
+      ).toMatchObject({
+        used_filter_body: true,
+        asset_last_updated: "2026-08-01T00:00Z",
+      });
+      expect(
+        typeof (
+          results.get("qualys_gav_asset_count")?.envelope.result as {
+            count?: unknown;
+          }
+        ).count,
+      ).toBe("number");
+      expect(
+        results.get("qualys_gav_asset_search")?.envelope.result,
+      ).toMatchObject({
+        pages_fetched: 1,
+        upstream_include_fields: ["assetName", "agentId"],
+      });
+      expect(
+        Array.isArray(
+          (
+            results.get("qualys_gav_asset_search")?.envelope.result as {
+              results?: unknown;
+            }
+          ).results,
+        ),
+      ).toBe(true);
+      expect(
+        results.get("qualys_cloud_agent_hostasset_count")?.envelope.result,
+      ).toMatchObject({ used_filter_body: true });
+      expect(
+        typeof (
+          results.get("qualys_cloud_agent_hostasset_count")?.envelope
+            .result as {
+            count?: unknown;
+          }
+        ).count,
+      ).toBe("number");
+      expect(
+        results.get("qualys_cloud_agent_hostasset_search")?.envelope.result,
+      ).toMatchObject({
+        pages_fetched: 1,
+      });
+      expect(
+        Array.isArray(
+          (
+            results.get("qualys_cloud_agent_hostasset_search")?.envelope
+              .result as {
+              results?: unknown;
+            }
+          ).results,
+        ),
+      ).toBe(true);
+      expect(
+        results.get("qualys_vmdr_host_list")?.envelope.result,
+      ).toMatchObject({ pages_fetched: 1 });
+      expect(
+        Array.isArray(
+          (
+            results.get("qualys_vmdr_host_list")?.envelope.result as {
+              results?: unknown;
+            }
+          ).results,
+        ),
+      ).toBe(true);
+    },
+    180_000,
+  );
+
   it("validates and promotes every migrated security family fixture", async () => {
     expect(
       LEGACY_INTEGRATION_HUB_MIGRATED_SECURITY_FAMILIES.map(
@@ -349,9 +474,9 @@ describe("legacy integration-hub migrated security families", () => {
           (mapping) => mapping.managedHostedToolName,
         ),
       );
-      expect(fixture.replacementMappings.map((mapping) => mapping.hostedToolName)).toEqual(
-        fixture.migratedToolNames,
-      );
+      expect(
+        fixture.replacementMappings.map((mapping) => mapping.hostedToolName),
+      ).toEqual(fixture.migratedToolNames);
       expect(
         fixture.replacementMappings.map((mapping) => mapping.legacyMcpToolName),
       ).toEqual(fixture.legacyMcpToolNames);
@@ -537,6 +662,63 @@ async function seedQualysConfig(): Promise<void> {
   });
 }
 
+interface LiveQualysConfig {
+  config: Record<string, string>;
+  secrets: Record<string, string>;
+}
+
+function readLiveQualysConfig(): LiveQualysConfig {
+  const vmUrl = process.env.QUALYS_VM_URL?.trim();
+  const gatewayUrl = process.env.QUALYS_GATEWAY_URL?.trim();
+  const username = process.env.QUALYS_USERNAME?.trim();
+  const password = process.env.QUALYS_PASSWORD?.trim();
+  if (!vmUrl || !username || !password) {
+    throw new Error(
+      "OPENACME_LIVE_QUALYS=1 requires QUALYS_VM_URL, QUALYS_USERNAME, and QUALYS_PASSWORD; QUALYS_GATEWAY_URL is optional.",
+    );
+  }
+  return {
+    config: {
+      QUALYS_VM_URL: vmUrl,
+      ...(gatewayUrl ? { QUALYS_GATEWAY_URL: gatewayUrl } : {}),
+      QUALYS_VERIFY_TLS: process.env.QUALYS_VERIFY_TLS ?? "1",
+      QUALYS_TIMEOUT_SECONDS: process.env.QUALYS_TIMEOUT_SECONDS ?? "120",
+      QUALYS_ASSET_MAX_PAGES: "1",
+      QUALYS_MAX_PAGES: "1",
+    },
+    secrets: {
+      QUALYS_USERNAME: username,
+      QUALYS_PASSWORD: password,
+    },
+  };
+}
+
+async function seedLiveQualysConfig(
+  liveConfig: LiveQualysConfig,
+): Promise<void> {
+  await createFileHostedIntegrationConfigScopeStore({
+    dataDir,
+    now: () => new Date(nowMs),
+  }).upsertConfigScope({
+    scopeId: "qualys-source-test",
+    familyId: "qualys",
+    environment: "test",
+    config: liveConfig.config,
+    secrets: {
+      QUALYS_USERNAME: { configured: true },
+      QUALYS_PASSWORD: { configured: true },
+    },
+    updatedBy: "human:operator",
+  });
+  await createFileHostedIntegrationSecretStore({
+    dataDir,
+  }).writeHumanOwnedSecrets({
+    scopeId: "qualys-source-test",
+    secrets: liveConfig.secrets,
+    updatedBy: "human:operator",
+  });
+}
+
 function createDraftStore(
   fixture = FIRST_LEGACY_INTEGRATION_HUB_MIGRATED_FAMILY,
 ) {
@@ -569,6 +751,19 @@ function splunkBinding() {
   };
 }
 
-function safeFixtureId(fixture: LegacyIntegrationHubMigratedFamilyFixture): string {
+function liveQualysBinding(toolName: string) {
+  return {
+    agentId: migrationActor.id,
+    familyId: "qualys",
+    toolName,
+    allowedConfigScopeIds: ["qualys-source-test"],
+    defaultConfigScopeId: "qualys-source-test",
+    environment: "test",
+  };
+}
+
+function safeFixtureId(
+  fixture: LegacyIntegrationHubMigratedFamilyFixture,
+): string {
   return fixture.familyId.replaceAll("-", "_");
 }

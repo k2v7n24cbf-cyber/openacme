@@ -4240,6 +4240,71 @@ function InspectorSection({
   );
 }
 
+function TimeoutMsInput({
+  ariaLabel,
+  value,
+  min,
+  max = 300_000,
+  onCommit,
+}: {
+  ariaLabel: string;
+  value: string;
+  min: number;
+  max?: number;
+  onCommit: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  function commit() {
+    const trimmed = draft.trim();
+    if (!trimmed) {
+      onCommit("");
+      return;
+    }
+    const timeoutMs = Number.parseInt(trimmed, 10);
+    if (
+      Number.isFinite(timeoutMs) &&
+      String(timeoutMs) === trimmed &&
+      timeoutMs >= min &&
+      timeoutMs <= max
+    ) {
+      onCommit(trimmed);
+      return;
+    }
+    setDraft(value);
+  }
+
+  return (
+    <Input
+      aria-label={ariaLabel}
+      inputMode="numeric"
+      value={draft}
+      placeholder={`${min}-${max}`}
+      onChange={(event) => {
+        const next = event.target.value;
+        if (/^\d*$/.test(next)) setDraft(next);
+      }}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          commit();
+          event.currentTarget.blur();
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          setDraft(value);
+          event.currentTarget.blur();
+        }
+      }}
+    />
+  );
+}
+
 function ReferenceInput({
   value,
   onChange,
@@ -5892,12 +5957,12 @@ function NodeCard({
                 <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                   Timeout
                 </span>
-                <Input
-                  aria-label={`${label} python timeout`}
-                  inputMode="numeric"
+                <TimeoutMsInput
+                  ariaLabel={`${label} python timeout`}
                   value={python.timeoutMs}
-                  onChange={(event) =>
-                    onPythonConfigChange("timeoutMs", event.target.value)
+                  min={100}
+                  onCommit={(value) =>
+                    onPythonConfigChange("timeoutMs", value)
                   }
                 />
               </label>
@@ -5994,12 +6059,12 @@ function NodeCard({
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Timeout ms
               </span>
-              <Input
-                aria-label={`${label} MCP timeout`}
-                inputMode="numeric"
+              <TimeoutMsInput
+                ariaLabel={`${label} MCP timeout`}
                 value={mcpTool.timeoutMs}
-                onChange={(event) =>
-                  onMcpToolConfigChange("timeoutMs", event.target.value)
+                min={100}
+                onCommit={(value) =>
+                  onMcpToolConfigChange("timeoutMs", value)
                 }
               />
             </label>
@@ -6117,13 +6182,11 @@ function NodeCard({
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Timeout ms
               </span>
-              <Input
-                aria-label={`${label} agent timeout`}
-                inputMode="numeric"
+              <TimeoutMsInput
+                ariaLabel={`${label} agent timeout`}
                 value={agentCall.timeoutMs}
-                onChange={(event) =>
-                  onAgentConfigChange("timeoutMs", event.target.value)
-                }
+                min={1}
+                onCommit={(value) => onAgentConfigChange("timeoutMs", value)}
               />
             </label>
           </div>

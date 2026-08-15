@@ -1,4 +1,12 @@
-import { Suspense, lazy, useState, useEffect, useMemo, useRef } from "react";
+import {
+  Suspense,
+  lazy,
+  useState,
+  useEffect,
+  useMemo,
+  useRef,
+  type ReactNode,
+} from "react";
 import {
   Plus,
   Trash2,
@@ -67,17 +75,18 @@ import type { EmojiClickData } from "emoji-picker-react";
 import { DynamicIcon, iconNames, type IconName } from "lucide-react/dynamic";
 import { cn } from "@/app/lib/utils";
 import {
+  agentSettingsCatalogTools,
   buildAgentSettingsHostedIntegrationBinding,
   groupAgentSettingsTools,
   hostedIntegrationNativeToolName,
-  hostedIntegrationScopesForTool,
+  hostedIntegrationEnvironmentConfigsForTool,
   isHostedIntegrationTool,
   removeHostedIntegrationBinding,
   sameHostedIntegrationBindings,
   selectedHostedIntegrationBindings,
   upsertHostedIntegrationBinding,
   type AgentHostedIntegrationBinding,
-  type HostedIntegrationConfigScope,
+  type HostedIntegrationEnvironmentConfig,
 } from "@/app/lib/hosted-integration-agent-settings";
 import { usePublishCurrentView } from "@/app/lib/CurrentViewContext";
 import { Markdown } from "@/app/components/Markdown";
@@ -414,9 +423,9 @@ function dedupeTools(tools: ToolInfo[]): ToolInfo[] {
   });
 }
 
-function dedupeHostedIntegrationConfigScopes(
-  scopes: HostedIntegrationConfigScope[],
-): HostedIntegrationConfigScope[] {
+function dedupeHostedIntegrationEnvironmentConfigs(
+  scopes: HostedIntegrationEnvironmentConfig[],
+): HostedIntegrationEnvironmentConfig[] {
   const seen = new Set<string>();
   return scopes.filter((scope) => {
     const key = `${scope.familyId}:${scope.id}:${scope.environment}:${scope.revision}`;
@@ -440,8 +449,8 @@ function AgentsPage() {
   const [globalMcp, setGlobalMcp] = useState<
     Record<string, MCPServerConfigDto>
   >({});
-  const [hostedConfigScopes, setHostedConfigScopes] = useState<
-    HostedIntegrationConfigScope[]
+  const [hostedEnvironmentConfigs, setHostedEnvironmentConfigs] = useState<
+    HostedIntegrationEnvironmentConfig[]
   >([]);
   const [allSkills, setAllSkills] = useState<SkillIndexEntry[]>([]);
 
@@ -529,7 +538,7 @@ function AgentsPage() {
         fetch(`${API_BASE}/api/mcp/global`, { signal }),
         fetch(`${API_BASE}/api/skills`, { signal }),
         fetch(`${API_BASE}/api/agents/catalog`, { signal }),
-        fetch(`${API_BASE}/api/hosted-integrations/config-scopes`, {
+        fetch(`${API_BASE}/api/hosted-integrations/environment-configs`, {
           signal,
         }),
       ]);
@@ -551,10 +560,10 @@ function AgentsPage() {
       }
       if (hostedScopesRes.ok) {
         const data = (await hostedScopesRes.json()) as {
-          configScopes?: HostedIntegrationConfigScope[];
+          environmentConfigs?: HostedIntegrationEnvironmentConfig[];
         };
-        setHostedConfigScopes(
-          dedupeHostedIntegrationConfigScopes(data.configScopes ?? []),
+        setHostedEnvironmentConfigs(
+          dedupeHostedIntegrationEnvironmentConfigs(data.environmentConfigs ?? []),
         );
       }
     } catch (e) {
@@ -610,7 +619,7 @@ function AgentsPage() {
   );
 
   const toolsByToolset = useMemo(() => {
-    return groupAgentSettingsTools(tools);
+    return groupAgentSettingsTools(agentSettingsCatalogTools(tools));
   }, [tools]);
 
   // ── Form helpers ─────────────────────────────────────────────────────────
@@ -621,7 +630,7 @@ function AgentsPage() {
         selected: prev.tools,
         hostedIntegrationBindings: prev.hostedIntegrationBindings,
         tool,
-        hostedConfigScopes,
+        hostedEnvironmentConfigs,
       }),
     }));
   };
@@ -634,7 +643,7 @@ function AgentsPage() {
         hostedIntegrationBindings: prev.hostedIntegrationBindings,
         tools,
         checked,
-        hostedConfigScopes,
+        hostedEnvironmentConfigs,
       }),
     }));
   };
@@ -1141,7 +1150,7 @@ function AgentsPage() {
                 providers={providers}
                 allSkills={allSkills}
                 toolGroups={toolsByToolset}
-                hostedConfigScopes={hostedConfigScopes}
+                hostedEnvironmentConfigs={hostedEnvironmentConfigs}
                 agentAskTool={agentAskTool}
                 onAgentUpdated={(updated) => {
                   setSelectedAgent(updated);
@@ -1272,27 +1281,29 @@ function AgentsPage() {
                       <ToolPicker
                         groups={toolsByToolset}
                         selected={formData.tools}
-                        hostedConfigScopes={hostedConfigScopes}
+                        hostedEnvironmentConfigs={hostedEnvironmentConfigs}
+                        hostedAccessEditor={
+                          <HostedIntegrationBindingsEditor
+                            tools={tools}
+                            selected={formData.tools}
+                            bindings={formData.hostedIntegrationBindings}
+                            hostedEnvironmentConfigs={hostedEnvironmentConfigs}
+                            onDefaultScopeChange={(tool, environment) =>
+                              setFormData((prev) => ({
+                                ...prev,
+                                hostedIntegrationBindings:
+                                  updateHostedIntegrationDefaultScope({
+                                    bindings: prev.hostedIntegrationBindings,
+                                    tool,
+                                    environment,
+                                    hostedEnvironmentConfigs,
+                                  }),
+                              }))
+                            }
+                          />
+                        }
                         onToggle={toggleTool}
                         onSetGroup={setToolGroup}
-                      />
-                      <HostedIntegrationBindingsEditor
-                        tools={tools}
-                        selected={formData.tools}
-                        bindings={formData.hostedIntegrationBindings}
-                        hostedConfigScopes={hostedConfigScopes}
-                        onDefaultScopeChange={(tool, scopeId) =>
-                          setFormData((prev) => ({
-                            ...prev,
-                            hostedIntegrationBindings:
-                              updateHostedIntegrationDefaultScope({
-                                bindings: prev.hostedIntegrationBindings,
-                                tool,
-                                scopeId,
-                                hostedConfigScopes,
-                              }),
-                          }))
-                        }
                       />
                       <AgentAskToolPicker
                         tool={agentAskTool}
@@ -1589,13 +1600,15 @@ function AgentsPage() {
 function ToolPicker({
   groups,
   selected,
-  hostedConfigScopes,
+  hostedEnvironmentConfigs,
+  hostedAccessEditor,
   onToggle,
   onSetGroup,
 }: {
   groups: [string, ToolInfo[]][];
   selected: string[];
-  hostedConfigScopes: HostedIntegrationConfigScope[];
+  hostedEnvironmentConfigs: HostedIntegrationEnvironmentConfig[];
+  hostedAccessEditor?: ReactNode;
   onToggle: (tool: ToolInfo) => void;
   onSetGroup: (tools: ToolInfo[], checked: boolean) => void;
 }) {
@@ -1610,6 +1623,15 @@ function ToolPicker({
     );
   }
   const total = groups.reduce((acc, [, list]) => acc + list.length, 0);
+  const orderedGroups = orderAgentSettingsToolGroups(groups, selected);
+  const lastSelectedHostedToolGroupIndex = orderedGroups.reduce(
+    (lastIndex, [toolset, list], index) =>
+      toolset.startsWith("Hosted Tools /") &&
+      list.some((tool) => selected.includes(tool.name))
+        ? index
+        : lastIndex,
+    -1,
+  );
   return (
     <div className="grid gap-3">
       <div className="flex items-center justify-between">
@@ -1619,7 +1641,7 @@ function ToolPicker({
         </span>
       </div>
       <div className="space-y-4">
-        {groups.map(([toolset, list]) => {
+        {orderedGroups.map(([toolset, list], groupIndex) => {
           const selectedInGroup = list.filter((t) =>
             selected.includes(t.name),
           ).length;
@@ -1627,7 +1649,7 @@ function ToolPicker({
           const selectableTools = list.filter(
             (tool) =>
               !isHostedIntegrationTool(tool) ||
-              hostedIntegrationScopesForTool(tool, hostedConfigScopes).length >
+              hostedIntegrationEnvironmentConfigsForTool(tool, hostedEnvironmentConfigs).length >
                 0,
           );
           return (
@@ -1658,19 +1680,34 @@ function ToolPicker({
                     checked={selected.includes(tool.name)}
                     disabled={
                       isHostedIntegrationTool(tool) &&
-                      hostedIntegrationScopesForTool(tool, hostedConfigScopes)
+                      hostedIntegrationEnvironmentConfigsForTool(tool, hostedEnvironmentConfigs)
                         .length === 0
                     }
                     onClick={() => onToggle(tool)}
                   />
                 ))}
               </div>
+              {groupIndex === lastSelectedHostedToolGroupIndex &&
+                hostedAccessEditor}
             </div>
           );
         })}
       </div>
     </div>
   );
+}
+
+function orderAgentSettingsToolGroups(
+  groups: [string, ToolInfo[]][],
+  selected: string[],
+): [string, ToolInfo[]][] {
+  const selectedSet = new Set(selected);
+  return [...groups].sort(([aName, aTools], [bName, bTools]) => {
+    const aSelected = aTools.some((tool) => selectedSet.has(tool.name));
+    const bSelected = bTools.some((tool) => selectedSet.has(tool.name));
+    if (aSelected !== bSelected) return aSelected ? -1 : 1;
+    return aName.localeCompare(bName);
+  });
 }
 
 function ToolToggle({
@@ -1710,12 +1747,15 @@ function ToolToggle({
         {checked && <Check className="size-3" strokeWidth={3} />}
       </div>
       <div className="min-w-0 flex-1">
-        <div className="truncate font-mono text-[12px] text-ink">
+        <div
+          className="line-clamp-2 break-all font-mono text-[12px] leading-5 text-ink"
+          title={tool.name}
+        >
           {tool.name}
         </div>
         <div className="line-clamp-2 text-[11px] text-ink-faint">
           {disabled
-            ? "Unavailable until a config scope exists."
+            ? "Unavailable until an environment config exists."
             : tool.description}
         </div>
       </div>
@@ -1984,7 +2024,7 @@ function AgentDetail({
   providers,
   allSkills,
   toolGroups,
-  hostedConfigScopes,
+  hostedEnvironmentConfigs,
   agentAskTool,
   tab,
   onTabChange,
@@ -1996,7 +2036,7 @@ function AgentDetail({
   providers: ProviderInfo[];
   allSkills: SkillIndexEntry[];
   toolGroups: [string, ToolInfo[]][];
-  hostedConfigScopes: HostedIntegrationConfigScope[];
+  hostedEnvironmentConfigs: HostedIntegrationEnvironmentConfig[];
   agentAskTool: ToolInfo;
   tab: AgentTab;
   onTabChange: (tab: AgentTab) => void;
@@ -2197,7 +2237,7 @@ function AgentDetail({
             agent={agent}
             groups={toolGroups}
             allTools={allTools}
-            hostedConfigScopes={hostedConfigScopes}
+            hostedEnvironmentConfigs={hostedEnvironmentConfigs}
             agentAskTool={agentAskTool}
             onSaved={onAgentUpdated}
             onDraftChange={setTabSlice}
@@ -2652,7 +2692,7 @@ function toggleToolSelection(input: {
   selected: string[];
   hostedIntegrationBindings: AgentHostedIntegrationBinding[];
   tool: ToolInfo;
-  hostedConfigScopes: HostedIntegrationConfigScope[];
+  hostedEnvironmentConfigs: HostedIntegrationEnvironmentConfig[];
 }): {
   selected: string[];
   hostedIntegrationBindings: AgentHostedIntegrationBinding[];
@@ -2680,7 +2720,7 @@ function toggleToolSelection(input: {
 
   const binding = buildAgentSettingsHostedIntegrationBinding({
     tool: input.tool,
-    configScopes: input.hostedConfigScopes,
+    environmentConfigs: input.hostedEnvironmentConfigs,
   });
   if (!binding) {
     return {
@@ -2703,7 +2743,7 @@ function setToolGroupSelection(input: {
   hostedIntegrationBindings: AgentHostedIntegrationBinding[];
   tools: ToolInfo[];
   checked: boolean;
-  hostedConfigScopes: HostedIntegrationConfigScope[];
+  hostedEnvironmentConfigs: HostedIntegrationEnvironmentConfig[];
 }): {
   selected: string[];
   hostedIntegrationBindings: AgentHostedIntegrationBinding[];
@@ -2718,7 +2758,7 @@ function setToolGroupSelection(input: {
       selected,
       hostedIntegrationBindings,
       tool,
-      hostedConfigScopes: input.hostedConfigScopes,
+      hostedEnvironmentConfigs: input.hostedEnvironmentConfigs,
     });
     selected = next.selected;
     hostedIntegrationBindings = next.hostedIntegrationBindings;
@@ -2729,13 +2769,13 @@ function setToolGroupSelection(input: {
 function updateHostedIntegrationDefaultScope(input: {
   bindings: AgentHostedIntegrationBinding[];
   tool: ToolInfo;
-  scopeId: string;
-  hostedConfigScopes: HostedIntegrationConfigScope[];
+  environment: "prod" | "test_debug";
+  hostedEnvironmentConfigs: HostedIntegrationEnvironmentConfig[];
 }): AgentHostedIntegrationBinding[] {
   const binding = buildAgentSettingsHostedIntegrationBinding({
     tool: input.tool,
-    configScopes: input.hostedConfigScopes,
-    defaultConfigScopeId: input.scopeId,
+    environmentConfigs: input.hostedEnvironmentConfigs,
+    defaultEnvironment: input.environment,
   });
   if (!binding) return input.bindings;
   return upsertHostedIntegrationBinding(input.bindings, binding);
@@ -2745,14 +2785,17 @@ function HostedIntegrationBindingsEditor({
   tools,
   selected,
   bindings,
-  hostedConfigScopes,
+  hostedEnvironmentConfigs,
   onDefaultScopeChange,
 }: {
   tools: ToolInfo[];
   selected: string[];
   bindings: AgentHostedIntegrationBinding[];
-  hostedConfigScopes: HostedIntegrationConfigScope[];
-  onDefaultScopeChange: (tool: ToolInfo, scopeId: string) => void;
+  hostedEnvironmentConfigs: HostedIntegrationEnvironmentConfig[];
+  onDefaultScopeChange: (
+    tool: ToolInfo,
+    environment: "prod" | "test_debug",
+  ) => void;
 }) {
   const selectedHostedTools = tools.filter(
     (tool) => selected.includes(tool.name) && isHostedIntegrationTool(tool),
@@ -2762,54 +2805,68 @@ function HostedIntegrationBindingsEditor({
   return (
     <div className="grid gap-3 border-t border-paper-rule pt-4">
       <div className="flex items-center justify-between">
-        <Label>Hosted integration access</Label>
+        <Label>Hosted tool access</Label>
         <span className="font-mono text-[11px] tabular-nums text-ink-soft">
           {selectedHostedTools.length}
         </span>
       </div>
       <div className="grid gap-px">
         {selectedHostedTools.map((tool) => {
-          const scopes = hostedIntegrationScopesForTool(
+          const scopes = hostedIntegrationEnvironmentConfigsForTool(
             tool,
-            hostedConfigScopes,
+            hostedEnvironmentConfigs,
           );
           const binding = bindings.find(
             (candidate) =>
               candidate.familyId === tool.source?.familyId &&
               candidate.toolName === hostedIntegrationNativeToolName(tool),
           );
-          const value = binding?.defaultConfigScopeId ?? scopes[0]?.id ?? "";
+          const value =
+            binding?.defaultEnvironment ?? scopes[0]?.environment ?? "";
           return (
             <div
               key={tool.name}
               className="grid gap-3 border border-paper-rule bg-paper px-3 py-3 md:grid-cols-[minmax(0,1fr)_minmax(220px,320px)]"
             >
               <div className="min-w-0">
-                <div className="truncate font-mono text-[12px] text-ink">
+                <div
+                  className="line-clamp-2 break-all font-mono text-[12px] leading-5 text-ink"
+                  title={tool.name}
+                >
                   {tool.name}
                 </div>
-                <div className="text-[11px] text-ink-faint">
+                <div className="mt-1 text-[11px] text-ink-faint">
                   {tool.source?.familyName ?? tool.source?.familyId}
                 </div>
               </div>
-              <Select
-                value={value}
-                onValueChange={(scopeId) => onDefaultScopeChange(tool, scopeId)}
-              >
-                <SelectTrigger aria-label={`${tool.name} config scope`}>
-                  <SelectValue placeholder="Select scope" />
-                </SelectTrigger>
-                <SelectContent>
-                  {scopes.map((scope) => (
-                    <SelectItem
-                      key={`${scope.familyId}:${scope.id}:${scope.environment}:${scope.revision}`}
-                      value={scope.id}
-                    >
-                      {scope.id} · {scope.environment} · rev {scope.revision}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="grid gap-1">
+                <Label className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                  Environment
+                </Label>
+                <Select
+                  value={value}
+                  onValueChange={(environment) =>
+                    onDefaultScopeChange(
+                      tool,
+                      environment as "prod" | "test_debug",
+                    )
+                  }
+                >
+                  <SelectTrigger aria-label={`${tool.name} environment`}>
+                    <SelectValue placeholder="Select environment" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {scopes.map((scope) => (
+                      <SelectItem
+                        key={`${scope.familyId}:${scope.environment}:${scope.revision}`}
+                        value={scope.environment}
+                      >
+                        {scope.environment} · {scope.id} · rev {scope.revision}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           );
         })}
@@ -2822,7 +2879,7 @@ function AgentToolsTab({
   agent,
   groups,
   allTools,
-  hostedConfigScopes,
+  hostedEnvironmentConfigs,
   agentAskTool,
   onSaved,
   onDraftChange,
@@ -2830,7 +2887,7 @@ function AgentToolsTab({
   agent: Agent;
   groups: [string, ToolInfo[]][];
   allTools: ToolInfo[];
-  hostedConfigScopes: HostedIntegrationConfigScope[];
+  hostedEnvironmentConfigs: HostedIntegrationEnvironmentConfig[];
   agentAskTool: ToolInfo;
   onSaved: (updated: Agent) => void;
   onDraftChange?: (slice: Partial<Agent>) => void;
@@ -2921,13 +2978,31 @@ function AgentToolsTab({
       <ToolPicker
         groups={groups}
         selected={selected}
-        hostedConfigScopes={hostedConfigScopes}
+        hostedEnvironmentConfigs={hostedEnvironmentConfigs}
+        hostedAccessEditor={
+          <HostedIntegrationBindingsEditor
+            tools={allTools}
+            selected={selected}
+            bindings={hostedIntegrationBindings}
+            hostedEnvironmentConfigs={hostedEnvironmentConfigs}
+            onDefaultScopeChange={(tool, environment) =>
+              setHostedIntegrationBindings((prev) =>
+                updateHostedIntegrationDefaultScope({
+                  bindings: prev,
+                  tool,
+                  environment,
+                  hostedEnvironmentConfigs,
+                }),
+              )
+            }
+          />
+        }
         onToggle={(tool) => {
           const next = toggleToolSelection({
             selected,
             hostedIntegrationBindings,
             tool,
-            hostedConfigScopes,
+            hostedEnvironmentConfigs,
           });
           setSelected(next.selected);
           setHostedIntegrationBindings(next.hostedIntegrationBindings);
@@ -2938,27 +3013,11 @@ function AgentToolsTab({
             hostedIntegrationBindings,
             tools,
             checked,
-            hostedConfigScopes,
+            hostedEnvironmentConfigs,
           });
           setSelected(next.selected);
           setHostedIntegrationBindings(next.hostedIntegrationBindings);
         }}
-      />
-      <HostedIntegrationBindingsEditor
-        tools={allTools}
-        selected={selected}
-        bindings={hostedIntegrationBindings}
-        hostedConfigScopes={hostedConfigScopes}
-        onDefaultScopeChange={(tool, scopeId) =>
-          setHostedIntegrationBindings((prev) =>
-            updateHostedIntegrationDefaultScope({
-              bindings: prev,
-              tool,
-              scopeId,
-              hostedConfigScopes,
-            }),
-          )
-        }
       />
       <AgentAskToolPicker
         tool={agentAskTool}

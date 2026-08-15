@@ -1,4 +1,5 @@
 import type { Config } from "@openacme/config";
+import { resolveDeploymentMode } from "@openacme/config";
 import { createLogger } from "@openacme/config/logger";
 import type { ModelResolver } from "@openacme/agent-core";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -6,14 +7,29 @@ import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { WorkflowManager } from "@openacme/workflows";
 import {
+  createDbHostedIntegrationService,
   createFileHostedIntegrationService,
   HostedIntegrationExampleSchema,
   FamilyManifestSchema,
   HostedIntegrationPythonRuntime,
-  HostedIntegrationPolicyBindingSchema,
+  HostedIntegrationHostedToolBindingSchema,
+  HostedIntegrationToolHelpRequestSchema,
+  buildHostedIntegrationFocusedSourceView,
+  buildHostedIntegrationGenerationDiff,
+  evaluateHostedIntegrationPolicy,
   evaluateHostedIntegrationPromotionApproval,
+  generationFilesRoot,
   isHostedIntegrationToolVisibleForSelection,
+  listFilesUnderRoot,
   parseHostedIntegrationManagedToolName,
+  readTextFileUnderRoot,
+  resolveAgentHostedToolBindingReadiness,
+  resolveDebugReadiness,
+  resolveEnvironmentConfigReadiness,
+  resolveInvocationReadiness,
+  resolvePublishReadiness,
+  resolveHostedIntegrationExecutionConfig,
+  resolveHostedIntegrationToolHelp,
   type FamilyManifest,
   type HostedIntegrationDraft,
   type HostedIntegrationExample,
@@ -21,18 +37,21 @@ import {
   type HostedIntegrationGatewayError,
   type HostedIntegrationGeneration,
   type HostedIntegrationHumanApprovalRecord,
-  type HostedIntegrationPolicyBinding,
+  type HostedIntegrationHostedToolBinding,
   type HostedIntegrationRegistryRefreshEvent,
   type HostedIntegrationService,
   JsonObjectSchema,
 } from "@openacme/hosted-integrations";
 import {
+  bindManagedToolHelp,
   bindHostedIntegrationManagement,
   HostedIntegrationToolRegistryAdapter,
+  MANAGED_TOOL_HELP_TOOL_NAME,
   registry as toolRegistry,
   type HostedIntegrationRegistrySnapshot,
   type HostedIntegrationManagementRequest,
   type HostedIntegrationToolInvokeRequest,
+  type ManagedToolHelpRequest,
 } from "@openacme/tools";
 import { jsonSchemaToZod } from "@openacme/mcp-client";
 import {
@@ -65,6 +84,7 @@ export interface ServerRuntimeOptions {
   workflowDispatcherIntervalMs?: number;
   workflowDispatcherNow?: () => Date;
   hostedIntegrationService?: HostedIntegrationService;
+  hostedIntegrationPersistenceBackend?: "file" | "db";
 }
 
 export class ServerRuntime {
@@ -76,6 +96,7 @@ export class ServerRuntime {
   readonly workflowPythonRuntime: WorkflowPythonRuntime;
   readonly workflowExecutionPorts: WorkflowExecutionPorts;
   readonly hostedIntegrationService: HostedIntegrationService;
+  readonly hostedIntegrationPersistenceBackend: "file" | "db";
   readonly hostedIntegrationToolRegistry: HostedIntegrationToolRegistryAdapter;
   private readonly dataDir: string;
   private readonly workflowDb: ReturnType<typeof createDatabase>;
@@ -100,17 +121,26 @@ export class ServerRuntime {
         registry: toolRegistry,
         invoke: (request) => this.invokeHostedIntegrationTool(request),
       });
-    this.hostedIntegrationService =
-      opts?.hostedIntegrationService ??
-      createFileHostedIntegrationService({
-        dataDir: config.dataDir,
+    if (opts?.hostedIntegrationService) {
+      this.hostedIntegrationService = opts.hostedIntegrationService;
+      this.hostedIntegrationPersistenceBackend =
+        opts.hostedIntegrationPersistenceBackend ?? "file";
+    } else {
+      const hostedIntegrationRuntime = createHostedIntegrationServiceForRuntime(config, {
         onRegistryRefresh: (event) =>
           this.refreshHostedIntegrationRegistry(event),
         onFailureBucketRecorded: (event) =>
           this.createHostedIntegrationRepairTask(event),
       });
+      this.hostedIntegrationService = hostedIntegrationRuntime.service;
+      this.hostedIntegrationPersistenceBackend =
+        hostedIntegrationRuntime.backend;
+    }
     bindHostedIntegrationManagement({
       invoke: (request) => this.invokeHostedIntegrationManagement(request),
+    });
+    bindManagedToolHelp({
+      invoke: (request) => this.invokeManagedToolHelp(request),
     });
     this.workflowExecutionPorts = {
       agent: this.workflowAgentRuntime,
@@ -144,9 +174,9 @@ export class ServerRuntime {
       actor: { id: request.actorId, kind: "agent", roles: ["agent"] },
       familyId: request.familyId,
       toolName: request.toolName,
-      environment: binding.binding.environment,
+      environment: binding.binding.defaultEnvironment,
       args: args.data,
-      bindings: [binding.binding],
+      hostedToolBindings: [binding.binding],
       generationId: request.generationId,
     });
     if (!result.ok) {
@@ -161,7 +191,7 @@ export class ServerRuntime {
   private hostedIntegrationBindingForTool(
     request: HostedIntegrationToolInvokeRequest,
   ):
-    | { ok: true; binding: HostedIntegrationPolicyBinding }
+    | { ok: true; binding: HostedIntegrationHostedToolBinding }
     | { ok: false; error: { code: string; message: string } } {
     const def = this.agentManager.getAgentDef(request.actorId);
     if (!def) {
@@ -207,7 +237,7 @@ export class ServerRuntime {
       };
     }
 
-    const parsed = HostedIntegrationPolicyBindingSchema.safeParse({
+    const parsed = HostedIntegrationHostedToolBindingSchema.safeParse({
       agentId: def.id,
       ...matches[0],
     });
@@ -235,6 +265,69 @@ export class ServerRuntime {
       canonicalToolName: request.canonicalToolName,
       generationId: request.generationId,
     });
+  }
+
+  private async invokeManagedToolHelp(
+    request: ManagedToolHelpRequest,
+  ): Promise<unknown> {
+    const def = this.agentManager.getAgentDef(request.actorId);
+    if (!def || !def.tools.includes(MANAGED_TOOL_HELP_TOOL_NAME)) {
+      return {
+        ok: false,
+        error: {
+          code: "policy_denied",
+          message: "agent cannot use managed tool help",
+        },
+      };
+    }
+
+    const parsedRequest = HostedIntegrationToolHelpRequestSchema.parse(
+      request.params,
+    );
+    const parsedName = parseHostedIntegrationManagedToolName(
+      parsedRequest.tool_name,
+    );
+    if (!parsedName) {
+      return {
+        ok: false,
+        error: {
+          code: "bad_arguments",
+          message:
+            "tool_name must be a managed hosted integration tool name like managed_<family>__<tool>",
+        },
+      };
+    }
+
+    const binding = this.hostedIntegrationBindingForTool({
+      actorId: request.actorId,
+      familyId: parsedName.familyId,
+      canonicalToolName: parsedRequest.tool_name,
+      toolName: parsedName.toolName,
+      generationId: "active",
+      args: {},
+    });
+    if (!binding.ok) {
+      return {
+        ok: false,
+        error: binding.error,
+      };
+    }
+
+    const result = await resolveHostedIntegrationToolHelp({
+      dataDir: this.dataDir,
+      generations: this.hostedIntegrationService.generations,
+      managedToolName: parsedRequest.tool_name,
+      familyId: parsedName.familyId,
+      toolName: parsedName.toolName,
+      request: {
+        tool_detail: parsedRequest.tool_detail,
+        include_examples: parsedRequest.include_examples,
+        parameters: parsedRequest.parameters,
+      },
+    });
+    return result.ok
+      ? { ok: true, help: result.help }
+      : { ok: false, error: result.error };
   }
 
   private async createHostedIntegrationRepairTask(
@@ -303,6 +396,8 @@ export class ServerRuntime {
       }
       case "hosted_integration_source_read":
         return this.readHostedIntegrationSource(p);
+      case "hosted_integration_source_view":
+        return this.readHostedIntegrationSourceView(p);
       case "hosted_integration_lock_acquire": {
         const result = await this.hostedIntegrationService.locks.acquireLock({
           familyId: stringParam(p, "family_id"),
@@ -430,6 +525,8 @@ export class ServerRuntime {
           ? { ok: true, generation }
           : { ok: false, error: { code: "not_found" } };
       }
+      case "hosted_integration_generation_diff":
+        return this.diffHostedIntegrationGenerations(p);
       case "hosted_integration_generation_rollback": {
         const generation =
           await this.hostedIntegrationService.generations.getGeneration(
@@ -447,21 +544,24 @@ export class ServerRuntime {
           ? { ok: true, activeGeneration: result.activeGeneration }
           : { ok: false, error: { code: result.reason } };
       }
-      case "hosted_integration_config_scope_list":
+      case "hosted_integration_environment_config_list":
         return {
           ok: true,
-          configScopes:
-            await this.hostedIntegrationService.configScopes.listConfigScopes(),
+          environmentConfigs:
+            await this.hostedIntegrationService.environmentConfigs.listEnvironmentConfigs(),
         };
-      case "hosted_integration_config_scope_get": {
-        const configScope =
-          await this.hostedIntegrationService.configScopes.getConfigScope(
-            stringParam(p, "scope_id"),
+      case "hosted_integration_environment_config_get": {
+        const environmentConfig =
+          await this.hostedIntegrationService.environmentConfigs.getEnvironmentConfig(
+            stringParam(p, "family_id"),
+            stringParam(p, "environment"),
           );
-        return configScope
-          ? { ok: true, configScope }
+        return environmentConfig
+          ? { ok: true, environmentConfig }
           : { ok: false, error: { code: "not_found" } };
       }
+      case "hosted_integration_readiness_get":
+        return this.readHostedIntegrationReadiness(request);
       case "hosted_integration_debug_run":
         return this.invokeHostedIntegrationDebugRun(request);
       case "hosted_integration_run_get": {
@@ -535,6 +635,7 @@ export class ServerRuntime {
   private hostedIntegrationManagementDenied(
     request: HostedIntegrationManagementRequest,
   ): { ok: false; error: { code: string; message: string } } | null {
+    if (request.actorId === "web-settings") return null;
     const def = this.agentManager.getAgentDef(request.actorId);
     if (!def || !def.tools.includes(request.toolName)) {
       return {
@@ -625,6 +726,198 @@ export class ServerRuntime {
       draft,
       files: files.ok ? files.files : [],
     };
+  }
+
+  private async readHostedIntegrationSourceView(
+    params: Record<string, unknown>,
+  ): Promise<unknown> {
+    const familyId = stringParam(params, "family_id");
+    const toolName = nativeHostedIntegrationToolNameParam(params, "tool_name");
+    const draftId = optionalStringParam(params, "draft_id");
+    const generationId = optionalStringParam(params, "generation_id");
+    const sourceTarget = draftId
+      ? await this.readDraftSourceViewTarget(draftId, familyId)
+      : await this.readGenerationSourceViewTarget(familyId, generationId);
+    if (!sourceTarget.ok) {
+      return { ok: false, error: { code: sourceTarget.reason } };
+    }
+
+    const view = await buildHostedIntegrationFocusedSourceView({
+      familyId,
+      generationId: sourceTarget.generationId,
+      manifest: sourceTarget.manifest,
+      entrypointPath: sourceTarget.manifest.runtime.entrypoint,
+      source: sourceTarget.source,
+      toolName,
+      options: {
+        includeSharedHelpers: params.include_shared_helpers === true,
+        includeHooks: params.include_hooks === true,
+        includeAllTools: params.include_all_tools === true,
+        helperDepthLimit:
+          positiveIntegerParam(params, "helper_depth_limit") ?? undefined,
+        maxHelperSnippets:
+          positiveIntegerParam(params, "max_helper_snippets") ?? undefined,
+        maxSourceChars:
+          positiveIntegerParam(params, "max_source_chars") ?? undefined,
+      },
+    });
+    return { ok: true, view };
+  }
+
+  private async readDraftSourceViewTarget(
+    draftId: string,
+    familyId: string,
+  ): Promise<
+    | {
+        ok: true;
+        generationId: string;
+        manifest: FamilyManifest;
+        source: string;
+      }
+    | { ok: false; reason: string }
+  > {
+    const draft = await this.hostedIntegrationService.drafts.getDraft(draftId);
+    if (!draft) return { ok: false, reason: "not_found" };
+    if (draft.familyId !== familyId) return { ok: false, reason: "not_found" };
+    const manifest = await this.readHostedIntegrationDraftManifest(draftId);
+    const source = await this.hostedIntegrationService.drafts.readDraftFile({
+      draftId,
+      path: manifest.runtime.entrypoint,
+    });
+    if (!source.ok) return { ok: false, reason: source.reason };
+    return {
+      ok: true,
+      generationId: `draft:${draft.id}`,
+      manifest,
+      source: source.content,
+    };
+  }
+
+  private async readGenerationSourceViewTarget(
+    familyId: string,
+    generationId: string | null,
+  ): Promise<
+    | {
+        ok: true;
+        generationId: string;
+        manifest: FamilyManifest;
+        source: string;
+      }
+    | { ok: false; reason: string }
+  > {
+    const generation = generationId
+      ? await this.hostedIntegrationService.generations.getGeneration(
+          generationId,
+        )
+      : await this.hostedIntegrationService.generations.getActiveGeneration(
+          familyId,
+        );
+    if (!generation) {
+      return {
+        ok: false,
+        reason: generationId ? "generation_not_found" : "no_active_generation",
+      };
+    }
+    if (generation.familyId !== familyId) {
+      return { ok: false, reason: "generation_not_found" };
+    }
+
+    const filesRoot = generationFilesRoot(this.dataDir, generation.id);
+    try {
+      const manifest = FamilyManifestSchema.parse(
+        parseYaml(
+          await readTextFileUnderRoot(
+            filesRoot,
+            "family.yaml",
+            "generation files root",
+          ),
+        ),
+      );
+      return {
+        ok: true,
+        generationId: generation.id,
+        manifest,
+        source: await readTextFileUnderRoot(
+          filesRoot,
+          manifest.runtime.entrypoint,
+          "generation files root",
+        ),
+      };
+    } catch {
+      return { ok: false, reason: "source_not_found" };
+    }
+  }
+
+  private async diffHostedIntegrationGenerations(
+    params: Record<string, unknown>,
+  ): Promise<unknown> {
+    const base = await this.readGenerationDiffSnapshot(
+      stringParam(params, "base_generation_id"),
+    );
+    if (!base.ok) return { ok: false, error: { code: base.reason } };
+    const compare = await this.readGenerationDiffSnapshot(
+      stringParam(params, "compare_generation_id"),
+    );
+    if (!compare.ok) return { ok: false, error: { code: compare.reason } };
+    return buildHostedIntegrationGenerationDiff({
+      base: base.snapshot,
+      compare: compare.snapshot,
+      options: {
+        mode:
+          (optionalStringParam(params, "mode") as
+            | "summary"
+            | "unified"
+            | "manifest"
+            | "tool_focused"
+            | null) ?? "summary",
+        path: optionalStringParam(params, "path") ?? undefined,
+        toolName: optionalStringParam(params, "tool_name") ?? undefined,
+        includeSharedHelpers: params.include_shared_helpers === true,
+        includeHooks: params.include_hooks === true,
+      },
+    });
+  }
+
+  private async readGenerationDiffSnapshot(
+    generationId: string,
+  ): Promise<
+    | {
+        ok: true;
+        snapshot: {
+          generationId: string;
+          familyId: string;
+          files: Record<string, string>;
+        };
+      }
+    | { ok: false; reason: string }
+  > {
+    const generation =
+      await this.hostedIntegrationService.generations.getGeneration(
+        generationId,
+      );
+    if (!generation) return { ok: false, reason: "generation_not_found" };
+    const filesRoot = generationFilesRoot(this.dataDir, generation.id);
+    try {
+      const files: Record<string, string> = {};
+      const listed = await listFilesUnderRoot(filesRoot);
+      for (const file of listed) {
+        files[file.path] = await readTextFileUnderRoot(
+          filesRoot,
+          file.path,
+          "generation files root",
+        );
+      }
+      return {
+        ok: true,
+        snapshot: {
+          generationId: generation.id,
+          familyId: generation.familyId,
+          files,
+        },
+      };
+    } catch {
+      return { ok: false, reason: "source_not_found" };
+    }
   }
 
   private async applyHostedIntegrationDraftPatch(
@@ -743,24 +1036,223 @@ export class ServerRuntime {
     }
     const familyId = stringParam(p, "family_id");
     const toolName = nativeHostedIntegrationToolNameParam(p, "tool_name");
-    const configScopeId = stringParam(p, "config_scope_id");
+    const environment = optionalStringParam(p, "environment") ?? "test_debug";
     return this.hostedIntegrationService.gateway.invoke({
       actor: { id: request.actorId, kind: "agent", roles: ["tool_developer"] },
       familyId,
       toolName,
-      environment: stringParam(p, "environment"),
+      environment,
       args: JsonObjectSchema.parse(p.args ?? {}),
-      bindings: [
+      hostedToolBindings: [
         {
           agentId: request.actorId,
           familyId,
           toolName,
-          allowedConfigScopeIds: [configScopeId],
-          defaultConfigScopeId: configScopeId,
-          environment: stringParam(p, "environment"),
+          allowedEnvironments: [environment as "prod" | "test_debug"],
+          defaultEnvironment: environment as "prod" | "test_debug",
+          generationPin: optionalStringParam(p, "generation_id")
+            ? {
+                type: "generation",
+                generationId: stringParam(p, "generation_id"),
+              }
+            : { type: "current" },
+          bindingKind: "internal",
+          purpose: "debug",
+          updatedAt: new Date().toISOString(),
+          updatedBy: request.actorId,
         },
       ],
+      invocationPurpose: "tool_maintenance",
+      executionPurpose: "debug",
       generationId: optionalStringParam(p, "generation_id") ?? undefined,
+    });
+  }
+
+  private async readHostedIntegrationReadiness(
+    request: HostedIntegrationManagementRequest,
+  ): Promise<unknown> {
+    const p = request.params;
+    const targetType = stringParam(p, "target_type");
+    switch (targetType) {
+      case "environment_config": {
+        const readiness = await this.environmentConfigReadiness(
+          stringParam(p, "family_id"),
+          stringParam(p, "environment"),
+        );
+        return { ok: true, readiness };
+      }
+      case "binding": {
+        const agentId = stringParam(p, "agent_id");
+        const familyId = stringParam(p, "family_id");
+        const toolName = nativeHostedIntegrationToolNameParam(p, "tool_name");
+        const def = this.agentManager.getAgentDef(agentId);
+        const activeGeneration =
+          await this.hostedIntegrationService.generations.getActiveGeneration(
+            familyId,
+          );
+        return {
+          ok: true,
+          readiness: resolveAgentHostedToolBindingReadiness({
+            agentId,
+            familyId,
+            toolName,
+            hostedToolBindings: (def?.hostedIntegrationBindings ?? []).map(
+              (binding) => ({ agentId, ...binding }),
+            ),
+            activeGenerationId: activeGeneration?.id,
+          }),
+        };
+      }
+      case "publish": {
+        const draftId = stringParam(p, "draft_id");
+        const draft = await this.hostedIntegrationService.drafts.getDraft(
+          draftId,
+        );
+        const validation = draft
+          ? await this.hostedIntegrationService.validator.validateDraft(draftId)
+          : null;
+        return {
+          ok: true,
+          readiness: resolvePublishReadiness({
+            draftId,
+            draftExists: draft !== null,
+            validation,
+            runtimeConfigContract: { status: "empty" },
+          }),
+        };
+      }
+      case "debug": {
+        const familyId = stringParam(p, "family_id");
+        const toolName = nativeHostedIntegrationToolNameParam(p, "tool_name");
+        const environment = optionalStringParam(p, "environment") ?? "test_debug";
+        const family = await this.hostedIntegrationService.getFamily(familyId);
+        const tool = family?.manifest.tools.find(
+          (candidate) => candidate.name === toolName,
+        );
+        const activeGeneration =
+          await this.hostedIntegrationService.generations.getActiveGeneration(
+            familyId,
+          );
+        const environmentConfig =
+          await this.hostedIntegrationService.environmentConfigs.getEnvironmentConfig(
+            familyId,
+            environment,
+          );
+        const executionConfig = resolveHostedIntegrationExecutionConfig({
+          familyId,
+          environment: environment === "prod" ? "prod" : "test_debug",
+          generation: {
+            runtimeConfig:
+              activeGeneration?.runtimeConfig ?? family?.manifest.runtimeConfig,
+          },
+          policyDecision: {
+            ok: true,
+            resolvedEnvironment: environment === "prod" ? "prod" : "test_debug",
+          },
+          environmentConfig,
+          executionPurpose: "debug",
+        });
+        const readiness = resolveDebugReadiness({
+          actor: { id: request.actorId, kind: "agent", roles: ["tool_developer"] },
+          familyId,
+          toolName,
+          environment,
+          allowProdEnvironment: p.allow_prod_environment === true,
+          operation: tool?.classification.operation ?? "read",
+          environmentReadiness: executionConfig.ok
+            ? executionConfig.readiness
+            : executionConfig.error,
+        });
+        return { ok: true, readiness };
+      }
+      case "invocation": {
+        const agentId = stringParam(p, "agent_id");
+        const familyId = stringParam(p, "family_id");
+        const toolName = nativeHostedIntegrationToolNameParam(p, "tool_name");
+        const def = this.agentManager.getAgentDef(agentId);
+        const family = await this.hostedIntegrationService.getFamily(familyId);
+        const tool = family?.manifest.tools.find(
+          (candidate) => candidate.name === toolName,
+        );
+        const bindings = (def?.hostedIntegrationBindings ?? []).map(
+          (binding) => ({ agentId, ...binding }),
+        );
+        const policyDecision = evaluateHostedIntegrationPolicy({
+          actor: { id: agentId, kind: "agent", roles: ["agent"] },
+          action: "invoke",
+          familyId,
+          toolName,
+          operationClass: tool?.classification.operation ?? "read",
+          environment: "test_debug",
+          mode: "run",
+          toolClassification: tool?.classification,
+          hostedToolBindings: bindings,
+        });
+        const environment =
+          policyDecision.ok && policyDecision.resolvedEnvironment
+            ? policyDecision.resolvedEnvironment
+            : "test_debug";
+        const activeGeneration =
+          await this.hostedIntegrationService.generations.getActiveGeneration(
+            familyId,
+          );
+        const environmentConfig =
+          await this.hostedIntegrationService.environmentConfigs.getEnvironmentConfig(
+            familyId,
+            environment,
+          );
+        const executionConfig = resolveHostedIntegrationExecutionConfig({
+          familyId,
+          environment,
+          generation: {
+            runtimeConfig:
+              activeGeneration?.runtimeConfig ?? family?.manifest.runtimeConfig,
+          },
+          policyDecision,
+          environmentConfig,
+          executionPurpose: "consumer",
+        });
+        return {
+          ok: true,
+          readiness: resolveInvocationReadiness({
+            actor: { id: agentId, kind: "agent", roles: ["agent"] },
+            familyId,
+            toolName,
+            toolLifecycle: tool?.lifecycle,
+            policyDecision,
+            environmentReadiness: executionConfig.ok
+              ? executionConfig.readiness
+              : executionConfig.error,
+            capturedGenerationId:
+              optionalStringParam(p, "captured_generation_id") ?? undefined,
+            resolvedGenerationId: activeGeneration?.id,
+          }),
+        };
+      }
+      default:
+        return { ok: false, error: { code: "invalid_readiness_target" } };
+    }
+  }
+
+  private async environmentConfigReadiness(
+    familyId: string,
+    environment: string,
+  ) {
+    const environmentConfig =
+      await this.hostedIntegrationService.environmentConfigs.getEnvironmentConfig(
+        familyId,
+        environment,
+      );
+    return resolveEnvironmentConfigReadiness({
+      familyId,
+      environment,
+      environmentConfig,
+      requiredConfigKeys: environmentConfig
+        ? Object.keys(environmentConfig.config)
+        : [],
+      requiredSecretKeys: environmentConfig
+        ? Object.keys(environmentConfig.secrets)
+        : [],
     });
   }
 
@@ -818,6 +1310,22 @@ export class ServerRuntime {
     if (!tool) return { ok: false, error: { code: "tool_not_found" } };
 
     const draftGenerationId = `draft:${draft.id}`;
+    const environmentConfig =
+      await this.hostedIntegrationService.environmentConfigs.getEnvironmentConfig(
+        draft.familyId,
+        "test_debug",
+      );
+    const executionConfig = resolveHostedIntegrationExecutionConfig({
+      familyId: draft.familyId,
+      environment: "test_debug",
+      generation: { runtimeConfig: manifest.runtimeConfig },
+      policyDecision: { ok: true, resolvedEnvironment: "test_debug" },
+      environmentConfig,
+      executionPurpose: "example",
+    });
+    if (!executionConfig.ok) {
+      return { ok: false, error: { code: executionConfig.error.code } };
+    }
     const { run, familyHome, runDir } =
       await this.hostedIntegrationService.artifacts.createRun({
         familyId: draft.familyId,
@@ -832,8 +1340,9 @@ export class ServerRuntime {
       toolName: example.toolName,
       generationId: draftGenerationId,
       actorId: request.actorId,
-      configScopeId: "debug",
-      configRevision: 1,
+      environmentConfigId: executionConfig.environmentConfigId,
+      configRevision: executionConfig.configRevision,
+      executionPurpose: executionConfig.executionPurpose,
       sanitizedArgs: JsonObjectSchema.parse(example.args),
       status: "running",
       startedAt: run.startedAt,
@@ -855,8 +1364,12 @@ export class ServerRuntime {
         runId: run.id,
         familyHome,
         runDir,
-        config: {},
-        secrets: {},
+        config: executionConfig.config,
+        secrets: executionConfig.secretsEnvironmentConfigId
+          ? await this.hostedIntegrationService.secrets.readSecretsForRuntime({
+              environmentConfigId: executionConfig.secretsEnvironmentConfigId,
+            })
+          : {},
       },
     });
     if (!runtimeResult.ok) {
@@ -1344,4 +1857,75 @@ function positiveIntegerParam(
     throw new Error(`${name} must be a positive integer`);
   }
   return value;
+}
+
+function createHostedIntegrationServiceForRuntime(
+  config: Config,
+  hooks: {
+    onRegistryRefresh: (
+      event: HostedIntegrationRegistryRefreshEvent,
+    ) => void | Promise<void>;
+    onFailureBucketRecorded: (
+      event: HostedIntegrationFailureBucketRecordedEvent,
+    ) => void | Promise<void>;
+  },
+): { service: HostedIntegrationService; backend: "file" | "db" } {
+  const deploymentMode = resolveDeploymentMode(config.server);
+  const hostedIntegrationConfig = config as Config & {
+    hostedIntegrations?: { persistenceBackend?: "auto" | "file" | "db" };
+  };
+  const configuredBackend =
+    hostedIntegrationConfig.hostedIntegrations?.persistenceBackend ?? "auto";
+  const backend =
+    configuredBackend === "auto"
+      ? deploymentMode === "authenticated"
+        ? "db"
+        : "file"
+      : configuredBackend;
+
+  if (deploymentMode === "authenticated" && backend === "file") {
+    throw new Error(
+      "hosted integrations file-backed persistence is only allowed for local trusted deployments; set hostedIntegrations.persistenceBackend to db or auto",
+    );
+  }
+
+  if (backend === "file") {
+    log.info("hosted integrations persistence backend selected", {
+      backend,
+      deploymentMode,
+    });
+    return {
+      service: createFileHostedIntegrationService({
+        dataDir: config.dataDir,
+        ...hooks,
+      }),
+      backend,
+    };
+  }
+
+  const hostedIntegrationDb = createDatabase(config);
+  const service = createDbHostedIntegrationService({
+    db: {
+      prepare: (sql) => hostedIntegrationDb.prepare(sql),
+      transaction: <T>(fn: () => T) => {
+        const run = hostedIntegrationDb.transaction(fn);
+        return () => run() as T;
+      },
+    },
+    dataDir: config.dataDir,
+    ...hooks,
+  });
+  log.info("hosted integrations persistence backend selected", {
+    backend,
+    deploymentMode,
+  });
+  const closeService = service.close.bind(service);
+  service.close = async () => {
+    await closeService();
+    hostedIntegrationDb.close();
+  };
+  return {
+    service,
+    backend,
+  };
 }

@@ -9,6 +9,7 @@ import {
 
 export type CurrentViewEntityType =
   | "agent"
+  | "hostedTools"
   | "objective"
   | "skill"
   | "settings"

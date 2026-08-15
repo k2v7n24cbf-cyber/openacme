@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfigSchema } from "@openacme/config";
 import { WorkflowManager } from "@openacme/workflows";
 import type { HostedIntegrationService } from "@openacme/hosted-integrations";
+import { createDatabase } from "@openacme/db";
 import { createApp } from "../src/app.js";
 import { ServerRuntime } from "../src/runtime.js";
 
@@ -39,6 +40,80 @@ describe("ServerRuntime", () => {
     expect(await runtime.hostedIntegrationService.listFamilies()).toEqual([]);
 
     await runtime.close();
+  });
+
+  it("uses file-backed hosted integrations for local trusted auto mode", async () => {
+    const config = tempConfig();
+    const runtime = new ServerRuntime(config);
+    expect(runtime.hostedIntegrationPersistenceBackend).toBe("file");
+
+    await runtime.hostedIntegrationService.sourceFiles.replaceSourceFiles({
+      familyId: "qualys",
+      sourceRevisionId: "source_rev_1",
+      updatedBy: "agent:tool-developer",
+      files: {
+        "family.yaml": "id: qualys\nname: Qualys\nversion: 1\ntools: []\n",
+      },
+    });
+
+    const db = createDatabase(config);
+    try {
+      expect(
+        db
+          .prepare("SELECT id FROM hosted_integration_source_revisions WHERE id = ?")
+          .get("source_rev_1"),
+      ).toBeUndefined();
+    } finally {
+      db.close();
+      await runtime.close();
+    }
+  });
+
+  it("uses DB-backed hosted integrations for authenticated auto mode", async () => {
+    const config = ConfigSchema.parse({
+      ...tempConfig(),
+      server: { host: "0.0.0.0", requireAuth: true },
+    });
+    const runtime = new ServerRuntime(config);
+    expect(runtime.hostedIntegrationPersistenceBackend).toBe("db");
+
+    await runtime.hostedIntegrationService.sourceFiles.replaceSourceFiles({
+      familyId: "qualys",
+      sourceRevisionId: "source_rev_1",
+      updatedBy: "agent:tool-developer",
+      files: {
+        "family.yaml": "id: qualys\nname: Qualys\nversion: 1\ntools: []\n",
+      },
+    });
+
+    const db = createDatabase(config);
+    try {
+      expect(
+        db
+          .prepare("SELECT id FROM hosted_integration_source_revisions WHERE id = ?")
+          .get("source_rev_1"),
+      ).toMatchObject({ id: "source_rev_1" });
+    } finally {
+      db.close();
+      await runtime.close();
+    }
+  });
+
+  it("refuses file-backed hosted integrations in authenticated mode", async () => {
+    const config = ConfigSchema.parse({
+      ...tempConfig(),
+      server: { host: "0.0.0.0", requireAuth: true },
+      hostedIntegrations: { persistenceBackend: "file" },
+    });
+    (
+      config as typeof config & {
+        hostedIntegrations: { persistenceBackend: "file" };
+      }
+    ).hostedIntegrations = { persistenceBackend: "file" };
+
+    expect(() => new ServerRuntime(config)).toThrow(
+      /file-backed persistence is only allowed for local trusted/,
+    );
   });
 
   it("createApp exposes the runtime without changing the manager alias", async () => {
@@ -114,6 +189,7 @@ describe("ServerRuntime", () => {
         {
           id: "runtime_fake",
           name: "Runtime Fake",
+          status: "active",
           version: 1,
           toolNames: ["runtime_fake_echo"],
         },
@@ -149,6 +225,7 @@ describe("ServerRuntime", () => {
         {
           id: "runtime_fake",
           name: "Runtime Fake",
+          status: "active",
           version: 1,
           toolNames: ["runtime_fake_echo"],
         },

@@ -33,8 +33,8 @@ export const HostedIntegrationDisableTargetSchema = z.discriminatedUnion(
       .strict(),
     z
       .object({
-        level: z.literal("config_scope"),
-        scopeId: z.string().min(1),
+        level: z.literal("environment_config"),
+        environmentConfigId: z.string().min(1),
       })
       .strict(),
   ],
@@ -73,7 +73,7 @@ export interface FindHostedIntegrationDisablementRequest {
   familyId: HostedIntegrationFamilyId | string;
   toolName?: HostedIntegrationToolName | string;
   generationId?: string;
-  configScopeId?: string;
+  environmentConfigId?: string;
 }
 
 export interface HostedIntegrationDisablementStore {
@@ -177,11 +177,11 @@ class FileHostedIntegrationDisablementStore implements HostedIntegrationDisablem
         }),
       );
     }
-    if (request.configScopeId) {
+    if (request.environmentConfigId) {
       keys.push(
         disablementKey({
-          level: "config_scope",
-          scopeId: request.configScopeId,
+          level: "environment_config",
+          environmentConfigId: request.environmentConfigId,
         }),
       );
     }
@@ -232,7 +232,7 @@ export function disablementKey(target: HostedIntegrationDisableTarget): string {
       return `tool:${target.familyId}:${target.toolName}`;
     case "generation":
       return `generation:${target.generationId}`;
-    case "config_scope":
-      return `config_scope:${target.scopeId}`;
+    case "environment_config":
+      return `environment_config:${target.environmentConfigId}`;
   }
 }

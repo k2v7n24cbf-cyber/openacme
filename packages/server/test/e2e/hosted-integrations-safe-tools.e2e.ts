@@ -7,7 +7,7 @@ import { startE2EServer, type E2EServer } from "./support/harness.js";
 import { makeClient } from "./support/client.js";
 
 const FAMILY_ID = "safe-tools";
-const CONFIG_SCOPE_ID = "safe-tools-local";
+const TEST_ENVIRONMENT = "test_debug";
 const LOCKED_BY = "agent:tool-developer";
 const MANAGED_SAFE_ECHO = managedToolName("safe_echo");
 const MANAGED_SAFE_SUM = managedToolName("safe_sum");
@@ -126,7 +126,7 @@ describe("hosted integrations safe tools (e2e)", () => {
   });
 
   it("invokes selected safe tools through the real agent tool path", async () => {
-    await configureScope();
+    await configureEnvironmentConfig();
     await c.createAgent("safe-agent", "Safe Agent", {
       role: "Runs safe hosted integration smoke tools.",
       persona: "Use safe hosted integrations.",
@@ -135,23 +135,32 @@ describe("hosted integrations safe tools (e2e)", () => {
         {
           familyId: FAMILY_ID,
           toolName: "safe_echo",
-          allowedConfigScopeIds: [CONFIG_SCOPE_ID],
-          defaultConfigScopeId: CONFIG_SCOPE_ID,
-          environment: "test",
+          allowedEnvironments: [TEST_ENVIRONMENT],
+          defaultEnvironment: TEST_ENVIRONMENT,
+          generationPin: { type: "current" },
+          bindingKind: "agent",
+          updatedAt: "2026-08-14T10:00:00.000Z",
+          updatedBy: "human:e2e",
         },
         {
           familyId: FAMILY_ID,
           toolName: "safe_sum",
-          allowedConfigScopeIds: [CONFIG_SCOPE_ID],
-          defaultConfigScopeId: CONFIG_SCOPE_ID,
-          environment: "test",
+          allowedEnvironments: [TEST_ENVIRONMENT],
+          defaultEnvironment: TEST_ENVIRONMENT,
+          generationPin: { type: "current" },
+          bindingKind: "agent",
+          updatedAt: "2026-08-14T10:00:00.000Z",
+          updatedBy: "human:e2e",
         },
         {
           familyId: FAMILY_ID,
           toolName: "safe_large_result",
-          allowedConfigScopeIds: [CONFIG_SCOPE_ID],
-          defaultConfigScopeId: CONFIG_SCOPE_ID,
-          environment: "test",
+          allowedEnvironments: [TEST_ENVIRONMENT],
+          defaultEnvironment: TEST_ENVIRONMENT,
+          generationPin: { type: "current" },
+          bindingKind: "agent",
+          updatedAt: "2026-08-14T10:00:00.000Z",
+          updatedBy: "human:e2e",
         },
       ],
     });
@@ -309,15 +318,13 @@ async function runExample(
   return res.json() as Promise<Record<string, unknown>>;
 }
 
-async function configureScope(): Promise<void> {
+async function configureEnvironmentConfig(): Promise<void> {
   const scope = await c.req(
-    `/api/hosted-integrations/config-scopes/${CONFIG_SCOPE_ID}`,
+    `/api/hosted-integrations/environment-configs/${FAMILY_ID}/${TEST_ENVIRONMENT}`,
     {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        familyId: FAMILY_ID,
-        environment: "test",
         config: { endpoint: "https://safe.example.test" },
         secrets: {},
         updatedBy: "human:e2e",
@@ -375,6 +382,9 @@ function safeFamilyYaml(): string {
     "    installDuringInvocation: false",
     "    allowedPackages: []",
     "    deniedPackages: []",
+    "runtimeConfig:",
+    "  requiredConfigKeys: []",
+    "  requiredSecretKeys: []",
     "tools:",
     "  - name: safe_echo",
     "    title: Safe Echo",
@@ -393,6 +403,11 @@ function safeFamilyYaml(): string {
     "      idempotency: idempotent",
     "      execution: sync",
     "      approval: none",
+    "    help:",
+    "      summary: Echo caller-provided text for hosted integration smoke testing.",
+    "      parameters:",
+    "        text:",
+    "          summary: Text to echo back in the result.",
     "  - name: safe_sum",
     "    title: Safe Sum",
     "    description: Sums numeric values for deterministic hosted integration smoke testing.",
@@ -410,6 +425,12 @@ function safeFamilyYaml(): string {
     "      idempotency: idempotent",
     "      execution: sync",
     "      approval: none",
+    "    help:",
+    "      summary: Sum numeric values for deterministic hosted integration smoke testing.",
+    "      parameters:",
+    "        values:",
+    "          summary: Numeric values to add together.",
+    "          full: Provide an array of integers or floating point numbers; non-numeric values are rejected.",
     "  - name: safe_large_result",
     "    title: Safe Large Result",
     "    description: Returns a large deterministic payload to verify result_ref spillover.",
@@ -427,29 +448,43 @@ function safeFamilyYaml(): string {
     "      idempotency: idempotent",
     "      execution: sync",
     "      approval: none",
+    "    help:",
+    "      summary: Return a deterministic large payload to verify result_ref spillover.",
+    "      parameters:",
+    "        repeat:",
+    "          summary: Positive integer multiplier for the deterministic payload.",
     "",
   ].join("\n");
 }
 
 function safeToolsPython(): string {
   return [
-    "def call_tool(name, args, ctx):",
-    "    if name == 'safe_echo':",
-    "        text = args.get('text')",
-    "        if not isinstance(text, str):",
-    "            raise ValueError('text must be a string')",
-    "        return {'echo': text}",
-    "    if name == 'safe_sum':",
-    "        values = args.get('values')",
-    "        if not isinstance(values, list) or not all(isinstance(v, (int, float)) for v in values):",
-    "            raise ValueError('values must be numeric')",
-    "        return {'sum': sum(values), 'count': len(values)}",
-    "    if name == 'safe_large_result':",
-    "        repeat = args.get('repeat')",
-    "        if not isinstance(repeat, int) or repeat < 1:",
-    "            raise ValueError('repeat must be a positive integer')",
-    "        return {'payload': '0123456789abcdef' * repeat}",
-    "    raise ValueError('unknown tool')",
+    "def authenticate(ctx):",
+    "    return {}",
+    "",
+    "def before_tool_call(tool_name, args, ctx, auth):",
+    "    return args",
+    "",
+    "def after_tool_call(tool_name, args, ctx, result, auth):",
+    "    return result",
+    "",
+    "def tool_safe_echo(args, context):",
+    "    text = args.get('text')",
+    "    if not isinstance(text, str):",
+    "        raise ValueError('text must be a string')",
+    "    return {'echo': text}",
+    "",
+    "def tool_safe_sum(args, context):",
+    "    values = args.get('values')",
+    "    if not isinstance(values, list) or not all(isinstance(v, (int, float)) for v in values):",
+    "        raise ValueError('values must be numeric')",
+    "    return {'sum': sum(values), 'count': len(values)}",
+    "",
+    "def tool_safe_large_result(args, context):",
+    "    repeat = args.get('repeat')",
+    "    if not isinstance(repeat, int) or repeat < 1:",
+    "        raise ValueError('repeat must be a positive integer')",
+    "    return {'payload': '0123456789abcdef' * repeat}",
     "",
   ].join("\n");
 }

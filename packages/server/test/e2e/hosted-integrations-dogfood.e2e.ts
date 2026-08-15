@@ -9,7 +9,8 @@ let c: ReturnType<typeof makeClient>;
 
 const suffix = randomUUID().slice(0, 8);
 const familyId = `dogfood-${suffix}`;
-const scopeId = `${familyId}-local`;
+const testEnvironment = "test_debug";
+const environmentConfigId = `${familyId}-${testEnvironment}`;
 const echoTool = `dogfood_echo_${suffix}`;
 const sumTool = `dogfood_sum_${suffix}`;
 const largeTool = `dogfood_large_${suffix}`;
@@ -227,30 +228,38 @@ describe("hosted integrations agent dogfood (e2e)", () => {
   });
 
   it("surfaces promoted tools and lets a consumer agent invoke them through chat", async () => {
-    await configureScope();
+    await configureEnvironmentConfig();
     await expect(
       chatTool(
         "tool-developer",
-        "list dogfood config scopes",
-        "hosted_integration_config_scope_list",
+        "list dogfood environment configs",
+        "hosted_integration_environment_config_list",
         {},
       ),
     ).resolves.toMatchObject({
       ok: true,
-      configScopes: expect.arrayContaining([
-        expect.objectContaining({ id: scopeId, familyId, environment: "test" }),
+      environmentConfigs: expect.arrayContaining([
+        expect.objectContaining({
+          id: environmentConfigId,
+          familyId,
+          environment: testEnvironment,
+        }),
       ]),
     });
     await expect(
       chatTool(
         "tool-developer",
-        "inspect dogfood config scope",
-        "hosted_integration_config_scope_get",
-        { scope_id: scopeId },
+        "inspect dogfood environment config",
+        "hosted_integration_environment_config_get",
+        { family_id: familyId, environment: testEnvironment },
       ),
     ).resolves.toMatchObject({
       ok: true,
-      configScope: { id: scopeId, familyId, environment: "test" },
+      environmentConfig: {
+        id: environmentConfigId,
+        familyId,
+        environment: testEnvironment,
+      },
     });
 
     const toolsBody = await c.json("/api/tools");
@@ -480,20 +489,27 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     await expect(
       chatTool(
         "tool-developer",
-        "inspect the flaky dogfood repair source window",
-        "hosted_integration_source_read",
+        "inspect the flaky dogfood repair source view",
+        "hosted_integration_source_view",
         {
+          family_id: familyId,
           draft_id: repairDraftId,
-          path: "dogfood_tools.py",
-          start_line: 15,
-          max_lines: 8,
+          tool_name: flakyTool,
+          include_hooks: true,
         },
       ),
     ).resolves.toMatchObject({
       ok: true,
-      path: "dogfood_tools.py",
-      content: expect.stringContaining("dogfood_unique_failure_marker"),
-      truncated: true,
+      view: {
+        mode: "focused",
+        familyId,
+        toolName: flakyTool,
+        source: {
+          selectedHandler: {
+            source: expect.stringContaining("dogfood_unique_failure_marker"),
+          },
+        },
+      },
     });
 
     await expect(
@@ -564,8 +580,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       {
         family_id: familyId,
         tool_name: flakyTool,
-        environment: "test",
-        config_scope_id: scopeId,
+        environment: testEnvironment,
         args: { mode: "fail" },
         generation_id: repairGenerationId,
         operation_class: "read",
@@ -632,7 +647,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       ok: true,
       activeGeneration: { id: generationId, familyId, status: "active" },
     });
-  });
+  }, 90_000);
 });
 
 async function chatTool(
@@ -693,9 +708,12 @@ async function createConsumerAgent(id: string, tools: string[]): Promise<void> {
     hostedIntegrationBindings: tools.map((toolName) => ({
       familyId,
       toolName,
-      allowedConfigScopeIds: [scopeId],
-      defaultConfigScopeId: scopeId,
-      environment: "test",
+      allowedEnvironments: [testEnvironment],
+      defaultEnvironment: testEnvironment,
+      generationPin: { type: "current" },
+      bindingKind: "agent",
+      updatedAt: "2026-08-14T10:00:00.000Z",
+      updatedBy: "human:e2e",
     })),
   });
 }
@@ -704,18 +722,19 @@ function managedToolName(toolName: string): string {
   return buildHostedIntegrationManagedToolName({ familyId, toolName });
 }
 
-async function configureScope(): Promise<void> {
-  const res = await c.req(`/api/hosted-integrations/config-scopes/${scopeId}`, {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      familyId,
-      environment: "test",
-      config: { endpoint: "https://dogfood.example.test" },
-      secrets: {},
-      updatedBy: "human:e2e",
-    }),
-  });
+async function configureEnvironmentConfig(): Promise<void> {
+  const res = await c.req(
+    `/api/hosted-integrations/environment-configs/${familyId}/${testEnvironment}`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        config: { endpoint: "https://dogfood.example.test" },
+        secrets: {},
+        updatedBy: "human:e2e",
+      }),
+    },
+  );
   expect(res.status).toBe(200);
 }
 
@@ -763,6 +782,9 @@ function familyYaml(): string {
     "    installDuringInvocation: false",
     "    allowedPackages: []",
     "    deniedPackages: []",
+    "runtimeConfig:",
+    "  requiredConfigKeys: []",
+    "  requiredSecretKeys: []",
     "tools:",
     toolYaml(
       echoTool,
@@ -803,7 +825,7 @@ function toolYaml(
   required: string,
   type: string,
 ): string {
-  return [
+  const lines = [
     `  - name: ${name}`,
     `    title: ${title}`,
     `    description: ${description}`,
@@ -821,7 +843,18 @@ function toolYaml(
     "      idempotency: idempotent",
     "      execution: sync",
     "      approval: none",
-  ].join("\n");
+    "    help:",
+    `      summary: ${description}`,
+    "      parameters:",
+    `        ${required}:`,
+    `          summary: ${description}`,
+  ];
+  if (type === "array") {
+    lines.push(
+      `          full: Provide ${required} as an array of integers or floating point numbers; non-numeric values are rejected.`,
+    );
+  }
+  return lines.join("\n");
 }
 
 function toolsPython(repaired: boolean): string {
@@ -829,30 +862,40 @@ function toolsPython(repaired: boolean): string {
     ? "            return {'recovered': True}"
     : "            raise RuntimeError('dogfood_unique_failure_marker')";
   return [
-    "def call_tool(name, args, ctx):",
-    `    if name == '${echoTool}':`,
-    "        text = args.get('text')",
-    "        if not isinstance(text, str):",
-    "            raise ValueError('text must be a string')",
-    "        return {'echo': text}",
-    `    if name == '${sumTool}':`,
-    "        values = args.get('values')",
-    "        if not isinstance(values, list) or not all(",
-    "            isinstance(v, (int, float)) for v in values",
-    "        ):",
-    "            raise ValueError('values must be numeric')",
-    "        return {'sum': sum(values), 'count': len(values)}",
-    `    if name == '${largeTool}':`,
-    "        repeat = args.get('repeat')",
-    "        if not isinstance(repeat, int) or repeat < 1:",
-    "            raise ValueError('repeat must be a positive integer')",
-    "        return {'payload': 'DOGFOOD-LARGE-' * repeat}",
-    `    if name == '${flakyTool}':`,
-    "        mode = args.get('mode')",
-    "        if mode == 'fail':",
+    "def authenticate(ctx):",
+    "    return {}",
+    "",
+    "def before_tool_call(tool_name, args, ctx, auth):",
+    "    return args",
+    "",
+    "def after_tool_call(tool_name, args, ctx, result, auth):",
+    "    return result",
+    "",
+    `def tool_${echoTool}(args, context):`,
+    "    text = args.get('text')",
+    "    if not isinstance(text, str):",
+    "        raise ValueError('text must be a string')",
+    "    return {'echo': text}",
+    "",
+    `def tool_${sumTool}(args, context):`,
+    "    values = args.get('values')",
+    "    if not isinstance(values, list) or not all(",
+    "        isinstance(v, (int, float)) for v in values",
+    "    ):",
+    "        raise ValueError('values must be numeric')",
+    "    return {'sum': sum(values), 'count': len(values)}",
+    "",
+    `def tool_${largeTool}(args, context):`,
+    "    repeat = args.get('repeat')",
+    "    if not isinstance(repeat, int) or repeat < 1:",
+    "        raise ValueError('repeat must be a positive integer')",
+    "    return {'payload': 'DOGFOOD-LARGE-' * repeat}",
+    "",
+    `def tool_${flakyTool}(args, context):`,
+    "    mode = args.get('mode')",
+    "    if mode == 'fail':",
     flakyFail,
-    "        return {'mode': mode}",
-    "    raise ValueError('unknown tool')",
+    "    return {'mode': mode}",
     "",
   ].join("\n");
 }

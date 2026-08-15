@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import {
@@ -14,9 +14,13 @@ import {
   type HostedIntegrationCatalog,
 } from "./catalog.js";
 import {
-  createFileHostedIntegrationConfigScopeStore,
-  type HostedIntegrationConfigScopeStore,
-} from "./config-scopes.js";
+  createFileHostedIntegrationEnvironmentConfigStore,
+  type HostedIntegrationEnvironmentConfigStore,
+} from "./environment-configs.js";
+import {
+  resolveHostedIntegrationExecutionConfig,
+  type HostedIntegrationExecutionPurpose,
+} from "./execution-config.js";
 import {
   createFileHostedIntegrationDisablementStore,
   type HostedIntegrationDisablement,
@@ -36,13 +40,19 @@ import {
   type HostedIntegrationPolicyActor,
 } from "./policy.js";
 import {
+  resolveEnvironmentConfigReadiness,
+  resolveInvocationReadiness,
+  type HostedIntegrationReadiness,
+} from "./readiness.js";
+import {
   HostedIntegrationFamilyIdSchema,
+  HostedIntegrationEnvironmentSchema,
   HostedIntegrationIdempotencyRecordSchema,
   HostedIntegrationToolNameSchema,
   JsonObjectSchema,
   type HostedIntegrationFailureBucket,
+  type HostedIntegrationHostedToolBinding,
   type HostedIntegrationIdempotencyRecord,
-  type HostedIntegrationPolicyBinding,
   type HostedIntegrationToolClassification,
   type HostedIntegrationToolSpec,
   type JsonObject,
@@ -65,7 +75,7 @@ import {
 export interface FileHostedIntegrationGatewayOptions {
   dataDir: string;
   catalog?: HostedIntegrationCatalog;
-  configScopes?: HostedIntegrationConfigScopeStore;
+  environmentConfigs?: HostedIntegrationEnvironmentConfigStore;
   secrets?: HostedIntegrationSecretStore;
   disablements?: HostedIntegrationDisablementStore;
   generations?: HostedIntegrationGenerationStore;
@@ -87,8 +97,10 @@ export interface InvokeHostedIntegrationRequest {
   toolName: string;
   environment: string;
   args: JsonObject;
-  bindings: HostedIntegrationPolicyBinding[];
-  requestedConfigScopeId?: string;
+  hostedToolBindings?: HostedIntegrationHostedToolBinding[];
+  invocationPurpose?: "consumer" | "tool_maintenance";
+  executionPurpose?: HostedIntegrationExecutionPurpose;
+  requestedEnvironment?: string;
   generationId?: string;
   idempotencyKey?: string;
   approvalGranted?: boolean;
@@ -117,20 +129,33 @@ export interface HostedIntegrationGatewayError {
   code:
     | "policy_denied"
     | "approval_required"
+    | "auth_failed"
+    | "bad_arguments"
     | "config_missing"
-    | "config_scope_not_found"
+    | "environment_config_not_found"
+    | "connection_error"
     | "family_not_found"
+    | "missing_config"
     | "tool_not_found"
+    | "environment_missing"
+    | "environment_incomplete"
+    | "binding_missing"
+    | "binding_invalid"
+    | "tool_not_enabled"
     | "no_active_generation"
     | "generation_not_found"
+    | "rate_limited"
     | "stale_generation"
+    | "generation_stale"
     | "runtime_missing"
+    | "runtime_config_contract_missing"
     | "runtime_error"
     | "timeout"
     | "tool_bug"
     | "tool_disabled"
     | "operationally_disabled"
-    | "idempotency_conflict";
+    | "idempotency_conflict"
+    | "upstream_error";
   message: string;
   details?: JsonValue;
 }
@@ -154,8 +179,9 @@ export interface HostedIntegrationExecutionLogEntry {
   toolName: string;
   generationId: string;
   actorId: string;
-  configScopeId: string;
-  configRevision: number;
+  environmentConfigId: string | null;
+  configRevision: number | null;
+  executionPurpose: HostedIntegrationExecutionPurpose;
   sanitizedArgs: JsonObject;
   status: "running" | "succeeded" | "failed";
   startedAt: string;
@@ -164,6 +190,14 @@ export interface HostedIntegrationExecutionLogEntry {
   resultEnvelopeRef?: string;
   resultMetadata?: HostedIntegrationExecutionResultMetadata;
   error?: HostedIntegrationGatewayError;
+}
+
+export interface ListHostedIntegrationExecutionLogsRequest {
+  familyId?: string;
+  toolName?: string;
+  generationId?: string;
+  status?: HostedIntegrationExecutionLogEntry["status"];
+  limit?: number;
 }
 
 export interface HostedIntegrationExecutionResultMetadata {
@@ -191,6 +225,9 @@ export interface HostedIntegrationExecutionLogStore {
     >,
   ): Promise<void>;
   getRunLog(runId: string): Promise<HostedIntegrationExecutionLogEntry | null>;
+  listRunLogs(
+    request?: ListHostedIntegrationExecutionLogsRequest,
+  ): Promise<HostedIntegrationExecutionLogEntry[]>;
 }
 
 export interface HostedIntegrationIdempotencyStore {
@@ -230,8 +267,17 @@ const ExecutionLogEntrySchema: z.ZodType<HostedIntegrationExecutionLogEntry> = z
     toolName: HostedIntegrationToolNameSchema,
     generationId: z.string().min(1),
     actorId: z.string().min(1),
-    configScopeId: z.string().min(1),
-    configRevision: z.number().int().positive(),
+    environmentConfigId: z.string().min(1).nullable(),
+    configRevision: z.number().int().positive().nullable(),
+    executionPurpose: z.enum([
+      "consumer",
+      "debug",
+      "example",
+      "regression",
+      "validation",
+      "parity",
+      "dogfood",
+    ]).default("consumer"),
     sanitizedArgs: JsonObjectSchema,
     status: z.enum(["running", "succeeded", "failed"]),
     startedAt: z.string().datetime({ offset: true }),
@@ -267,9 +313,9 @@ export function createFileHostedIntegrationGateway(
 ): HostedIntegrationGateway {
   const catalog =
     options.catalog ?? createFileHostedIntegrationCatalog(options);
-  const configScopes =
-    options.configScopes ??
-    createFileHostedIntegrationConfigScopeStore({ ...options, catalog });
+  const environmentConfigs =
+    options.environmentConfigs ??
+    createFileHostedIntegrationEnvironmentConfigStore({ ...options, catalog });
   const secrets =
     options.secrets ?? createFileHostedIntegrationSecretStore(options);
   const disablements =
@@ -290,7 +336,7 @@ export function createFileHostedIntegrationGateway(
   return new FileHostedIntegrationGateway({
     dataDir: options.dataDir,
     catalog,
-    configScopes,
+    environmentConfigs,
     secrets,
     disablements,
     generations,
@@ -317,7 +363,7 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
 
   private readonly dataDir: string;
   private readonly catalog: HostedIntegrationCatalog;
-  private readonly configScopes: HostedIntegrationConfigScopeStore;
+  private readonly environmentConfigs: HostedIntegrationEnvironmentConfigStore;
   private readonly secrets: HostedIntegrationSecretStore;
   private readonly disablements: HostedIntegrationDisablementStore;
   private readonly generations: HostedIntegrationGenerationStore;
@@ -330,7 +376,7 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
   constructor(parts: {
     dataDir: string;
     catalog: HostedIntegrationCatalog;
-    configScopes: HostedIntegrationConfigScopeStore;
+    environmentConfigs: HostedIntegrationEnvironmentConfigStore;
     secrets: HostedIntegrationSecretStore;
     disablements: HostedIntegrationDisablementStore;
     generations: HostedIntegrationGenerationStore;
@@ -349,7 +395,7 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
   }) {
     this.dataDir = parts.dataDir;
     this.catalog = parts.catalog;
-    this.configScopes = parts.configScopes;
+    this.environmentConfigs = parts.environmentConfigs;
     this.secrets = parts.secrets;
     this.disablements = parts.disablements;
     this.generations = parts.generations;
@@ -414,25 +460,25 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
       operationClass: toolClassification.operation,
       environment: request.environment,
       mode: "run",
-      requestedConfigScopeId: request.requestedConfigScopeId,
+      requestedEnvironment: request.requestedEnvironment,
       toolClassification,
-      bindings: request.bindings,
+      hostedToolBindings: request.hostedToolBindings,
       approvalGranted: request.approvalGranted,
     });
-    if (!policy.ok) return failure(policy.reason, policy.message);
-
-    const configScope = await this.configScopes.getConfigScope(
-      policy.resolvedConfigScopeId ?? "",
-    );
-    if (!configScope || configScope.familyId !== familyId) {
-      return failure("config_scope_not_found", "config scope was not found");
-    }
-    const configScopeDisablement = await this.disablements.findDisabled({
-      familyId,
-      configScopeId: configScope.id,
-    });
-    if (configScopeDisablement) {
-      return disabledFailure(configScopeDisablement);
+    if (!policy.ok) {
+      return readinessFailure(
+        resolveInvocationReadiness({
+          actor: request.actor,
+          familyId,
+          toolName,
+          toolLifecycle: tool.lifecycle,
+          policyDecision: policy,
+          environmentReadiness: readyEnvironmentReadinessForPolicyFailure(
+            familyId,
+            request.environment,
+          ),
+        }),
+      );
     }
 
     const lease = await this.generations.beginInvocation({
@@ -462,14 +508,86 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
       await this.generations.completeInvocation({ leaseId: lease.lease.id });
       return failure("runtime_missing", "generation has no runtime metadata");
     }
+    const environment = HostedIntegrationEnvironmentSchema.parse(
+      policy.resolvedEnvironment ?? request.environment,
+    );
+    const environmentConfig = await this.environmentConfigs.getEnvironmentConfig(
+      familyId,
+      environment,
+    );
+    const resolvedEnvironmentConfig =
+      environmentConfig && environmentConfig.familyId === familyId
+        ? environmentConfig
+        : null;
+    const executionConfig = resolveHostedIntegrationExecutionConfig({
+      familyId,
+      environment,
+      generation,
+      policyDecision: policy,
+      environmentConfig: resolvedEnvironmentConfig,
+      executionPurpose:
+        request.executionPurpose ??
+        (request.invocationPurpose === "tool_maintenance"
+          ? "debug"
+          : "consumer"),
+    });
+    if (!executionConfig.ok) {
+      await this.generations.completeInvocation({ leaseId: lease.lease.id });
+      return readinessFailure(
+        resolveInvocationReadiness({
+          actor: request.actor,
+          familyId,
+          toolName,
+          toolLifecycle: tool.lifecycle,
+          policyDecision: policy,
+          environmentReadiness: executionConfig.error,
+          capturedGenerationId: request.generationId,
+          resolvedGenerationId: generation.id,
+        }),
+      );
+    }
+    span.setAttributes({
+      "openacme.hosted_integration.config_mode": executionConfig.mode,
+      "openacme.hosted_integration.execution_purpose":
+        executionConfig.executionPurpose,
+      "openacme.hosted_integration.environment_config_id":
+        executionConfig.environmentConfigId ?? "",
+      "openacme.hosted_integration.config_revision":
+        executionConfig.configRevision ?? 0,
+    });
+    if (executionConfig.mode === "config_backed") {
+      const environmentConfigDisablement = await this.disablements.findDisabled({
+        familyId,
+        environmentConfigId: executionConfig.environmentConfigId,
+      });
+      if (environmentConfigDisablement) {
+        await this.generations.completeInvocation({ leaseId: lease.lease.id });
+        return disabledFailure(environmentConfigDisablement);
+      }
+    }
+    const dispatchReadiness = resolveInvocationReadiness({
+      actor: request.actor,
+      familyId,
+      toolName,
+      toolLifecycle: tool.lifecycle,
+      policyDecision: policy,
+      environmentReadiness: executionConfig.readiness,
+      capturedGenerationId: request.generationId,
+      resolvedGenerationId: generation.id,
+    });
+    if (dispatchReadiness.status !== "ready") {
+      await this.generations.completeInvocation({ leaseId: lease.lease.id });
+      return readinessFailure(dispatchReadiness);
+    }
 
     const fingerprint = fingerprintInvocation({
       actorId: request.actor.id,
       familyId,
       toolName,
       args,
-      configScopeId: configScope.id,
-      configRevision: configScope.revision,
+      environmentConfigId: executionConfig.environmentConfigId,
+      configRevision: executionConfig.configRevision,
+      executionPurpose: executionConfig.executionPurpose,
       generationId: generation.id,
     });
     const target = `${familyId}/${toolName}/${generation.id}`;
@@ -512,12 +630,16 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
       toolName,
       generationId: generation.id,
       actorId: request.actor.id,
-      configScopeId: configScope.id,
-      configRevision: configScope.revision,
+      environmentConfigId: executionConfig.environmentConfigId,
+      configRevision: executionConfig.configRevision,
+      executionPurpose: executionConfig.executionPurpose,
       sanitizedArgs: sanitizeJsonObject(args),
       status: "running",
       startedAt: run.startedAt,
     });
+
+    const suppressFailureBucket =
+      request.invocationPurpose === "tool_maintenance";
 
     try {
       const runtimeResult = await this.runtime.callTool({
@@ -534,10 +656,12 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
           runId: run.id,
           familyHome,
           runDir,
-          config: configScope.config,
-          secrets: await this.secrets.readSecretsForRuntime({
-            scopeId: configScope.id,
-          }),
+          config: executionConfig.config,
+          secrets: executionConfig.secretsEnvironmentConfigId
+            ? await this.secrets.readSecretsForRuntime({
+                environmentConfigId: executionConfig.secretsEnvironmentConfigId,
+              })
+            : {},
         },
       });
       if (!runtimeResult.ok) {
@@ -547,6 +671,7 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
           startedAt: run.startedAt,
           leaseId: lease.lease.id,
           error: normalizeRuntimeError(runtimeResult.error),
+          suppressFailureBucket,
         });
       }
 
@@ -590,6 +715,7 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
           code: "runtime_error",
           message: error instanceof Error ? error.message : String(error),
         },
+        suppressFailureBucket,
       });
     }
   }
@@ -612,6 +738,7 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
     startedAt: string;
     leaseId: string;
     error: HostedIntegrationGatewayError;
+    suppressFailureBucket?: boolean;
   }): Promise<InvokeHostedIntegrationResult> {
     await this.artifacts.completeRunError({
       familyId: args.familyId,
@@ -625,7 +752,9 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
       durationMs: durationMs(args.startedAt, endedAt),
       error: sanitizeGatewayError(args.error),
     });
-    await this.recordFailureBucket(args.runId);
+    if (!args.suppressFailureBucket) {
+      await this.recordFailureBucket(args.runId);
+    }
     await this.generations.completeInvocation({ leaseId: args.leaseId });
     return { ok: false, runId: args.runId, error: args.error };
   }
@@ -693,6 +822,29 @@ class FileHostedIntegrationExecutionLogStore implements HostedIntegrationExecuti
     }
   }
 
+  async listRunLogs(
+    request: ListHostedIntegrationExecutionLogsRequest = {},
+  ): Promise<HostedIntegrationExecutionLogEntry[]> {
+    let entries: HostedIntegrationExecutionLogEntry[];
+    try {
+      entries = await Promise.all(
+        (await readdir(this.logsDir))
+          .filter((fileName) => fileName.endsWith(".json"))
+          .map(async (fileName) =>
+            ExecutionLogEntrySchema.parse(
+              JSON.parse(
+                await readFile(path.join(this.logsDir, fileName), "utf-8"),
+              ),
+            ),
+          ),
+      );
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") return [];
+      throw error;
+    }
+    return filterAndLimitExecutionLogs(entries, request);
+  }
+
   private async writeLog(
     entry: HostedIntegrationExecutionLogEntry,
   ): Promise<void> {
@@ -706,6 +858,34 @@ class FileHostedIntegrationExecutionLogStore implements HostedIntegrationExecuti
   private logPath(runId: string): string {
     return path.join(this.logsDir, `${safePathSegment("runId", runId)}.json`);
   }
+}
+
+function filterAndLimitExecutionLogs(
+  entries: HostedIntegrationExecutionLogEntry[],
+  request: ListHostedIntegrationExecutionLogsRequest,
+): HostedIntegrationExecutionLogEntry[] {
+  const limit = normalizeExecutionLogLimit(request.limit);
+  return entries
+    .filter((entry) => {
+      if (request.familyId && entry.familyId !== request.familyId) return false;
+      if (request.toolName && entry.toolName !== request.toolName) return false;
+      if (request.generationId && entry.generationId !== request.generationId) {
+        return false;
+      }
+      if (request.status && entry.status !== request.status) return false;
+      return true;
+    })
+    .sort((left, right) =>
+      (right.endedAt ?? right.startedAt).localeCompare(
+        left.endedAt ?? left.startedAt,
+      ),
+    )
+    .slice(0, limit);
+}
+
+function normalizeExecutionLogLimit(limit: number | undefined): number {
+  if (!Number.isFinite(limit) || limit === undefined) return 25;
+  return Math.max(1, Math.min(100, Math.trunc(limit)));
 }
 
 export function createFileHostedIntegrationIdempotencyStore(options: {
@@ -876,6 +1056,51 @@ function failure(
   return { ok: false, error: { code, message } };
 }
 
+function readinessFailure(
+  readiness: HostedIntegrationReadiness,
+): InvokeHostedIntegrationResult {
+  const blocker = readiness.blockers[0];
+  return failure(
+    gatewayCodeForReadiness(readiness.code),
+    blocker?.message ?? readiness.code,
+  );
+}
+
+function readyEnvironmentReadinessForPolicyFailure(
+  familyId: string,
+  environment: string,
+): HostedIntegrationReadiness {
+  return {
+    kind: "environment_config",
+    status: "ready",
+    code: "ready",
+    target: {
+      familyId,
+      environment,
+      environmentConfigId: `${familyId}-${environment}`,
+    },
+    blockers: [],
+  };
+}
+
+function gatewayCodeForReadiness(
+  code: string,
+): HostedIntegrationGatewayError["code"] {
+  switch (code) {
+    case "environment_missing":
+    case "environment_incomplete":
+    case "binding_missing":
+    case "binding_invalid":
+    case "tool_not_enabled":
+    case "tool_disabled":
+    case "approval_required":
+    case "generation_stale":
+      return code;
+    default:
+      return "policy_denied";
+  }
+}
+
 function disabledFailure(
   disablement: HostedIntegrationDisablement,
 ): InvokeHostedIntegrationResult {
@@ -939,15 +1164,15 @@ function largeResponseAttributes(
   request: InvokeHostedIntegrationRequest,
   result: Extract<InvokeHostedIntegrationResult, { ok: true; replayed: false }>,
 ): Record<string, string | number | boolean> {
-  const ref = "result_ref" in result.envelope ? result.envelope.result_ref : null;
+  const ref =
+    "result_ref" in result.envelope ? result.envelope.result_ref : null;
   return {
     "openacme.hosted_integration.family_id": request.familyId,
     "openacme.hosted_integration.tool_name": request.toolName,
     "openacme.hosted_integration.actor_kind": request.actor.kind,
     "openacme.hosted_integration.generation_id": result.generationId,
     "openacme.hosted_integration.response_mode": "artifact",
-    "openacme.hosted_integration.artifact_size_bytes":
-      ref?.size_bytes ?? 0,
+    "openacme.hosted_integration.artifact_size_bytes": ref?.size_bytes ?? 0,
     "openacme.hosted_integration.artifact_estimated_tokens":
       ref?.estimated_tokens ?? 0,
   };

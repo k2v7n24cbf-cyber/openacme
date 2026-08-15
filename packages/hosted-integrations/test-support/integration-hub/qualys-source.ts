@@ -22,67 +22,431 @@ runtime:
   dependencyPolicy:
     installDuringInvocation: false
     allowedPackages: []
+runtimeConfig:
+  requiredConfigKeys:
+    - QUALYS_VM_URL
+  requiredSecretKeys:
+    - QUALYS_USERNAME
+    - QUALYS_PASSWORD
 tools:
   - name: qualys_gav_asset_count
     title: Qualys GAV Asset Count
-    description: Source-backed port of legacy integration-hub Qualys count_assets for CSAM/GAV asset counts.
+    description: Source-backed port of legacy integration-hub Qualys count_assets for CSAM/GAV asset counts. filter_body must use native Qualys GAV filter tokens such as asset.name, operatingSystem.category1, qualys.agent.lastCheckedInDate, and asset.trackingMethod; response projection fields such as assetName are not valid filter fields.
     inputSchema:
       type: object
-      additionalProperties: true
+      properties:
+        asset_last_updated:
+          type: string
+        filter_body:
+          type: object
+          description: Native Qualys GAV FilterRequest JSON body, for example {"filters":[{"field":"asset.name","operator":"EQUALS","value":"host01"}]}. Do not pass a bare Criteria object.
+          additionalProperties: true
+        search_body:
+          type: object
+          description: Deprecated alias for filter_body.
+          additionalProperties: true
+        filter_xml:
+          type: string
+        last_seen_asset_id:
+          type: integer
+      additionalProperties: false
     classification:
       operation: read
       freshness: live
       idempotency: idempotent
       execution: sync
       approval: none
+${qualysGavAssetCountHelpYaml()}
   - name: qualys_gav_asset_search
     title: Qualys GAV Asset Search
     description: Source-backed port of legacy integration-hub Qualys list_assets for CSAM/GAV asset search.
     inputSchema:
       type: object
-      additionalProperties: true
+      properties:
+        page_size:
+          type: integer
+        max_pages:
+          type: integer
+        detail_level:
+          type: string
+        include_fields:
+          type: array
+          items:
+            type: string
+        exclude_fields:
+          type: array
+          items:
+            type: string
+        asset_last_updated:
+          type: string
+        filter_body:
+          type: object
+          description: Native Qualys GAV FilterRequest JSON body.
+          additionalProperties: true
+        search_body:
+          type: object
+          description: Deprecated alias for filter_body.
+          additionalProperties: true
+        filter_xml:
+          type: string
+        last_seen_asset_id:
+          type: integer
+      additionalProperties: false
     classification:
       operation: read
       freshness: live
       idempotency: idempotent
       execution: sync
       approval: none
+${qualysGavAssetSearchHelpYaml()}
   - name: qualys_cloud_agent_hostasset_count
     title: Qualys Cloud Agent Hostasset Count
-    description: Source-backed Qualys Cloud Agent count using CSAM/GAV asset.trackingMethod EQUALS QAGENT filter semantics.
+    description: Source-backed Qualys Cloud Agent count using CSAM/GAV asset.trackingMethod EQUALS QAGENT filter semantics. Caller filters are ANDed with QAGENT and must use native Qualys GAV filter tokens such as asset.name, operatingSystem.category1, or qualys.agent.lastCheckedInDate; response projection fields such as assetName are not valid filter fields.
     inputSchema:
       type: object
-      additionalProperties: true
+      properties:
+        asset_last_updated:
+          type: string
+        filter_body:
+          type: object
+          description: Native Qualys GAV FilterRequest JSON body. The tool adds asset.trackingMethod EQUALS QAGENT automatically. Use native filter tokens, not returned field names.
+          additionalProperties: true
+        search_body:
+          type: object
+          description: Deprecated alias for filter_body.
+          additionalProperties: true
+        last_seen_asset_id:
+          type: integer
+      additionalProperties: false
     classification:
       operation: read
       freshness: live
       idempotency: idempotent
       execution: sync
       approval: none
+${qualysCloudAgentCountHelpYaml()}
   - name: qualys_cloud_agent_hostasset_search
     title: Qualys Cloud Agent Hostasset Search
     description: Source-backed Qualys Cloud Agent search using CSAM/GAV asset.trackingMethod EQUALS QAGENT filter semantics.
     inputSchema:
       type: object
-      additionalProperties: true
+      properties:
+        page_size:
+          type: integer
+        max_pages:
+          type: integer
+        detail_level:
+          type: string
+        include_fields:
+          type: array
+          items:
+            type: string
+        exclude_fields:
+          type: array
+          items:
+            type: string
+        asset_last_updated:
+          type: string
+        filter_body:
+          type: object
+          description: Native Qualys GAV FilterRequest JSON body. The tool adds asset.trackingMethod EQUALS QAGENT automatically.
+          additionalProperties: true
+        search_body:
+          type: object
+          description: Deprecated alias for filter_body.
+          additionalProperties: true
+        last_seen_asset_id:
+          type: integer
+      additionalProperties: false
     classification:
       operation: read
       freshness: live
       idempotency: idempotent
       execution: sync
       approval: none
+${qualysCloudAgentSearchHelpYaml()}
   - name: qualys_vmdr_host_list
     title: Qualys VMDR Host List
     description: Source-backed port of legacy integration-hub Qualys list_hosts for VMDR Host List API v5.
     inputSchema:
       type: object
-      additionalProperties: true
+      properties:
+        params:
+          type: object
+          description: Native Qualys Host List query parameters, excluding tracking_method/trackingMethod.
+          additionalProperties: true
+        truncation_limit:
+          type: integer
+        max_pages:
+          type: integer
+        tracking_method:
+          type: string
+          description: Unsupported and rejected when present.
+      additionalProperties: false
     classification:
       operation: read
       freshness: live
       idempotency: idempotent
       execution: sync
       approval: none
+${qualysVmdrHostListHelpYaml()}
+`;
+}
+
+function qualysGavAssetCountHelpYaml(): string {
+  return `
+    help:
+      summary: Count CSAM/GAV assets matching optional native Qualys filters.
+      full: |
+        Counts assets through the Qualys Gateway count endpoint. Use this when
+        the caller needs only a count, not asset records. Filters must use
+        native Qualys GAV filter field tokens such as asset.name,
+        operatingSystem.category1, qualys.agent.lastCheckedInDate, or
+        asset.trackingMethod. Returned response field names such as assetName
+        are not valid filter fields.
+      whenToUse:
+        - Count assets by native GAV filters.
+        - Verify whether a filter matches any assets before running a search.
+      whenNotToUse:
+        - Do not use when asset records or pagination are required.
+        - Do not use response projection fields as filter field names.
+      parameters:
+        filter_body:
+          summary: Native Qualys GAV FilterRequest JSON body.
+          full: |
+            Pass an object shaped like {"filters":[{"field":"asset.name",
+            "operator":"EQUALS","value":"host01"}]}. A legacy
+            ServiceRequest.filters.Criteria wrapper is accepted and normalized,
+            but a bare Criteria object is not. The operation defaults to Qualys
+            native behavior unless supplied by the caller.
+          rules:
+            - Use native GAV filter field tokens, not response field names.
+            - assetName is invalid; use asset.name.
+            - asset_last_updated is a hosted tool request parameter, not a filter field token.
+            - qualys.agent.lastCheckedInDate is the Cloud Agent check-in field token.
+          examples:
+            - filter_body:
+                filters:
+                  - field: asset.name
+                    operator: EQUALS
+                    value: definitely-missing-host
+        filter_body.filters.field:
+          summary: Native Qualys GAV filter token.
+          full: Use asset.name, operatingSystem.category1, qualys.agent.lastCheckedInDate, or another documented GAV token. Do not use assetName or hosted request parameters such as asset_last_updated.
+        filter_body.filters.operator:
+          summary: Native Qualys operator such as EQUALS, CONTAINS, GREATER, or LESSER.
+        filter_body.filters.value:
+          summary: Filter value sent to Qualys without platform-side caching.
+        asset_last_updated:
+          summary: Optional top-level assetLastUpdated query value forwarded to the GAV endpoint; do not put asset_last_updated in filter_body.filters.field.
+        search_body:
+          summary: Deprecated alias for filter_body.
+          full: Prefer filter_body. search_body accepts the same native Qualys GAV FilterRequest JSON body and cannot be combined with filter_body.
+        filter_xml:
+          summary: Optional legacy XML filter body for GAV count.
+          full: Use only when the caller already has a valid Qualys Gateway XML filter. Do not combine filter_xml with filter_body or search_body.
+        last_seen_asset_id:
+          summary: Optional lastSeenAssetId cursor value for legacy compatibility.
+      examples:
+        - filter_body:
+            filters:
+              - field: asset.name
+                operator: EQUALS
+                value: definitely-missing-host
+`;
+}
+
+function qualysGavAssetSearchHelpYaml(): string {
+  return `
+    help:
+      summary: Search CSAM/GAV assets and return matching records.
+      full: |
+        Searches assets through the Qualys Gateway search endpoint. Use this
+        when the caller needs records, selected fields, or pagination. Filter
+        syntax is Qualys-native; response projection names are not valid filter
+        tokens.
+      whenToUse:
+        - Retrieve asset records by native GAV filters.
+        - Page through CSAM/GAV search results.
+      whenNotToUse:
+        - Use the count tool when only cardinality is needed.
+      parameters:
+        page_size:
+          summary: Optional Qualys page size for asset search.
+          full: Positive integer forwarded as pageSize. Use conservative values for live Qualys calls to avoid target-side throttling.
+        max_pages:
+          summary: Optional maximum number of pages to fetch.
+          full: Positive integer cap for pagination. Use this to bound runtime and response size.
+        detail_level:
+          summary: Optional Qualys asset detail level.
+        filter_body:
+          summary: Native Qualys GAV FilterRequest JSON body.
+          full: Use the same FilterRequest shape as the count tool. The request may include filters and an operation accepted by Qualys.
+          rules:
+            - Use asset.name instead of assetName.
+            - asset_last_updated is a hosted tool request parameter, not a filter field token.
+            - Use qualys.agent.lastCheckedInDate for Cloud Agent check-in filtering.
+        include_fields:
+          summary: Optional response field projection list for returned asset records.
+          full: List response projection fields to keep in the returned records. Use exclude_fields instead when removing a small number of fields.
+        exclude_fields:
+          summary: Optional response field exclusion list for returned asset records.
+          full: List response projection fields to omit. Do not combine with include_fields.
+        last_seen_asset_id:
+          summary: Optional pagination cursor forwarded as lastSeenAssetId.
+        asset_last_updated:
+          summary: Optional top-level assetLastUpdated query value forwarded to Qualys; do not put asset_last_updated in filter_body.filters.field.
+        search_body:
+          summary: Deprecated alias for filter_body.
+          full: Prefer filter_body. search_body accepts the same native Qualys GAV FilterRequest JSON body and cannot be combined with filter_body.
+        filter_xml:
+          summary: Optional legacy XML filter body for GAV search.
+          full: Use only when the caller already has a valid Qualys Gateway XML filter. Do not combine filter_xml with filter_body or search_body.
+      examples:
+        - filter_body:
+            filters:
+              - field: asset.name
+                operator: EQUALS
+                value: definitely-missing-host
+`;
+}
+
+function qualysCloudAgentCountHelpYaml(): string {
+  return `
+    help:
+      summary: Count Cloud Agent assets; the tool automatically scopes results to QAGENT.
+      full: |
+        Counts Cloud Agent assets by ANDing caller filters with
+        asset.trackingMethod EQUALS QAGENT. The caller must not provide
+        operation OR or override trackingMethod to a non-QAGENT value. Use
+        native GAV filter tokens such as asset.name or
+        qualys.agent.lastCheckedInDate.
+      whenToUse:
+        - Count Cloud Agent host assets.
+        - Verify last check-in filters before a record search.
+      whenNotToUse:
+        - Do not use for non-agent VMDR Host List queries.
+        - Do not pass operation OR.
+      parameters:
+        filter_body:
+          summary: Native GAV FilterRequest JSON body ANDed with QAGENT scope.
+          full: |
+            The tool injects asset.trackingMethod EQUALS QAGENT and combines it
+            with caller filters using AND. If the caller supplies
+            asset.trackingMethod, it must be QAGENT. operation OR is rejected
+            because it would escape the Cloud Agent scope.
+          rules:
+            - asset.trackingMethod EQUALS QAGENT is enforced automatically.
+            - operation must be absent or AND.
+            - asset.trackingMethod values other than QAGENT are rejected.
+            - asset_last_updated is a hosted tool request parameter, not a filter field token.
+            - Use qualys.agent.lastCheckedInDate for Cloud Agent check-in filters.
+        filter_body.filters.field:
+          summary: Native GAV filter token; use asset.name, not assetName.
+          full: Native Qualys GAV token. For Cloud Agent last check-in, use qualys.agent.lastCheckedInDate. Do not use hosted request parameters such as asset_last_updated as filter fields.
+        filter_body.filters.operator:
+          summary: Native Qualys operator such as EQUALS, CONTAINS, GREATER, or LESSER.
+        filter_body.filters.value:
+          summary: Filter value sent to Qualys.
+        filter_body.operation:
+          summary: Must be absent or AND for Cloud Agent tools.
+          full: OR is rejected because the tool must keep every result scoped to QAGENT.
+        asset_last_updated:
+          summary: Optional top-level assetLastUpdated query value forwarded to Qualys; do not put asset_last_updated in filter_body.filters.field.
+        search_body:
+          summary: Deprecated alias for filter_body.
+          full: Prefer filter_body. search_body accepts the same native Qualys GAV FilterRequest JSON body and is also ANDed with QAGENT scope.
+        last_seen_asset_id:
+          summary: Optional lastSeenAssetId cursor value for legacy compatibility.
+      examples:
+        - filter_body:
+            filters:
+              - field: qualys.agent.lastCheckedInDate
+                operator: LESSER
+                value: "2026-07-01T00:00:00Z"
+`;
+}
+
+function qualysCloudAgentSearchHelpYaml(): string {
+  return `
+    help:
+      summary: Search Cloud Agent asset records with automatic QAGENT scoping.
+      full: |
+        Searches CSAM/GAV asset records while enforcing
+        asset.trackingMethod EQUALS QAGENT. Caller filters are combined with
+        AND. Use this for Cloud Agent record retrieval, not for VMDR host list
+        XML queries.
+      whenToUse:
+        - Retrieve Cloud Agent asset records.
+        - Page through Cloud Agent assets using GAV search semantics.
+      whenNotToUse:
+        - Do not use operation OR or non-QAGENT trackingMethod filters.
+      parameters:
+        page_size:
+          summary: Optional Qualys page size for Cloud Agent asset search.
+          full: Positive integer forwarded as pageSize. Use conservative values for live Qualys calls to avoid target-side throttling.
+        max_pages:
+          summary: Optional maximum number of pages to fetch.
+          full: Positive integer cap for pagination. Use this to bound runtime and response size.
+        detail_level:
+          summary: Optional Qualys asset detail level.
+        filter_body:
+          summary: Native GAV FilterRequest JSON body ANDed with QAGENT scope.
+          full: The tool enforces QAGENT scope exactly like the Cloud Agent count tool.
+          rules:
+            - operation must be absent or AND.
+            - Use asset.name instead of assetName.
+            - asset_last_updated is a hosted tool request parameter, not a filter field token.
+            - Use qualys.agent.lastCheckedInDate for Cloud Agent last check-in.
+        include_fields:
+          summary: Optional response field projection list.
+          full: List response projection fields to keep in returned Cloud Agent records. Do not combine with exclude_fields.
+        exclude_fields:
+          summary: Optional response field exclusion list.
+          full: List response projection fields to omit. Do not combine with include_fields.
+        last_seen_asset_id:
+          summary: Optional pagination cursor forwarded as lastSeenAssetId.
+        asset_last_updated:
+          summary: Optional top-level assetLastUpdated query value forwarded to Qualys; do not put asset_last_updated in filter_body.filters.field.
+        search_body:
+          summary: Deprecated alias for filter_body.
+          full: Prefer filter_body. search_body accepts the same native Qualys GAV FilterRequest JSON body and is also ANDed with QAGENT scope.
+      examples:
+        - filter_body:
+            filters:
+              - field: asset.name
+                operator: EQUALS
+                value: definitely-missing-host
+`;
+}
+
+function qualysVmdrHostListHelpYaml(): string {
+  return `
+    help:
+      summary: List VMDR Host List API v5 hosts with read-only filters.
+      full: |
+        Calls the Qualys VMDR Host List API v5. This is separate from CSAM/GAV
+        Gateway asset search. Do not pass Cloud Agent tracking_method input to
+        this tool; the tool rejects unsupported tracking_method arguments before
+        credentials or network access.
+      whenToUse:
+        - Retrieve VMDR host records through Host List API v5.
+      whenNotToUse:
+        - Use Cloud Agent tools for QAGENT-scoped CSAM/GAV assets.
+      parameters:
+        params:
+          summary: Native Qualys Host List query parameters.
+          full: Optional key/value parameters forwarded to the VMDR Host List API v5 after the tool enforces action=list. Do not include tracking_method or trackingMethod.
+        truncation_limit:
+          summary: Optional Qualys Host List truncation_limit.
+        max_pages:
+          summary: Optional maximum number of Host List pages to fetch.
+          full: Positive integer cap for pagination. Use this to bound runtime and response size.
+        tracking_method:
+          summary: Unsupported for this hosted VMDR tool and rejected when present.
+          full: Cloud Agent tracking_method belongs to the CSAM/GAV Cloud Agent tools, not VMDR Host List API v5.
+      examples:
+        - details: Basic read-only VMDR host list call with no tracking_method override.
 `;
 }
 
@@ -101,7 +465,7 @@ This is a narrow port from the legacy integration-hub Qualys client:
 - VMDR host listing uses Host List API v5 and rejects tracking_method input
   before credentials or network are touched.
 
-Credentials and endpoints come from hosted integration config scopes and
+Credentials and endpoints come from hosted integration environment configs and
 human-owned secrets in ToolContext. This module must not read process env.
 """
 
@@ -233,44 +597,72 @@ def list_tools():
     return []
 
 
-def call_tool(name, args, context):
-    args = args or {}
-    if name == "qualys_vmdr_host_list":
-        _validate_host_list_args(args)
-        client = QualysClient(context)
-        return client.list_hosts(
-            truncation_limit=args.get("truncation_limit"),
-            params=_native_params_arg(args),
-            max_pages=_positive_int(args, "max_pages"),
-        )
+def authenticate(ctx):
+    return {"context": ctx, "client": None}
 
-    if name == "qualys_gav_asset_count":
-        client = QualysClient(context)
-        return client.count_assets(
-            asset_last_updated=_optional_string(args, "asset_last_updated"),
-            filter_body=_gateway_filter_body_arg(args, allow_filter_xml=True),
-            filter_xml=_gateway_filter_xml_arg(args),
-            last_seen_asset_id=_positive_int(args, "last_seen_asset_id"),
-        )
 
-    if name == "qualys_gav_asset_search":
-        client = QualysClient(context)
-        return _list_assets_from_args(client, args)
+def before_tool_call(tool_name, args, ctx, auth):
+    return args or {}
 
-    if name == "qualys_cloud_agent_hostasset_count":
-        client = QualysClient(context)
-        return client.count_assets(
-            asset_last_updated=_optional_string(args, "asset_last_updated"),
-            filter_body=_qagent_filter_body(args),
-            filter_xml=None,
-            last_seen_asset_id=_positive_int(args, "last_seen_asset_id"),
-        )
 
-    if name == "qualys_cloud_agent_hostasset_search":
-        client = QualysClient(context)
-        return _list_assets_from_args(client, {**args, "filter_body": _qagent_filter_body(args)})
+def after_tool_call(tool_name, args, ctx, result, auth):
+    return result
 
-    raise ValueError(f"unknown tool: {name}")
+
+def tool_qualys_vmdr_host_list(args, context):
+    _validate_host_list_args(args)
+    truncation_limit = args.get("truncation_limit")
+    params = _native_params_arg(args)
+    max_pages = _positive_int(args, "max_pages")
+    client = _authenticated_client(context)
+    return client.list_hosts(
+        truncation_limit=truncation_limit,
+        params=params,
+        max_pages=max_pages,
+    )
+
+
+def tool_qualys_gav_asset_count(args, context):
+    asset_last_updated = _optional_string(args, "asset_last_updated")
+    filter_body = _gateway_filter_body_arg(args, allow_filter_xml=True)
+    filter_xml = _gateway_filter_xml_arg(args)
+    last_seen_asset_id = _positive_int(args, "last_seen_asset_id")
+    client = _authenticated_client(context)
+    return client.count_assets(
+        asset_last_updated=asset_last_updated,
+        filter_body=filter_body,
+        filter_xml=filter_xml,
+        last_seen_asset_id=last_seen_asset_id,
+    )
+
+
+def tool_qualys_gav_asset_search(args, context):
+    client = _authenticated_client(context)
+    return _list_assets_from_args(client, args)
+
+
+def tool_qualys_cloud_agent_hostasset_count(args, context):
+    filter_body = _qagent_filter_body(args)
+    client = _authenticated_client(context)
+    return client.count_assets(
+        asset_last_updated=_optional_string(args, "asset_last_updated"),
+        filter_body=filter_body,
+        filter_xml=None,
+        last_seen_asset_id=_positive_int(args, "last_seen_asset_id"),
+    )
+
+
+def tool_qualys_cloud_agent_hostasset_search(args, context):
+    filter_body = _qagent_filter_body(args)
+    client = _authenticated_client(context)
+    return _list_assets_from_args(client, {**args, "filter_body": filter_body})
+
+
+def _authenticated_client(context):
+    auth = context["auth"]
+    if auth["client"] is None:
+        auth["client"] = QualysClient(auth["context"])
+    return auth["client"]
 
 
 class QualysClient:
@@ -495,7 +887,7 @@ class QualysClient:
             },
             method="POST",
         )
-        raw = self._request_bytes(req, "Qualys Gateway").decode("utf-8", errors="replace")
+        raw = self._request_bytes(req, "Qualys Gateway", return_error_body_codes=(400,)).decode("utf-8", errors="replace")
         stripped = raw.strip()
         if not stripped:
             raise QualysToolError("upstream_error", "Qualys Gateway returned an empty asset search response")
@@ -504,11 +896,15 @@ class QualysClient:
                 parsed = _xml_to_obj(ET.fromstring(stripped))
             except ET.ParseError as exc:
                 raise QualysToolError("upstream_error", f"Could not parse Qualys Gateway XML response: {exc}; first 300 chars: {raw[:300]}")
-            return parsed if isinstance(parsed, dict) else {"response": parsed}
+            payload = parsed if isinstance(parsed, dict) else {"response": parsed}
+            _raise_gateway_failed_response(payload)
+            return payload
         try:
-            return json.loads(stripped)
+            payload = json.loads(stripped)
         except json.JSONDecodeError as exc:
             raise QualysToolError("upstream_error", f"Could not parse Qualys Gateway JSON response: {exc}; first 300 chars: {raw[:300]}")
+        _raise_gateway_failed_response(payload)
+        return payload
 
     def _get_jwt(self):
         if self._jwt_token:
@@ -533,12 +929,15 @@ class QualysClient:
     def _ssl_context(self):
         return ssl.create_default_context() if self.verify_tls else ssl._create_unverified_context()
 
-    def _request_bytes(self, req, service, parse_xml_cooldown=False):
+    def _request_bytes(self, req, service, parse_xml_cooldown=False, return_error_body_codes=None):
         try:
             with urlopen(req, timeout=self.timeout, context=self._ssl_context()) as resp:
                 body = resp.read()
         except HTTPError as exc:
-            body_txt = exc.read().decode("utf-8", errors="replace")
+            body = exc.read()
+            body_txt = body.decode("utf-8", errors="replace")
+            if return_error_body_codes and exc.code in return_error_body_codes:
+                return body
             if exc.code in (401, 403):
                 if "Gateway" in service:
                     self._jwt_token = None
@@ -586,8 +985,16 @@ def _qagent_filter_body(args):
         raise QualysToolError("bad_arguments", "cloud agent hostasset tools require JSON filter_body/search_body so asset.trackingMethod EQUALS QAGENT can be applied")
     base = _gateway_filter_body_arg(args, allow_filter_xml=False) or {"filters": []}
     filters = [item for item in base.get("filters", []) if isinstance(item, dict)]
-    has_tracking = any(str(item.get("field", "")).lower() == "asset.trackingmethod" for item in filters)
-    return {**base, "filters": ([QAGENT_FILTER] if not has_tracking else []) + filters}
+    operation = str(base.get("operation") or "AND").upper()
+    if operation != "AND":
+        raise QualysToolError("bad_arguments", "cloud agent hostasset tools always AND caller filters with asset.trackingMethod EQUALS QAGENT; use qualys_gav_asset_count for other boolean operations")
+    for item in filters:
+        if str(item.get("field", "")).lower() != "asset.trackingmethod":
+            continue
+        if str(item.get("operator", "")).upper() == "EQUALS" and str(item.get("value", "")).upper() == "QAGENT":
+            return {**base, "operation": "AND", "filters": filters}
+        raise QualysToolError("bad_arguments", "cloud agent hostasset tools require asset.trackingMethod EQUALS QAGENT; omit trackingMethod or use qualys_gav_asset_count")
+    return {**base, "operation": "AND", "filters": [QAGENT_FILTER] + filters}
 
 
 def _validate_host_list_args(args):
@@ -658,8 +1065,8 @@ def _native_params_arg(args, required=False):
 
 
 def _gateway_filter_body_arg(args, allow_filter_xml=False):
-    search_body = args.get("search_body")
-    filter_body = args.get("filter_body")
+    search_body = _normalize_gateway_filter_body(args.get("search_body"))
+    filter_body = _normalize_gateway_filter_body(args.get("filter_body"))
     _validate_mapping(search_body, "search_body")
     _validate_mapping(filter_body, "filter_body")
     _validate_gateway_filter_shape(search_body, "search_body")
@@ -683,6 +1090,35 @@ def _gateway_filter_xml_arg(args):
     return value.strip()
 
 
+def _raise_gateway_failed_response(payload):
+    if not isinstance(payload, dict):
+        return
+    response_code = str(payload.get("responseCode") or "").upper()
+    if not response_code or response_code == "SUCCESS":
+        return
+    message = str(payload.get("responseMessage") or "Qualys Gateway returned a failed response")
+    error_code = "bad_arguments" if "Request Validation Exception" in message else "upstream_error"
+    raise QualysToolError(error_code, f"Qualys Gateway {response_code}: {message[:1200]}")
+
+
+def _normalize_gateway_filter_body(value):
+    if not isinstance(value, dict):
+        return value
+    service_request = value.get("ServiceRequest")
+    if not isinstance(service_request, dict):
+        return value
+    filters = service_request.get("filters")
+    if isinstance(filters, list):
+        return {"filters": filters}
+    if isinstance(filters, dict) and "Criteria" in filters:
+        criteria = filters.get("Criteria")
+        if isinstance(criteria, list):
+            return {"filters": criteria}
+        if isinstance(criteria, dict):
+            return {"filters": [criteria]}
+    return value
+
+
 def _validate_gateway_filter_shape(value, field):
     if value is None or value == {}:
         return
@@ -696,6 +1132,9 @@ def _validate_gateway_filter_shape(value, field):
             raise QualysToolError("bad_arguments", f"{field}.filters[{index}] must be an object")
         if not isinstance(criterion.get("field"), str) or not criterion.get("field").strip():
             raise QualysToolError("bad_arguments", f"{field}.filters[{index}].field must be a non-empty string")
+        normalized_filter_field = criterion.get("field").strip().lower()
+        if normalized_filter_field in {"asset_last_updated", "assetlastupdated", "last_seen_asset_id", "lastseenassetid"}:
+            raise QualysToolError("bad_arguments", f"{field}.filters[{index}].field={criterion.get('field')} is a hosted tool request parameter, not a Qualys GAV filter field; pass it as a top-level argument instead")
         if not isinstance(criterion.get("operator"), str) or not criterion.get("operator").strip():
             raise QualysToolError("bad_arguments", f"{field}.filters[{index}].operator must be a non-empty string")
         if "value" not in criterion:

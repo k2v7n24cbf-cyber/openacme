@@ -31,8 +31,9 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc --build",
+    "build": "rm -rf dist && tsc --build",
     "check-types": "tsc --noEmit",
+    "check-types:test-support": "tsc --noEmit -p tsconfig.test-support.json",
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest"

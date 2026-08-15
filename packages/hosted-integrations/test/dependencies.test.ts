@@ -158,7 +158,11 @@ async function createDraftWithManifest(manifest: string) {
     sourceRevisionId: "source_rev_1",
     files: {
       "family.yaml": manifest,
-      "qualys.py": "def run(): pass\n",
+      "qualys.py": [
+        "def tool_qualys_count_assets(args, context):",
+        "    return {}",
+        "",
+      ].join("\n"),
     },
   });
   if (!created.ok) throw new Error(created.reason);
@@ -212,6 +216,10 @@ runtime:
   dependencyPolicy:
     installDuringInvocation: false
     allowedPackages:${formatYamlStringList(allowedPackages)}
+hookJustifications:
+  authenticate: Dependency fixture does not need authentication.
+  before_tool_call: Dependency fixture does not need shared request normalization.
+  after_tool_call: Dependency fixture does not need shared response normalization.
 tools:
   - name: qualys_count_assets
     title: Count assets
@@ -225,6 +233,10 @@ tools:
       idempotency: idempotent
       execution: sync
       approval: none
+    help:
+      summary: Count Qualys assets.
+      examples:
+        - {}
 `;
 }
 

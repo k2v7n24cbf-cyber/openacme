@@ -359,9 +359,12 @@ describe("agents CRUD", () => {
     const binding = {
       familyId: "qualys",
       toolName: "qualys_count_assets",
-      environment: "prod",
-      allowedConfigScopeIds: ["qualys-prod-readonly", "qualys-prod-secondary"],
-      defaultConfigScopeId: "qualys-prod-readonly",
+      allowedEnvironments: ["prod", "test_debug"],
+      defaultEnvironment: "prod",
+      generationPin: { type: "current" },
+      bindingKind: "agent",
+      updatedAt: "2026-08-14T10:00:00.000Z",
+      updatedBy: "human:test",
     };
     let res = await req("/api/agents/helper", {
       method: "PUT",

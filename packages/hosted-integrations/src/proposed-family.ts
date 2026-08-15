@@ -274,6 +274,14 @@ function proposedFamilyFiles(input: {
         allowedPackages: [],
       },
     },
+    hookJustifications: {
+      authenticate:
+        "Initial proposed tool does not authenticate until implementation config is added.",
+      before_tool_call:
+        "Initial proposed tool has no shared request normalization yet.",
+      after_tool_call:
+        "Initial proposed tool has no shared response normalization yet.",
+    },
     tools: [
       {
         name: input.toolName,
@@ -291,6 +299,11 @@ function proposedFamilyFiles(input: {
           execution: "sync",
           approval: "none",
         },
+        help: {
+          summary: `Initial read-only ${input.name} hosted integration tool.`,
+          noExampleJustification:
+            "Initial proposed tool has no stable request example until implementation is completed.",
+        },
       },
     ],
   });
@@ -298,8 +311,8 @@ function proposedFamilyFiles(input: {
   return {
     "family.yaml": stringifyYaml(manifest),
     [`${input.familyId}.py`]: [
-      "def invoke(tool_name, args, context):",
-      "    return {\"ok\": True, \"tool\": tool_name, \"args\": args}",
+      `def tool_${input.toolName}(args, context):`,
+      `    return {"ok": True, "tool": "${input.toolName}", "args": args}`,
       "",
     ].join("\n"),
   };

@@ -7,6 +7,7 @@ export const HOSTED_INTEGRATION_MANAGEMENT_TOOL_NAMES = [
   "hosted_integration_family_list",
   "hosted_integration_family_create",
   "hosted_integration_source_read",
+  "hosted_integration_source_view",
   "hosted_integration_lock_acquire",
   "hosted_integration_lock_renew",
   "hosted_integration_lock_release",
@@ -21,9 +22,11 @@ export const HOSTED_INTEGRATION_MANAGEMENT_TOOL_NAMES = [
   "hosted_integration_promote",
   "hosted_integration_generation_list",
   "hosted_integration_generation_get",
+  "hosted_integration_generation_diff",
   "hosted_integration_generation_rollback",
-  "hosted_integration_config_scope_list",
-  "hosted_integration_config_scope_get",
+  "hosted_integration_environment_config_list",
+  "hosted_integration_environment_config_get",
+  "hosted_integration_readiness_get",
   "hosted_integration_debug_run",
   "hosted_integration_run_get",
   "hosted_integration_artifact_get",
@@ -76,6 +79,47 @@ const LockId = z.string().min(1);
 const GenerationId = z.string().min(1);
 const RunId = z.string().min(1);
 const BucketId = z.string().min(1);
+const ReadinessTargetParams = z.discriminatedUnion("target_type", [
+  z
+    .object({
+      target_type: z.literal("environment_config"),
+      family_id: FamilyId,
+      environment: z.enum(["prod", "test_debug"]),
+    })
+    .strict(),
+  z
+    .object({
+      target_type: z.literal("binding"),
+      agent_id: z.string().min(1),
+      family_id: FamilyId,
+      tool_name: NativeToolName,
+    })
+    .strict(),
+  z
+    .object({
+      target_type: z.literal("publish"),
+      draft_id: DraftId,
+    })
+    .strict(),
+  z
+    .object({
+      target_type: z.literal("debug"),
+      family_id: FamilyId,
+      tool_name: NativeToolName,
+      environment: z.enum(["prod", "test_debug"]).default("test_debug"),
+      allow_prod_environment: z.boolean().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      target_type: z.literal("invocation"),
+      agent_id: z.string().min(1),
+      family_id: FamilyId,
+      tool_name: NativeToolName,
+      captured_generation_id: GenerationId.nullable().optional(),
+    })
+    .strict(),
+]);
 const SourceReadStartLine = z.number().int().positive().nullable().optional();
 const SourceReadMaxLines = z
   .number()
@@ -105,7 +149,7 @@ const ExampleParam = z
 const definitions: Array<{
   name: HostedIntegrationManagementToolName;
   description: string;
-  parameters: z.ZodObject;
+  parameters: z.ZodType;
 }> = [
   {
     name: "hosted_integration_family_list",
@@ -136,6 +180,25 @@ const definitions: Array<{
         path: OptionalStringParam,
         start_line: SourceReadStartLine,
         max_lines: SourceReadMaxLines,
+      })
+      .strict(),
+  },
+  {
+    name: "hosted_integration_source_view",
+    description:
+      "Inspect source focused on one hosted integration tool handler, with optional hooks and deterministic shared helpers.",
+    parameters: z
+      .object({
+        family_id: FamilyId,
+        tool_name: NativeToolName,
+        draft_id: DraftId.nullable().optional(),
+        generation_id: GenerationId.nullable().optional(),
+        include_shared_helpers: z.boolean().optional(),
+        include_hooks: z.boolean().optional(),
+        include_all_tools: z.boolean().optional(),
+        helper_depth_limit: OptionalPositiveInteger,
+        max_helper_snippets: OptionalPositiveInteger,
+        max_source_chars: OptionalPositiveInteger,
       })
       .strict(),
   },
@@ -259,22 +322,51 @@ const definitions: Array<{
     parameters: z.object({ generation_id: GenerationId }).strict(),
   },
   {
+    name: "hosted_integration_generation_diff",
+    description:
+      "Compare two promoted hosted integration generations with summary, unified, manifest-only, or tool-focused output.",
+    parameters: z
+      .object({
+        base_generation_id: GenerationId,
+        compare_generation_id: GenerationId,
+        mode: z
+          .enum(["summary", "unified", "manifest", "tool_focused"])
+          .default("summary"),
+        path: OptionalStringParam,
+        tool_name: NativeToolName.nullable().optional(),
+        include_shared_helpers: z.boolean().optional(),
+        include_hooks: z.boolean().optional(),
+      })
+      .strict(),
+  },
+  {
     name: "hosted_integration_generation_rollback",
     description:
       "Roll back a hosted integration family to an older generation.",
     parameters: z.object({ generation_id: GenerationId }).strict(),
   },
   {
-    name: "hosted_integration_config_scope_list",
+    name: "hosted_integration_environment_config_list",
     description:
-      "List hosted integration config scopes with sanitized secret metadata.",
+      "List hosted integration environment configs with sanitized secret metadata.",
     parameters: z.object({}).strict(),
   },
   {
-    name: "hosted_integration_config_scope_get",
+    name: "hosted_integration_environment_config_get",
     description:
-      "Inspect one hosted integration config scope with sanitized secret metadata.",
-    parameters: z.object({ scope_id: z.string().min(1) }).strict(),
+      "Inspect one hosted integration environment config with sanitized secret metadata.",
+    parameters: z
+      .object({
+        family_id: FamilyId,
+        environment: z.enum(["prod", "test_debug"]),
+      })
+      .strict(),
+  },
+  {
+    name: "hosted_integration_readiness_get",
+    description:
+      "Inspect normalized hosted integration lifecycle readiness for environment config, binding, publish, debug, or invocation targets.",
+    parameters: ReadinessTargetParams,
   },
   {
     name: "hosted_integration_debug_run",
@@ -284,8 +376,7 @@ const definitions: Array<{
       .object({
         family_id: FamilyId,
         tool_name: NativeToolName,
-        environment: z.string().min(1),
-        config_scope_id: z.string().min(1),
+        environment: z.enum(["prod", "test_debug"]).default("test_debug"),
         args: JsonObjectParam.default({}),
         generation_id: GenerationId.nullable().optional(),
         operation_class: z
@@ -346,7 +437,24 @@ for (const definition of definitions) {
     description: definition.description,
     parameters: definition.parameters,
     parallelSafe: false,
-    handler: async (args) => invokeManagementTool(definition.name, args),
+    handler: async (args) => {
+      const parsed = definition.parameters.safeParse(args);
+      if (!parsed.success) {
+        return JSON.stringify({
+          ok: false,
+          error: {
+            code: "invalid_params",
+            message: parsed.error.issues
+              .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+              .join("; "),
+          },
+        });
+      }
+      return invokeManagementTool(
+        definition.name,
+        parsed.data as Record<string, unknown>,
+      );
+    },
   });
 }
 

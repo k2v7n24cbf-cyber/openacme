@@ -1,0 +1,13 @@
+{
+  "extends": "@repo/typescript-config/node-library.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "outDir": "dist-operator"
+  },
+  "include": [
+    "scripts/**/*.ts",
+    "test-support/**/*.ts",
+    "../hosted-integrations/test-support/**/*.ts"
+  ],
+  "exclude": ["node_modules", "dist", "dist-operator"]
+}

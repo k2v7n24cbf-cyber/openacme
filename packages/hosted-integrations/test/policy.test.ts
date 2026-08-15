@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  createAgentSettingsHostedIntegrationBinding,
+  createAgentSettingsHostedToolBinding,
   evaluateHostedIntegrationPolicy,
   type HostedIntegrationPolicyActor,
   type HostedIntegrationPolicyInput,
@@ -46,14 +46,17 @@ function invocation(
     environment: "prod",
     mode: "run",
     toolClassification: readTool,
-    bindings: [
+    hostedToolBindings: [
       {
         agentId: "agent:analyst",
         familyId: "qualys",
         toolName: "qualys_count_assets",
-        allowedConfigScopeIds: ["qualys-prod-readonly"],
-        defaultConfigScopeId: "qualys-prod-readonly",
-        environment: "prod",
+        allowedEnvironments: ["prod"],
+        defaultEnvironment: "prod",
+        generationPin: { type: "current" },
+        bindingKind: "agent",
+        updatedAt: "2026-08-14T10:00:00.000Z",
+        updatedBy: "human:test",
       },
     ],
     ...overrides,
@@ -102,7 +105,9 @@ describe("hosted integration access policy", () => {
   it("allows normal agents to invoke explicitly bound hosted integration tools", () => {
     expect(evaluateHostedIntegrationPolicy(invocation())).toEqual({
       ok: true,
-      resolvedConfigScopeId: "qualys-prod-readonly",
+      resolvedEnvironment: "prod",
+      resolvedEnvironmentConfigId: "qualys-prod",
+      generationPin: { type: "current" },
     });
   });
 
@@ -121,47 +126,57 @@ describe("hosted integration access policy", () => {
     });
   });
 
-  it("resolves the default config scope from the agent tool binding", () => {
+  it("resolves the default environment config from the agent tool binding", () => {
     expect(
       evaluateHostedIntegrationPolicy(
-        invocation({ requestedConfigScopeId: undefined }),
+        invocation({ requestedEnvironment: undefined }),
       ),
     ).toEqual({
       ok: true,
-      resolvedConfigScopeId: "qualys-prod-readonly",
+      resolvedEnvironment: "prod",
+      resolvedEnvironmentConfigId: "qualys-prod",
+      generationPin: { type: "current" },
     });
   });
 
-  it("fails before runtime when multiple scopes are allowed without a default", () => {
+  it("rejects requested environments outside the agent binding", () => {
     expect(
       evaluateHostedIntegrationPolicy(
         invocation({
-          bindings: [
+          requestedEnvironment: "test_debug",
+          hostedToolBindings: [
             {
               agentId: "agent:analyst",
               familyId: "qualys",
               toolName: "qualys_count_assets",
-              allowedConfigScopeIds: ["qualys-prod", "qualys-stage"],
-              environment: "prod",
+              allowedEnvironments: ["prod"],
+              defaultEnvironment: "prod",
+              generationPin: { type: "current" },
+              bindingKind: "agent",
+              updatedAt: "2026-08-14T10:00:00.000Z",
+              updatedBy: "human:test",
             },
           ],
         }),
       ),
     ).toEqual({
       ok: false,
-      reason: "config_missing",
-      message: "multiple config scopes require a default",
+      reason: "policy_denied",
+      message: "requested environment is not allowed",
     });
   });
 
   it("does not let Agent Settings bindings grant management-tool access", () => {
-    const binding = createAgentSettingsHostedIntegrationBinding({
+    const binding = createAgentSettingsHostedToolBinding({
       agentId: "agent:analyst",
       familyId: "qualys",
       toolName: "qualys_count_assets",
-      allowedConfigScopeIds: ["qualys-prod-readonly"],
-      defaultConfigScopeId: "qualys-prod-readonly",
-      environment: "prod",
+      allowedEnvironments: ["prod"],
+      defaultEnvironment: "prod",
+      generationPin: { type: "current" },
+      bindingKind: "agent",
+      updatedAt: "2026-08-14T10:00:00.000Z",
+      updatedBy: "human:test",
     });
     expect(binding).toMatchObject({ ok: true });
 
@@ -170,7 +185,7 @@ describe("hosted integration access policy", () => {
         invocation({
           action: "management_tool",
           operationClass: "management",
-          bindings: binding.ok ? [binding.binding] : [],
+          hostedToolBindings: binding.ok ? [binding.binding] : [],
         }),
       ),
     ).toMatchObject({ ok: false, reason: "policy_denied" });
@@ -183,14 +198,17 @@ describe("hosted integration access policy", () => {
           toolName: "qualys_delete_asset",
           operationClass: "destructive",
           toolClassification: destructiveTool,
-          bindings: [
+          hostedToolBindings: [
             {
               agentId: "agent:analyst",
               familyId: "qualys",
               toolName: "qualys_delete_asset",
-              allowedConfigScopeIds: ["qualys-prod-readonly"],
-              defaultConfigScopeId: "qualys-prod-readonly",
-              environment: "prod",
+              allowedEnvironments: ["prod"],
+              defaultEnvironment: "prod",
+              generationPin: { type: "current" },
+              bindingKind: "agent",
+              updatedAt: "2026-08-14T10:00:00.000Z",
+              updatedBy: "human:test",
             },
           ],
         }),

@@ -95,7 +95,7 @@ class FileHostedIntegrationFailureBucketStore implements HostedIntegrationFailur
   async recordFailure(
     request: RecordHostedIntegrationFailureRequest,
   ): Promise<RecordHostedIntegrationFailureResult> {
-    const classification = classifyFailure(
+    const classification = classifyHostedIntegrationFailure(
       request.log,
       this.ownerActionableTimeouts,
     );
@@ -228,12 +228,29 @@ class FileHostedIntegrationFailureBucketStore implements HostedIntegrationFailur
   }
 }
 
-function classifyFailure(
+export function classifyHostedIntegrationFailure(
   log: HostedIntegrationExecutionLogEntry,
   ownerActionableTimeouts: boolean,
 ): HostedIntegrationFailureBucketClassification {
   if (log.status !== "failed" || !log.error) return "non_failed";
-  if (log.error.code === "policy_denied") return "platform_policy";
+  if (
+    [
+      "approval_required",
+      "auth_failed",
+      "bad_arguments",
+      "config_missing",
+      "missing_config",
+      "policy_denied",
+    ].includes(log.error.code)
+  ) {
+    return "platform_policy";
+  }
+  if (
+    log.error.code === "connection_error" ||
+    log.error.code === "rate_limited"
+  ) {
+    return "target_timeout";
+  }
   if (log.error.code === "timeout" && !ownerActionableTimeouts) {
     return "target_timeout";
   }

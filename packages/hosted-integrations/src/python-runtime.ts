@@ -110,6 +110,55 @@ def load_module(entrypoint):
     spec.loader.exec_module(module)
     return module
 
+def call_legacy_tool(module, req):
+    return module.call_tool(req["toolName"], req.get("args") or {}, req["context"])
+
+def call_optional_hook(module, name, *args):
+    hook = getattr(module, name, None)
+    if hook is None:
+        return None
+    if not callable(hook):
+        raise RuntimeError(f"standard hook {name} is not callable")
+    return hook(*args)
+
+def call_derived_tool(module, req):
+    tool_name = req["toolName"]
+    handler_name = "tool_" + tool_name
+    handler = getattr(module, handler_name, None)
+    if handler is None or not callable(handler):
+        raise RuntimeError(f"missing Python handler {handler_name}(args, context)")
+
+    args = req.get("args") or {}
+    ctx = req["context"]
+    auth = call_optional_hook(module, "authenticate", ctx)
+    ctx["auth"] = auth
+    normalized_args = call_optional_hook(
+        module,
+        "before_tool_call",
+        tool_name,
+        args,
+        ctx,
+        auth,
+    )
+    if normalized_args is not None:
+        args = normalized_args
+    result = handler(args, ctx)
+    normalized_result = call_optional_hook(
+        module,
+        "after_tool_call",
+        tool_name,
+        args,
+        ctx,
+        result,
+        auth,
+    )
+    return result if normalized_result is None else normalized_result
+
+def call_tool(module, req):
+    if req["runtime"].get("handlerDispatch", "derived") == "legacy_call_tool":
+        return call_legacy_tool(module, req)
+    return call_derived_tool(module, req)
+
 def run(req):
     out_buf = io.StringIO()
     err_buf = io.StringIO()
@@ -128,7 +177,7 @@ def run(req):
                     "stderr": err_buf.getvalue(),
                 }
             if operation == "call_tool":
-                result = module.call_tool(req["toolName"], req.get("args") or {}, req["context"])
+                result = call_tool(module, req)
                 return {
                     "ok": True,
                     "result": to_jsonable(result),
@@ -137,13 +186,17 @@ def run(req):
                 }
             raise RuntimeError("unknown hosted integration operation")
     except BaseException as exc:
+        error_code = getattr(exc, "code", None)
+        if not isinstance(error_code, str) or not error_code:
+            error_code = "tool_bug"
         return {
             "ok": False,
             "error": {
-                "code": "tool_bug",
-                "message": traceback.format_exc(),
+                "code": error_code,
+                "message": str(exc) or type(exc).__name__,
                 "details": {
                     "exception_type": type(exc).__name__,
+                    "traceback": traceback.format_exc(),
                     "stdout": out_buf.getvalue(),
                     "stderr": err_buf.getvalue(),
                 },
@@ -198,9 +251,15 @@ export interface HostedIntegrationPythonCallToolRequest
 }
 
 export type HostedIntegrationPythonRuntimeErrorCode =
+  | "auth_failed"
+  | "bad_arguments"
+  | "connection_error"
+  | "missing_config"
+  | "rate_limited"
   | "runtime_error"
   | "timeout"
-  | "tool_bug";
+  | "tool_bug"
+  | "upstream_error";
 
 export interface HostedIntegrationPythonRuntimeError {
   code: HostedIntegrationPythonRuntimeErrorCode;
@@ -472,7 +531,17 @@ function parseRuntimeError(
 function parseRuntimeErrorCode(
   value: unknown,
 ): HostedIntegrationPythonRuntimeErrorCode {
-  if (value === "tool_bug" || value === "timeout" || value === "runtime_error") {
+  if (
+    value === "auth_failed" ||
+    value === "bad_arguments" ||
+    value === "connection_error" ||
+    value === "missing_config" ||
+    value === "rate_limited" ||
+    value === "runtime_error" ||
+    value === "timeout" ||
+    value === "tool_bug" ||
+    value === "upstream_error"
+  ) {
     return value;
   }
   return "runtime_error";

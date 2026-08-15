@@ -23,13 +23,13 @@ describe("hosted integration managed tool naming", () => {
   it("preserves hyphenated families and underscored native tool names", () => {
     const name = buildHostedIntegrationManagedToolName({
       familyId: "defender-alert",
-      toolName: "defender_alert_search",
+      toolName: "defender_alert_get",
     });
 
-    expect(name).toBe("managed_defender-alert__defender_alert_search");
+    expect(name).toBe("managed_defender-alert__defender_alert_get");
     expect(parseHostedIntegrationManagedToolName(name)).toEqual({
       familyId: "defender-alert",
-      toolName: "defender_alert_search",
+      toolName: "defender_alert_get",
     });
   });
 
@@ -37,7 +37,7 @@ describe("hosted integration managed tool naming", () => {
     expect(() =>
       buildHostedIntegrationManagedToolName({
         familyId: "Defender Alert",
-        toolName: "defender_alert_search",
+        toolName: "defender_alert_get",
       }),
     ).toThrow();
     expect(() =>

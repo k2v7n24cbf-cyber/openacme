@@ -1,6 +1,6 @@
 # Hosted Integrations Architecture
 
-Last revised: 2026-08-13.
+Last revised: 2026-08-14.
 
 ## Goal
 
@@ -23,6 +23,14 @@ Hosted integrations are not compiled OpenAcme built-in tools. They are also not
 external MCP servers. They are hosted by OpenAcme, surfaced through the normal
 OpenAcme tool registry, and maintained through a managed development lifecycle.
 
+Product principle: OpenAcme is agent-first, but human-native. Agents should be
+able to develop, validate, repair, and promote hosted integrations
+autonomously where policy allows, but every lifecycle capability must also be
+available to authorized humans through first-class UI/API surfaces. A human
+operator should be able to inspect families, understand tool mappings, edit
+source, validate, run examples/debug calls, compare versions, approve, promote,
+rollback, and repair without asking an agent to perform the action.
+
 ## Vocabulary
 
 - **Hosted integration**: A tool family hosted by OpenAcme and developed through
@@ -38,8 +46,14 @@ OpenAcme tool registry, and maintained through a managed development lifecycle.
 - **Generation**: Immutable, validated, promoted runtime artifact.
 - **Proposed family**: A not-yet-promoted family initialized as a draft. It is
   not visible as runtime tools until its first generation is promoted.
-- **Config scope**: Human-owned non-secret config plus secret references for a
-  family/environment, tracked by revision.
+- **Environment config**: Human-owned non-secret config plus secret references
+  for a family in one of the two supported runtime environments: `prod` or
+  `test_debug`. It is tracked by revision and is not agent-specific.
+- **Agent hosted-tool binding**: Per-agent policy and selection data that says
+  which hosted tool the agent may use, which environments are allowed, which
+  environment is the default, and whether the agent is pinned to a non-current
+  generation. These bindings are not separate
+  environment configs.
 - **Run directory**: Per-invocation workspace for input, output, diagnostics,
   and artifacts.
 - **Family home**: Persistent, family-owned workspace for explicit family state
@@ -68,7 +82,7 @@ The package owns:
 - validation and promotion lifecycle
 - generation artifacts
 - the Hosted Integration Gateway
-- config scopes and secret references
+- environment configs and secret references
 - family workspaces and run directories
 - execution logs and failure buckets
 - async job state for hosted integration calls
@@ -88,7 +102,7 @@ packages/agent-catalog
 
 `packages/tools` should see hosted integrations through thin `ToolEntry`
 adapters. It should not own hosted integration source, generations, policies,
-failure buckets, or config scopes.
+failure buckets, or environment configs.
 
 The Hosted Integrations API is the canonical control plane. Agent-facing
 management tools are wrappers over that API, not a second implementation of the
@@ -165,25 +179,52 @@ bindings.
 
 Remote MCP tools and managed hosted integration tools are independent tool
 surfaces. A remote MCP allowlist entry must not enable a managed tool, and a
-managed allowlist entry must not enable a remote MCP tool. Migration metadata
-may declare that a managed tool replaces a legacy MCP tool, for example:
+managed allowlist entry must not enable a remote MCP tool. Offline
+parity/replacement metadata may declare that a managed tool replaces a legacy MCP
+tool, for example:
 
 ```text
 managed_splunk__splunk_search replaces mcp_integration-hub__splunk_search
 ```
 
-That relationship is operational metadata for UI, parity checks, and cutover
-planning. It is not an authorization alias and must not rewrite agent settings
-or model-facing tool selections implicitly.
+That relationship is offline operational metadata for parity checks,
+replacement evidence, and decommission planning. It is not an authorization
+alias and must not
+rewrite agent settings or model-facing tool selections implicitly. It must not
+be exported from the hosted integration runtime package, exposed as a product
+readiness state, or carried by the API/tool surface used by normal hosted
+integration lifecycle work.
 
-Integration-hub conversion is additive until a later decommission milestone is
-explicitly approved. Porting a legacy `integration-hub` tool to a managed
-hosted tool must not delete the legacy source, remove the remote MCP server, or
-hide the remote MCP tool. The converted hosted tool appears as a separate
-managed registry entry, and agents opt in by selecting that managed tool plus a
-hosted integration binding/config scope. Parity reports may recommend a
-replacement, but the platform must not silently rewrite
-`mcp_integration-hub__<tool>` selections to `managed_<family>__<tool>`.
+Live parity validation is an operator command, not CI-required behavior. The
+runner connects to the selected legacy MCP server and invokes the matching
+managed hosted tool with equivalent safe read-only intent. Equivalence may use
+different argument shapes when the legacy and managed schemas differ; for
+example, legacy Qualys Cloud Agent QPS tools use `criteria`, while managed
+source-backed Qualys tools use GAV `filter_body` plus the hosted QAGENT
+constraint. The runner writes sanitized evidence only: match/mismatch status,
+summary fingerprints, hosted run ids, failure bucket ids when present, and
+artifact references. It must not write target-system state unless the tool is
+classified write/destructive and separately approved.
+
+Integration-hub parity/replacement work is additive until a later decommission
+milestone is explicitly approved. Developing a managed hosted replacement for a
+legacy `integration-hub` tool must not delete the legacy source, remove the
+remote MCP server, or hide the remote MCP tool. The hosted replacement appears as a
+separate managed registry entry, and agents opt in by selecting that managed
+tool plus a hosted-tool binding. Parity reports may recommend a replacement,
+but the platform must not silently rewrite `mcp_integration-hub__<tool>`
+selections to `managed_<family>__<tool>`.
+
+Integration-hub tool definitions, examples, and environment config blocks may
+be read by operator/test scripts as parity inputs. They are not hosted
+integration runtime code and must not be embedded into application runtime
+modules, package root exports, managed tool schemas, readiness resolvers, or
+HTTP routes. Test scripts that seed hosted replacement tools and run parity are
+allowed when they are clearly outside the product runtime and write through the
+normal hosted integration store/API boundaries; they must not create a second
+lifecycle implementation. Removed legacy URLs may have explicit 404 tombstones
+to avoid SPA fallback ambiguity; those tombstones are not lifecycle routes and
+must not return readiness payloads.
 
 The UI should group hosted integration tools separately from built-in tools and
 MCP tools:
@@ -205,47 +246,191 @@ Tool selection and tool authorization are separate:
 
 - `agent.tools` controls which tool schemas are offered to the model
 - hosted integration tool bindings in Agent Settings define the per-agent
-  allowed family/tool/config-scope surface
+  allowed family/tool/environment/generation surface
 - Hosted Integrations access policy evaluates whether an invocation may run
 - the Hosted Integration Gateway is the final authorization point
 
 Agent Settings is the primary user-facing policy and binding surface for hosted
 integration invocation tools. A user should be able to decide from Agent
-Settings which hosted integration tools an agent may see, which config scopes
-the agent may use, and which default config scope is selected for each binding.
+Settings which hosted integration tools an agent may see, which product
+environment the agent defaults to, whether the agent follows the current active
+generation, and whether a binding note explains a non-default pin.
 The resulting settings are stored as policy/binding data, not as ordinary model
 prompt text.
 
-Config scope selection is also platform-owned. Normal tool schemas should not
-ask the model to provide credential or tenant selection as ordinary tool
-arguments.
+Environment configs are not a general-purpose place to model every
+caller-specific variant. The product-level environment set is intentionally
+small: `prod` and `test_debug`. More environment labels such as `dev`,
+`stage`, `demo`, or `parity` create avoidable operational choice.
+Caller-specific behavior belongs to the agent hosted-tool binding layer:
+allowed environments, default environment, optional generation/version pin,
+internal runner purpose, and an optional binding note.
+
+Per-agent custom runtime config is explicitly unsupported. Agent hosted-tool
+bindings must not carry config values, secret references, endpoint overrides,
+tenant overrides, credential selectors, custom environment config ids, or
+environment config revision pins. If a future product needs tenant/profile level
+config isolation, it must be introduced as a new first-class primitive rather
+than by extending agent bindings or resurrecting custom config scopes.
+
+The Managed Tools settings surface should show the family-level environment
+configs and, on the same screen, an agent matrix for that family/tool: which
+agents can use the tool, which environment each agent defaults to, whether the
+agent follows the current active generation or is pinned to a specific
+generation/version, and any binding note explaining a non-default pin. Internal
+parity/debug runners should appear as internal agent bindings, not as normal
+human-facing environment configs.
+
+Hosted-tool binding controls are part of the hosted tool selection task. They
+should render adjacent to the selected hosted tool groups in Agent Settings, not
+after the full built-in/MCP/system tool catalog, so the user can complete access
+policy setup while the selected hosted tools are still in context.
+
+Agent Settings tool groups should also keep currently selected groups ahead of
+unselected catalog groups. An existing agent's active tool/access policy is the
+primary inspection target; unselected tools are available catalog choices, not
+the first thing a human should scan.
+
+Long managed tool names in Agent Settings should wrap enough to distinguish the
+actual operation. Truncating every selected hosted tool at the common
+`managed_<family>__...` prefix hides the policy target and forces the user to
+infer access from descriptions. The same rule applies to hosted tool access
+binding rows; environment and generation controls should be labeled directly,
+not left as unlabeled selects next to a clipped managed name.
+
+Environment config selection is platform-owned. Normal hosted tool schemas must
+not ask the model to provide credential, tenant, environment, or config
+selection as ordinary tool arguments.
 
 Hosted integration tool bindings should include:
 
 ```text
-agent_id
-family
-tool
-allowed_config_scope_ids
-default_config_scope_id
-environment
+agentId
+familyId
+toolName
+allowedEnvironments: non-empty subset of [prod, test_debug]
+defaultEnvironment: prod | test_debug
+generationPin: { type: "current" } | { type: "generation", generationId: string }
+bindingKind: normal | internal
+purpose?: debug | parity | dogfood | maintenance
+bindingNote?
+updatedAt
+updatedBy
 ```
 
-For normal agent invocation, the gateway resolves the config scope from the
-agent/tool binding and policy. If multiple scopes are allowed and no default is
-set, invocation fails with a normalized `config_missing` error before runtime
-dispatch. Management/debug tools may specify a config scope explicitly, but the
-gateway still enforces policy.
+Binding identity is unique by `(agentId, familyId, toolName)`. Internal runners use
+their own stable agent ids, so they do not require multiple bindings for the
+same visible human agent. `defaultEnvironment` must be present in
+`allowedEnvironments`. Normal human-edited bindings default to `prod` when a
+`prod` environment config exists, otherwise `test_debug`; internal
+debug/parity/dogfood bindings default to `test_debug`.
+
+Reserved internal runner actor ids:
+
+```text
+agent:hosted-integrations:debug
+agent:hosted-integrations:live-parity
+agent:hosted-integrations:dogfood
+```
+
+These actors are platform-owned. They may have internal bindings, but they do
+not appear as normal workforce agents in Agent Settings. They are used for
+platform-initiated runner jobs only. Interactive Tool Developer Agent work keeps
+the Tool Developer Agent's own actor id and marks the invocation purpose as
+`tool_maintenance`; it does not impersonate the reserved debug actor.
+
+For normal agent invocation, the gateway resolves the environment config from
+the agent/tool binding and policy. Normal model-facing tool calls do not carry a
+environment config id or environment argument. Debug control-plane calls accept
+an optional `environment` field that defaults to `test_debug`; `prod` is
+accepted only when the actor is an authorized human or internal maintenance
+actor and the request includes `allowProdEnvironment: true`. The gateway still
+enforces the actor's binding, operation class, and approval policy before
+runtime dispatch.
+
+Generation pin resolution is part of tool surfacing, not only invocation. When a
+binding uses `{ type: "current" }`, the ToolRegistry exposes the active
+generation's schema for that family/tool and carries the captured generation id
+into the gateway call. When a binding uses `{ type: "generation" }`, the
+ToolRegistry exposes that pinned generation's schema and the gateway accepts
+only that captured generation id for the call. If the pinned generation is
+retired, disabled, or no longer available for draining, the tool is hidden from
+new turns and stale in-flight calls fail before runtime dispatch.
 
 Agent Settings can grant invocation access only within the caller's own
 administrative permissions. It cannot grant hosted integration management-tool
 access to normal agents, cannot expose secret values, and cannot bypass
 destructive-operation approval requirements.
 
+Hosted-tool bindings are stored on the existing `AgentDefinition` model. Hosted
+Integrations must not introduce a second authoritative policy store for the same
+agent/tool access decision. The Hosted Integrations API may expose computed
+read-models such as an agent matrix for a family/tool, but binding writes route
+through the existing Agent Settings/agent-definition persistence path and update
+that single source of truth.
+
 Agent Settings should avoid presenting disabled or policy-ineligible hosted
 integration tools as ordinary selectable tools when the agent context is known.
 If a stale or hand-edited agent config still selects a denied tool, invocation
 fails at the gateway before runtime dispatch.
+
+## Workflow State And Readiness Resolvers
+
+Hosted integrations must not spread lifecycle decisions across UI components,
+API handlers, management tools, and runtime dispatch. Workflow state is resolved
+by shared deterministic readiness resolvers, and every surface renders or
+enforces those resolver results.
+
+The canonical resolver layer owns these decisions:
+
+```text
+resolveEnvironmentConfigReadiness(familyId, environment)
+resolveAgentHostedToolBinding(agentId, familyId, toolName)
+resolvePublishReadiness(draftId)
+resolveDebugReadiness(actor, familyId, toolName, requestedEnvironment?)
+resolveInvocationReadiness(actor, familyId, toolName, capturedGenerationId)
+```
+
+Resolver results are structured and sanitized:
+
+```text
+status
+code
+target
+blockers[]
+sanitizedDetails?
+```
+
+Resolvers never return secret values, raw credentials, provider tokens, or
+unmasked request/response payloads. They may return missing key names,
+environment names, tool/family ids, generation ids, and policy reason codes.
+
+State machines:
+
+- Environment config readiness:
+  `missing | incomplete | ready | conflicted | quarantined`
+- Hosted-tool binding readiness:
+  `missing | invalid | ready | denied | stale_generation`
+- Publish readiness:
+  `draft_missing | lock_required | validation_required | validation_failed |
+runtime_config_contract_missing | production_config_missing |
+production_config_incomplete | ready`
+- Debug readiness:
+  `ready | actor_denied | approval_required | environment_missing |
+environment_incomplete | prod_environment_requires_explicit_allow |
+tool_not_debuggable`
+- Invocation readiness:
+  `ready | tool_not_enabled | binding_missing | binding_invalid |
+environment_missing | environment_incomplete | generation_stale |
+tool_disabled | approval_required`
+
+The UI uses resolver output to decide which actions are visible, disabled, or
+blocked and to explain blockers with the same reason codes the API returns. API
+handlers enforce the same resolver decisions before mutating state. Management
+tools call the API instead of reimplementing readiness logic. The gateway
+rechecks invocation readiness immediately before runtime dispatch because stale
+prompts, retired generations, policy edits, and draining windows can change
+between tool surfacing and tool execution.
 
 Hosted integration generation changes can add, change, hide, disable, or remove
 tool schemas. On every promoted generation change, OpenAcme must refresh the
@@ -261,6 +446,689 @@ tool call shaped by an older prompt schema from accidentally dispatching to a
 newer generation after promotion. If the captured generation is no longer
 available for draining, the gateway returns a normalized stale-generation tool
 failure before runtime dispatch.
+
+## Human-Native Managed Tools UX
+
+Managed Tools is a human-native admin surface over the same hosted integration
+control plane used by agents. The UI must let an authorized human inspect and
+change every lifecycle detail without exposing the human to unnecessary
+internal choreography.
+
+The surface follows these principles:
+
+- **Selection and identity live once**: the left rail owns family/tool
+  selection. The work pane may show a compact context line, but it should not
+  start with another large family/tool restatement after the user has already
+  selected `family > tool`.
+- **Navigation identity is runtime-first**: if the control plane has both an
+  active family summary and a proposed draft summary for the same family id, the
+  normal family/tool navigation resolves that identity to the active runtime
+  family. Proposed drafts belong in explicit creation/review flows, not as
+  duplicate primary navigation identities for the same family.
+- **Navigable state is URL-addressable**: selected family, selected tool,
+  primary tab, and meaningful sub-tab state belong in the URL for top-level
+  Managed Tools surfaces. Refresh, back/forward, and shared links should restore
+  the user's work location instead of falling back to the first family or a
+  default tab. Component memory can cache transient edit fields, but it must not
+  be the only source for navigation identity.
+- **The work pane starts with work**: after a family/tool is selected, the right
+  pane should start at the active task, such as source, help, files, logs, or
+  publish state. Intermediary banners, registry summaries, or "workbench"
+  strips are justified only when they directly change what the user can decide
+  or do next.
+- **Navigation is bounded on constrained screens**: family/tool navigation is a
+  selection aid, not the work surface. On mobile and other constrained
+  viewports, the navigation region must not push the active tool workspace out
+  of reach; it should use bounded scrolling, single-row scrollable tab strips,
+  compact horizontal selectors, or collapse/expand behavior while preserving
+  access to every family, tool, file, and task tab. Bounded selectors must also
+  be width-contained so their scrollable content does not expand the work pane,
+  and the current target should remain visible without requiring horizontal
+  scrolling first. Auto-scrolling a selected tab or selector item should use
+  contained alignment and scroll padding so the selected target is readable
+  without leaving a clipped fragment of a neighboring label visible as broken
+  UI text. Horizontal task strips also need enough trailing scroll room for
+  end-of-list tabs to align cleanly; otherwise later tabs can never become the
+  first readable item and the viewport exposes partial labels from earlier
+  tasks.
+- **Top-level placement is cross-viewport**: if Managed Tools is promoted to a
+  top-level product surface, both desktop and mobile primary navigation expose
+  it, and command/search navigation can route to it by name. Mobile bottom
+  navigation stays a single row; adding a surface must not wrap the bar into a
+  second row or hide the current page behind Settings.
+- **Name UI by user task, not platform plumbing**: primary actions use lifecycle
+  verbs such as `Edit`, `Save`, `Validate`, `Test`, `Publish`, `Rollback`, and
+  `Discard`. Labels such as `Registry`, `Workbench`, `Workspace`, or `Controls`
+  are allowed only when that section owns a concrete task that cannot be named
+  more directly. Internal primitives such as lock acquisition, draft creation,
+  generation ids, source revisions, and expiry timestamps remain metadata or
+  diagnostic details.
+- **Section headers must own decisions**: a named section is not useful merely
+  because the backend has a matching concept. If `Hosted Tools`, family/tool
+  navigation, or the active tab already explains the context, another
+  `Registry`, family title, or status band should be removed, collapsed, or
+  converted into a small action/status row. Page-level utility actions can live
+  in the page header only when their scope is truly page-wide.
+- **Compact visible labels need target-aware action names**: visible button text
+  can stay short when the surrounding layout already gives context, but the
+  action identity must still name the concrete target for assistive review,
+  automated UI checks, and agent-driven operation. A visible `Refresh`, `Edit`,
+  `Save`, task tab, mode toggle, or selected row is acceptable only when the
+  accessible/action label resolves to the operated surface, family, tool, file,
+  example, run, or version. Status chips, file sizes, and badges must not
+  accidentally merge into names such as `QualysActive` or
+  `qualys.py34726 bytes`; encode the target and state deliberately, for example
+  `Select family Qualys, active`, `Show Code for qualys_gav_asset_count`, or
+  `Select current file qualys.py, 34726 bytes`. Scope toggles follow the same
+  rule: visible `Selected tool`, `Family`, or `Refresh logs` labels are concise
+  only if their action names identify the concrete tool or family being
+  inspected. Repair actions must identify the concrete failure bucket target,
+  including at least the tool and version relation, even when the visible label
+  remains a compact `Assign repair`. Embedded editors follow the same rule:
+  visible headers can stay compact, but the actual textarea/input name should
+  identify the concrete payload target when the generic label would be
+  ambiguous, for example `Debug arguments for qualys_gav_asset_count` instead
+  of only `Arguments`, or `Published example payload for
+qualys_gav_asset_count_source_backed` instead of only `Published example
+  payload`. Help editors use the same target-aware input names for tool-level
+  fields, selected parameter details, editable parameter table rows, and
+  numbered examples. Parameter row controls name the tool plus the parameter or
+  row ordinal, not only `Parameter 1 name`, `Summary`, or `Remove parameter`.
+  Code source and schema editors name the selected handler or tool, not just the
+  generic source pane. Files mode toggles and file source editors name the
+  current family or file path, not only `Current`, `Changes`, or
+  `Changed source`. Version diff and rollback result editors name the selected
+  previous-version target. Validate/Publish actions and raw result editors name
+  the edited family/change set, not just generic pending changes. Test/debug
+  result editors name the example, tool, and environment config target that
+  produced the output. Execution-log detail editors and artifact load actions name the
+  concrete run and artifact, not only `Sanitized arguments`, `Error`, or
+  `Artifact`. Disclosure summaries are action controls too: visible labels such
+  as `Schema and diagnostics`, `Advanced help fields`, `Help examples`, or
+  `Raw result` stay compact only when their accessible/action names identify
+  the selected tool, family, change set, or result target. Selector controls in
+  dense task rows follow the same rule: visible labels such as `Examples` or
+  `Environment` must produce combobox names that include the selected tool or
+  family target, not anonymous/select-value-only controls.
+- **Inspect first, edit explicit**: default mode is read-only inspection. When
+  the user starts editing, the UI may acquire a lock and prepare a draft
+  automatically; the user should not have to understand whether a separate
+  draft object exists before making a change. Unless the caller explicitly
+  selects a source revision, editing starts from the active generation currently
+  served to agents.
+- **Draft is a working set, not default chrome**: for the common human path,
+  entering edit mode creates or reuses the editable working set. `New draft`
+  should not appear as a parallel default action next to edit/lock controls.
+  Explicit draft creation belongs only to advanced flows such as starting from a
+  non-current version, discarding and restarting, or diagnostic recovery.
+- **One transition, one control**: do not expose both the platform primitive and
+  the human verb for the same transition. `Edit` may acquire a lock and prepare
+  a draft; once editing is active, the same control position can become
+  `Unlock` or `Discard` according to policy. `New draft`, parallel
+  acquire/release controls, and similar primitives are reserved for explicit
+  diagnostic/admin details.
+- **Visible actions require active owned targets**: actions appear as actions
+  only when the current human has a concrete, selected, actionable object the
+  action will operate on. A backend object existing somewhere is not enough.
+  `Save`, `Discard`, `Validate`, and `Publish` require the current human's
+  editable draft/change set; `Publish` also requires the latest validation for
+  that change set to have passed; `Rollback` requires a selected prior version;
+  `Unlock` requires a held edit session; run/artifact actions require a selected
+  run or artifact; repair actions require an open failure bucket.
+- **Action targets are explicit view-model facts**: every lifecycle action or
+  lifecycle tab is rendered from a concrete target descriptor, not from a static
+  list of possible commands. The descriptor must name the target kind, selected
+  target identity, current human ownership, and readiness state. If the view
+  model cannot answer `which exact draft/version/run/artifact/bucket would this
+operate on right now?`, the UI should show task guidance or omit the action
+  instead of exposing a disabled placeholder.
+- **Lifecycle verbs are promises, not menu inventory**: a visible lifecycle
+  action tells the user "this can be done now." If no draft exists, there is
+  nothing to publish; if no previous version is selected, there is nothing to
+  rollback; if no run/artifact/bucket is selected, there is nothing to inspect
+  or repair. The UI should not show a full lifecycle command inventory and
+  rely on disabled controls to explain missing state. A lifecycle tab or lane
+  follows the same rule: it appears because the selected state has entered that
+  task, not because the platform can theoretically perform that command later.
+- **Unavailable commands are not primary UI**: hiding, moving into details, or
+  replacing a command with state guidance is usually clearer than rendering a
+  disabled primary button. Disabled controls are acceptable only when the user
+  already owns the right target and the missing prerequisite is local and
+  immediately fixable, such as invalid JSON in the same editor. If there is no
+  current draft/change set, previous version, run, artifact, or open bucket,
+  the related command should not appear as the primary action.
+- **Public verbs stay human-facing**: internal API verbs such as `promote`
+  should not leak into the default human workflow when a clearer lifecycle verb
+  exists. Humans publish a validated change set; the platform may implement
+  that by promoting a generation. Therefore `Publish` appears only for the
+  current human's validated editable draft, while `promote` remains an API,
+  management-tool, or diagnostic term.
+- **Publish is a result of a real change set**: there is no human-facing
+  publish lane until the current human has an editable change set. After edits
+  exist, the lane leads with `Validate` or `Validate again` until the latest
+  validation for that same change set passes; only then does `Publish` become
+  the primary action. A static `Promote`/`Publish` control before that state is
+  platform inventory, not useful UI. The question "what would this action
+  operate on if clicked right now?" must have a concrete answer before the
+  action is rendered as a primary command.
+- **Invocation access and lifecycle management are different tasks**: normal
+  Agent Settings tool catalogs show invocation tools and hosted tool help, not
+  hosted integration management tools such as draft, lock, validate, promote,
+  generation, failure-bucket, or artifact lifecycle commands. Those management
+  tools belong to the Tool Developer Agent workflow and explicit admin/debug
+  surfaces, so a human cannot accidentally grant lifecycle control while trying
+  to grant a consumer agent read access.
+- **State creates the workspace**: tabs, lanes, sections, and primary controls
+  appear because a real lifecycle state exists, not because the page has static
+  chrome for every possible operation. If there is no editable change set,
+  selected prior version, open failure bucket, selected run, or selected
+  artifact, the related workspace is absent or reduced to contextual guidance.
+- **Action availability is decided before render**: primary lifecycle controls
+  should not be mounted first and then disabled as a substitute for state
+  design. The view model decides whether the current human owns a valid target,
+  whether the target is ready for the next transition, and whether the command
+  belongs in the current tab at all. Disabled primary controls are the exception
+  for local, fixable prerequisites on an owned target; they are not a way to
+  advertise future lifecycle commands.
+- **Lifecycle lanes open at the first useful step**: a lane such as
+  Validate/Publish starts only when the current human has an editable change set.
+  Within that lane, the primary verb advances with state: `Validate` for untested
+  changes, `Validate again` after a failed or stale validation, and `Publish`
+  only after the latest validation for that same change set passed. Before that
+  lane exists, the page may guide the user toward `Edit`; it should not reserve a
+  static tab or button for publishing.
+- **Empty states teach the next real step**: when a lifecycle object does not
+  exist yet, the screen explains what state is missing and points to the next
+  valid task instead of rendering inert primary controls. For example, before a
+  draft-backed edit exists, the publish area can say there are no pending
+  changes and direct the user to `Edit`; it should not show a targetless
+  `Publish` button. Empty-state text should name the relevant family, tool, or
+  mode when the surrounding layout might not be enough, for example current
+  files vs changed files for a selected family. Structured Help empty states
+  should also name the selected tool and parameter where relevant, instead of
+  generic copy such as `No summary documented`, `No parameter help entries`, or
+  `No help examples`. Test example empty states should name the selected tool and
+  whether the user is inspecting current published examples or editing saved
+  draft examples. Debug unavailable states should name the selected tool/family
+  and the actual missing prerequisite, such as permission, read-safe
+  classification, or environment config readiness. Code source empty states
+  should name the selected handler and tool so stale-generation or
+  missing-handler diagnostics have a concrete investigation target. Version empty states should name the
+  selected family and distinguish missing previous-version selection from a
+  family with no published versions.
+- **Each tab has one job**: code editing, help editing, files, tests/debug,
+  logs, failures, and publish/version management are separated by task. A tab
+  should expose one obvious primary action and move secondary/internal actions
+  into details or overflow controls.
+- **Sub-tabs separate detail families, not lifecycle tasks**: when a task tab
+  still contains distinct information families, use a compact sub-bar inside
+  that tab instead of one long mixed page. For Help, tool-level guidance
+  belongs under `Tool details`, while parameter summaries, full details, rules,
+  shapes, and parameter examples belong under `Parameters`. Do not duplicate the
+  selected family/tool identity in the sub-tab content when the left rail and
+  task tab already establish context.
+- **Sub-tabs replace same-scope disclosure stacks**: after a sub-tab separates
+  the selected information family, avoid adding collapse/expand sections for
+  the same tool-level content unless the content is raw diagnostics, audit
+  evidence, or unusually expensive to render. A `Tool details` sub-tab should
+  show its summary, full detail, usage guidance, and examples as direct
+  sections instead of hiding them behind another disclosure layer.
+- **Avoid separator overload**: do not turn every logical group into a bordered
+  section. When a form already has labeled fields, multiline editors, and a
+  sub-tab boundary, prefer a continuous field flow with sparse spacing. Use
+  separator lines only when the next content changes type, such as moving from
+  guidance fields into example payloads.
+- **Tab content does not need opening and closing rules**: the task tab bar
+  already separates navigation from work. Do not add generic top or bottom
+  borders around every tab content shell. Keep separators inside the content
+  only when they distinguish rows, tables, editor chrome, or a meaningful change
+  in content type.
+- **Avoid summary-only toolbars**: do not reserve a full row for facts such as
+  handler count or for mode toggles that belong to the editor they affect. Put
+  editor-local actions, mode switches, and status beside the editor title when
+  the controls only affect that editor surface.
+- **Do not invent missing example metadata**: the current help template stores
+  tool-level examples as payload values. Human UI may summarize payload shape
+  and render examples as a table, but it must not imply that title,
+  description, or purpose metadata exists until the help contract explicitly
+  adds those fields.
+- **Example presence and no-example justification are mutually exclusive**:
+  when examples exist, hide `noExampleJustification` from the normal human
+  surface. Show the justification only when the selected help scope has no
+  examples, because its purpose is to explain absence rather than accompany
+  present examples.
+- **Task switches start at the task**: switching tool-work tabs should land the
+  user at the start of the selected task surface. Scroll position from a long
+  tab should not leave a short tab with blank space above its content, and
+  mobile task switches must not leave clipped family/tool navigation fragments
+  above the selected task. If the scroll container cannot align the editor start
+  because it has reached the bottom, the surface needs enough trailing scroll
+  room for the task header to sit cleanly under the page header.
+- **Primary actions stay with their work**: a save/run/validate action should
+  sit beside the field, list, or lifecycle state it operates on. Standalone
+  toolbar bands are reserved for page-level actions that truly affect the
+  whole work pane; otherwise they consume viewport space without adding task
+  clarity. When a tab and its primary action share the same visible lifecycle
+  verb, the action's accessible name should include the target state, such as
+  `Validate pending changes`, so navigation and execution controls remain
+  distinct. When a compact action operates on a selected file, version, run, or
+  bucket, its accessible name should include that target even if the visible
+  label remains short.
+- **Compact target rows still label controls**: dense rows may keep labels small,
+  but target selectors, environment selectors, operation classifications, and
+  mode controls must not appear as unlabeled values beside an action. The row
+  should answer what the value controls before the user reaches the action.
+- **Form actions follow reviewed inputs**: actions that execute, test, debug, or
+  publish user-controlled payloads should appear after the relevant editable
+  inputs and validation messages. A user should not see the primary execution
+  command before the arguments it will run.
+- **Editors are viewport-bounded work surfaces**: code, JSON, payload, and diff
+  editors should use stable viewport-aware heights with internal scrolling.
+  They should not create one giant page-height textarea or sit inside another
+  decorative frame that repeats the editor's own border and header.
+  Decorative editor gutters, line numbers, and cursor chrome are visual aids;
+  they must not become the primary accessible text for the editor or overwhelm
+  snapshots and assistive review.
+- **Progressive disclosure follows task timing**: raw JSON, raw schemas,
+  internal ids, diagnostics, lock metadata, generation diffs, publish controls,
+  rollback controls, repair controls, and artifact details are available only
+  when they are useful for the current state, or behind explicit detail
+  controls.
+- **Structured forms first, raw data second**: help, parameter docs, examples,
+  config, and schema metadata should be editable through human forms/tables
+  where practical. Raw JSON remains a fallback and audit surface, not the
+  default editor for structured concepts. Large audit payloads such as version
+  diffs should open with scannable summary facts and keep the raw payload behind
+  an explicit disclosure.
+- **Schema and diagnostics are summaries first**: schema views should lead with
+  parameter, type, required, and description/default/enum details in a compact
+  table before offering raw JSON. Diagnostics should be grouped by
+  severity/code/message and show repeat counts instead of listing identical
+  warnings line by line. Raw schema/source metadata stays available behind one
+  explicit disclosure for audit and debugging.
+- **Focused source is inherently partial**: a focused handler view is a bounded
+  convenience view, not proof that every possible runtime reference has been
+  shown. Do not emit user-facing diagnostics merely because dynamic Python call
+  patterns could make static helper discovery incomplete. Reserve diagnostics
+  for concrete source-view problems such as missing handlers, parse failures,
+  unresolved named helper references, and configured view limits.
+- **Parameter help is first-class help**: if a tool carries parameter-level
+  `full`, `rules`, `shape`, or `examples`, the UI must expose those fields from
+  the parameter help workflow, not only the short summary. Missing detail should
+  be visible as missing coverage so humans can fill the gap.
+- **Top-level inputs and nested help paths are different things**: the contract
+  view shows executable top-level input schema properties. Help may also
+  document nested paths such as `filter_body.filters.field`; those are field
+  details inside a top-level input, not additional callable parameters. Human UI
+  should keep them in the same parameter table, place each nested path
+  immediately under its top-level parent with a small branch marker, and label
+  the count separately, so the table stays calm while parameter counts do not
+  contradict the executable schema.
+- **Runtime env requirements must be explicit**: the Managed Tools surface must
+  show `prod` and `test_debug` environment configs, non-secret config key names,
+  secret key names, and configured/missing secret status before a human runs
+  tests or debug. Secret values are write-only: humans can set or rotate a
+  required secret through targeted password inputs, but read views, DOM text,
+  logs, diff, and exported view models must never expose raw secret values.
+- **Field shape follows content shape**: long summaries, parameter explanations,
+  rules, examples, and payloads should use multiline controls or tables that
+  keep the value readable. Single-line inputs are for genuinely short names,
+  ids, paths, and compact scalar settings.
+- **Diagnostics are contextual**: code parse errors belong beside code,
+  schema/help errors beside schema/help, example failures in test/debug, and
+  publish blockers in publish/version management. Global error banners are only
+  for cross-cutting failures.
+- **Transient results follow the selected target**: debug results, test results,
+  version diffs, rollback responses, artifact previews, and expanded run details
+  are not global page state. When the selected tool, log scope, family, version,
+  run, or artifact changes, stale result panes from the previous target must
+  clear or be explicitly labeled as historical evidence inside the correct audit
+  surface.
+- **Task tab movement stays on one axis**: mobile task tabs may auto-scroll
+  horizontally to keep the selected tab visible, but they must not trigger their
+  own vertical `scrollIntoView`. The workspace root owns vertical alignment so
+  task switches do not leave clipped navigation fragments above the active
+  task.
+- **No visual nesting spiral**: avoid card-in-card and panel-in-panel layouts.
+  Use a stable left navigation plus a calm right work area, restrained borders,
+  compact status lines, and table/form/editor primitives instead of stacks of
+  framed boxes.
+- **Tool mapping is navigable**: the UI must make the relationship between
+  family-native tool name, handler function, input schema, help, examples, and
+  promoted managed registry name visible. Clicking a tool should focus the
+  relevant handler and de-emphasize unrelated handlers by default.
+- **No duplicate facts or microcopy**: the same family name, tool name,
+  version, lock state, status, count, description, or action explanation should
+  not be repeated in multiple visible places unless the repetition changes
+  context or supports a different task. Familiar repeated affordances should use
+  icon buttons with hover tooltips instead of visible text every time.
+- **Completeness does not require constant visibility**: human-native means an
+  authorized human can reach every lifecycle detail and update path, not that
+  every detail is visible at once. Advanced state, raw payloads, ids, locks,
+  draft metadata, and diagnostics should be one deliberate step away from the
+  task that needs them, rather than competing with the default work path.
+- **Every section earns its space**: a visible section must either add new
+  information, enable a current task, or make the screen easier to understand
+  at a glance. Sections that only restate context, introduce decorative chrome,
+  or occupy space without decision value should be removed or folded into a
+  smaller control/status line.
+- **Repeated records stay scannable**: logs, failures, versions, examples, and
+  files should keep the default row focused on the few fields needed to choose
+  the next action. Repeated secondary metadata should collapse into a compact
+  mobile meta line or expand details, instead of making every row a tall block.
+  Editable repeated rows follow the same rule: compact row actions such as
+  remove/delete stay beside the row identity on constrained screens, while the
+  longer editable value keeps the readable width below it. Row actions should
+  not create their own mostly empty mobile row unless the action itself needs
+  supporting content.
+  In scoped tables, column labels must match the row's actual primary
+  identifier; for example, selected-tool logs lead with version relation, while
+  family logs lead with tool name. When responsive layouts keep both desktop
+  columns and mobile summaries in the DOM, interactive row accessible names
+  should be synthesized once so assistive review does not hear the same status,
+  result, duration, or count twice.
+- **Status words must not contradict lifecycle state**: a row that has already
+  succeeded, failed, published, closed, or retired must not use active-state
+  labels such as `running`, `pending`, `open`, or `editing` for missing or
+  unavailable secondary metadata. Missing duration, artifact, or timestamp data
+  should be labeled as missing/not recorded rather than implying an active
+  process. Entering edit mode may create a `Changes` working set, but it should
+  not be labeled as `pending` until there is a concrete validation/publish
+  result or pending approval state.
+- **Recovery flows are first-class**: authorized humans can inspect and resolve
+  locks, discard drafts, compare versions, inspect failure buckets, view
+  execution logs/artifacts, rollback, and continue repair loops without asking
+  an agent to perform the action.
+- **UX principles are living acceptance criteria**: when implementation review
+  exposes a new repeatable confusion pattern, the rule belongs in this document
+  before or alongside the code change. Examples, screenshot findings, and
+  human-review objections should tune the canonical principles instead of
+  remaining only in chat history or local implementation memory.
+
+UX language must be consistent across every Managed Tools surface. The same
+platform concept must always use the same user-facing term. Do not call the
+same action `Edit` in one tab, `Acquire lock` in another, and `Create draft` in
+a third. Canonical UI terms are:
+
+```text
+Edit: enter edit mode; platform may acquire lock and prepare draft.
+Save: persist changes to the active draft.
+Discard: abandon the active draft or edit session where policy allows.
+Validate: run deterministic structure, schema, dependency, and example checks.
+Test: run registered examples or read-safe debug calls.
+Publish: promote a validated draft to an active generation.
+Rollback: restore a previous generation as the active generation.
+Version: human-facing label for generation/source revision history.
+Current: the active source, files, help, or version currently served to agents.
+Changes: the editable work set being prepared for validation and publishing.
+Tool: family-native callable operation in the selected family.
+Managed tool: model-facing registry tool name `managed_<family>__<tool>`.
+Family: hosted integration ownership/reload unit.
+Environment config: family-level `prod` or `test_debug` runtime config.
+Hosted-tool binding: per-agent access, default environment, and generation pin.
+Execution log: audit/debug record of a tool call.
+Failure bucket: deduplicated runtime failure group assigned for repair.
+```
+
+Internal terms may appear only in metadata/detail areas:
+
+```text
+lock
+draft
+generation id
+source revision id
+run directory
+artifact id
+```
+
+Every Managed Tools page or tab is human-ready only when:
+
+- the user can tell what family/tool/version they are viewing within three
+  seconds
+- constrained viewports show both navigation context and the active tool
+  workspace without unbounded navigation pushing the workspace below the fold
+- compact horizontal selectors keep the current family, tool, file, example, or
+  version target visible first
+- the primary action for the current tab is obvious
+- the primary action sits near the concrete work target it affects
+- primary action accessible names distinguish the action target from same-word
+  navigation tabs
+- compact target rows label selectors, operation state, and mode state even
+  when the visual treatment is dense
+- code, JSON, payload, and diff editors are bounded to the viewport and avoid
+  redundant outer frames
+- code/editor line-number gutters are decorative and hidden from assistive
+  content review
+- editable and read-only states are visually distinct
+- raw/internal data is available without being the default view
+- form controls match the expected content length, so summaries and parameter
+  explanations are readable instead of clipped in single-line fields
+- diagnostics appear near the thing that caused them
+- tab switches preserve the selected family/tool and do not lose unsaved work
+- tab switches return the work pane to the selected task start instead of
+  preserving stale scroll offset from a previous long tab
+- agent and human actions use the same hosted integration API contracts
+- terminology is consistent with the canonical UI language above
+- visible facts are not duplicated without a task-specific reason
+- repeated small controls use icons and tooltips instead of repeated visible
+  microcopy where the icon is familiar
+- every visible section passes the space test: new information, active task, or
+  faster comprehension
+- scoped table headings match the row label actually shown in that scope
+- completed historical records do not display active-state labels merely because
+  optional secondary metadata is missing
+- work panes do not start with duplicated family/tool context already owned by
+  the navigation
+- named chrome such as registry/workbench sections has a concrete task owner or
+  is removed
+- right panes start with the selected task rather than an intermediate summary
+  band that repeats navigation context
+- named sections answer a concrete decision or action; backend-concept headings
+  without task value are removed or collapsed
+- page-level utility actions sit in the page header only when their scope is
+  genuinely page-wide
+- lifecycle actions are state-aware and hidden, disabled, or moved to metadata
+  when the current state has no corresponding task
+- lifecycle verbs are not rendered as a command inventory; each visible verb
+  must be immediately true for the current selected state
+- unavailable lifecycle commands are hidden, moved into details, or replaced by
+  guidance unless the user already owns the target and the missing prerequisite
+  is local and immediately fixable
+- public lifecycle labels use human-facing terms such as `Publish`; internal
+  terms such as `promote` stay in APIs, management tools, or diagnostic details
+- Agent Settings for normal agents does not render hosted integration
+  management tools as ordinary selectable catalog entries
+- lifecycle action availability is computed from concrete hosted integration
+  state rather than static page layout
+- primary lifecycle controls are rendered from view-model state after target
+  ownership and readiness are known, not rendered as an always-present disabled
+  command inventory
+- lifecycle action availability requires the current human's active owned target;
+  a draft, generation, run, or bucket that exists elsewhere in backend state is
+  not enough to render a primary action
+- lifecycle actions and lifecycle tabs are backed by explicit view-model target
+  descriptors containing target kind, selected target identity, ownership, and
+  readiness; missing descriptors render guidance or no action, not disabled
+  command inventory
+- draft creation is folded behind edit for the common path
+- `New draft` is absent from the default path unless the user explicitly enters
+  an advanced start-over or start-from-version flow
+- publish is validation-gated and cannot appear as the next action before a
+  validated change set exists
+- publish does not appear as a primary workspace before the current human owns
+  an editable change set
+- Validate/Publish lanes open at the first useful state for the current human:
+  no editable change set means no publish lane; unvalidated or stale changes show
+  `Validate`/`Validate again`; only the latest passed validation shows `Publish`
+- empty states explain the missing lifecycle object and route the user toward
+  the next real task instead of exposing inert lifecycle controls
+- every visible action has a concrete target object and a predictable result
+- one state transition is represented by one primary control, even when the
+  backend performs multiple primitives behind it
+- controls transform in place when they represent the same lifecycle lane
+- advanced controls appear only after the related task state exists
+- any new repeated UX problem found during review is folded back into these
+  principles and the matching implementation-plan acceptance notes
+
+## Managed Tool Help
+
+Hosted integrations need a hosted-managed-tool-only help surface so normal
+agents can learn how to call agent-developed tools without memorizing every
+target-system detail in prompt text.
+
+The platform exposes this as a reserved built-in support tool, not as a remote
+MCP helper and not as a canonical hosted integration invocation tool:
+
+```text
+managed_tool_help
+```
+
+`managed_tool_help` intentionally starts with `managed_` for agent-facing
+clarity, but it is not a valid hosted tool name because canonical hosted
+integration invocation tools must contain exactly one family/tool separator:
+
+```text
+managed_<family>__<tool>
+```
+
+`managed_tool_help` accepts only managed hosted integration names:
+
+```text
+managed_<family>__<tool>
+```
+
+It must reject remote MCP names, built-in tool names, and family-native names.
+Any code that classifies hosted integration invocation tools must use the
+canonical parser/source metadata, not a raw `managed_` prefix check. This keeps
+the hosted integration surface independent from the MCP surface and prevents
+the help support tool from being treated as a hosted family tool.
+
+The help request supports four levels of information:
+
+```json
+{
+  "tool_name": "managed_qualys__qualys_cloud_agent_hostasset_count",
+  "tool_detail": "summary",
+  "include_examples": true,
+  "parameters": [
+    {
+      "name": "filter_body",
+      "detail": "full",
+      "include_examples": true
+    },
+    {
+      "name": "filter_body.filters.field",
+      "detail": "summary",
+      "include_examples": true
+    }
+  ]
+}
+```
+
+`tool_detail` may be `summary`, `full`, or `none`. Parameter detail may be
+`summary` or `full`. If `parameters` is omitted or `null`, the response returns
+the tool-level help plus documented parameters automatically. With
+`tool_detail: "summary"` those parameters are summary-level; with
+`tool_detail: "full"` they are expanded with full parameter details. If
+`include_examples` is false, example payloads are omitted but example ids and
+categories may still be listed when useful.
+
+The response is normalized across all hosted tools:
+
+```json
+{
+  "tool_name": "managed_qualys__qualys_cloud_agent_hostasset_count",
+  "family_id": "qualys",
+  "family_tool_name": "qualys_cloud_agent_hostasset_count",
+  "generation_id": "gen_...",
+  "tool_help": {
+    "summary": "...",
+    "full": "...",
+    "when_to_use": ["..."],
+    "when_not_to_use": ["..."],
+    "no_example_justification": "..."
+  },
+  "parameters": {
+    "filter_body": {
+      "summary": "...",
+      "full": "...",
+      "shape": {},
+      "rules": ["..."],
+      "examples": []
+    }
+  },
+  "examples": []
+}
+```
+
+Help content is source-controlled with the hosted family and promoted into each
+generation. It may live inline in `family.yaml` for small tools or in separate
+family files for larger domains:
+
+```text
+families/
+  qualys/
+    family.yaml
+    help/
+      qualys_cloud_agent_hostasset_count.md
+      gav-filter-body.md
+      gav-filter-fields.json
+```
+
+The manifest owns the stable help contract:
+
+```yaml
+tools:
+  - name: qualys_cloud_agent_hostasset_count
+    description: Short selection-oriented description.
+    inputSchema: {}
+    help:
+      summary: One or two sentence calling summary.
+      full: help/qualys_cloud_agent_hostasset_count.md
+      noExampleJustification: Optional reason when examples would be misleading.
+      parameters:
+        filter_body:
+          summary: Native GAV FilterRequest JSON body.
+          full: help/gav-filter-body.md
+        filter_body.filters.field:
+          summary: Native Qualys GAV filter token, not a response field.
+          full: help/gav-filter-fields.json
+```
+
+For large target-system vocabularies, help should not bloat the model-facing
+tool description. The help metadata may point to a family-local reference file
+or a family-local reference tool. Qualys GAV filter fields are the first case:
+the tool description stays short, `managed_tool_help` explains the filter-body
+contract, and a Qualys quickref/reference tool can perform domain lookup when
+the agent needs exact field discovery.
+
+Access policy applies to help:
+
+- `managed_tool_help` itself is selectable from Agent Settings like an ordinary
+  built-in tool; it is not an always-on system tool
+- an agent can ask for help only for managed tools it can see or invoke
+- management-only tools remain hidden from normal agents
+- secret values and config values are never returned
+- disabled tools may return high-level help plus disabled status, but not
+  invocation guidance that bypasses the disablement
+- agent-facing `managed_tool_help` responses pass through the common
+  tool-result spillover choke point; the HTTP help route returns normal
+  control-plane JSON
+
+Promotion validation should require enough help for active managed tools:
+
+- every active tool has a short description for selection
+- every active tool has a `help.summary`
+- every public input parameter has at least a short parameter summary
+- complex parameters, filter DSLs, enum-like catalogs, pagination, result-file
+  behavior, cache semantics, and destructive risk require full parameter help
+- every active tool has at least one registered/help example or an explicit
+  `noExampleJustification`
+
+This help surface teaches normal agents how to call tools. The
+Tool Developer Agent still uses hosted integration management tools and the
+`hosted-integrations-development` skill to edit, validate, and promote help
+content.
 
 ## Tool Family Model
 
@@ -283,17 +1151,155 @@ families/
     examples.yaml
 ```
 
-The runtime contract should stay family-first:
+The runtime contract should stay family-first while keeping individual tool
+handlers deterministic and inspectable. A family may be a single Python file,
+but each tool maps to a predictable handler function:
 
 ```python
-def get_manifest() -> FamilyManifest: ...
-def list_tools() -> list[ToolSpec]: ...
-def call_tool(name: str, args: dict, ctx: ToolContext) -> ToolResult: ...
-def validate() -> ValidationResult: ...
+def tool_qualys_cloud_agent_hostasset_count(args: dict, ctx: ToolContext) -> ToolResult: ...
+def tool_qualys_cloud_agent_hostasset_search(args: dict, ctx: ToolContext) -> ToolResult: ...
 ```
 
 Tool names are stable public API. Rename and removal follow the deprecation
 rules below.
+
+The handler name is derived from the family-native tool name:
+
+```text
+handler = "tool_" + tool_name
+```
+
+where `tool_name` must already satisfy the hosted integration tool-name
+character set. The runtime should dispatch directly to this derived function
+instead of allowing each family to invent arbitrary handler names or hide a
+large custom `if name == ...` router. Shared helpers, clients, constants, and
+auth code can still live in the same file.
+
+Families should also expose structured lifecycle hooks for cross-tool behavior
+instead of duplicating setup/teardown/authentication inside every handler:
+
+```python
+def authenticate(ctx: ToolContext) -> AuthState: ...
+def before_tool_call(tool_name: str, args: dict, ctx: ToolContext, auth: AuthState) -> dict: ...
+def after_tool_call(tool_name: str, args: dict, ctx: ToolContext, result: ToolResult, auth: AuthState) -> ToolResult: ...
+```
+
+`authenticate` is the standard place for credential/config validation, token
+creation/refresh, target-client construction, and auth-specific error
+normalization. `before_tool_call` is the standard place for request shaping that
+applies to every tool in the family, correlation metadata, shared validation,
+and family-level telemetry annotations. `after_tool_call` is the standard place
+for response normalization, shared masking, pagination/result metadata, and
+family-level cleanup. Tool handlers should receive whatever normalized/auth
+state the runtime contract exposes rather than re-reading secrets or rebuilding
+auth independently.
+
+The runtime invocation order is deterministic:
+
+```text
+authenticate
+before_tool_call
+tool_<tool_name>
+after_tool_call
+gateway response masking/artifact spillover/logging
+```
+
+The runtime dispatch mode is declared on family runtime settings:
+
+```yaml
+runtime:
+  handlerDispatch: derived
+```
+
+`derived` is the default and calls `tool_<tool_name>(args, context)`.
+`legacy_call_tool` is reserved for migrated generations that still expose
+`call_tool(name, args, context)`. New families should not use legacy dispatch.
+The Python runtime executes available standard hooks around derived handlers in
+the order above. If a hook is absent because the manifest contains a matching
+`hookJustifications` entry, runtime treats it as a no-op. `authenticate`
+returns auth state, which the runtime exposes to the handler as
+`context["auth"]` and passes to pre/post hooks.
+
+Validation should require these hooks for new production families unless a hook
+is explicitly marked unnecessary with a short justification. The hook names and
+signatures are platform contract, not per-family inventions.
+
+The manifest-level field for intentionally omitted hooks is
+`hookJustifications`. Its keys match the Python hook names:
+
+```yaml
+hookJustifications:
+  authenticate: No credentials are needed for this public read-only family.
+  before_tool_call: No shared request normalization is needed.
+  after_tool_call: No shared response normalization is needed.
+```
+
+The draft validator enforces the first part of this contract before promotion:
+for every non-removed manifest tool, the Python entrypoint must expose a
+top-level `tool_<tool_name>(args, context)` handler. The validator inspects the
+entrypoint with Python AST rather than model inference or text guessing. A
+legacy entrypoint that exposes only `call_tool(name, args, context)` remains
+promotable for existing migrated families, but receives a
+`legacy_call_tool_router` warning. Manifest-level handler aliases are not part
+of the schema; the derived handler name is the only accepted mapping.
+
+For new-format families, the same AST-backed validator also checks standard
+hook functions when no `hookJustifications` entry is present:
+
+```python
+def authenticate(ctx): ...
+def before_tool_call(tool_name, args, ctx, auth): ...
+def after_tool_call(tool_name, args, ctx, result, auth): ...
+```
+
+Management/debug APIs should expose a targeted source view for a single tool:
+
+```text
+family.yaml excerpt for the tool, including inputSchema/help/classification
+selected handler function body
+shared helper references when requested
+other tool handlers collapsed behind a short placeholder; exact wording is an
+implementation detail
+```
+
+The control-plane HTTP route is:
+
+```text
+POST /api/hosted-integrations/source-view
+```
+
+The Tool Developer Agent-facing management wrapper is:
+
+```text
+hosted_integration_source_view
+```
+
+Both accept a family-native `toolName`/`tool_name`, optional draft or generation
+target, and focused-view options for hooks, shared helpers, full-family source,
+helper depth, helper snippet count, and max source size. These are management
+surfaces; normal consumer agents must not receive focused source access merely
+because they can invoke the managed tool.
+
+This lets an investigating agent read only the failing tool's executable code
+and input contract by default, while still making the full family source
+available on explicit request.
+
+Helper inclusion must also be deterministic. Focused source views should derive
+helper dependencies from Python structure where practical, not from model
+guessing. The resolver should build a bounded helper graph from the selected
+handler and standard hooks, include referenced family-local helper functions in
+stable source order, and report unresolved or dynamic references as diagnostics.
+The focused view contract should expose depth/size limits so agents and humans
+know when they are seeing a partial helper set and can request full-family
+source for broader refactors.
+
+The human UI should use the same focused source model. A family page should let
+the human select a family, inspect its tools and mappings, and open a rich code
+editor. Clicking a tool name should navigate to and highlight the deterministic
+handler for that tool, show the tool's input schema/help/classification beside
+the code, and collapse or visually de-emphasize unrelated tool handlers by
+default. The UI should still offer an explicit full-family source view for
+cross-tool refactors.
 
 ## Family Runtime Settings
 
@@ -330,7 +1336,7 @@ Gateway responsibilities:
 
 - identify the actor
 - enforce access policy
-- resolve config scope and secret references
+- resolve the hosted-tool binding, environment config, and secret references
 - validate input
 - create the run directory
 - start the execution log record
@@ -342,7 +1348,7 @@ Gateway responsibilities:
 - enforce response size limits
 - write large responses as artifacts
 - finish execution logging
-- create or update failure buckets for code-level failures
+- create or update failure buckets for owner-actionable consumer failures
 
 The caller sees only the normalized tool result. If the platform creates a
 failure bucket or repair task, that is internal platform work. The requesting
@@ -404,6 +1410,67 @@ generation records the resulting source revision. The next draft for that
 family starts from this updated source revision, not from the pre-promotion
 source.
 
+## Persistence Contract
+
+Production hosted integration persistence is DB-backed. File-backed stores stay
+available as dev/test adapters, but runtime and API code must depend on store
+ports, not concrete file-backed stores.
+
+Runtime backend selection is explicit. `hostedIntegrations.persistenceBackend`
+may be `auto`, `file`, or `db`. `auto` keeps local trusted loopback deployments
+on file-backed persistence and selects DB-backed persistence for authenticated
+deployments. Explicit `file` persistence is rejected in authenticated
+deployments. The active backend is reported by
+`GET /api/hosted-integrations/persistence`.
+
+The executable contract lives in
+`packages/hosted-integrations/src/persistence-contract.ts`. That file is the
+handoff from architecture into DB schema and adapter work: every record family
+listed there needs file-backed contract coverage now and either a concrete
+DB-backed factory or an explicit delegated storage decision once the DB adapter
+lands in Slice 17.3.
+
+Minimum DB-backed record families:
+
+- catalog family manifests and diagnostics
+- source revisions and source files
+- drafts, draft files, and draft revisions
+- examples
+- proposed family lifecycle records
+- family edit locks
+- environment configs and secret metadata
+- approvals and promotion provenance
+- disablements
+- immutable generations, generation files, generation status, active generation
+  pointers, and invocation/draining records
+- async jobs and progress events
+- run records, artifact metadata, artifact byte refs, and diagnostics artifacts
+- execution logs
+- failure buckets and bucket events
+- idempotency records
+- retention state over runs and artifacts
+
+Transactional boundaries:
+
+- source replacement, draft file mutation, lock mutation, environment config
+  writes, disablement writes, idempotency reserve/complete, promotion, rollback,
+  and run completion are transactional DB writes
+- approvals, jobs, execution logs, failure bucket events, and generation
+  promotion/rollback events are append-only or event-style records where
+  practical
+- generation rows, generation file rows, promotion provenance, approval records,
+  failure bucket events, artifact byte refs, and request hashes are immutable
+  after creation
+
+The DB stores environment config metadata and secret metadata only. Raw secret
+values remain human-owned runtime secret material and must not be placed in
+general hosted integration DB rows by the hosted-integrations package.
+
+The DB stores artifact metadata, content hashes, sizes, retention state, and
+file/object refs. Large artifact bytes may remain in file/object storage.
+DB-backed retention sweeps use DB run/artifact/log/bucket metadata as the
+candidate index and must not discover candidates by scanning run directories.
+
 Promotion flow:
 
 ```text
@@ -464,7 +1531,7 @@ and simple:
 filesystem: run_dir + family_home only
 process_env: no raw secret export by default
 subprocess: denied unless policy allows
-network: allowed target egress declared by family/config scope
+network: allowed target egress declared by family/environment config
 timeout: family default with optional tool override
 concurrency: family/tool limit
 ```
@@ -476,7 +1543,7 @@ Execution locality and ownership are separate:
 
 ```text
 caller context
-  actor, session, selected config scope, path policy
+  actor, session, resolved environment config, path policy
 
 hosted integration generation
   immutable platform-owned artifact
@@ -539,7 +1606,7 @@ Disable can apply at these levels:
 family
 tool
 generation
-config scope
+environment config
 ```
 
 Disable is different from deprecation. Deprecation is planned API lifecycle.
@@ -628,9 +1695,11 @@ hosted_integration_validate
 hosted_integration_promote
 hosted_integration_generation_list
 hosted_integration_generation_get
+hosted_integration_generation_diff
 hosted_integration_generation_rollback
-hosted_integration_config_scope_list
-hosted_integration_config_scope_get
+hosted_integration_environment_config_list
+hosted_integration_environment_config_get
+hosted_integration_readiness_get
 hosted_integration_debug_run
 hosted_integration_run_get
 hosted_integration_artifact_get
@@ -658,13 +1727,13 @@ hosted_integration_family_create
   -> POST /api/hosted-integrations/families
 
 hosted_integration_source_read
-  -> GET /api/hosted-integrations/families/:family
-  -> GET /api/hosted-integrations/families/:family/source/files
-  -> GET /api/hosted-integrations/families/:family/source/files/*path
+  -> GET /api/hosted-integrations/families/:familyId
+  -> GET /api/hosted-integrations/families/:familyId/source/files
+  -> GET /api/hosted-integrations/families/:familyId/source/files/*path
   -> GET /api/hosted-integrations/drafts/:draftId/files/*path
 
 hosted_integration_lock_acquire
-  -> POST /api/hosted-integrations/families/:family/lock
+  -> POST /api/hosted-integrations/families/:familyId/lock
 
 hosted_integration_lock_renew
   -> POST /api/hosted-integrations/locks/:lockId/renew
@@ -673,7 +1742,7 @@ hosted_integration_lock_release
   -> DELETE /api/hosted-integrations/locks/:lockId
 
 hosted_integration_draft_create
-  -> POST /api/hosted-integrations/families/:family/drafts
+  -> POST /api/hosted-integrations/families/:familyId/drafts
 
 hosted_integration_draft_get
   -> GET /api/hosted-integrations/drafts/:draftId
@@ -707,14 +1776,23 @@ hosted_integration_generation_list
 hosted_integration_generation_get
   -> GET /api/hosted-integrations/generations/:generationId
 
+hosted_integration_generation_diff
+  -> GET /api/hosted-integrations/generations/:baseGenerationId/diff/:compareGenerationId
+
 hosted_integration_generation_rollback
   -> POST /api/hosted-integrations/generations/:generationId/rollback
 
-hosted_integration_config_scope_list
-  -> GET /api/hosted-integrations/config-scopes
+hosted_integration_environment_config_list
+  -> GET /api/hosted-integrations/environment-configs
 
-hosted_integration_config_scope_get
-  -> GET /api/hosted-integrations/config-scopes/:scopeId
+hosted_integration_environment_config_get
+  -> GET /api/hosted-integrations/environment-configs/:familyId/:environment
+
+hosted_integration_readiness_get
+  -> GET /api/hosted-integrations/readiness/environment-configs/:familyId/:environment
+  -> GET /api/hosted-integrations/readiness/bindings/:agentId/:familyId/:toolName
+  -> GET /api/hosted-integrations/readiness/drafts/:draftId/publish
+  -> GET /api/hosted-integrations/readiness/debug
 
 hosted_integration_debug_run
   -> POST /api/hosted-integrations/debug-runs
@@ -742,6 +1820,14 @@ The API remains useful for UI and automation. The tools make the same lifecycle
 available to the Tool Developer Agent without giving that agent filesystem or
 secret access beyond the Hosted Integrations access policy.
 
+The management-tool surface is the agent-facing OpenAcme built-in tool surface
+for hosted integration lifecycle work. It is not an external MCP server and does
+not use remote MCP discovery. If OpenAcme exposes these tools through an
+internal MCP-compatible protocol later, that protocol is only a transport over
+the same `hosted_integration_*` OpenAcme tool definitions and Hosted
+Integrations API routes; it must not create a second lifecycle implementation or
+let remote MCP allowlist entries enable managed hosted tools.
+
 ## API Surface
 
 Existing tool selection endpoints remain in place:
@@ -762,21 +1848,36 @@ Family and tool discovery:
 ```http
 GET /api/hosted-integrations/families
 POST /api/hosted-integrations/families
-GET /api/hosted-integrations/families/:family
-GET /api/hosted-integrations/families/:family/tools
+GET /api/hosted-integrations/families/:familyId
+GET /api/hosted-integrations/families/:familyId/tools
+GET /api/hosted-integrations/families/:familyId/tools/:toolName/agent-bindings
+```
+
+`GET /families` returns active runtime families by default for normal navigation
+and settings surfaces. Proposed draft families are included only when the caller
+explicitly requests `includeProposed=true`, so creation/review flows can inspect
+them without polluting primary runtime navigation.
+
+`GET /families/:familyId/tools/:toolName/agent-bindings` is a read-only matrix
+view derived from `AgentDefinition` bindings plus hosted tool catalog state. It
+does not own binding writes. Mutations still go through the existing Agent
+Settings path:
+
+```http
+PATCH /api/agents/:id
 ```
 
 Locks, source, and drafts:
 
 ```http
-POST   /api/hosted-integrations/families/:family/lock
+POST   /api/hosted-integrations/families/:familyId/lock
 POST   /api/hosted-integrations/locks/:lockId/renew
 DELETE /api/hosted-integrations/locks/:lockId
 
-GET  /api/hosted-integrations/families/:family/source/files
-GET  /api/hosted-integrations/families/:family/source/files/*path
+GET  /api/hosted-integrations/families/:familyId/source/files
+GET  /api/hosted-integrations/families/:familyId/source/files/*path
 
-POST /api/hosted-integrations/families/:family/drafts
+POST /api/hosted-integrations/families/:familyId/drafts
 GET  /api/hosted-integrations/drafts/:draftId
 GET  /api/hosted-integrations/drafts/:draftId/files
 GET  /api/hosted-integrations/drafts/:draftId/files/*path
@@ -799,6 +1900,7 @@ Generations:
 ```http
 GET  /api/hosted-integrations/generations
 GET  /api/hosted-integrations/generations/:generationId
+GET  /api/hosted-integrations/generations/:baseGenerationId/diff/:compareGenerationId
 POST /api/hosted-integrations/generations/:generationId/rollback
 ```
 
@@ -825,21 +1927,73 @@ POST /api/hosted-integrations/failure-buckets/:bucketId/assign
 POST /api/hosted-integrations/failure-buckets/:bucketId/close
 ```
 
-Config scopes and secrets:
+Readiness:
 
 ```http
-GET /api/hosted-integrations/config-scopes
-GET /api/hosted-integrations/config-scopes/:scopeId
-PUT /api/hosted-integrations/config-scopes/:scopeId
-PUT /api/hosted-integrations/config-scopes/:scopeId/secrets
+GET /api/hosted-integrations/readiness/environment-configs/:familyId/:environment
+GET /api/hosted-integrations/readiness/bindings/:agentId/:familyId/:toolName
+GET /api/hosted-integrations/readiness/drafts/:draftId/publish
+GET /api/hosted-integrations/readiness/debug?familyId=:familyId&toolName=:toolName&environment=:environment
 ```
 
-Secret endpoints are human-only. Read endpoints never return secret values.
+Readiness endpoints return the shared resolver result shape and never return
+secret values. Mutation endpoints still call the same resolvers immediately
+before mutating state; readiness reads are advisory snapshots for UI,
+automation, and Tool Developer Agent planning.
 
-## Config Scopes And Secrets
+Environment configs and secrets:
 
-Secret values are human-owned. Agents may inspect only sanitized config-scope
-metadata.
+```http
+GET /api/hosted-integrations/environment-configs
+GET /api/hosted-integrations/environment-configs/:familyId/:environment
+PUT /api/hosted-integrations/environment-configs/:familyId/:environment
+PUT /api/hosted-integrations/environment-configs/:familyId/:environment/secrets
+```
+
+Secret endpoints are human-only. Read endpoints never return secret values. The
+route `:environment` parameter accepts only `prod` or `test_debug`.
+
+## Environment Configs And Secrets
+
+Secret values are human-owned. Agents may inspect only sanitized environment
+config metadata. Hosted integrations support two product-level runtime
+environments:
+
+- `prod`: the production/runtime environment intended for normal agent use.
+- `test_debug`: the non-production environment used for tool development,
+  debug runs, parity, and safe dogfood.
+
+Agent-specific choices, generation pins, and internal runner defaults are stored
+as agent hosted-tool bindings. They must not create extra environment names such
+as `demo`, `parity`, `stage`, or per-agent config clones.
+
+The canonical environment config identity is:
+
+```text
+family_id + environment
+```
+
+The canonical persisted id is derived from that identity as
+`<family_id>-<environment>`, for example `qualys-prod` or
+`qualys-test_debug`. Humans and agents should not provide custom environment
+config ids. Storage must enforce uniqueness for `(family_id, environment)`.
+Creating/updating an environment config is idempotent through
+`PUT /environment-configs/:familyId/:environment`: if the canonical record
+exists, its non-secret config and secret metadata revision are updated; if it
+does not exist, the canonical record is created. No API creates a second record
+for the same `(family_id, environment)`.
+
+Legacy `/config-scopes` routes are not compatibility aliases for new code.
+Offline parity scripts may read legacy persisted files/rows directly as test
+inputs, but active product APIs and agent-facing management tools use
+`/environment-configs` only.
+
+Debug environment selection is intentionally narrow. Tool Developer Agent debug,
+parity, and dogfood runs default to `test_debug`. A `prod` debug run is allowed
+only through the hosted integration control plane for an authorized human or
+internal maintenance actor with an explicit `allowProdEnvironment` flag; write
+or destructive operations still require the existing operation-class approval
+path. Normal agents never choose `prod` or `test_debug` at call time.
 
 OpenAcme already keeps credentials out of user-editable config files and writes
 credential files with atomic `0600` semantics. Hosted integrations should use
@@ -849,18 +2003,20 @@ Suggested layout:
 
 ```text
 <dataDir>/hosted-integrations/
-  config-scopes/
-    qualys-prod-readonly.json
+  environment-configs/
+    qualys-prod.json
+    qualys-test_debug.json
   secrets/
-    qualys-prod-readonly.json
+    qualys-prod.json
+    qualys-test_debug.json
 ```
 
-Config scope file:
+Environment config file:
 
 ```json
 {
-  "id": "qualys-prod-readonly",
-  "family": "qualys",
+  "id": "qualys-prod",
+  "family_id": "qualys",
   "revision": 7,
   "environment": "prod",
   "config": {
@@ -888,7 +2044,8 @@ Invocation logs record only:
 
 ```json
 {
-  "config_scope_id": "qualys-prod-readonly",
+  "environment_config_id": "qualys-prod",
+  "environment": "prod",
   "config_revision": 7
 }
 ```
@@ -901,6 +2058,39 @@ but does not rewrite canonical family source. If the source should be reverted,
 the Tool Developer Agent creates a new draft from the canonical source, applies
 the revert as an explicit source change, validates it, and promotes a new
 generation.
+
+Generation diff is a first-class control-plane capability. Tool Developer,
+repair workflows, and authorized humans should be able to compare two promoted
+generations without reading raw store internals. The diff API should support:
+
+- full generation file diff
+- path-filtered diff
+- tool-focused diff using the deterministic handler/source-view rules
+- manifest-only diff for schema/help/classification changes
+- summary mode for changed files, changed tool names, and risk-relevant
+  metadata changes
+- unified patch text when an agent needs normal code-review context
+
+Diff output must be sanitized like source-read output and must not include
+secret values or environment config secret material.
+
+The HTTP route is:
+
+```text
+GET /api/hosted-integrations/generations/:baseGenerationId/diff/:compareGenerationId
+```
+
+The Tool Developer Agent management wrapper is:
+
+```text
+hosted_integration_generation_diff
+```
+
+Supported modes are `summary`, `unified`, `manifest`, and `tool_focused`.
+`path` limits file diffs to one generation file. `toolName`/`tool_name` is
+required for `tool_focused` mode and must be a family-native tool name.
+Tool-focused diff reuses the same deterministic focused source-view model used
+for repair reads.
 
 ## Tool Context
 
@@ -1007,8 +2197,8 @@ Policy dimensions:
 - family
 - tool
 - operation class
-- config scope
 - environment
+- hosted-tool binding
 - debug/run mode
 
 Default behavior is deny by default.
@@ -1194,6 +2384,15 @@ Debug runs use the same gateway and policy model as normal invocations.
 Debug runs may target a draft or a promoted generation. They create a run
 directory, execution log, diagnostics artifact, and standard result envelope.
 
+Tool Developer test, example, and debug failures are retained in execution logs
+and artifacts, but they do not create failure buckets or repair tasks. The
+gateway makes this decision from an explicit tool-maintenance invocation
+purpose set by management/debug surfaces, not from the actor role alone. Those
+calls are part of the development loop; creating another Tool Developer task for
+each failed validation attempt would create avoidable churn. Bucket/task
+automation starts from normal consumer invocations and other owner-actionable
+runtime failures.
+
 Debug and replay permissions are separate from normal invocation permissions.
 Replay of write or destructive tools requires the tool classification and
 approval policy to allow it.
@@ -1258,9 +2457,16 @@ Do not include these in the MVP:
 
 These remain implementation choices, not unresolved product direction:
 
-- long-term persistence backend after the MVP file-backed stores
+- exact hosted integration DB table DDL and migrations for the persistence
+  contract in `packages/hosted-integrations/src/persistence-contract.ts`
 - exact worker process lifecycle and generation loading protocol
 - exact sandbox enforcement implementation for filesystem/process/network
-- exact UI placement for hosted integration family management
+- exact visual layout for hosted integration family management
 - exact retention defaults for successful and failed run artifacts
 - exact policy file/schema shape
+- maintenance/debug authority source. MVP may guard platform maintenance
+  surfaces with the canonical managed Tool Developer agent id, but this is a
+  refactor target. The durable model should resolve authority from platform
+  managed-agent/template metadata and, when family-level ownership exists, the
+  family maintainer/active lock/failure-bucket assignment rather than a
+  hard-coded id or caller-supplied role string.

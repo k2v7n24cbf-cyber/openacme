@@ -289,6 +289,9 @@ export async function createApp(
   registerHostedIntegrationRoutes(app, runtime.hostedIntegrationService, {
     authStore: manager.authStore,
     dataDir: config.dataDir,
+    persistenceBackend: runtime.hostedIntegrationPersistenceBackend,
+    resolveAgentDef: (agentId) => manager.getAgentDef(agentId),
+    listAgentDefs: () => manager.listAgents(),
   });
 
   // Health check

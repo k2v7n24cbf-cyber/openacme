@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  agentSettingsCatalogTools,
   agentSettingsToolGroupLabel,
   buildAgentSettingsHostedIntegrationBinding,
   groupAgentSettingsTools,
-  hostedIntegrationScopesForTool,
+  hostedIntegrationEnvironmentConfigsForTool,
   isHostedIntegrationTool,
   selectedHostedIntegrationBindings,
   type AgentHostedIntegrationBinding,
-  type HostedIntegrationConfigScope,
+  type HostedIntegrationEnvironmentConfig,
 } from "@/app/lib/hosted-integration-agent-settings";
 import type { ToolInfo } from "@/app/lib/types";
 
@@ -36,9 +37,21 @@ const mcpTool: ToolInfo = {
   toolset: "mcp-github",
 };
 
-const scopes: HostedIntegrationConfigScope[] = [
+const managedHelpTool: ToolInfo = {
+  name: "managed_tool_help",
+  description: "Get managed hosted integration tool help.",
+  toolset: "hosted-integration-support",
+};
+
+const hostedManagementTool: ToolInfo = {
+  name: "hosted_integration_promote",
+  description: "Promote a validated hosted integration draft.",
+  toolset: "hosted-integration-management",
+};
+
+const environmentConfigs: HostedIntegrationEnvironmentConfig[] = [
   {
-    id: "qualys-prod-readonly",
+    id: "qualys-prod",
     familyId: "qualys",
     revision: 1,
     environment: "prod",
@@ -48,21 +61,11 @@ const scopes: HostedIntegrationConfigScope[] = [
     updatedBy: "human:alen",
   },
   {
-    id: "qualys-prod-secondary",
+    id: "qualys-test_debug",
     familyId: "qualys",
     revision: 2,
-    environment: "prod",
-    config: { QUALYS_BASE_URL: "https://qualys-secondary.example" },
-    secrets: {},
-    updatedAt: "2026-08-12T00:00:00.000Z",
-    updatedBy: "human:alen",
-  },
-  {
-    id: "qualys-stage",
-    familyId: "qualys",
-    revision: 1,
-    environment: "stage",
-    config: { QUALYS_BASE_URL: "https://qualys-stage.example" },
+    environment: "test_debug",
+    config: { QUALYS_BASE_URL: "https://qualys-debug.example" },
     secrets: {},
     updatedAt: "2026-08-12T00:00:00.000Z",
     updatedBy: "human:alen",
@@ -73,37 +76,80 @@ describe("hosted integration agent settings helpers", () => {
   it("classifies and groups hosted tools separately from built-in and MCP tools", () => {
     expect(isHostedIntegrationTool(hostedTool)).toBe(true);
     expect(isHostedIntegrationTool(builtinTool)).toBe(false);
+    expect(isHostedIntegrationTool(managedHelpTool)).toBe(false);
     expect(agentSettingsToolGroupLabel(hostedTool)).toBe(
-      "Hosted Integrations / Qualys",
+      "Hosted Tools / Qualys",
+    );
+    expect(agentSettingsToolGroupLabel(managedHelpTool)).toBe(
+      "hosted-integration-support",
     );
     expect(agentSettingsToolGroupLabel(mcpTool)).toBe("mcp-github");
 
-    expect(groupAgentSettingsTools([hostedTool, builtinTool, mcpTool])).toEqual([
+    expect(
+      groupAgentSettingsTools([
+        hostedTool,
+        builtinTool,
+        mcpTool,
+        managedHelpTool,
+      ]),
+    ).toEqual([
       ["filesystem", [builtinTool]],
-      ["Hosted Integrations / Qualys", [hostedTool]],
+      ["Hosted Tools / Qualys", [hostedTool]],
+      ["hosted-integration-support", [managedHelpTool]],
       ["mcp-github", [mcpTool]],
     ]);
   });
 
-  it("returns only sanitized family scopes for a hosted tool", () => {
-    expect(hostedIntegrationScopesForTool(hostedTool, scopes)).toEqual(scopes);
-    expect(hostedIntegrationScopesForTool(builtinTool, scopes)).toEqual([]);
-    expect(JSON.stringify(scopes)).not.toContain("secret-value");
+  it("keeps hosted management tools out of the normal agent catalog", () => {
+    expect(
+      agentSettingsCatalogTools([
+        hostedTool,
+        managedHelpTool,
+        hostedManagementTool,
+        builtinTool,
+      ]),
+    ).toEqual([hostedTool, managedHelpTool, builtinTool]);
+
+    expect(
+      groupAgentSettingsTools(
+        agentSettingsCatalogTools([
+          hostedTool,
+          managedHelpTool,
+          hostedManagementTool,
+        ]),
+      ),
+    ).toEqual([
+      ["Hosted Tools / Qualys", [hostedTool]],
+      ["hosted-integration-support", [managedHelpTool]],
+    ]);
   });
 
-  it("builds one agent binding for the selected environment and default scope", () => {
+  it("returns only sanitized family scopes for a hosted tool", () => {
+    expect(hostedIntegrationEnvironmentConfigsForTool(hostedTool, environmentConfigs)).toEqual(
+      environmentConfigs,
+    );
+    expect(hostedIntegrationEnvironmentConfigsForTool(builtinTool, environmentConfigs)).toEqual([]);
+    expect(JSON.stringify(environmentConfigs)).not.toContain("secret-value");
+  });
+
+  it("builds one agent binding for the selected default environment", () => {
     const binding = buildAgentSettingsHostedIntegrationBinding({
       tool: hostedTool,
-      configScopes: scopes,
-      defaultConfigScopeId: "qualys-prod-secondary",
+      environmentConfigs: environmentConfigs,
+      defaultEnvironment: "test_debug",
+      now: "2026-08-14T10:00:00.000Z",
+      updatedBy: "human:alen",
     });
 
     expect(binding).toEqual({
       familyId: "qualys",
       toolName: "qualys_count_assets",
-      environment: "prod",
-      defaultConfigScopeId: "qualys-prod-secondary",
-      allowedConfigScopeIds: ["qualys-prod-readonly", "qualys-prod-secondary"],
+      allowedEnvironments: ["prod", "test_debug"],
+      defaultEnvironment: "test_debug",
+      generationPin: { type: "current" },
+      bindingKind: "agent",
+      updatedAt: "2026-08-14T10:00:00.000Z",
+      updatedBy: "human:alen",
     });
   });
 
@@ -112,16 +158,22 @@ describe("hosted integration agent settings helpers", () => {
       {
         familyId: "qualys",
         toolName: "qualys_count_assets",
-        environment: "prod",
-        defaultConfigScopeId: "qualys-prod-readonly",
-        allowedConfigScopeIds: ["qualys-prod-readonly"],
+        allowedEnvironments: ["prod"],
+        defaultEnvironment: "prod",
+        generationPin: { type: "current" },
+        bindingKind: "agent",
+        updatedAt: "2026-08-14T10:00:00.000Z",
+        updatedBy: "human:alen",
       },
       {
         familyId: "qualys",
         toolName: "qualys_unused",
-        environment: "prod",
-        defaultConfigScopeId: "qualys-prod-readonly",
-        allowedConfigScopeIds: ["qualys-prod-readonly"],
+        allowedEnvironments: ["prod"],
+        defaultEnvironment: "prod",
+        generationPin: { type: "current" },
+        bindingKind: "agent",
+        updatedAt: "2026-08-14T10:00:00.000Z",
+        updatedBy: "human:alen",
       },
     ];
 

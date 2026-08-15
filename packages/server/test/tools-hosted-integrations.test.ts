@@ -5,14 +5,16 @@ import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { AgentDefinitionSchema, ConfigSchema } from "@openacme/config";
 import {
-  createFileHostedIntegrationConfigScopeStore,
   createFileHostedIntegrationDraftStore,
+  createFileHostedIntegrationEnvironmentConfigStore,
   createFileHostedIntegrationGenerationStore,
   createFileHostedIntegrationLockStore,
   createFileHostedIntegrationSecretStore,
-  LEGACY_INTEGRATION_HUB_FIVE_READONLY_TOOL_SYNC_FAMILY,
-  type LegacyIntegrationHubMigratedFamilyFixture,
 } from "@openacme/hosted-integrations";
+import {
+  LEGACY_INTEGRATION_HUB_FIVE_READONLY_TOOL_SYNC_FAMILY,
+  type LegacyIntegrationHubReplacementFamilyFixture,
+} from "../../hosted-integrations/test-support/integration-hub/fixtures.js";
 import { registry as toolRegistry, toolCallContext } from "@openacme/tools";
 import { createApp } from "../src/app.js";
 
@@ -151,7 +153,7 @@ describe("/api/tools hosted integration surfacing", () => {
       validation: { ok: true, diagnostics: [] },
     });
     expect(promoted.ok).toBe(true);
-    await seedConfigScope(dataDir);
+    await seedEnvironmentConfig(dataDir);
 
     const config = ConfigSchema.parse({
       dataDir,
@@ -190,7 +192,7 @@ describe("/api/tools hosted integration surfacing", () => {
       for (const [
         index,
         nativeToolName,
-      ] of fixture.migratedToolNames.entries()) {
+      ] of fixture.replacementToolNames.entries()) {
         const managedToolName = fixture.managedToolNames[index]!;
         const legacyMcpToolName = fixture.legacyMcpToolNames[index]!;
         expect(
@@ -220,14 +222,8 @@ describe("/api/tools hosted integration surfacing", () => {
           model: { provider: "anthropic", model: "claude-sonnet-4-6" },
           persona: "Use managed hosted integration pilot tools.",
           tools: fixture.managedToolNames,
-          hostedIntegrationBindings: fixture.migratedToolNames.map(
-            (toolName) => ({
-              familyId: "qualys",
-              toolName,
-              allowedConfigScopeIds: ["qualys-prod"],
-              defaultConfigScopeId: "qualys-prod",
-              environment: "prod",
-            }),
+          hostedIntegrationBindings: fixture.replacementToolNames.map(
+            (toolName) => hostedToolBinding(toolName),
           ),
         }),
       );
@@ -239,14 +235,8 @@ describe("/api/tools hosted integration surfacing", () => {
           model: { provider: "anthropic", model: "claude-sonnet-4-6" },
           persona: "Only has legacy MCP integration-hub tools.",
           tools: fixture.legacyMcpToolNames,
-          hostedIntegrationBindings: fixture.migratedToolNames.map(
-            (toolName) => ({
-              familyId: "qualys",
-              toolName,
-              allowedConfigScopeIds: ["qualys-prod"],
-              defaultConfigScopeId: "qualys-prod",
-              environment: "prod",
-            }),
+          hostedIntegrationBindings: fixture.replacementToolNames.map(
+            (toolName) => hostedToolBinding(toolName),
           ),
         }),
       );
@@ -282,8 +272,8 @@ describe("/api/tools hosted integration surfacing", () => {
           envelope: {
             ok: true,
             result: {
-              migrated: true,
-              tool: fixture.migratedToolNames[index],
+              replacement: true,
+              tool: fixture.replacementToolNames[index],
               args: { pilot: true },
               auth_configured: true,
             },
@@ -315,7 +305,7 @@ describe("/api/tools hosted integration surfacing", () => {
     }
   });
 
-  it("invokes selected hosted integration tools through the gateway using the agent default config scope", async () => {
+  it("invokes selected hosted integration tools through the gateway using the agent default environment config", async () => {
     dataDir = mkdtempSync(path.join(tmpdir(), "openacme-tools-hosted-"));
     writeFamily(dataDir);
     const locks = createFileHostedIntegrationLockStore({
@@ -348,7 +338,7 @@ describe("/api/tools hosted integration surfacing", () => {
       validation: { ok: true, diagnostics: [] },
     });
     expect(promoted.ok).toBe(true);
-    await seedConfigScope(dataDir);
+    await seedEnvironmentConfig(dataDir);
 
     const config = ConfigSchema.parse({
       dataDir,
@@ -363,21 +353,15 @@ describe("/api/tools hosted integration surfacing", () => {
         role: "",
         model: { provider: "anthropic", model: "claude-sonnet-4-6" },
         persona: "Use hosted integrations.",
-        tools: [MANAGED_QUALYS_COUNT_ASSETS],
+        tools: ["managed_tool_help", MANAGED_QUALYS_COUNT_ASSETS],
         hostedIntegrationBindings: [
-          {
-            familyId: "qualys",
-            toolName: "qualys_count_assets",
-            allowedConfigScopeIds: ["qualys-prod"],
-            defaultConfigScopeId: "qualys-prod",
-            environment: "prod",
-          },
+          hostedToolBinding("qualys_count_assets"),
         ],
       }),
     );
 
     const tools = toolRegistry.getVercelTools(
-      new Set([MANAGED_QUALYS_COUNT_ASSETS]),
+      new Set(["managed_tool_help", MANAGED_QUALYS_COUNT_ASSETS]),
     ) as Record<
       string,
       { execute: (args: Record<string, unknown>) => Promise<string> }
@@ -406,6 +390,28 @@ describe("/api/tools hosted integration surfacing", () => {
         },
       },
     });
+    const helpOutput = await toolCallContext.run(
+      {
+        agentId: "analyst",
+        sessionId: "session_1_help",
+        workspaceDir: path.join(dataDir, "agents", "analyst", "workspace"),
+      },
+      () =>
+        tools.managed_tool_help!.execute({
+          tool_name: MANAGED_QUALYS_COUNT_ASSETS,
+          tool_detail: "summary",
+          include_examples: false,
+        }),
+    );
+    expect(JSON.parse(helpOutput)).toMatchObject({
+      ok: true,
+      help: {
+        tool_name: MANAGED_QUALYS_COUNT_ASSETS,
+        tool_help: {
+          summary: "Count Qualys assets.",
+        },
+      },
+    });
 
     await manager.createAgent(
       AgentDefinitionSchema.parse({
@@ -416,13 +422,7 @@ describe("/api/tools hosted integration surfacing", () => {
         persona: "Do not use hosted integrations.",
         tools: [],
         hostedIntegrationBindings: [
-          {
-            familyId: "qualys",
-            toolName: "qualys_count_assets",
-            allowedConfigScopeIds: ["qualys-prod"],
-            defaultConfigScopeId: "qualys-prod",
-            environment: "prod",
-          },
+          hostedToolBinding("qualys_count_assets"),
         ],
       }),
     );
@@ -435,13 +435,7 @@ describe("/api/tools hosted integration surfacing", () => {
         persona: "Only has the legacy MCP surface.",
         tools: ["mcp_integration-hub__qualys_count_assets"],
         hostedIntegrationBindings: [
-          {
-            familyId: "qualys",
-            toolName: "qualys_count_assets",
-            allowedConfigScopeIds: ["qualys-prod"],
-            defaultConfigScopeId: "qualys-prod",
-            environment: "prod",
-          },
+          hostedToolBinding("qualys_count_assets"),
         ],
       }),
     );
@@ -517,7 +511,7 @@ describe("/api/tools hosted integration surfacing", () => {
       validation: { ok: true, diagnostics: [] },
     });
     expect(promoted.ok).toBe(true);
-    await seedConfigScope(dataDir);
+    await seedEnvironmentConfig(dataDir);
 
     const config = ConfigSchema.parse({
       dataDir,
@@ -534,13 +528,7 @@ describe("/api/tools hosted integration surfacing", () => {
         persona: "Use hosted integrations.",
         tools: [MANAGED_QUALYS_COUNT_ASSETS],
         hostedIntegrationBindings: [
-          {
-            familyId: "qualys",
-            toolName: "qualys_count_assets",
-            allowedConfigScopeIds: ["qualys-prod"],
-            defaultConfigScopeId: "qualys-prod",
-            environment: "prod",
-          },
+          hostedToolBinding("qualys_count_assets"),
         ],
       }),
     );
@@ -653,7 +641,7 @@ describe("/api/tools hosted integration surfacing", () => {
 
   it("runs examples and promotes drafts through hosted integration management tools", async () => {
     dataDir = mkdtempSync(path.join(tmpdir(), "openacme-tools-hosted-"));
-    writeFamily(dataDir);
+    writeFamily(dataDir, undefined, { configBacked: false });
 
     const config = ConfigSchema.parse({
       dataDir,
@@ -664,12 +652,14 @@ describe("/api/tools hosted integration surfacing", () => {
     const managementToolNames = [
       "hosted_integration_family_create",
       "hosted_integration_source_read",
+      "hosted_integration_source_view",
       "hosted_integration_lock_acquire",
       "hosted_integration_draft_create",
       "hosted_integration_draft_patch",
       "hosted_integration_example_upsert",
       "hosted_integration_example_run",
       "hosted_integration_promote",
+      "hosted_integration_readiness_get",
     ];
     await manager.createAgent(
       AgentDefinitionSchema.parse({
@@ -714,9 +704,9 @@ describe("/api/tools hosted integration surfacing", () => {
     ).resolves.toMatchObject({
       ok: false,
       error: {
-        code: "runtime_error",
+        code: "invalid_params",
         message:
-          "tool_name must be a family-native hosted integration tool name, not a managed canonical registry name",
+          "tool_name: must be a family-native hosted integration tool name, not a managed canonical registry name",
       },
     });
 
@@ -752,6 +742,52 @@ describe("/api/tools hosted integration surfacing", () => {
       startLine: 2,
       endLine: 4,
       truncated: true,
+    });
+
+    await expect(
+      call("hosted_integration_source_view", {
+        draft_id: draft.draft.id,
+        family_id: "qualys",
+        tool_name: "qualys_count_assets",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      view: {
+        mode: "focused",
+        familyId: "qualys",
+        toolName: "qualys_count_assets",
+        diagnostics: [
+          {
+            code: "selected_handler_missing",
+          },
+        ],
+      },
+    });
+
+    await expect(
+      call("hosted_integration_readiness_get", {
+        target_type: "environment_config",
+        family_id: "qualys",
+        environment: "prod",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      readiness: {
+        kind: "environment_config",
+        status: "blocked",
+        code: "missing",
+      },
+    });
+
+    await expect(
+      call("hosted_integration_readiness_get", {
+        target_type: "mig" + "ration",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "invalid_params",
+      },
     });
 
     await expect(
@@ -832,7 +868,7 @@ describe("/api/tools hosted integration surfacing", () => {
 
   it("exposes failure bucket repair lifecycle through management tools", async () => {
     dataDir = mkdtempSync(path.join(tmpdir(), "openacme-tools-hosted-"));
-    writeFamily(dataDir);
+    writeFamily(dataDir, undefined, { configBacked: false });
 
     const config = ConfigSchema.parse({
       dataDir,
@@ -848,7 +884,7 @@ describe("/api/tools hosted integration surfacing", () => {
           toolName: "qualys_count_assets",
           generationId: "gen_1",
           actorId: "agent:analyst",
-          configScopeId: "qualys-prod",
+          environmentConfigId: "qualys-prod",
           configRevision: 1,
           sanitizedArgs: {},
           status: "failed",
@@ -999,21 +1035,255 @@ describe("/api/tools hosted integration surfacing", () => {
       error: { code: "regression_example_not_found" },
     });
 
-    await expect(
-      call("hosted_integration_failure_bucket_close", {
-        bucket_id: seeded.bucket.id,
-        draft_id: draft.draft.id,
-        generation_id: promoted.generation.id,
-        regression_example_id: "regression_1",
-      }),
-    ).resolves.toMatchObject({
+    const closeRegression = await call("hosted_integration_failure_bucket_close", {
+      bucket_id: seeded.bucket.id,
+      draft_id: draft.draft.id,
+      generation_id: promoted.generation.id,
+      regression_example_id: "regression_1",
+    });
+    expect(closeRegression).toMatchObject({
       ok: true,
       bucket: { id: seeded.bucket.id, status: "closed" },
     });
   });
+
+  it("returns focused source views only through authorized management tools", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "openacme-tools-hosted-"));
+    writeFamily(
+      dataDir,
+      [
+        "def normalize(args):",
+        "    return args",
+        "",
+        "def tool_qualys_count_assets(args, context):",
+        "    return {'count': len(normalize(args))}",
+        "",
+        "def tool_qualys_search_assets(args, context):",
+        "    return {'items': ['not-focused']}",
+        "",
+      ].join("\n"),
+    );
+
+    const config = ConfigSchema.parse({
+      dataDir,
+      model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+    });
+    const { manager, runtime, close } = await createApp(config);
+    closeApp = close;
+    const lock = await runtime.hostedIntegrationService.locks.acquireLock({
+      familyId: "qualys",
+      lockedBy: "agent:tool-developer",
+      ttlMs: 60_000,
+    });
+    if (!lock.ok) throw new Error("failed to lock family");
+    const draft = await runtime.hostedIntegrationService.drafts.createDraft({
+      familyId: "qualys",
+      lockId: lock.lock.id,
+      sourceRevisionId: "source_rev_1",
+    });
+    if (!draft.ok) throw new Error("failed to create draft");
+
+    await manager.createAgent(
+      AgentDefinitionSchema.parse({
+        id: "tool-developer",
+        name: "Tool Developer",
+        role: "",
+        model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+        persona: "Inspect hosted integrations.",
+        tools: ["hosted_integration_source_view"],
+      }),
+    );
+    await manager.createAgent(
+      AgentDefinitionSchema.parse({
+        id: "analyst",
+        name: "Analyst",
+        role: "",
+        model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+        persona: "Analyze data.",
+        tools: [],
+      }),
+    );
+
+    const tools = toolRegistry.getVercelTools(
+      new Set(["hosted_integration_source_view"]),
+    ) as Record<
+      string,
+      { execute: (args: Record<string, unknown>) => Promise<string> }
+    >;
+    const call = async (agentId: string) =>
+      JSON.parse(
+        await toolCallContext.run(
+          {
+            agentId,
+            sessionId: `session_source_view_${agentId}`,
+            workspaceDir: path.join(dataDir!, "agents", agentId, "workspace"),
+          },
+          () =>
+            tools.hosted_integration_source_view!.execute({
+              draft_id: draft.draft.id,
+              family_id: "qualys",
+              tool_name: "qualys_count_assets",
+              include_shared_helpers: true,
+            }),
+        ),
+      );
+
+    await expect(call("analyst")).resolves.toMatchObject({
+      ok: false,
+      error: { code: "policy_denied" },
+    });
+    await expect(call("tool-developer")).resolves.toMatchObject({
+      ok: true,
+      view: {
+        mode: "focused",
+        source: {
+          selectedHandler: {
+            source: expect.stringContaining("def tool_qualys_count_assets"),
+          },
+          helpers: [
+            {
+              name: "normalize",
+            },
+          ],
+          collapsedToolHandlers: [],
+        },
+      },
+    });
+  });
+
+  it("exposes generation diffs through authorized management tools", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "openacme-tools-hosted-"));
+    writeFamily(dataDir, "def call_tool(name, args, ctx):\n    return {'count': 1}\n");
+    const locks = createFileHostedIntegrationLockStore({
+      dataDir,
+      createId: () => "lock_1",
+    });
+    await locks.acquireLock({
+      familyId: "qualys",
+      lockedBy: "agent:tool-developer",
+      ttlMs: 60_000,
+    });
+    let draftCounter = 0;
+    const drafts = createFileHostedIntegrationDraftStore({
+      dataDir,
+      lockStore: locks,
+      createId: () => `draft_${++draftCounter}`,
+    });
+    const generations = createFileHostedIntegrationGenerationStore({
+      dataDir,
+      draftStore: drafts,
+      createId: () => `gen_${draftCounter}`,
+    });
+
+    const firstDraft = await drafts.createDraftFromFiles({
+      familyId: "qualys",
+      lockId: "lock_1",
+      sourceRevisionId: "source_rev_1",
+      files: {
+        "family.yaml": familyYaml(),
+        "qualys.py": "def call_tool(name, args, ctx):\n    return {'count': 1}\n",
+      },
+    });
+    if (!firstDraft.ok) throw new Error(firstDraft.reason);
+    const first = await generations.promoteDraft({
+      draftId: firstDraft.draft.id,
+      promotedBy: "agent:tool-developer",
+      validation: { ok: true, diagnostics: [] },
+    });
+    if (!first.ok) throw new Error(first.reason);
+
+    const secondDraft = await drafts.createDraftFromFiles({
+      familyId: "qualys",
+      lockId: "lock_1",
+      sourceRevisionId: "source_rev_2",
+      files: {
+        "family.yaml": familyYaml(),
+        "qualys.py": "def call_tool(name, args, ctx):\n    return {'count': 2}\n",
+      },
+    });
+    if (!secondDraft.ok) throw new Error(secondDraft.reason);
+    const second = await generations.promoteDraft({
+      draftId: secondDraft.draft.id,
+      promotedBy: "agent:tool-developer",
+      validation: { ok: true, diagnostics: [] },
+    });
+    if (!second.ok) throw new Error(second.reason);
+
+    const config = ConfigSchema.parse({
+      dataDir,
+      model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+    });
+    const { manager, close } = await createApp(config);
+    closeApp = close;
+    await manager.createAgent(
+      AgentDefinitionSchema.parse({
+        id: "tool-developer",
+        name: "Tool Developer",
+        role: "",
+        model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+        persona: "Compare hosted integrations.",
+        tools: ["hosted_integration_generation_diff"],
+      }),
+    );
+    await manager.createAgent(
+      AgentDefinitionSchema.parse({
+        id: "analyst",
+        name: "Analyst",
+        role: "",
+        model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+        persona: "Analyze data.",
+        tools: [],
+      }),
+    );
+
+    const tools = toolRegistry.getVercelTools(
+      new Set(["hosted_integration_generation_diff"]),
+    ) as Record<
+      string,
+      { execute: (args: Record<string, unknown>) => Promise<string> }
+    >;
+    const call = async (agentId: string) =>
+      JSON.parse(
+        await toolCallContext.run(
+          {
+            agentId,
+            sessionId: `session_generation_diff_${agentId}`,
+            workspaceDir: path.join(dataDir!, "agents", agentId, "workspace"),
+          },
+          () =>
+            tools.hosted_integration_generation_diff!.execute({
+              base_generation_id: first.generation.id,
+              compare_generation_id: second.generation.id,
+              mode: "unified",
+            }),
+        ),
+      );
+
+    await expect(call("analyst")).resolves.toMatchObject({
+      ok: false,
+      error: { code: "policy_denied" },
+    });
+    await expect(call("tool-developer")).resolves.toMatchObject({
+      ok: true,
+      diff: {
+        mode: "unified",
+        files: [
+          {
+            path: "qualys.py",
+            changeType: "modified",
+            unifiedPatch: expect.stringContaining("+    return {'count': 2}"),
+          },
+        ],
+      },
+    });
+  });
 });
 
-function writeFamily(root: string, source?: string): void {
+function writeFamily(
+  root: string,
+  source?: string,
+  options: { configBacked?: boolean } = {},
+): void {
   const dir = path.join(
     root,
     "hosted-integrations",
@@ -1022,7 +1292,10 @@ function writeFamily(root: string, source?: string): void {
     "qualys",
   );
   mkdirSync(dir, { recursive: true });
-  writeFileSync(path.join(dir, "family.yaml"), familyYaml());
+  writeFileSync(
+    path.join(dir, "family.yaml"),
+    familyYaml({ configBacked: options.configBacked ?? true }),
+  );
   writeFileSync(
     path.join(dir, "qualys.py"),
     source ??
@@ -1040,7 +1313,7 @@ function writeFamily(root: string, source?: string): void {
 
 function writeFixtureFamily(
   root: string,
-  fixture: LegacyIntegrationHubMigratedFamilyFixture,
+  fixture: LegacyIntegrationHubReplacementFamilyFixture,
 ): void {
   const dir = path.join(
     root,
@@ -1055,27 +1328,69 @@ function writeFixtureFamily(
   }
 }
 
-async function seedConfigScope(root: string): Promise<void> {
-  await createFileHostedIntegrationConfigScopeStore({
+async function seedEnvironmentConfig(root: string): Promise<void> {
+  const environmentConfigs = createFileHostedIntegrationEnvironmentConfigStore({
     dataDir: root,
-  }).upsertConfigScope({
-    scopeId: "qualys-prod",
-    familyId: "qualys",
-    environment: "prod",
-    config: { endpoint: "https://qualys.example.test" },
-    secrets: { apiToken: { configured: true } },
-    updatedBy: "human:alen",
   });
-  await createFileHostedIntegrationSecretStore({
+  const secrets = createFileHostedIntegrationSecretStore({
     dataDir: root,
-  }).writeHumanOwnedSecrets({
-    scopeId: "qualys-prod",
-    secrets: { apiToken: "raw-token-123" },
-    updatedBy: "human:alen",
   });
+  for (const environment of ["prod", "test_debug"] as const) {
+    await environmentConfigs.upsertEnvironmentConfig({
+      familyId: "qualys",
+      environment,
+      config: {
+        endpoint: "https://qualys.example.test",
+        QUALYS_VM_URL: "https://qualys-vm.example.test",
+        QUALYS_GATEWAY_URL: "https://qualys-gateway.example.test",
+      },
+      secrets: {
+        apiToken: { configured: true },
+        QUALYS_USERNAME: { configured: true },
+        QUALYS_PASSWORD: { configured: true },
+      },
+      updatedBy: "human:alen",
+    });
+    await secrets.writeHumanOwnedSecrets({
+      environmentConfigId: `qualys-${environment}`,
+      secrets: {
+        apiToken: "raw-token-123",
+        QUALYS_USERNAME: "qualys-user",
+        QUALYS_PASSWORD: "qualys-password",
+      },
+      updatedBy: "human:alen",
+    });
+  }
 }
 
-function familyYaml(): string {
+function hostedToolBinding(toolName: string) {
+  return {
+    familyId: "qualys",
+    toolName,
+    allowedEnvironments: ["prod"],
+    defaultEnvironment: "prod",
+    generationPin: { type: "current" },
+    bindingKind: "agent",
+    updatedAt: "2026-08-14T10:00:00.000Z",
+    updatedBy: "human:test",
+  };
+}
+
+function familyYaml(
+  options: { configBacked?: boolean } = {},
+): string {
+  const runtimeConfig =
+    options.configBacked === false
+      ? `runtimeConfig:
+  requiredConfigKeys: []
+  requiredSecretKeys: []
+`
+      : `runtimeConfig:
+  requiredConfigKeys:
+    - endpoint
+  requiredSecretKeys:
+    - apiToken
+`;
   return `
 id: qualys
 name: Qualys
@@ -1083,6 +1398,7 @@ version: 1
 runtime:
   language: python
   entrypoint: qualys.py
+  handlerDispatch: legacy_call_tool
   defaultTimeoutMs: 30000
   inlineResultTokenLimit: 8000
   maxConcurrency: 2
@@ -1094,7 +1410,7 @@ runtime:
   dependencyPolicy:
     installDuringInvocation: false
     allowedPackages: []
-tools:
+${runtimeConfig}tools:
   - name: qualys_count_assets
     title: Count assets
     description: Count Qualys assets.

@@ -1,18 +1,27 @@
 import type { ToolInfo } from "./types";
 
+const HOSTED_INTEGRATION_MANAGEMENT_TOOLSET = "hosted-integration-management";
+
 export interface AgentHostedIntegrationBinding {
   familyId: string;
   toolName: string;
-  allowedConfigScopeIds: string[];
-  defaultConfigScopeId?: string;
-  environment: string;
+  allowedEnvironments: Array<"prod" | "test_debug">;
+  defaultEnvironment: "prod" | "test_debug";
+  generationPin:
+    | { type: "current" }
+    | { type: "generation"; generationId: string };
+  bindingKind: "agent" | "internal";
+  purpose?: string;
+  bindingNote?: string;
+  updatedAt: string;
+  updatedBy: string;
 }
 
-export interface HostedIntegrationConfigScope {
+export interface HostedIntegrationEnvironmentConfig {
   id: string;
   familyId: string;
   revision: number;
-  environment: string;
+  environment: "prod" | "test_debug";
   config: Record<string, unknown>;
   secrets: Record<string, { configured: boolean }>;
   updatedAt: string;
@@ -23,6 +32,14 @@ export function isHostedIntegrationTool(tool: ToolInfo): boolean {
   return tool.source?.kind === "hosted_integration";
 }
 
+export function isHostedIntegrationManagementTool(tool: ToolInfo): boolean {
+  return tool.toolset === HOSTED_INTEGRATION_MANAGEMENT_TOOLSET;
+}
+
+export function agentSettingsCatalogTools(tools: ToolInfo[]): ToolInfo[] {
+  return tools.filter((tool) => !isHostedIntegrationManagementTool(tool));
+}
+
 export function hostedIntegrationNativeToolName(tool: ToolInfo): string | null {
   return tool.source?.kind === "hosted_integration"
     ? tool.source.toolName
@@ -31,7 +48,7 @@ export function hostedIntegrationNativeToolName(tool: ToolInfo): string | null {
 
 export function agentSettingsToolGroupLabel(tool: ToolInfo): string {
   if (isHostedIntegrationTool(tool)) {
-    return `Hosted Integrations / ${tool.source?.familyName ?? tool.toolset}`;
+    return `Hosted Tools / ${tool.source?.familyName ?? tool.toolset}`;
   }
   return tool.toolset;
 }
@@ -50,13 +67,13 @@ export function groupAgentSettingsTools(
   return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
 }
 
-export function hostedIntegrationScopesForTool(
+export function hostedIntegrationEnvironmentConfigsForTool(
   tool: ToolInfo,
-  configScopes: HostedIntegrationConfigScope[],
-): HostedIntegrationConfigScope[] {
+  environmentConfigs: HostedIntegrationEnvironmentConfig[],
+): HostedIntegrationEnvironmentConfig[] {
   const familyId = tool.source?.familyId;
   if (!familyId) return [];
-  return configScopes
+  return environmentConfigs
     .filter((scope) => scope.familyId === familyId)
     .sort((a, b) =>
       a.environment === b.environment
@@ -67,26 +84,33 @@ export function hostedIntegrationScopesForTool(
 
 export function buildAgentSettingsHostedIntegrationBinding(input: {
   tool: ToolInfo;
-  configScopes: HostedIntegrationConfigScope[];
-  defaultConfigScopeId?: string;
+  environmentConfigs: HostedIntegrationEnvironmentConfig[];
+  defaultEnvironment?: "prod" | "test_debug";
+  now?: string;
+  updatedBy?: string;
 }): AgentHostedIntegrationBinding | null {
   const familyId = input.tool.source?.familyId;
   const toolName = hostedIntegrationNativeToolName(input.tool);
   if (!familyId || !toolName) return null;
-  const scopes = hostedIntegrationScopesForTool(input.tool, input.configScopes);
-  const defaultScope =
-    scopes.find((scope) => scope.id === input.defaultConfigScopeId) ??
-    scopes[0];
-  if (!defaultScope) return null;
-  const allowedConfigScopeIds = scopes
-    .filter((scope) => scope.environment === defaultScope.environment)
-    .map((scope) => scope.id);
+  const scopes = hostedIntegrationEnvironmentConfigsForTool(input.tool, input.environmentConfigs);
+  const allowedEnvironments = [
+    ...new Set(scopes.map((scope) => scope.environment)),
+  ].sort();
+  const defaultEnvironment =
+    input.defaultEnvironment &&
+    allowedEnvironments.includes(input.defaultEnvironment)
+      ? input.defaultEnvironment
+      : allowedEnvironments[0];
+  if (!defaultEnvironment) return null;
   return {
     familyId,
     toolName,
-    allowedConfigScopeIds,
-    defaultConfigScopeId: defaultScope.id,
-    environment: defaultScope.environment,
+    allowedEnvironments,
+    defaultEnvironment,
+    generationPin: { type: "current" },
+    bindingKind: "agent",
+    updatedAt: input.now ?? new Date().toISOString(),
+    updatedBy: input.updatedBy ?? "human:web",
   };
 }
 
@@ -97,7 +121,8 @@ export function upsertHostedIntegrationBinding(
   return [
     ...bindings.filter(
       (binding) =>
-        binding.familyId !== next.familyId || binding.toolName !== next.toolName,
+        binding.familyId !== next.familyId ||
+        binding.toolName !== next.toolName,
     ),
     next,
   ].sort((a, b) =>
@@ -115,8 +140,7 @@ export function removeHostedIntegrationBinding(
   const toolName = hostedIntegrationNativeToolName(tool);
   if (!familyId || !toolName) return bindings;
   return bindings.filter(
-    (binding) =>
-      binding.familyId !== familyId || binding.toolName !== toolName,
+    (binding) => binding.familyId !== familyId || binding.toolName !== toolName,
   );
 }
 
@@ -128,8 +152,13 @@ export function selectedHostedIntegrationBindings(
   const selected = new Set(selectedTools);
   const hostedToolKeys = new Set(
     tools
-      .filter((tool) => selected.has(tool.name) && isHostedIntegrationTool(tool))
-      .map((tool) => `${tool.source?.familyId}:${hostedIntegrationNativeToolName(tool)}`),
+      .filter(
+        (tool) => selected.has(tool.name) && isHostedIntegrationTool(tool),
+      )
+      .map(
+        (tool) =>
+          `${tool.source?.familyId}:${hostedIntegrationNativeToolName(tool)}`,
+      ),
   );
   return bindings.filter((binding) =>
     hostedToolKeys.has(`${binding.familyId}:${binding.toolName}`),
@@ -140,7 +169,10 @@ export function sameHostedIntegrationBindings(
   a: AgentHostedIntegrationBinding[] = [],
   b: AgentHostedIntegrationBinding[] = [],
 ): boolean {
-  return JSON.stringify(normalizeBindings(a)) === JSON.stringify(normalizeBindings(b));
+  return (
+    JSON.stringify(normalizeBindings(a)) ===
+    JSON.stringify(normalizeBindings(b))
+  );
 }
 
 function normalizeBindings(
@@ -149,7 +181,7 @@ function normalizeBindings(
   return bindings
     .map((binding) => ({
       ...binding,
-      allowedConfigScopeIds: [...binding.allowedConfigScopeIds].sort(),
+      allowedEnvironments: [...binding.allowedEnvironments].sort(),
     }))
     .sort((a, b) =>
       a.familyId === b.familyId

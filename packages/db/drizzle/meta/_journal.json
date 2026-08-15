@@ -162,6 +162,13 @@
       "when": 1786473735589,
       "tag": "0022_round_sabra",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1786653964531,
+      "tag": "0023_mixed_dreadnoughts",
+      "breakpoints": true
     }
   ]
 }

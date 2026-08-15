@@ -1,8 +1,12 @@
 import {
-  HostedIntegrationPolicyBindingSchema,
-  type HostedIntegrationPolicyBinding,
+  HostedIntegrationEnvironmentSchema,
+  HostedIntegrationHostedToolBindingSchema,
+  type HostedIntegrationEnvironment,
+  type HostedIntegrationGenerationPin,
+  type HostedIntegrationHostedToolBinding,
   type HostedIntegrationToolClassification,
 } from "./schemas.js";
+import { hostedIntegrationEnvironmentConfigId } from "./environment-configs.js";
 
 export type HostedIntegrationPolicyActorKind = "agent" | "human" | "system";
 
@@ -36,36 +40,81 @@ export interface HostedIntegrationPolicyInput {
   operationClass: HostedIntegrationPolicyOperationClass;
   environment: string;
   mode: HostedIntegrationPolicyMode;
-  requestedConfigScopeId?: string;
+  requestedEnvironment?: string;
   toolClassification?: HostedIntegrationToolClassification;
-  bindings?: HostedIntegrationPolicyBinding[];
+  hostedToolBindings?: HostedIntegrationHostedToolBinding[];
   approvalGranted?: boolean;
 }
 
 export type HostedIntegrationPolicyDecision =
-  | { ok: true; resolvedConfigScopeId?: string }
+  | {
+      ok: true;
+      resolvedEnvironment?: HostedIntegrationEnvironment;
+      resolvedEnvironmentConfigId?: string;
+      generationPin?: HostedIntegrationGenerationPin;
+    }
   | {
       ok: false;
       reason: "policy_denied" | "config_missing" | "approval_required";
       message: string;
     };
 
-type ResolvedConfigScopeDecision =
-  | { ok: true; scopeId: string }
-  | Extract<HostedIntegrationPolicyDecision, { ok: false }>;
-
-export type CreateAgentSettingsHostedIntegrationBindingResult =
-  | { ok: true; binding: HostedIntegrationPolicyBinding }
+export type CreateAgentSettingsHostedToolBindingResult =
+  | { ok: true; binding: HostedIntegrationHostedToolBinding }
   | { ok: false; error: string };
 
-export function createAgentSettingsHostedIntegrationBinding(
+export function createAgentSettingsHostedToolBinding(
   input: unknown,
-): CreateAgentSettingsHostedIntegrationBindingResult {
-  const parsed = HostedIntegrationPolicyBindingSchema.safeParse(input);
+): CreateAgentSettingsHostedToolBindingResult {
+  const parsed = HostedIntegrationHostedToolBindingSchema.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: "invalid_binding" };
   }
   return { ok: true, binding: parsed.data };
+}
+
+export type ResolveHostedIntegrationBindingEnvironmentResult =
+  | {
+      ok: true;
+      environment: HostedIntegrationEnvironment;
+      environmentConfigId: string;
+    }
+  | {
+      ok: false;
+      reason: "policy_denied" | "config_missing";
+      message: string;
+    };
+
+export function resolveHostedIntegrationBindingEnvironment(
+  binding: HostedIntegrationHostedToolBinding,
+  requestedEnvironment?: string,
+): ResolveHostedIntegrationBindingEnvironmentResult {
+  const environment = requestedEnvironment ?? binding.defaultEnvironment;
+  const parsedEnvironment = HostedIntegrationEnvironmentSchema.safeParse(
+    environment,
+  );
+  if (!parsedEnvironment.success) {
+    return {
+      ok: false,
+      reason: "policy_denied",
+      message: "requested environment is not allowed",
+    };
+  }
+  if (!binding.allowedEnvironments.includes(parsedEnvironment.data)) {
+    return {
+      ok: false,
+      reason: "policy_denied",
+      message: "requested environment is not allowed",
+    };
+  }
+  return {
+    ok: true,
+    environment: parsedEnvironment.data,
+    environmentConfigId: hostedIntegrationEnvironmentConfigId(
+      binding.familyId,
+      parsedEnvironment.data,
+    ),
+  };
 }
 
 export function evaluateHostedIntegrationPolicy(
@@ -114,56 +163,27 @@ function evaluateInvocation(
     };
   }
 
-  const binding = (input.bindings ?? []).find(
+  const hostedToolBinding = (input.hostedToolBindings ?? []).find(
     (candidate) =>
       candidate.agentId === input.actor?.id &&
       candidate.familyId === input.familyId &&
-      candidate.toolName === input.toolName &&
-      candidate.environment === input.environment,
+      candidate.toolName === input.toolName,
   );
-  if (!binding) return denied("agent is not bound to hosted integration tool");
-
-  const resolvedConfigScopeId = resolveConfigScope(input, binding);
-  if (!resolvedConfigScopeId.ok) return resolvedConfigScopeId;
-  return { ok: true, resolvedConfigScopeId: resolvedConfigScopeId.scopeId };
-}
-
-function resolveConfigScope(
-  input: HostedIntegrationPolicyInput,
-  binding: HostedIntegrationPolicyBinding,
-): ResolvedConfigScopeDecision {
-  if (input.requestedConfigScopeId) {
-    if (binding.allowedConfigScopeIds.includes(input.requestedConfigScopeId)) {
-      return { ok: true, scopeId: input.requestedConfigScopeId };
-    }
+  if (hostedToolBinding) {
+    const resolved = resolveHostedIntegrationBindingEnvironment(
+      hostedToolBinding,
+      input.requestedEnvironment,
+    );
+    if (!resolved.ok) return resolved;
     return {
-      ok: false,
-      reason: "policy_denied",
-      message: "requested config scope is not allowed",
+      ok: true,
+      resolvedEnvironment: resolved.environment,
+      resolvedEnvironmentConfigId: resolved.environmentConfigId,
+      generationPin: hostedToolBinding.generationPin,
     };
   }
 
-  if (binding.defaultConfigScopeId) {
-    if (binding.allowedConfigScopeIds.includes(binding.defaultConfigScopeId)) {
-      return { ok: true, scopeId: binding.defaultConfigScopeId };
-    }
-    return {
-      ok: false,
-      reason: "policy_denied",
-      message: "default config scope is not allowed",
-    };
-  }
-
-  const onlyConfigScopeId = binding.allowedConfigScopeIds[0];
-  if (binding.allowedConfigScopeIds.length === 1 && onlyConfigScopeId) {
-    return { ok: true, scopeId: onlyConfigScopeId };
-  }
-
-  return {
-    ok: false,
-    reason: "config_missing",
-    message: "multiple config scopes require a default",
-  };
+  return denied("agent is not bound to hosted integration tool");
 }
 
 function denied(message: string): HostedIntegrationPolicyDecision {

@@ -1,10 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "@tanstack/react-router";
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-} from "@/app/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/app/components/ui/dialog";
 import { API_BASE } from "@/app/lib/api";
 import { cn } from "@/app/lib/utils";
 import { AgentAvatar } from "@/app/components/ui/agent-avatar";
@@ -16,6 +12,7 @@ import {
   Settings,
   Plus,
   HelpCircle,
+  Plug,
 } from "lucide-react";
 
 interface AgentLite {
@@ -174,6 +171,15 @@ export function CommandPalette() {
         },
       },
       {
+        id: "go-hosted-tools",
+        label: "Go to Hosted Tools",
+        icon: Plug,
+        onSelect: () => {
+          void navigate({ to: "/hosted-tools" });
+          close();
+        },
+      },
+      {
         id: "go-settings",
         label: "Go to Settings",
         icon: Settings,
@@ -229,10 +235,7 @@ export function CommandPalette() {
   }, [agents, query, navigate]);
 
   // Flatten for keyboard nav. Section labels don't count as targets.
-  const flat = useMemo(
-    () => sections.flatMap((s) => s.items),
-    [sections]
-  );
+  const flat = useMemo(() => sections.flatMap((s) => s.items), [sections]);
 
   // Clamp active index whenever the filtered list shrinks/grows.
   useEffect(() => {
@@ -250,6 +253,7 @@ export function CommandPalette() {
           if (it.id === "go-agents") return pathname !== "/agents";
           if (it.id === "go-tasks") return pathname !== "/tasks";
           if (it.id === "go-skills") return pathname !== "/skills";
+          if (it.id === "go-hosted-tools") return pathname !== "/hosted-tools";
           if (it.id === "go-settings") return pathname !== "/settings";
           return true;
         }),
@@ -259,7 +263,7 @@ export function CommandPalette() {
 
   const visibleFlat = useMemo(
     () => visibleSections.flatMap((s) => s.items),
-    [visibleSections]
+    [visibleSections],
   );
 
   function onInputKey(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -279,7 +283,7 @@ export function CommandPalette() {
   useEffect(() => {
     if (!listRef.current) return;
     const el = listRef.current.querySelector<HTMLElement>(
-      `[data-palette-index="${active}"]`
+      `[data-palette-index="${active}"]`,
     );
     el?.scrollIntoView({ block: "nearest" });
   }, [active]);
@@ -347,7 +351,7 @@ export function CommandPalette() {
                       "relative flex w-full items-center gap-3 px-4 py-2 text-left text-sm transition-colors",
                       isActive
                         ? "bg-paper text-ink"
-                        : "text-ink-soft hover:bg-paper hover:text-ink"
+                        : "text-ink-soft hover:bg-paper hover:text-ink",
                     )}
                   >
                     {isActive && (

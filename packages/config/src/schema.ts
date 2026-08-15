@@ -226,11 +226,33 @@ export const AgentHostedIntegrationBindingSchema = z
   .object({
     familyId: z.string().min(1),
     toolName: z.string().min(1),
-    allowedConfigScopeIds: z.array(z.string().min(1)).min(1),
-    defaultConfigScopeId: z.string().min(1).optional(),
-    environment: z.string().min(1),
+    allowedEnvironments: z.array(z.enum(["prod", "test_debug"])).min(1),
+    defaultEnvironment: z.enum(["prod", "test_debug"]),
+    generationPin: z.discriminatedUnion("type", [
+      z.object({ type: z.literal("current") }).strict(),
+      z
+        .object({
+          type: z.literal("generation"),
+          generationId: z.string().min(1),
+        })
+        .strict(),
+    ]),
+    bindingKind: z.enum(["agent", "internal"]),
+    purpose: z.string().min(1).optional(),
+    bindingNote: z.string().min(1).optional(),
+    updatedAt: z.string().datetime({ offset: true }),
+    updatedBy: z.string().min(1),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (!value.allowedEnvironments.includes(value.defaultEnvironment)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["defaultEnvironment"],
+        message: "defaultEnvironment must be in allowedEnvironments",
+      });
+    }
+  });
 export type AgentHostedIntegrationBinding = z.infer<
   typeof AgentHostedIntegrationBindingSchema
 >;
@@ -312,9 +334,9 @@ export const AgentDefinitionSchema = z.object({
   // Empty (default) = inherit everything.
   mcpDisabled: z.array(z.string()).default([]),
   // Per-agent hosted integration invocation bindings. Tool visibility still
-  // comes from `tools`; these bindings choose the allowed/default config scope
-  // for a selected hosted integration tool without exposing scope choice to
-  // the model as a tool argument.
+  // comes from `tools`; these bindings choose the allowed/default environment
+  // and generation pin for a selected hosted integration tool without exposing
+  // config choice to the model as a tool argument.
   hostedIntegrationBindings: z
     .array(AgentHostedIntegrationBindingSchema)
     .optional(),
@@ -430,6 +452,13 @@ export const ServerConfigSchema = z.object({
   requireAuth: z.boolean().default(false),
 });
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
+
+export const HostedIntegrationsConfigSchema = z.object({
+  persistenceBackend: z.enum(["auto", "file", "db"]).default("auto"),
+});
+export type HostedIntegrationsConfig = z.infer<
+  typeof HostedIntegrationsConfigSchema
+>;
 
 /**
  * Per-model metadata. Vercel AI SDK's `LanguageModelV1`/`V2` doesn't
@@ -704,6 +733,7 @@ export const ConfigSchema = z.object({
   dataDir: z.string().default("~/.openacme"),
   model: ModelConfigSchema.prefault({}),
   server: ServerConfigSchema.prefault({}),
+  hostedIntegrations: HostedIntegrationsConfigSchema.prefault({}),
   behavior: AgentBehaviorSchema.prefault({}),
   skills: SkillsConfigSchema.prefault({}),
   web: WebConfigSchema.prefault({}),

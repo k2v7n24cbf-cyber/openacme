@@ -19,6 +19,7 @@ import { Route as SetupRouteImport } from './routes/setup'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as ObjectivesRouteImport } from './routes/objectives'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as HostedToolsRouteImport } from './routes/hosted-tools'
 import { Route as EnrollRouteImport } from './routes/enroll'
 import { Route as AgentsRouteImport } from './routes/agents'
 import { Route as IndexRouteImport } from './routes/index'
@@ -73,6 +74,11 @@ const LoginRoute = LoginRouteImport.update({
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
+const HostedToolsRoute = HostedToolsRouteImport.update({
+  id: '/hosted-tools',
+  path: '/hosted-tools',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const EnrollRoute = EnrollRouteImport.update({
   id: '/enroll',
   path: '/enroll',
@@ -93,6 +99,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/agents': typeof AgentsRoute
   '/enroll': typeof EnrollRoute
+  '/hosted-tools': typeof HostedToolsRoute
   '/login': typeof LoginRoute
   '/objectives': typeof ObjectivesRoute
   '/settings': typeof SettingsRoute
@@ -108,6 +115,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/agents': typeof AgentsRoute
   '/enroll': typeof EnrollRoute
+  '/hosted-tools': typeof HostedToolsRoute
   '/login': typeof LoginRoute
   '/objectives': typeof ObjectivesRoute
   '/settings': typeof SettingsRoute
@@ -124,6 +132,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/agents': typeof AgentsRoute
   '/enroll': typeof EnrollRoute
+  '/hosted-tools': typeof HostedToolsRoute
   '/login': typeof LoginRoute
   '/objectives': typeof ObjectivesRoute
   '/settings': typeof SettingsRoute
@@ -141,6 +150,7 @@ export interface FileRouteTypes {
     | '/'
     | '/agents'
     | '/enroll'
+    | '/hosted-tools'
     | '/login'
     | '/objectives'
     | '/settings'
@@ -156,6 +166,7 @@ export interface FileRouteTypes {
     | '/'
     | '/agents'
     | '/enroll'
+    | '/hosted-tools'
     | '/login'
     | '/objectives'
     | '/settings'
@@ -171,6 +182,7 @@ export interface FileRouteTypes {
     | '/'
     | '/agents'
     | '/enroll'
+    | '/hosted-tools'
     | '/login'
     | '/objectives'
     | '/settings'
@@ -187,6 +199,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AgentsRoute: typeof AgentsRoute
   EnrollRoute: typeof EnrollRoute
+  HostedToolsRoute: typeof HostedToolsRoute
   LoginRoute: typeof LoginRoute
   ObjectivesRoute: typeof ObjectivesRoute
   SettingsRoute: typeof SettingsRoute
@@ -271,6 +284,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/hosted-tools': {
+      id: '/hosted-tools'
+      path: '/hosted-tools'
+      fullPath: '/hosted-tools'
+      preLoaderRoute: typeof HostedToolsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/enroll': {
       id: '/enroll'
       path: '/enroll'
@@ -299,6 +319,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AgentsRoute: AgentsRoute,
   EnrollRoute: EnrollRoute,
+  HostedToolsRoute: HostedToolsRoute,
   LoginRoute: LoginRoute,
   ObjectivesRoute: ObjectivesRoute,
   SettingsRoute: SettingsRoute,

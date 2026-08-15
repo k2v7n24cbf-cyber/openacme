@@ -638,6 +638,465 @@ export const workflowArtifacts = sqliteTable(
   (t) => [index("idx_workflow_artifacts_run").on(t.runId)],
 );
 
+export const hostedIntegrationFamilies = sqliteTable(
+  "hosted_integration_families",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    version: integer("version").notNull(),
+    status: text("status").notNull(),
+    manifestJson: text("manifest_json").notNull(),
+    diagnosticsJson: text("diagnostics_json").notNull().default("[]"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [index("idx_hosted_families_status").on(t.status)],
+);
+
+export const hostedIntegrationSourceRevisions = sqliteTable(
+  "hosted_integration_source_revisions",
+  {
+    id: text("id").primaryKey(),
+    familyId: text("family_id").notNull(),
+    createdAt: text("created_at").notNull(),
+    createdBy: text("created_by").notNull(),
+    provenanceJson: text("provenance_json"),
+  },
+  (t) => [index("idx_hosted_source_revisions_family").on(t.familyId, t.createdAt)],
+);
+
+export const hostedIntegrationSourceFiles = sqliteTable(
+  "hosted_integration_source_files",
+  {
+    sourceRevisionId: text("source_revision_id")
+      .notNull()
+      .references(() => hostedIntegrationSourceRevisions.id, {
+        onDelete: "cascade",
+      }),
+    path: text("path").notNull(),
+    content: text("content").notNull(),
+    sha256: text("sha256").notNull(),
+    size: integer("size").notNull(),
+    mediaType: text("media_type"),
+  },
+  (t) => [
+    primaryKey({ columns: [t.sourceRevisionId, t.path] }),
+    index("idx_hosted_source_files_revision").on(t.sourceRevisionId),
+  ],
+);
+
+export const hostedIntegrationDrafts = sqliteTable(
+  "hosted_integration_drafts",
+  {
+    id: text("id").primaryKey(),
+    familyId: text("family_id").notNull(),
+    sourceRevisionId: text("source_revision_id").notNull(),
+    lockId: text("lock_id").notNull(),
+    status: text("status").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [
+    index("idx_hosted_drafts_family_status").on(t.familyId, t.status),
+    index("idx_hosted_drafts_lock").on(t.lockId),
+  ],
+);
+
+export const hostedIntegrationDraftFiles = sqliteTable(
+  "hosted_integration_draft_files",
+  {
+    draftId: text("draft_id")
+      .notNull()
+      .references(() => hostedIntegrationDrafts.id, { onDelete: "cascade" }),
+    path: text("path").notNull(),
+    content: text("content").notNull(),
+    sha256: text("sha256").notNull(),
+    size: integer("size").notNull(),
+    mediaType: text("media_type"),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.draftId, t.path] }),
+    index("idx_hosted_draft_files_draft").on(t.draftId),
+  ],
+);
+
+export const hostedIntegrationExamples = sqliteTable(
+  "hosted_integration_examples",
+  {
+    id: text("id").primaryKey(),
+    draftId: text("draft_id")
+      .notNull()
+      .references(() => hostedIntegrationDrafts.id, { onDelete: "cascade" }),
+    familyId: text("family_id").notNull(),
+    toolName: text("tool_name").notNull(),
+    category: text("category").notNull(),
+    argsJson: text("args_json").notNull(),
+    expectedJson: text("expected_json"),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [
+    index("idx_hosted_examples_draft").on(t.draftId),
+    uniqueIndex("idx_hosted_examples_draft_id").on(t.draftId, t.id),
+  ],
+);
+
+export const hostedIntegrationProposedFamilies = sqliteTable(
+  "hosted_integration_proposed_families",
+  {
+    familyId: text("family_id").primaryKey(),
+    draftId: text("draft_id").notNull(),
+    lockId: text("lock_id").notNull(),
+    proposedBy: text("proposed_by").notNull(),
+    createdAt: text("created_at").notNull(),
+    status: text("status").notNull(),
+  },
+  (t) => [index("idx_hosted_proposed_status").on(t.status)],
+);
+
+export const hostedIntegrationLocks = sqliteTable(
+  "hosted_integration_locks",
+  {
+    id: text("id").primaryKey(),
+    familyId: text("family_id").notNull(),
+    lockedBy: text("locked_by").notNull(),
+    draftId: text("draft_id"),
+    acquiredAt: text("acquired_at").notNull(),
+    renewedAt: text("renewed_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
+    releasedAt: text("released_at"),
+  },
+  (t) => [
+    index("idx_hosted_locks_family_expires").on(t.familyId, t.expiresAt),
+    uniqueIndex("idx_hosted_locks_active_family")
+      .on(t.familyId)
+      .where(sql`${t.releasedAt} IS NULL`),
+  ],
+);
+
+export const hostedIntegrationEnvironmentConfigs = sqliteTable(
+  "hosted_integration_environment_configs",
+  {
+    id: text("id").primaryKey(),
+    familyId: text("family_id").notNull(),
+    environment: text("environment").notNull(),
+    revision: integer("revision").notNull(),
+    configJson: text("config_json").notNull(),
+    secretsMetadataJson: text("secrets_metadata_json").notNull().default("{}"),
+    updatedAt: text("updated_at").notNull(),
+    updatedBy: text("updated_by").notNull(),
+  },
+  (t) => [
+    index("idx_hosted_environment_configs_family").on(
+      t.familyId,
+      t.environment,
+    ),
+  ],
+);
+
+export const hostedIntegrationSecretMetadata = sqliteTable(
+  "hosted_integration_secret_metadata",
+  {
+    environmentConfigId: text("environment_config_id")
+      .notNull()
+      .references(() => hostedIntegrationEnvironmentConfigs.id, {
+        onDelete: "cascade",
+      }),
+    name: text("name").notNull(),
+    configured: integer("configured", { mode: "boolean" }).notNull(),
+    updatedAt: text("updated_at").notNull(),
+    updatedBy: text("updated_by").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.environmentConfigId, t.name] }),
+    index("idx_hosted_secret_metadata_environment_config").on(
+      t.environmentConfigId,
+    ),
+  ],
+);
+
+export const hostedIntegrationApprovals = sqliteTable(
+  "hosted_integration_approvals",
+  {
+    id: text("id").primaryKey(),
+    familyId: text("family_id").notNull(),
+    targetJson: text("target_json").notNull(),
+    actorJson: text("actor_json").notNull(),
+    decision: text("decision").notNull(),
+    reason: text("reason"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [index("idx_hosted_approvals_family").on(t.familyId, t.createdAt)],
+);
+
+export const hostedIntegrationDisablements = sqliteTable(
+  "hosted_integration_disablements",
+  {
+    id: text("id").primaryKey(),
+    familyId: text("family_id").notNull(),
+    toolName: text("tool_name"),
+    targetJson: text("target_json").notNull(),
+    reason: text("reason"),
+    disabledBy: text("disabled_by").notNull(),
+    disabledAt: text("disabled_at").notNull(),
+  },
+  (t) => [
+    index("idx_hosted_disablements_family").on(t.familyId),
+    uniqueIndex("idx_hosted_disablements_target").on(t.familyId, t.toolName),
+  ],
+);
+
+export const hostedIntegrationGenerations = sqliteTable(
+  "hosted_integration_generations",
+  {
+    id: text("id").primaryKey(),
+    familyId: text("family_id").notNull(),
+    sourceRevisionId: text("source_revision_id").notNull(),
+    status: text("status").notNull(),
+    promotedAt: text("promoted_at").notNull(),
+    promotedBy: text("promoted_by").notNull(),
+    manifestJson: text("manifest_json").notNull(),
+    toolNamesJson: text("tool_names_json").notNull(),
+    validationJson: text("validation_json").notNull(),
+    dependencyResolutionJson: text("dependency_resolution_json"),
+    provenanceJson: text("provenance_json").notNull(),
+  },
+  (t) => [
+    index("idx_hosted_generations_family").on(t.familyId, t.promotedAt),
+    index("idx_hosted_generations_status").on(t.status),
+  ],
+);
+
+export const hostedIntegrationGenerationFiles = sqliteTable(
+  "hosted_integration_generation_files",
+  {
+    generationId: text("generation_id")
+      .notNull()
+      .references(() => hostedIntegrationGenerations.id, {
+        onDelete: "cascade",
+      }),
+    path: text("path").notNull(),
+    content: text("content").notNull(),
+    sha256: text("sha256").notNull(),
+    size: integer("size").notNull(),
+    mediaType: text("media_type"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.generationId, t.path] }),
+    index("idx_hosted_generation_files_generation").on(t.generationId),
+  ],
+);
+
+export const hostedIntegrationActiveGenerations = sqliteTable(
+  "hosted_integration_active_generations",
+  {
+    familyId: text("family_id").primaryKey(),
+    generationId: text("generation_id")
+      .notNull()
+      .references(() => hostedIntegrationGenerations.id, {
+        onDelete: "restrict",
+      }),
+    activatedAt: text("activated_at").notNull(),
+    activatedBy: text("activated_by").notNull(),
+    previousGenerationId: text("previous_generation_id"),
+  },
+  (t) => [uniqueIndex("idx_hosted_active_generation").on(t.generationId)],
+);
+
+export const hostedIntegrationGenerationInvocations = sqliteTable(
+  "hosted_integration_generation_invocations",
+  {
+    leaseId: text("lease_id").primaryKey(),
+    generationId: text("generation_id").notNull(),
+    familyId: text("family_id").notNull(),
+    startedAt: text("started_at").notNull(),
+    completedAt: text("completed_at"),
+  },
+  (t) => [
+    index("idx_hosted_generation_invocations_generation").on(
+      t.generationId,
+      t.completedAt,
+    ),
+  ],
+);
+
+export const hostedIntegrationJobs = sqliteTable(
+  "hosted_integration_jobs",
+  {
+    id: text("id").primaryKey(),
+    familyId: text("family_id").notNull(),
+    toolName: text("tool_name").notNull(),
+    generationId: text("generation_id"),
+    status: text("status").notNull(),
+    actorJson: text("actor_json").notNull(),
+    argsHash: text("args_hash").notNull(),
+    resultJson: text("result_json"),
+    errorJson: text("error_json"),
+    createdAt: text("created_at").notNull(),
+    startedAt: text("started_at"),
+    endedAt: text("ended_at"),
+    cancelledAt: text("cancelled_at"),
+  },
+  (t) => [
+    index("idx_hosted_jobs_family_status").on(t.familyId, t.status),
+    index("idx_hosted_jobs_generation").on(t.generationId),
+  ],
+);
+
+export const hostedIntegrationJobEvents = sqliteTable(
+  "hosted_integration_job_events",
+  {
+    id: text("id").primaryKey(),
+    jobId: text("job_id")
+      .notNull()
+      .references(() => hostedIntegrationJobs.id, { onDelete: "cascade" }),
+    sequence: integer("sequence").notNull(),
+    eventType: text("event_type").notNull(),
+    payloadJson: text("payload_json"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [
+    index("idx_hosted_job_events_job").on(t.jobId, t.sequence),
+    uniqueIndex("idx_hosted_job_events_job_sequence").on(t.jobId, t.sequence),
+  ],
+);
+
+export const hostedIntegrationRuns = sqliteTable(
+  "hosted_integration_runs",
+  {
+    id: text("id").primaryKey(),
+    familyId: text("family_id").notNull(),
+    toolName: text("tool_name").notNull(),
+    generationId: text("generation_id").notNull(),
+    actorJson: text("actor_json").notNull(),
+    purpose: text("purpose").notNull(),
+    status: text("status").notNull(),
+    resultEnvelopeRefJson: text("result_envelope_ref_json"),
+    resultMetadataJson: text("result_metadata_json"),
+    errorJson: text("error_json"),
+    createdAt: text("created_at").notNull(),
+    endedAt: text("ended_at"),
+    retentionState: text("retention_state").notNull().default("active"),
+  },
+  (t) => [
+    index("idx_hosted_runs_family_tool").on(t.familyId, t.toolName),
+    index("idx_hosted_runs_generation").on(t.generationId),
+    index("idx_hosted_runs_retention").on(t.retentionState, t.createdAt),
+  ],
+);
+
+export const hostedIntegrationArtifacts = sqliteTable(
+  "hosted_integration_artifacts",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => hostedIntegrationRuns.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    kind: text("kind").notNull(),
+    mediaType: text("media_type"),
+    size: integer("size").notNull(),
+    sha256: text("sha256").notNull(),
+    storageRef: text("storage_ref").notNull(),
+    retentionState: text("retention_state").notNull().default("active"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [
+    index("idx_hosted_artifacts_run").on(t.runId),
+    index("idx_hosted_artifacts_retention").on(t.retentionState, t.createdAt),
+    uniqueIndex("idx_hosted_artifacts_run_name").on(t.runId, t.name),
+  ],
+);
+
+export const hostedIntegrationExecutionLogs = sqliteTable(
+  "hosted_integration_execution_logs",
+  {
+    runId: text("run_id").primaryKey(),
+    familyId: text("family_id").notNull(),
+    toolName: text("tool_name").notNull(),
+    generationId: text("generation_id").notNull(),
+    actorJson: text("actor_json").notNull(),
+    status: text("status").notNull(),
+    startedAt: text("started_at").notNull(),
+    endedAt: text("ended_at"),
+    durationMs: integer("duration_ms"),
+    requestSanitizedJson: text("request_sanitized_json").notNull(),
+    resultEnvelopeRefJson: text("result_envelope_ref_json"),
+    resultMetadataJson: text("result_metadata_json"),
+    errorJson: text("error_json"),
+    traceId: text("trace_id"),
+    spanId: text("span_id"),
+  },
+  (t) => [
+    index("idx_hosted_execution_logs_family").on(t.familyId, t.startedAt),
+    index("idx_hosted_execution_logs_trace").on(t.traceId),
+  ],
+);
+
+export const hostedIntegrationFailureBuckets = sqliteTable(
+  "hosted_integration_failure_buckets",
+  {
+    id: text("id").primaryKey(),
+    familyId: text("family_id").notNull(),
+    toolName: text("tool_name").notNull(),
+    generationId: text("generation_id").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    status: text("status").notNull(),
+    count: integer("count").notNull().default(1),
+    latestRunId: text("latest_run_id"),
+    firstSeenAt: text("first_seen_at").notNull(),
+    latestSeenAt: text("latest_seen_at").notNull(),
+    assignedTo: text("assigned_to"),
+    closedAt: text("closed_at"),
+    closedBy: text("closed_by"),
+  },
+  (t) => [
+    index("idx_hosted_failure_buckets_family").on(t.familyId, t.status),
+    uniqueIndex("idx_hosted_failure_buckets_unique_open")
+      .on(t.familyId, t.toolName, t.generationId, t.fingerprint)
+      .where(sql`${t.status} = 'open'`),
+  ],
+);
+
+export const hostedIntegrationFailureBucketEvents = sqliteTable(
+  "hosted_integration_failure_bucket_events",
+  {
+    id: text("id").primaryKey(),
+    bucketId: text("bucket_id")
+      .notNull()
+      .references(() => hostedIntegrationFailureBuckets.id, {
+        onDelete: "cascade",
+      }),
+    eventType: text("event_type").notNull(),
+    runId: text("run_id"),
+    actor: text("actor"),
+    payloadJson: text("payload_json"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [index("idx_hosted_failure_bucket_events_bucket").on(t.bucketId)],
+);
+
+export const hostedIntegrationIdempotency = sqliteTable(
+  "hosted_integration_idempotency",
+  {
+    key: text("key").primaryKey(),
+    operation: text("operation").notNull(),
+    actorId: text("actor_id").notNull(),
+    targetJson: text("target_json").notNull(),
+    requestHash: text("request_hash").notNull(),
+    status: text("status").notNull(),
+    finalEnvelopeMetadataJson: text("final_envelope_metadata_json"),
+    createdAt: text("created_at").notNull(),
+    completedAt: text("completed_at"),
+    expiresAt: text("expires_at"),
+  },
+  (t) => [
+    index("idx_hosted_idempotency_actor").on(t.actorId, t.createdAt),
+    index("idx_hosted_idempotency_expires").on(t.expiresAt),
+  ],
+);
+
 /**
  * Human operators. The deployment is single-org / flat-role: every member
  * is a full admin, distinguished only so the system can route to them.
@@ -740,6 +1199,98 @@ export type WorkflowRunEventRow = typeof workflowRunEvents.$inferSelect;
 export type NewWorkflowRunEventRow = typeof workflowRunEvents.$inferInsert;
 export type WorkflowArtifactRow = typeof workflowArtifacts.$inferSelect;
 export type NewWorkflowArtifactRow = typeof workflowArtifacts.$inferInsert;
+export type HostedIntegrationFamilyRow =
+  typeof hostedIntegrationFamilies.$inferSelect;
+export type NewHostedIntegrationFamilyRow =
+  typeof hostedIntegrationFamilies.$inferInsert;
+export type HostedIntegrationSourceRevisionRow =
+  typeof hostedIntegrationSourceRevisions.$inferSelect;
+export type NewHostedIntegrationSourceRevisionRow =
+  typeof hostedIntegrationSourceRevisions.$inferInsert;
+export type HostedIntegrationSourceFileRow =
+  typeof hostedIntegrationSourceFiles.$inferSelect;
+export type NewHostedIntegrationSourceFileRow =
+  typeof hostedIntegrationSourceFiles.$inferInsert;
+export type HostedIntegrationDraftRow = typeof hostedIntegrationDrafts.$inferSelect;
+export type NewHostedIntegrationDraftRow =
+  typeof hostedIntegrationDrafts.$inferInsert;
+export type HostedIntegrationDraftFileRow =
+  typeof hostedIntegrationDraftFiles.$inferSelect;
+export type NewHostedIntegrationDraftFileRow =
+  typeof hostedIntegrationDraftFiles.$inferInsert;
+export type HostedIntegrationExampleRow =
+  typeof hostedIntegrationExamples.$inferSelect;
+export type NewHostedIntegrationExampleRow =
+  typeof hostedIntegrationExamples.$inferInsert;
+export type HostedIntegrationProposedFamilyRow =
+  typeof hostedIntegrationProposedFamilies.$inferSelect;
+export type NewHostedIntegrationProposedFamilyRow =
+  typeof hostedIntegrationProposedFamilies.$inferInsert;
+export type HostedIntegrationLockRow = typeof hostedIntegrationLocks.$inferSelect;
+export type NewHostedIntegrationLockRow =
+  typeof hostedIntegrationLocks.$inferInsert;
+export type HostedIntegrationEnvironmentConfigRow =
+  typeof hostedIntegrationEnvironmentConfigs.$inferSelect;
+export type NewHostedIntegrationEnvironmentConfigRow =
+  typeof hostedIntegrationEnvironmentConfigs.$inferInsert;
+export type HostedIntegrationSecretMetadataRow =
+  typeof hostedIntegrationSecretMetadata.$inferSelect;
+export type NewHostedIntegrationSecretMetadataRow =
+  typeof hostedIntegrationSecretMetadata.$inferInsert;
+export type HostedIntegrationApprovalRow =
+  typeof hostedIntegrationApprovals.$inferSelect;
+export type NewHostedIntegrationApprovalRow =
+  typeof hostedIntegrationApprovals.$inferInsert;
+export type HostedIntegrationDisablementRow =
+  typeof hostedIntegrationDisablements.$inferSelect;
+export type NewHostedIntegrationDisablementRow =
+  typeof hostedIntegrationDisablements.$inferInsert;
+export type HostedIntegrationGenerationRow =
+  typeof hostedIntegrationGenerations.$inferSelect;
+export type NewHostedIntegrationGenerationRow =
+  typeof hostedIntegrationGenerations.$inferInsert;
+export type HostedIntegrationGenerationFileRow =
+  typeof hostedIntegrationGenerationFiles.$inferSelect;
+export type NewHostedIntegrationGenerationFileRow =
+  typeof hostedIntegrationGenerationFiles.$inferInsert;
+export type HostedIntegrationActiveGenerationRow =
+  typeof hostedIntegrationActiveGenerations.$inferSelect;
+export type NewHostedIntegrationActiveGenerationRow =
+  typeof hostedIntegrationActiveGenerations.$inferInsert;
+export type HostedIntegrationGenerationInvocationRow =
+  typeof hostedIntegrationGenerationInvocations.$inferSelect;
+export type NewHostedIntegrationGenerationInvocationRow =
+  typeof hostedIntegrationGenerationInvocations.$inferInsert;
+export type HostedIntegrationJobRow = typeof hostedIntegrationJobs.$inferSelect;
+export type NewHostedIntegrationJobRow =
+  typeof hostedIntegrationJobs.$inferInsert;
+export type HostedIntegrationJobEventRow =
+  typeof hostedIntegrationJobEvents.$inferSelect;
+export type NewHostedIntegrationJobEventRow =
+  typeof hostedIntegrationJobEvents.$inferInsert;
+export type HostedIntegrationRunRow = typeof hostedIntegrationRuns.$inferSelect;
+export type NewHostedIntegrationRunRow =
+  typeof hostedIntegrationRuns.$inferInsert;
+export type HostedIntegrationArtifactRow =
+  typeof hostedIntegrationArtifacts.$inferSelect;
+export type NewHostedIntegrationArtifactRow =
+  typeof hostedIntegrationArtifacts.$inferInsert;
+export type HostedIntegrationExecutionLogRow =
+  typeof hostedIntegrationExecutionLogs.$inferSelect;
+export type NewHostedIntegrationExecutionLogRow =
+  typeof hostedIntegrationExecutionLogs.$inferInsert;
+export type HostedIntegrationFailureBucketRow =
+  typeof hostedIntegrationFailureBuckets.$inferSelect;
+export type NewHostedIntegrationFailureBucketRow =
+  typeof hostedIntegrationFailureBuckets.$inferInsert;
+export type HostedIntegrationFailureBucketEventRow =
+  typeof hostedIntegrationFailureBucketEvents.$inferSelect;
+export type NewHostedIntegrationFailureBucketEventRow =
+  typeof hostedIntegrationFailureBucketEvents.$inferInsert;
+export type HostedIntegrationIdempotencyRow =
+  typeof hostedIntegrationIdempotency.$inferSelect;
+export type NewHostedIntegrationIdempotencyRow =
+  typeof hostedIntegrationIdempotency.$inferInsert;
 export type MemberRow = typeof members.$inferSelect;
 export type NewMemberRow = typeof members.$inferInsert;
 export type AuthSessionRow = typeof authSessions.$inferSelect;

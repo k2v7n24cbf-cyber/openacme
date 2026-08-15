@@ -10,8 +10,9 @@ const dataDir =
 const requestedPort = positivePort(process.env["OPENACME_E2E_PORT"]) ?? 3466;
 const suffix = randomUUID().slice(0, 8);
 const familyId = `real-dogfood-${suffix}`;
-const scopeId = `${familyId}-local`;
+const environmentConfigId = `${familyId}-test_debug`;
 const consumerId = `real-dogfood-consumer-${suffix}`;
+const largeConsumerId = `real-dogfood-large-consumer-${suffix}`;
 const deniedId = `real-dogfood-denied-${suffix}`;
 const echoTool = `real_echo_${suffix}`;
 const largeTool = `real_large_${suffix}`;
@@ -76,6 +77,7 @@ async function main(): Promise<void> {
       },
       familyId,
       consumerId,
+      largeConsumerId,
       deniedId,
     }),
   );
@@ -259,26 +261,61 @@ async function runDogfood(): Promise<void> {
 
   await scenario("consumer-agent-invokes-promoted-tools", async () => {
     await configureScope();
-    const configScopes = await askForTool(
+    const environmentConfigs = await askForTool(
       "tool-developer",
-      promptForTool("hosted_integration_config_scope_list", {}),
-      "hosted_integration_config_scope_list",
+      promptForTool("hosted_integration_environment_config_list", {}),
+      "hosted_integration_environment_config_list",
     );
-    assertJsonIncludes(configScopes, scopeId);
+    assertJsonIncludes(environmentConfigs, environmentConfigId);
 
-    const configScope = await askForTool(
+    const environmentConfig = await askForTool(
       "tool-developer",
-      promptForTool("hosted_integration_config_scope_get", {
-        scope_id: scopeId,
+      promptForTool("hosted_integration_environment_config_get", {
+        family_id: familyId,
+        environment: "test_debug",
       }),
-      "hosted_integration_config_scope_get",
+      "hosted_integration_environment_config_get",
     );
-    expectObject(configScope, {
+    expectObject(environmentConfig, {
       ok: true,
-      configScope: { id: scopeId, familyId, environment: "test" },
+      environmentConfig: {
+        id: environmentConfigId,
+        familyId,
+        environment: "test_debug",
+      },
     });
 
-    await createConsumerAgent(consumerId, [echoTool, largeTool, flakyTool]);
+    await createConsumerAgent(consumerId, [echoTool, flakyTool]);
+    await createConsumerAgent(largeConsumerId, [largeTool]);
+
+    const help = await askForTool(
+      consumerId,
+      [
+        `Get usage help for \`${managedEchoTool}\` before calling it.`,
+        "Call `managed_tool_help` exactly once with this JSON argument:",
+        jsonBlock({
+          tool_name: managedEchoTool,
+          tool_detail: "summary",
+          include_examples: true,
+          parameters: [
+            {
+              name: "text",
+              detail: "summary",
+              include_examples: true,
+            },
+          ],
+        }),
+      ].join("\n"),
+      "managed_tool_help",
+    );
+    expectObject(help, {
+      ok: true,
+      help: {
+        tool_name: managedEchoTool,
+        tool_help: { summary: "Echoes text for real LLM dogfood." },
+      },
+    });
+    assertJsonIncludes(help, "text");
 
     const echo = await askForTool(
       consumerId,
@@ -295,7 +332,7 @@ async function runDogfood(): Promise<void> {
     });
 
     const large = await askForTool(
-      consumerId,
+      largeConsumerId,
       [
         `Use the hosted integration tool \`${managedLargeTool}\` with repeat 150.`,
         "Call the tool exactly once with the required JSON argument.",
@@ -325,7 +362,7 @@ async function runDogfood(): Promise<void> {
         runId: largeRunId,
         familyId,
         toolName: largeTool,
-        actorId: consumerId,
+        actorId: largeConsumerId,
         status: "succeeded",
       },
     });
@@ -566,8 +603,7 @@ async function runDogfood(): Promise<void> {
       promptForTool("hosted_integration_debug_run", {
         family_id: familyId,
         tool_name: flakyTool,
-        environment: "test",
-        config_scope_id: scopeId,
+        environment: "test_debug",
         args: { mode: "fail" },
         generation_id: repairGenerationId,
         operation_class: "read",
@@ -788,14 +824,17 @@ async function createConsumerAgent(id: string, tools: string[]): Promise<void> {
   await createAgent(id, "Real Dogfood Consumer", {
     role: "Consumes real LLM dogfood hosted integrations.",
     persona:
-      "When asked to use a hosted integration, call the requested tool exactly once with the requested arguments.",
-    tools: tools.map(managedToolName),
+      "When asked to use hosted integration help, call managed_tool_help exactly once. When asked to use a hosted integration, call the requested tool exactly once with the requested arguments.",
+    tools: ["managed_tool_help", ...tools.map(managedToolName)],
     hostedIntegrationBindings: tools.map((toolName) => ({
       familyId,
       toolName,
-      allowedConfigScopeIds: [scopeId],
-      defaultConfigScopeId: scopeId,
-      environment: "test",
+      allowedEnvironments: ["test_debug"],
+      defaultEnvironment: "test_debug",
+      generationPin: { type: "current" },
+      bindingKind: "agent",
+      updatedAt: new Date().toISOString(),
+      updatedBy: "human:real-dogfood",
     })),
   });
 }
@@ -822,19 +861,22 @@ async function createAgent(
 }
 
 async function configureScope(): Promise<void> {
-  const res = await req(`/api/hosted-integrations/config-scopes/${scopeId}`, {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      familyId,
-      environment: "test",
-      config: { endpoint: "https://real-dogfood.example.test" },
-      secrets: {},
-      updatedBy: "human:real-dogfood",
-    }),
-  });
+  const res = await req(
+    `/api/hosted-integrations/environment-configs/${familyId}/test_debug`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        config: { endpoint: "https://real-dogfood.example.test" },
+        secrets: {},
+        updatedBy: "human:real-dogfood",
+      }),
+    },
+  );
   if (res.status !== 200) {
-    throw new Error(`config scope failed ${res.status}: ${await res.text()}`);
+    throw new Error(
+      `environment config failed ${res.status}: ${await res.text()}`,
+    );
   }
 }
 
@@ -897,9 +939,11 @@ async function waitForRepairTask(
       const detail = (await getJson(`/api/tasks/${id}`)) as {
         task?: Record<string, unknown>;
       };
-      const body = detail.task?.body;
+      const taskDetail = detail.task;
+      if (!taskDetail) continue;
+      const body = taskDetail.body;
       if (typeof body === "string" && body.includes(marker)) {
-        return detail.task;
+        return taskDetail;
       }
     }
     if (Date.now() > deadline) {
@@ -1078,6 +1122,15 @@ function toolYaml(
     "      idempotency: idempotent",
     "      execution: sync",
     "      approval: none",
+    "    help:",
+    `      summary: ${description}`,
+    "      parameters:",
+    `        ${required}:`,
+    `          summary: Required ${type} argument for ${title}.`,
+    "          examples:",
+    `            - ${required}: ${type === "string" ? "real agent" : 3}`,
+    "      examples:",
+    `        - ${required}: ${type === "string" ? "real agent" : 3}`,
   ].join("\n");
 }
 

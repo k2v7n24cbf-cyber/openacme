@@ -221,9 +221,12 @@ describe("file-based AgentStore (folder + AGENT.md)", () => {
         {
           familyId: "qualys",
           toolName: "qualys_count_assets",
-          allowedConfigScopeIds: ["qualys-prod"],
-          defaultConfigScopeId: "qualys-prod",
-          environment: "prod",
+          allowedEnvironments: ["prod", "test_debug"],
+          defaultEnvironment: "prod",
+          generationPin: { type: "current" },
+          bindingKind: "agent",
+          updatedAt: "2026-08-14T10:00:00.000Z",
+          updatedBy: "human:alen",
         },
       ],
     };
@@ -237,6 +240,27 @@ describe("file-based AgentStore (folder + AGENT.md)", () => {
     expect(store.get("hosted")?.hostedIntegrationBindings).toEqual(
       agent.hostedIntegrationBindings,
     );
+  });
+
+  it("rejects legacy hosted integration binding fields", () => {
+    const store = createAgentStore(dir);
+    const allowedLegacyKey = ["allowedConfig", "Ids"].join("Scope");
+    const defaultLegacyKey = ["defaultConfig", "Id"].join("Scope");
+    const agent = {
+      ...makeAgent("legacy-hosted"),
+      tools: ["managed_qualys__qualys_count_assets"],
+      hostedIntegrationBindings: [
+        {
+          familyId: "qualys",
+          toolName: "qualys_count_assets",
+          [allowedLegacyKey]: ["qualys-prod"],
+          [defaultLegacyKey]: "qualys-prod",
+          environment: "prod",
+        },
+      ],
+    };
+
+    expect(() => store.upsert(agent)).toThrow();
   });
 
   it("persists agentAskEnabled in AGENT.md frontmatter", () => {

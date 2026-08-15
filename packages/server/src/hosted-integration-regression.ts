@@ -7,6 +7,7 @@ import {
   HostedIntegrationExampleSchema,
   HostedIntegrationPythonRuntime,
   JsonObjectSchema,
+  resolveHostedIntegrationExecutionConfig,
   type HostedIntegrationFailureBucket,
   type HostedIntegrationService,
 } from "@openacme/hosted-integrations";
@@ -113,14 +114,28 @@ export async function validateHostedIntegrationRegressionClose(input: {
     actorId: input.actorId,
     input: example.args,
   });
+  const environmentConfig = await input.service.environmentConfigs.getEnvironmentConfig(
+    input.bucket.familyId,
+    "test_debug",
+  );
+  const executionConfig = resolveHostedIntegrationExecutionConfig({
+    familyId: input.bucket.familyId,
+    environment: "test_debug",
+    generation,
+    policyDecision: { ok: true, resolvedEnvironment: "test_debug" },
+    environmentConfig,
+    executionPurpose: "regression",
+  });
+  if (!executionConfig.ok) return { ok: false, code: "regression_example_failed", runId: run.id };
   await input.service.gateway.executionLogs.startLog({
     runId: run.id,
     familyId: input.bucket.familyId,
     toolName: example.toolName,
     generationId: generation.id,
     actorId: input.actorId,
-    configScopeId: "regression",
-    configRevision: 1,
+    environmentConfigId: executionConfig.environmentConfigId,
+    configRevision: executionConfig.configRevision,
+    executionPurpose: executionConfig.executionPurpose,
     sanitizedArgs: JsonObjectSchema.parse(example.args),
     status: "running",
     startedAt: run.startedAt,
@@ -140,8 +155,12 @@ export async function validateHostedIntegrationRegressionClose(input: {
       runId: run.id,
       familyHome,
       runDir,
-      config: {},
-      secrets: {},
+      config: executionConfig.config,
+      secrets: executionConfig.secretsEnvironmentConfigId
+        ? await input.service.secrets.readSecretsForRuntime({
+            environmentConfigId: executionConfig.secretsEnvironmentConfigId,
+          })
+        : {},
     },
   });
   if (!runtimeResult.ok) {

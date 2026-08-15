@@ -15,9 +15,9 @@ import {
   type HostedIntegrationFamilySummary,
 } from "./catalog.js";
 import {
-  createFileHostedIntegrationConfigScopeStore,
-  type HostedIntegrationConfigScopeStore,
-} from "./config-scopes.js";
+  createFileHostedIntegrationEnvironmentConfigStore,
+  type HostedIntegrationEnvironmentConfigStore,
+} from "./environment-configs.js";
 import {
   createFileHostedIntegrationDisablementStore,
   type HostedIntegrationDisablementStore,
@@ -74,6 +74,23 @@ import {
   createFileHostedIntegrationDraftValidator,
   type HostedIntegrationDraftValidator,
 } from "./validation.js";
+import {
+  createDbHostedIntegrationApprovalStore,
+  createDbHostedIntegrationArtifactStore,
+  createDbHostedIntegrationDisablementStore,
+  createDbHostedIntegrationDraftStore,
+  createDbHostedIntegrationEnvironmentConfigStore,
+  createDbHostedIntegrationExecutionLogStore,
+  createDbHostedIntegrationFailureBucketStore,
+  createDbHostedIntegrationGenerationStore,
+  createDbHostedIntegrationIdempotencyStore,
+  createDbHostedIntegrationJobStore,
+  createDbHostedIntegrationLockStore,
+  createDbHostedIntegrationRetentionSweeper,
+  createDbHostedIntegrationSecretStore,
+  createDbHostedIntegrationSourceFileStore,
+  type HostedIntegrationSqlDatabase,
+} from "./db-store.js";
 
 export type HostedIntegrationManagementFamilySummary =
   | HostedIntegrationFamilySummary
@@ -86,7 +103,7 @@ export interface HostedIntegrationService {
   readonly examples: HostedIntegrationExampleRegistry;
   readonly validator: HostedIntegrationDraftValidator;
   readonly proposedFamilies: HostedIntegrationProposedFamilyManager;
-  readonly configScopes: HostedIntegrationConfigScopeStore;
+  readonly environmentConfigs: HostedIntegrationEnvironmentConfigStore;
   readonly secrets: HostedIntegrationSecretStore;
   readonly approvals: HostedIntegrationApprovalStore;
   readonly disablements: HostedIntegrationDisablementStore;
@@ -114,6 +131,13 @@ export interface FileHostedIntegrationServiceOptions extends FileHostedIntegrati
   ) => void | Promise<void>;
 }
 
+export interface DbHostedIntegrationServiceOptions
+  extends FileHostedIntegrationServiceOptions {
+  db: HostedIntegrationSqlDatabase;
+  now?: () => Date;
+  createId?: () => string;
+}
+
 export function createFileHostedIntegrationService(
   options: FileHostedIntegrationServiceOptions,
 ): HostedIntegrationService {
@@ -137,7 +161,7 @@ export function createFileHostedIntegrationService(
     lockStore: locks,
     draftStore: drafts,
   });
-  const configScopes = createFileHostedIntegrationConfigScopeStore({
+  const environmentConfigs = createFileHostedIntegrationEnvironmentConfigStore({
     ...options,
     catalog,
   });
@@ -156,7 +180,7 @@ export function createFileHostedIntegrationService(
   const gateway = createFileHostedIntegrationGateway({
     ...options,
     catalog,
-    configScopes,
+    environmentConfigs,
     secrets,
     generations,
     artifacts,
@@ -172,7 +196,82 @@ export function createFileHostedIntegrationService(
     examples,
     validator,
     proposedFamilies,
-    configScopes,
+    environmentConfigs,
+    secrets,
+    approvals,
+    disablements,
+    generations,
+    jobs,
+    artifacts,
+    failureBuckets,
+    retention,
+    gateway,
+  });
+}
+
+export function createDbHostedIntegrationService(
+  options: DbHostedIntegrationServiceOptions,
+): HostedIntegrationService {
+  const catalog = createFileHostedIntegrationCatalog(options);
+  const locks = createDbHostedIntegrationLockStore(options);
+  const sourceFiles = createDbHostedIntegrationSourceFileStore(options);
+  const drafts = createDbHostedIntegrationDraftStore({
+    ...options,
+    lockStore: locks,
+  });
+  const examples = createFileHostedIntegrationExampleRegistry({
+    draftStore: drafts,
+  });
+  const validator = createFileHostedIntegrationDraftValidator({
+    draftStore: drafts,
+    catalog,
+  });
+  const proposedFamilies = createFileHostedIntegrationProposedFamilyManager({
+    ...options,
+    catalog,
+    lockStore: locks,
+    draftStore: drafts,
+  });
+  const environmentConfigs = createDbHostedIntegrationEnvironmentConfigStore({
+    ...options,
+    catalog,
+  });
+  const secrets = createDbHostedIntegrationSecretStore(options);
+  const approvals = createDbHostedIntegrationApprovalStore(options);
+  const disablements = createDbHostedIntegrationDisablementStore(options);
+  const failureBuckets = createDbHostedIntegrationFailureBucketStore(options);
+  const generations = createDbHostedIntegrationGenerationStore({
+    ...options,
+    draftStore: drafts,
+    onRegistryRefresh: options.onRegistryRefresh,
+  });
+  const jobs = createDbHostedIntegrationJobStore(options);
+  const artifacts = createDbHostedIntegrationArtifactStore(options);
+  const retention = createDbHostedIntegrationRetentionSweeper(options);
+  const executionLogs = createDbHostedIntegrationExecutionLogStore(options);
+  const idempotency = createDbHostedIntegrationIdempotencyStore(options);
+  const gateway = createFileHostedIntegrationGateway({
+    ...options,
+    catalog,
+    environmentConfigs,
+    secrets,
+    generations,
+    artifacts,
+    disablements,
+    executionLogs,
+    failureBuckets,
+    idempotency,
+    onFailureBucketRecorded: options.onFailureBucketRecorded,
+  });
+  return new FileHostedIntegrationService({
+    catalog,
+    locks,
+    drafts,
+    sourceFiles,
+    examples,
+    validator,
+    proposedFamilies,
+    environmentConfigs,
     secrets,
     approvals,
     disablements,
@@ -192,7 +291,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
   readonly examples: HostedIntegrationExampleRegistry;
   readonly validator: HostedIntegrationDraftValidator;
   readonly proposedFamilies: HostedIntegrationProposedFamilyManager;
-  readonly configScopes: HostedIntegrationConfigScopeStore;
+  readonly environmentConfigs: HostedIntegrationEnvironmentConfigStore;
   readonly secrets: HostedIntegrationSecretStore;
   readonly approvals: HostedIntegrationApprovalStore;
   readonly disablements: HostedIntegrationDisablementStore;
@@ -213,7 +312,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     examples: HostedIntegrationExampleRegistry;
     validator: HostedIntegrationDraftValidator;
     proposedFamilies: HostedIntegrationProposedFamilyManager;
-    configScopes: HostedIntegrationConfigScopeStore;
+    environmentConfigs: HostedIntegrationEnvironmentConfigStore;
     secrets: HostedIntegrationSecretStore;
     approvals: HostedIntegrationApprovalStore;
     disablements: HostedIntegrationDisablementStore;
@@ -231,7 +330,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     this.examples = parts.examples;
     this.validator = parts.validator;
     this.proposedFamilies = parts.proposedFamilies;
-    this.configScopes = parts.configScopes;
+    this.environmentConfigs = parts.environmentConfigs;
     this.secrets = parts.secrets;
     this.approvals = parts.approvals;
     this.disablements = parts.disablements;

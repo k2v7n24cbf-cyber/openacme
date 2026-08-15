@@ -13,12 +13,12 @@ import { isNodeError, safePathSegment } from "./file-access.js";
 const SecretValuesSchema = z.record(z.string(), z.string());
 
 export interface HostedIntegrationSecretMetadata {
-  scopeId: string;
+  environmentConfigId: string;
   secrets: Record<string, { configured: boolean }>;
 }
 
 export interface WriteHostedIntegrationHumanSecretsRequest {
-  scopeId: string;
+  environmentConfigId: string;
   secrets: Record<string, string>;
   updatedBy: string;
 }
@@ -29,12 +29,12 @@ export type WriteHostedIntegrationHumanSecretsResult = {
 };
 
 export interface GetHostedIntegrationSecretMetadataRequest {
-  scopeId: string;
+  environmentConfigId: string;
   secretNames?: string[];
 }
 
 export interface ReadHostedIntegrationRuntimeSecretsRequest {
-  scopeId: string;
+  environmentConfigId: string;
 }
 
 export interface HostedIntegrationSecretStore {
@@ -59,9 +59,7 @@ export function createFileHostedIntegrationSecretStore(
   return new FileHostedIntegrationSecretStore(options.dataDir);
 }
 
-class FileHostedIntegrationSecretStore
-  implements HostedIntegrationSecretStore
-{
+class FileHostedIntegrationSecretStore implements HostedIntegrationSecretStore {
   private readonly secretsDir: string;
 
   constructor(dataDir: string) {
@@ -71,23 +69,26 @@ class FileHostedIntegrationSecretStore
   async writeHumanOwnedSecrets(
     request: WriteHostedIntegrationHumanSecretsRequest,
   ): Promise<WriteHostedIntegrationHumanSecretsResult> {
-    assertNonEmpty("scopeId", request.scopeId);
+    assertNonEmpty("environmentConfigId", request.environmentConfigId);
     assertNonEmpty("updatedBy", request.updatedBy);
-    const secrets = SecretValuesSchema.parse(request.secrets);
-    await this.writeSecretValues(request.scopeId, secrets);
+    const secrets = {
+      ...(await this.readSecretValues(request.environmentConfigId)),
+      ...SecretValuesSchema.parse(request.secrets),
+    };
+    await this.writeSecretValues(request.environmentConfigId, secrets);
     return {
       ok: true,
-      metadata: metadataFromSecrets(request.scopeId, secrets),
+      metadata: metadataFromSecrets(request.environmentConfigId, secrets),
     };
   }
 
   async getSecretMetadata(
     request: GetHostedIntegrationSecretMetadataRequest,
   ): Promise<HostedIntegrationSecretMetadata> {
-    const secrets = await this.readSecretValues(request.scopeId);
+    const secrets = await this.readSecretValues(request.environmentConfigId);
     if (request.secretNames) {
       return {
-        scopeId: request.scopeId,
+        environmentConfigId: request.environmentConfigId,
         secrets: Object.fromEntries(
           request.secretNames.map((name) => [
             name,
@@ -96,22 +97,22 @@ class FileHostedIntegrationSecretStore
         ),
       };
     }
-    return metadataFromSecrets(request.scopeId, secrets);
+    return metadataFromSecrets(request.environmentConfigId, secrets);
   }
 
   async readSecretsForRuntime(
     request: ReadHostedIntegrationRuntimeSecretsRequest,
   ): Promise<Record<string, string>> {
-    return this.readSecretValues(request.scopeId);
+    return this.readSecretValues(request.environmentConfigId);
   }
 
   private async readSecretValues(
-    scopeId: string,
+    environmentConfigId: string,
   ): Promise<Record<string, string>> {
-    assertNonEmpty("scopeId", scopeId);
+    assertNonEmpty("environmentConfigId", environmentConfigId);
     try {
       return SecretValuesSchema.parse(
-        JSON.parse(await readFile(this.secretPath(scopeId), "utf-8")),
+        JSON.parse(await readFile(this.secretPath(environmentConfigId), "utf-8")),
       );
     } catch (error) {
       if (isNodeError(error) && error.code === "ENOENT") return {};
@@ -120,12 +121,12 @@ class FileHostedIntegrationSecretStore
   }
 
   private async writeSecretValues(
-    scopeId: string,
+    environmentConfigId: string,
     secrets: Record<string, string>,
   ): Promise<void> {
     await mkdir(this.secretsDir, { recursive: true, mode: 0o700 });
     await bestEffortChmod(this.secretsDir, 0o700);
-    const filePath = this.secretPath(scopeId);
+    const filePath = this.secretPath(environmentConfigId);
     const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
     try {
       await writeFile(tmpPath, `${JSON.stringify(secrets, null, 2)}\n`, {
@@ -141,20 +142,20 @@ class FileHostedIntegrationSecretStore
     }
   }
 
-  private secretPath(scopeId: string): string {
+  private secretPath(environmentConfigId: string): string {
     return path.join(
       this.secretsDir,
-      `${safePathSegment("scopeId", scopeId)}.json`,
+      `${safePathSegment("environmentConfigId", environmentConfigId)}.json`,
     );
   }
 }
 
 function metadataFromSecrets(
-  scopeId: string,
+  environmentConfigId: string,
   secrets: Record<string, string>,
 ): HostedIntegrationSecretMetadata {
   return {
-    scopeId,
+    environmentConfigId,
     secrets: Object.fromEntries(
       Object.keys(secrets)
         .sort((a, b) => a.localeCompare(b))

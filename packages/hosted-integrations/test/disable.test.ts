@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  createFileHostedIntegrationConfigScopeStore,
   createFileHostedIntegrationDisablementStore,
   createFileHostedIntegrationDraftStore,
+  createFileHostedIntegrationEnvironmentConfigStore,
   createFileHostedIntegrationGateway,
   createFileHostedIntegrationGenerationStore,
   createFileHostedIntegrationLockStore,
@@ -74,8 +74,11 @@ describe("hosted integration operational disable policy", () => {
     expect(runtime.calls).toEqual([]);
   });
 
-  it("blocks disabled config scopes before runtime dispatch", async () => {
-    await disable({ level: "config_scope", scopeId: "qualys-test" });
+  it("blocks disabled environment configs before runtime dispatch", async () => {
+    await disable({
+      level: "environment_config",
+      environmentConfigId: "qualys-test_debug",
+    });
 
     const result = await gateway().invoke(allowedInvocation());
 
@@ -83,7 +86,12 @@ describe("hosted integration operational disable policy", () => {
       ok: false,
       error: {
         code: "operationally_disabled",
-        details: { target: { level: "config_scope", scopeId: "qualys-test" } },
+        details: {
+          target: {
+            level: "environment_config",
+            environmentConfigId: "qualys-test_debug",
+          },
+        },
       },
     });
     expect(result).not.toHaveProperty("runId");
@@ -141,16 +149,19 @@ function allowedInvocation() {
     actor,
     familyId: "qualys",
     toolName: "qualys_count_assets",
-    environment: "test",
+    environment: "test_debug",
     args: {},
-    bindings: [
+    hostedToolBindings: [
       {
         agentId: "agent:analyst",
         familyId: "qualys",
         toolName: "qualys_count_assets",
-        allowedConfigScopeIds: ["qualys-test"],
-        defaultConfigScopeId: "qualys-test",
-        environment: "test",
+        allowedEnvironments: ["test_debug"],
+        defaultEnvironment: "test_debug",
+        generationPin: { type: "current" },
+        bindingKind: "agent",
+        updatedAt: "2026-08-14T10:00:00.000Z",
+        updatedBy: "human:test",
       },
     ],
   };
@@ -204,12 +215,11 @@ async function seedPromotedGeneration(): Promise<string> {
 }
 
 async function seedConfig(): Promise<void> {
-  await createFileHostedIntegrationConfigScopeStore({
+  await createFileHostedIntegrationEnvironmentConfigStore({
     dataDir,
-  }).upsertConfigScope({
-    scopeId: "qualys-test",
+  }).upsertEnvironmentConfig({
     familyId: "qualys",
-    environment: "test",
+    environment: "test_debug",
     config: {},
     secrets: { apiToken: { configured: true } },
     updatedBy: "human:operator",
@@ -217,7 +227,7 @@ async function seedConfig(): Promise<void> {
   await createFileHostedIntegrationSecretStore({
     dataDir,
   }).writeHumanOwnedSecrets({
-    scopeId: "qualys-test",
+    environmentConfigId: "qualys-test_debug",
     secrets: { apiToken: "token_123" },
     updatedBy: "human:operator",
   });
@@ -241,6 +251,10 @@ runtime:
     network: denied
   dependencyPolicy:
     installDuringInvocation: false
+runtimeConfig:
+  requiredConfigKeys: []
+  requiredSecretKeys:
+    - apiToken
 tools:
   - name: qualys_count_assets
     title: Count assets

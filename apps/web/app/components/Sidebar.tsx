@@ -8,6 +8,7 @@ import {
   Compass,
   Gauge,
   ListChecks,
+  Plug,
   Settings,
   ScrollText,
   Target,
@@ -54,6 +55,11 @@ const navItems = [
     icon: ScrollText,
   },
   { link: linkOptions({ to: "/skills" }), label: "Skills", icon: BookOpen },
+  {
+    link: linkOptions({ to: "/hosted-tools" }),
+    label: "Hosted Tools",
+    icon: Plug,
+  },
   { link: linkOptions({ to: "/usage" }), label: "Usage", icon: Gauge },
   { link: linkOptions({ to: "/settings" }), label: "Settings", icon: Settings },
 ];

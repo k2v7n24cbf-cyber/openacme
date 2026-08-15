@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  createFileHostedIntegrationConfigScopeStore,
   createFileHostedIntegrationDraftStore,
+  createFileHostedIntegrationEnvironmentConfigStore,
   createFileHostedIntegrationGateway,
   createFileHostedIntegrationGenerationStore,
   createFileHostedIntegrationLockStore,
@@ -62,7 +62,7 @@ describe("hosted integration execution logs", () => {
       toolName: "qualys_count_assets",
       generationId: generation.id,
       actorId: "agent:analyst",
-      configScopeId: "qualys-test",
+      environmentConfigId: "qualys-test_debug",
       configRevision: 1,
       status: "succeeded",
       sanitizedArgs: {
@@ -142,16 +142,19 @@ function allowedInvocation(
     actor,
     familyId: "qualys",
     toolName: "qualys_count_assets",
-    environment: "test",
+    environment: "test_debug",
     args: { query: "severity:5" },
-    bindings: [
+    hostedToolBindings: [
       {
         agentId: "agent:analyst",
         familyId: "qualys",
         toolName: "qualys_count_assets",
-        allowedConfigScopeIds: ["qualys-test"],
-        defaultConfigScopeId: "qualys-test",
-        environment: "test",
+        allowedEnvironments: ["test_debug"],
+        defaultEnvironment: "test_debug",
+        generationPin: { type: "current" },
+        bindingKind: "agent",
+        updatedAt: "2026-08-14T10:00:00.000Z",
+        updatedBy: "human:test",
       },
     ],
     ...overrides,
@@ -213,13 +216,12 @@ async function seedPromotedGeneration() {
 }
 
 async function seedConfig(): Promise<void> {
-  await createFileHostedIntegrationConfigScopeStore({
+  await createFileHostedIntegrationEnvironmentConfigStore({
     dataDir,
     now: () => new Date(nowMs),
-  }).upsertConfigScope({
-    scopeId: "qualys-test",
+  }).upsertEnvironmentConfig({
     familyId: "qualys",
-    environment: "test",
+    environment: "test_debug",
     config: { endpoint: "https://qualys.example.test" },
     secrets: { apiToken: { configured: true } },
     updatedBy: "human:operator",
@@ -227,7 +229,7 @@ async function seedConfig(): Promise<void> {
   await createFileHostedIntegrationSecretStore({
     dataDir,
   }).writeHumanOwnedSecrets({
-    scopeId: "qualys-test",
+    environmentConfigId: "qualys-test_debug",
     secrets: { apiToken: "token_123" },
     updatedBy: "human:operator",
   });
@@ -258,6 +260,11 @@ runtime:
     network: denied
   dependencyPolicy:
     installDuringInvocation: false
+runtimeConfig:
+  requiredConfigKeys:
+    - endpoint
+  requiredSecretKeys:
+    - apiToken
 tools:
   - name: qualys_count_assets
     title: Count assets

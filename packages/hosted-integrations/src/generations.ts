@@ -250,6 +250,7 @@ class FileHostedIntegrationGenerationStore implements HostedIntegrationGeneratio
         promotedAt: now,
         promotedBy: request.promotedBy,
         runtime: manifest?.runtime,
+        runtimeConfig: manifest?.runtimeConfig,
         tools: manifest?.tools,
         dependencyResolution: dependencyResolution?.dependencyResolution,
         provenance: buildHostedIntegrationGenerationProvenance({

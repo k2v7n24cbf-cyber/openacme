@@ -73,6 +73,26 @@ describe("hosted integration failure bucket dedupe", () => {
     await expect(store.listBuckets()).resolves.toEqual([]);
   });
 
+  it("does not create repair buckets for caller argument failures", async () => {
+    const store = createStore();
+
+    await expect(
+      store.recordFailure({
+        log: failedLog("run_1", {
+          error: {
+            code: "bad_arguments",
+            message: "invalid filter field",
+          },
+        }),
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: "not_owner_actionable",
+      classification: "platform_policy",
+    });
+    await expect(store.listBuckets()).resolves.toEqual([]);
+  });
+
   it("can classify target timeouts as non-owner-actionable by policy", async () => {
     const store = createStore({ ownerActionableTimeouts: false });
 
@@ -109,7 +129,7 @@ function failedLog(
     toolName: "qualys_count_assets",
     generationId: "gen_1",
     actorId: "agent:analyst",
-    configScopeId: "qualys-test",
+    environmentConfigId: "qualys-test_debug",
     configRevision: 1,
     sanitizedArgs: {
       query: "severity:5",

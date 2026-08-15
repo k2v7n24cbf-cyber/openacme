@@ -7,6 +7,19 @@ export type HostedIntegrationFamilyId = z.infer<
   typeof HostedIntegrationFamilyIdSchema
 >;
 
+export const HostedIntegrationEnvironmentSchema = z.enum([
+  "prod",
+  "test_debug",
+]);
+export type HostedIntegrationEnvironment = z.infer<
+  typeof HostedIntegrationEnvironmentSchema
+>;
+
+export const HOSTED_INTEGRATION_ENVIRONMENTS = [
+  "prod",
+  "test_debug",
+] as const satisfies readonly HostedIntegrationEnvironment[];
+
 export const HostedIntegrationToolNameSchema = z
   .string()
   .regex(/^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/);
@@ -172,6 +185,7 @@ export const HostedIntegrationRuntimeSettingsSchema = z
   .object({
     language: z.literal("python"),
     entrypoint: z.string().min(1),
+    handlerDispatch: z.enum(["derived", "legacy_call_tool"]).default("derived"),
     defaultTimeoutMs: z.number().int().positive(),
     inlineResultTokenLimit: z.number().int().positive(),
     maxConcurrency: z.number().int().positive(),
@@ -184,6 +198,58 @@ export type HostedIntegrationRuntimeSettings = z.infer<
   typeof HostedIntegrationRuntimeSettingsSchema
 >;
 
+export const HostedIntegrationRuntimeConfigContractSchema = z
+  .object({
+    requiredConfigKeys: z.array(z.string().min(1)).default([]),
+    requiredSecretKeys: z.array(z.string().min(1)).default([]),
+  })
+  .strict();
+export type HostedIntegrationRuntimeConfigContract = z.infer<
+  typeof HostedIntegrationRuntimeConfigContractSchema
+>;
+
+export const HostedIntegrationHookJustificationsSchema = z
+  .object({
+    authenticate: z.string().min(1).optional(),
+    before_tool_call: z.string().min(1).optional(),
+    after_tool_call: z.string().min(1).optional(),
+  })
+  .strict()
+  .default({});
+export type HostedIntegrationHookJustifications = z.infer<
+  typeof HostedIntegrationHookJustificationsSchema
+>;
+
+export const HostedIntegrationHelpParameterSchema = z
+  .object({
+    summary: z.string().min(1).optional(),
+    full: z.string().min(1).optional(),
+    shape: JsonObjectSchema.optional(),
+    rules: z.array(z.string().min(1)).default([]),
+    examples: z.array(JsonValueSchema).default([]),
+  })
+  .strict();
+export type HostedIntegrationHelpParameter = z.infer<
+  typeof HostedIntegrationHelpParameterSchema
+>;
+
+export const HostedIntegrationToolHelpSchema = z
+  .object({
+    summary: z.string().min(1).optional(),
+    full: z.string().min(1).optional(),
+    whenToUse: z.array(z.string().min(1)).default([]),
+    whenNotToUse: z.array(z.string().min(1)).default([]),
+    parameters: z
+      .record(z.string().min(1), HostedIntegrationHelpParameterSchema)
+      .default({}),
+    examples: z.array(JsonValueSchema).default([]),
+    noExampleJustification: z.string().min(1).optional(),
+  })
+  .strict();
+export type HostedIntegrationToolHelp = z.infer<
+  typeof HostedIntegrationToolHelpSchema
+>;
+
 export const HostedIntegrationToolSpecSchema = z
   .object({
     name: HostedIntegrationToolNameSchema,
@@ -194,6 +260,7 @@ export const HostedIntegrationToolSpecSchema = z
     classification: HostedIntegrationToolClassificationSchema,
     cache: HostedIntegrationToolCacheSchema.optional(),
     runtime: HostedIntegrationRuntimeSettingsSchema.partial().optional(),
+    help: HostedIntegrationToolHelpSchema.optional(),
   })
   .strict();
 export type HostedIntegrationToolSpec = z.infer<
@@ -206,6 +273,8 @@ export const FamilyManifestSchema = z
     name: z.string().min(1),
     version: z.number().int().positive(),
     runtime: HostedIntegrationRuntimeSettingsSchema,
+    runtimeConfig: HostedIntegrationRuntimeConfigContractSchema.optional(),
+    hookJustifications: HostedIntegrationHookJustificationsSchema,
     tools: z.array(HostedIntegrationToolSpecSchema).min(1),
   })
   .strict();
@@ -263,6 +332,7 @@ export const HostedIntegrationGenerationSchema = z
     promotedAt: IsoTimestampSchema,
     promotedBy: z.string().min(1),
     runtime: HostedIntegrationRuntimeSettingsSchema.optional(),
+    runtimeConfig: HostedIntegrationRuntimeConfigContractSchema.optional(),
     tools: z.array(HostedIntegrationToolSpecSchema).optional(),
     dependencyResolution:
       HostedIntegrationDependencyResolutionSchema.optional(),
@@ -344,12 +414,12 @@ export type HostedIntegrationGenerationProvenance = z.infer<
   typeof HostedIntegrationGenerationProvenanceSchema
 >;
 
-export const HostedIntegrationConfigScopeSchema = z
+export const HostedIntegrationEnvironmentConfigSchema = z
   .object({
     id: z.string().min(1),
     familyId: HostedIntegrationFamilyIdSchema,
     revision: z.number().int().positive(),
-    environment: z.string().min(1),
+    environment: HostedIntegrationEnvironmentSchema,
     config: JsonObjectSchema,
     secrets: z.record(
       z.string(),
@@ -362,9 +432,19 @@ export const HostedIntegrationConfigScopeSchema = z
     updatedAt: IsoTimestampSchema,
     updatedBy: z.string().min(1),
   })
-  .strict();
-export type HostedIntegrationConfigScope = z.infer<
-  typeof HostedIntegrationConfigScopeSchema
+  .strict()
+  .superRefine((value, ctx) => {
+    const expectedId = `${value.familyId}-${value.environment}`;
+    if (value.id !== expectedId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["id"],
+        message: `environment config id must be ${expectedId}`,
+      });
+    }
+  });
+export type HostedIntegrationEnvironmentConfig = z.infer<
+  typeof HostedIntegrationEnvironmentConfigSchema
 >;
 
 export const HostedIntegrationExampleCategorySchema = z.enum([
@@ -436,18 +516,48 @@ export const HostedIntegrationJobSchema = z
   .strict();
 export type HostedIntegrationJob = z.infer<typeof HostedIntegrationJobSchema>;
 
-export const HostedIntegrationPolicyBindingSchema = z
+export const HostedIntegrationGenerationPinSchema = z.discriminatedUnion(
+  "type",
+  [
+    z.object({ type: z.literal("current") }).strict(),
+    z
+      .object({
+        type: z.literal("generation"),
+        generationId: z.string().min(1),
+      })
+      .strict(),
+  ],
+);
+export type HostedIntegrationGenerationPin = z.infer<
+  typeof HostedIntegrationGenerationPinSchema
+>;
+
+export const HostedIntegrationHostedToolBindingSchema = z
   .object({
     agentId: z.string().min(1),
     familyId: HostedIntegrationFamilyIdSchema,
     toolName: HostedIntegrationToolNameSchema,
-    allowedConfigScopeIds: z.array(z.string().min(1)).min(1),
-    defaultConfigScopeId: z.string().min(1).optional(),
-    environment: z.string().min(1),
+    allowedEnvironments: z.array(HostedIntegrationEnvironmentSchema).min(1),
+    defaultEnvironment: HostedIntegrationEnvironmentSchema,
+    generationPin: HostedIntegrationGenerationPinSchema,
+    bindingKind: z.enum(["agent", "internal"]),
+    purpose: z.string().min(1).optional(),
+    bindingNote: z.string().min(1).optional(),
+    updatedAt: IsoTimestampSchema,
+    updatedBy: z.string().min(1),
   })
-  .strict();
-export type HostedIntegrationPolicyBinding = z.infer<
-  typeof HostedIntegrationPolicyBindingSchema
+  .strict()
+  .superRefine((value, ctx) => {
+    if (!value.allowedEnvironments.includes(value.defaultEnvironment)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["defaultEnvironment"],
+        message: "defaultEnvironment must be in allowedEnvironments",
+      });
+    }
+  });
+export type HostedIntegrationHostedToolBinding = z.infer<
+  typeof HostedIntegrationHostedToolBindingSchema
 >;
 
 export const HostedIntegrationFailureBucketSchema = z

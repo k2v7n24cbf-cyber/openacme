@@ -45,7 +45,7 @@ creating, editing, validating, promoting, debugging, repairing, migrating, or
 cutting over hosted integration tool families, read
 `$hosted-integrations-development` before planning or changing anything. Keep
 hosted integration lifecycle rules, management tool sequences, failure-bucket
-repair, promotion gates, config-scope boundaries, and secret-handling guidance
+repair, promotion gates, environment config boundaries, and secret-handling guidance
 in that skill rather than duplicating them here.
 
 The hosted integrations development skill is intentionally a separate skill:

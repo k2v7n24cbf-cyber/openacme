@@ -25,9 +25,9 @@ Classify the request before editing:
 - Bug or production failure: inspect sanitized run and failure-bucket evidence,
   reproduce with a debug run or regression example, patch, validate, promote,
   then close the bucket with regression evidence.
-- Config issue: inspect sanitized config-scope metadata only. Report the missing
-  or invalid config key/scope and stop; do not patch source to compensate for
-  missing credentials.
+- Config issue: inspect sanitized environment config readiness and metadata
+  only. Report the missing or invalid environment/config key and stop; do not
+  patch source to compensate for missing credentials.
 - Question or investigation: inspect family, generation, examples, logs, or
   artifacts and answer from sanitized evidence. Do not acquire a lock unless a
   source change is actually needed.
@@ -51,8 +51,9 @@ Classify the request before editing:
 - Acquire a family lock before editing. Respect the lock owner and lock TTL; if
   a lock is held by another actor, stop and report the holder and expiry.
 - Do not read, request, or return secret values. Human operators own secret
-  values. You may inspect sanitized config-scope metadata and explain which
-  config key blocks validation.
+  values. You may inspect sanitized environment config metadata and readiness
+  blockers, then explain which environment/config key blocks validation or
+  publish.
 - Do not bypass access policy. A hosted tool being visible in the catalog does
   not mean the current agent can call it; Agent Settings owns per-agent tool
   access.
@@ -67,7 +68,8 @@ Classify the request before editing:
 Use the management tools by intent:
 
 - Discover families/source: `hosted_integration_family_list`,
-  `hosted_integration_source_read`.
+  `hosted_integration_source_read`, and tool-focused
+  `hosted_integration_source_view`.
 - Create or prepare work: `hosted_integration_family_create`,
   `hosted_integration_lock_acquire`, `hosted_integration_lock_renew`,
   `hosted_integration_draft_create`.
@@ -80,8 +82,11 @@ Use the management tools by intent:
 - Inspect or rollback generations: `hosted_integration_generation_list`,
   `hosted_integration_generation_get`,
   `hosted_integration_generation_rollback`.
-- Inspect config metadata: `hosted_integration_config_scope_list`,
-  `hosted_integration_config_scope_get`.
+- Inspect environment config metadata:
+  `hosted_integration_environment_config_list`,
+  `hosted_integration_environment_config_get`.
+- Inspect lifecycle readiness before acting:
+  `hosted_integration_readiness_get`.
 - Investigate runs: `hosted_integration_debug_run`,
   `hosted_integration_run_get`, `hosted_integration_artifact_get`.
 - Repair buckets: `hosted_integration_failure_bucket_list`,
@@ -91,8 +96,10 @@ Use the management tools by intent:
 
 ## Request to promotion lifecycle
 
-1. Discover the current state with `hosted_integration_family_list` and
-   `hosted_integration_source_read`.
+1. Discover the current state with `hosted_integration_family_list`,
+   `hosted_integration_source_read`, and `hosted_integration_source_view` when
+   you need one tool handler plus relevant hooks/helpers instead of a raw file
+   window.
 2. Acquire the family lock with enough TTL for the edit window. Renew it before
    long validation runs if needed.
 3. Create a draft from the current generation. Keep edits scoped to the requested
@@ -107,9 +114,10 @@ Use the management tools by intent:
    Promotion requires at least one safe example for every promoted tool.
 6. Run `hosted_integration_validate`, then run safe examples with
    `hosted_integration_example_run`.
-7. Promote only when validation and required examples pass. Non-destructive
-   changes can be promoted by the Tool Developer Agent; destructive changes stop
-   at the human approval boundary.
+7. Inspect publish readiness with `hosted_integration_readiness_get`. Promote
+   only when validation, required examples, and publish readiness pass.
+   Non-destructive changes can be promoted by the Tool Developer Agent;
+   destructive changes stop at the human approval boundary.
 8. Release the lock once the draft is promoted or intentionally abandoned.
 
 Before promotion, check:
@@ -120,6 +128,7 @@ Before promotion, check:
 - Any reproduced bug has a regression example.
 - `hosted_integration_validate` passed after the final patch.
 - Required safe examples passed after the final patch.
+- Publish readiness is `ready`, or the blocker is explicitly reported.
 - Tool classification is accurate: read, write, destructive, live, cached,
   sync, sync execution, async execution, approval mode.
 - Runtime settings are family-level unless a tool-specific override is
@@ -134,7 +143,8 @@ and safe to run in the hosted integration runtime.
 
 - Add a smoke example for each new tool.
 - Add a regression example before fixing a reproducible failure.
-- Include representative config-scope metadata, but never include secret values.
+- Include representative environment config metadata, but never include secret
+  values.
 - Prefer deterministic assertions. When an external service is inherently
   variable, assert shape, status, masking, and error taxonomy rather than an
   exact volatile payload.
@@ -203,12 +213,36 @@ do not add cancellation semantics to synchronous calls.
   and execution log capture are platform responsibilities. Tool code should
   still avoid returning secrets or unnecessary large payloads.
 
-## Secrets and config
+## Readiness, Secrets, And Config
 
-Use config-scope tools to inspect what a family expects and whether a required
-key is present. Do not inspect backing `.env`, token, auth, or secret files. If a
-missing or invalid secret blocks progress, return the config scope and key name
-that a human needs to update.
+Use `hosted_integration_readiness_get` before promote, debug, or repair actions
+when the next step depends on environment config, hosted-tool binding, publish,
+debug, or invocation readiness. Treat readiness reads as advisory
+snapshots: the API will recheck the same resolver before mutating state.
+
+Use environment config tools to inspect what a family expects and whether a
+required key is present. Do not inspect backing `.env`, token, auth, or secret
+files. If a missing or invalid secret blocks progress, return the environment
+and key name that a human needs to update.
+
+Environment configs are family-level and limited to `prod` and `test_debug`.
+Agent-specific access, default environment, and generation pins live in
+hosted-tool bindings through Agent Settings; do not create per-agent config
+clones or new environment labels such as `demo`, `parity`, `stage`, or `local`.
+
+A hosted integration may be config-free when its runtime config contract has no
+required config or secret keys. In that case, do not ask a human to create an
+empty environment config and do not treat missing `prod` or `test_debug`
+environment config records as a blocker. Debug, example, regression, parity,
+dogfood, and consumer runs may proceed config-free when readiness says the tool
+does not require config. Execution logs for those runs should show an explicit
+purpose with no environment config id or config revision.
+
+When a family declares required config or secret keys, use `prod` for normal
+production invocation and GA publish readiness, and use `test_debug` for
+debug, examples, validation, regression, parity, and dogfood unless prod debug
+is explicitly authorized. Never invent synthetic environment config ids such as
+`debug`, `regression`, `<family>-test`, `demo`, or `parity`.
 
 ## Done criteria
 
@@ -220,5 +254,5 @@ validated, regression evidence exists for code-owned bugs, and the failure
 bucket is closed or left open with a clear blocker.
 
 For investigation-only work, you are done when the answer cites sanitized
-family, generation, run, artifact, config-scope, or bucket evidence and no edit
-lock remains held by you.
+family, generation, run, artifact, environment config, readiness, or bucket
+evidence and no edit lock remains held by you.

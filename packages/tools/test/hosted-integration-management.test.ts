@@ -22,6 +22,7 @@ describe("hosted integration management tools", () => {
       "hosted_integration_family_list",
       "hosted_integration_family_create",
       "hosted_integration_source_read",
+      "hosted_integration_source_view",
       "hosted_integration_lock_acquire",
       "hosted_integration_lock_renew",
       "hosted_integration_lock_release",
@@ -36,9 +37,11 @@ describe("hosted integration management tools", () => {
       "hosted_integration_promote",
       "hosted_integration_generation_list",
       "hosted_integration_generation_get",
+      "hosted_integration_generation_diff",
       "hosted_integration_generation_rollback",
-      "hosted_integration_config_scope_list",
-      "hosted_integration_config_scope_get",
+      "hosted_integration_environment_config_list",
+      "hosted_integration_environment_config_get",
+      "hosted_integration_readiness_get",
       "hosted_integration_debug_run",
       "hosted_integration_run_get",
       "hosted_integration_artifact_get",
@@ -237,7 +240,7 @@ describe("hosted integration management tools", () => {
     bindHostedIntegrationManagement({
       invoke: async () => ({
         ok: true,
-        configScope: {
+        environmentConfig: {
           id: "qualys-prod",
           secrets: { apiToken: { configured: true } },
           nested: { password: "super-secret-value" },
@@ -247,8 +250,8 @@ describe("hosted integration management tools", () => {
     });
 
     const result = await runTool(
-      "hosted_integration_config_scope_get",
-      { scope_id: "qualys-prod" },
+      "hosted_integration_environment_config_get",
+      { family_id: "qualys", environment: "prod" },
       "tool-developer",
     );
 
@@ -257,12 +260,94 @@ describe("hosted integration management tools", () => {
     expect(JSON.stringify(result)).not.toContain("raw-token-123");
     expect(result).toMatchObject({
       ok: true,
-      configScope: {
+      environmentConfig: {
         secrets: "[REDACTED]",
         nested: { password: "[REDACTED]" },
         note: "[REDACTED]",
       },
     });
+  });
+
+  it("delegates readiness inspection through the control-plane port", async () => {
+    const calls: HostedIntegrationManagementRequest[] = [];
+    bindHostedIntegrationManagement({
+      invoke: async (request) => {
+        calls.push(request);
+        return {
+          ok: true,
+          readiness: {
+            kind: "environment_config",
+            status: "blocked",
+            code: "missing",
+            target: {
+              familyId: "qualys",
+              environment: "prod",
+              environmentConfigId: "qualys-prod",
+            },
+            blockers: [
+              {
+                code: "missing_environment_config",
+                message: "environment config is missing",
+              },
+            ],
+          },
+        };
+      },
+    });
+
+    await expect(
+      runTool(
+        "hosted_integration_readiness_get",
+        {
+          target_type: "environment_config",
+          family_id: "qualys",
+          environment: "prod",
+        },
+        "tool-developer",
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      readiness: {
+        kind: "environment_config",
+        status: "blocked",
+        code: "missing",
+      },
+    });
+    expect(calls).toMatchObject([
+      {
+        actorId: "tool-developer",
+        operation: "hosted_integration_readiness_get",
+        params: {
+          target_type: "environment_config",
+          family_id: "qualys",
+          environment: "prod",
+        },
+      },
+    ]);
+  });
+
+  it("rejects offline parity readiness as a product management-tool target", async () => {
+    const calls: HostedIntegrationManagementRequest[] = [];
+    bindHostedIntegrationManagement({
+      invoke: async (request) => {
+        calls.push(request);
+        return { ok: true };
+      },
+    });
+
+    const result = await runTool(
+      "hosted_integration_readiness_get",
+      { target_type: "mig" + "ration" },
+      "tool-developer",
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "invalid_params",
+      },
+    });
+    expect(calls).toEqual([]);
   });
 
   it("rejects self-approval style destructive promotion parameters", async () => {

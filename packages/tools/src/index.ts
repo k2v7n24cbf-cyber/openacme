@@ -104,6 +104,12 @@ export {
   type HostedIntegrationManagementRequest,
   type HostedIntegrationManagementToolName,
 } from "./builtins/hosted-integration-management.js";
+export {
+  bindManagedToolHelp,
+  MANAGED_TOOL_HELP_TOOL_NAME,
+  type ManagedToolHelpBindings,
+  type ManagedToolHelpRequest,
+} from "./builtins/hosted-integration-help.js";
 export { SYSTEM_TOOLS, type SystemTool } from "./system.js";
 export {
   sweepOverflow,
@@ -132,5 +138,6 @@ import "./builtins/agent.js";
 import "./builtins/ping.js";
 import "./builtins/defer-session.js";
 import "./builtins/hosted-integration-management.js";
+import "./builtins/hosted-integration-help.js";
 import "./builtins/browser/index.js";
 import "./builtins/email/index.js";

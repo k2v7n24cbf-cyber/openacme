@@ -4,6 +4,7 @@ import {
   Bot,
   BookOpen,
   ListChecks,
+  Plug,
   Settings,
   Target,
   Users,
@@ -18,14 +19,14 @@ const navItems = [
   { link: linkOptions({ to: "/tasks" }), label: "Tasks", icon: ListChecks },
   { link: linkOptions({ to: "/objectives" }), label: "Goals", icon: Target },
   { link: linkOptions({ to: "/workflows" }), label: "Flows", icon: Workflow },
+  { link: linkOptions({ to: "/hosted-tools" }), label: "Tools", icon: Plug },
   { link: linkOptions({ to: "/skills" }), label: "Skills", icon: BookOpen },
-  { link: linkOptions({ to: "/settings" }), label: "Settings", icon: Settings },
+  { link: linkOptions({ to: "/settings" }), label: "Setup", icon: Settings },
 ];
 
 /**
  * Mobile bottom tab bar. Replaces the hamburger drawer pattern with a
- * fixed bar of icon+label entries at the bottom of the viewport — the
- * convention for native iOS/Android apps with 3-5 top-level sections.
+ * fixed bar of icon+label entries at the bottom of the viewport.
  * Hidden on md+ where the persistent left sidebar takes over.
  *
  * Position: fixed bottom-0 so it sits above content regardless of scroll
@@ -40,7 +41,7 @@ export function MobileTabBar() {
       aria-label="Primary"
       className="fixed inset-x-0 bottom-0 z-40 border-t border-paper-rule bg-paper-sunk pb-[env(safe-area-inset-bottom)] md:hidden"
     >
-      <ul className="grid grid-cols-7">
+      <ul className="grid grid-cols-9">
         {navItems.map((item) => {
           const isActive =
             item.link.to === "/"
@@ -53,12 +54,14 @@ export function MobileTabBar() {
                 {...item.link}
                 aria-current={isActive ? "page" : undefined}
                 className={cn(
-                  "flex h-14 flex-col items-center justify-center gap-0.5 text-[10px] uppercase tracking-[0.08em] transition-colors",
+                  "flex h-14 min-w-0 flex-col items-center justify-center gap-0.5 text-[9px] uppercase tracking-[0.04em] transition-colors",
                   isActive ? "text-plot-red" : "text-ink-soft hover:text-ink",
                 )}
               >
                 <Icon className="size-5" aria-hidden />
-                <span className="font-mono">{item.label}</span>
+                <span className="max-w-full truncate font-mono">
+                  {item.label}
+                </span>
               </Link>
             </li>
           );

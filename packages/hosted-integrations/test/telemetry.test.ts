@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  createFileHostedIntegrationConfigScopeStore,
   createFileHostedIntegrationDraftStore,
+  createFileHostedIntegrationEnvironmentConfigStore,
   createFileHostedIntegrationGateway,
   createFileHostedIntegrationGenerationStore,
   createFileHostedIntegrationLockStore,
@@ -66,7 +66,7 @@ describe("hosted integration telemetry", () => {
     expect(encoded).not.toContain("token_123");
   });
 
-  it("records policy denied events without runtime dispatch", async () => {
+  it("records binding readiness failures without runtime dispatch", async () => {
     const telemetry = new RecordingTelemetry();
     const runtime = fakeRuntime({ result: { count: 2 } });
     await seedPromotedGeneration();
@@ -74,21 +74,17 @@ describe("hosted integration telemetry", () => {
 
     await gateway(runtime, telemetry).invoke({
       ...allowedInvocation(),
-      bindings: [],
+      hostedToolBindings: [],
     });
 
     expect(runtime.calls).toEqual([]);
     expect(telemetry.spans[0]).toMatchObject({
       status: "error",
-      statusMessage: "policy_denied",
-      events: [
-        {
-          name: "openacme.hosted_integration.policy_denied",
-          attributes: {
-            "openacme.hosted_integration.error_code": "policy_denied",
-          },
-        },
-      ],
+      statusMessage: "binding_missing",
+      events: [],
+      attributes: expect.objectContaining({
+        "openacme.hosted_integration.error_code": "binding_missing",
+      }),
     });
   });
 
@@ -190,16 +186,19 @@ function allowedInvocation(
     actor,
     familyId: "qualys",
     toolName: "qualys_count_assets",
-    environment: "test",
+    environment: "test_debug",
     args: { query: "severity:5" },
-    bindings: [
+    hostedToolBindings: [
       {
         agentId: "agent:analyst",
         familyId: "qualys",
         toolName: "qualys_count_assets",
-        allowedConfigScopeIds: ["qualys-test"],
-        defaultConfigScopeId: "qualys-test",
-        environment: "test",
+        allowedEnvironments: ["test_debug"],
+        defaultEnvironment: "test_debug",
+        generationPin: { type: "current" },
+        bindingKind: "agent",
+        updatedAt: "2026-08-14T10:00:00.000Z",
+        updatedBy: "human:test",
       },
     ],
     ...overrides,
@@ -261,19 +260,18 @@ async function seedPromotedGeneration() {
 }
 
 async function seedConfig(): Promise<void> {
-  await createFileHostedIntegrationConfigScopeStore({
+  await createFileHostedIntegrationEnvironmentConfigStore({
     dataDir,
     now: () => new Date(nowMs),
-  }).upsertConfigScope({
-    scopeId: "qualys-test",
+  }).upsertEnvironmentConfig({
     familyId: "qualys",
-    environment: "test",
+    environment: "test_debug",
     config: { endpoint: "https://qualys.example.test" },
     secrets: { apiToken: { configured: true } },
     updatedBy: "human:operator",
   });
   await createFileHostedIntegrationSecretStore({ dataDir }).writeHumanOwnedSecrets({
-    scopeId: "qualys-test",
+    environmentConfigId: "qualys-test_debug",
     secrets: { apiToken: "token_123" },
     updatedBy: "human:operator",
   });
@@ -297,6 +295,11 @@ runtime:
     network: denied
   dependencyPolicy:
     installDuringInvocation: false
+runtimeConfig:
+  requiredConfigKeys:
+    - endpoint
+  requiredSecretKeys:
+    - apiToken
 tools:
   - name: qualys_count_assets
     title: Count assets

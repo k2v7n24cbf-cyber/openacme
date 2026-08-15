@@ -4,9 +4,9 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createFileHostedIntegrationCatalog,
-  createFileHostedIntegrationConfigScopeStore,
   createFileHostedIntegrationDraftStore,
   createFileHostedIntegrationDraftValidator,
+  createFileHostedIntegrationEnvironmentConfigStore,
   createFileHostedIntegrationGateway,
   createFileHostedIntegrationGenerationStore,
   createFileHostedIntegrationLockStore,
@@ -43,7 +43,9 @@ describe("hosted integration tool deprecation policy", () => {
 
     await expect(validator.validateDraft("draft_1")).resolves.toMatchObject({
       ok: false,
-      diagnostics: [expect.objectContaining({ code: "breaking_tool_removal" })],
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({ code: "breaking_tool_removal" }),
+      ]),
     });
   });
 
@@ -163,12 +165,11 @@ async function createDraftFromSource(yaml: string) {
 }
 
 async function seedConfig(): Promise<void> {
-  await createFileHostedIntegrationConfigScopeStore({
+  await createFileHostedIntegrationEnvironmentConfigStore({
     dataDir,
-  }).upsertConfigScope({
-    scopeId: "qualys-test",
+  }).upsertEnvironmentConfig({
     familyId: "qualys",
-    environment: "test",
+    environment: "test_debug",
     config: {},
     secrets: { apiToken: { configured: true } },
     updatedBy: "human:operator",
@@ -176,7 +177,7 @@ async function seedConfig(): Promise<void> {
   await createFileHostedIntegrationSecretStore({
     dataDir,
   }).writeHumanOwnedSecrets({
-    scopeId: "qualys-test",
+    environmentConfigId: "qualys-test_debug",
     secrets: { apiToken: "token_123" },
     updatedBy: "human:operator",
   });
@@ -191,16 +192,19 @@ function allowedInvocation() {
     actor,
     familyId: "qualys",
     toolName: "qualys_count_assets",
-    environment: "test",
+    environment: "test_debug",
     args: {},
-    bindings: [
+    hostedToolBindings: [
       {
         agentId: "agent:analyst",
         familyId: "qualys",
         toolName: "qualys_count_assets",
-        allowedConfigScopeIds: ["qualys-test"],
-        defaultConfigScopeId: "qualys-test",
-        environment: "test",
+        allowedEnvironments: ["test_debug"],
+        defaultEnvironment: "test_debug",
+        generationPin: { type: "current" },
+        bindingKind: "agent",
+        updatedAt: "2026-08-14T10:00:00.000Z",
+        updatedBy: "human:test",
       },
     ],
   };
@@ -228,6 +232,10 @@ runtime:
     network: denied
   dependencyPolicy:
     installDuringInvocation: false
+runtimeConfig:
+  requiredConfigKeys: []
+  requiredSecretKeys:
+    - apiToken
 tools:
   - name: qualys_count_assets
     title: Count assets

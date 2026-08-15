@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
+import { registry as toolRegistry } from "@openacme/tools";
 import {
   startE2EServer,
   openSSE,
@@ -36,11 +38,15 @@ function req(p: string, init: RequestInit = {}): Promise<Response> {
   return fetch(`${srv.baseUrl}${p}`, { ...init, headers });
 }
 
-async function createAgent(id = "helper", name = "Helper"): Promise<void> {
+async function createAgent(
+  id = "helper",
+  name = "Helper",
+  extra: Record<string, unknown> = {},
+): Promise<void> {
   const res = await req("/api/agents", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ id, name }),
+    body: JSON.stringify({ id, name, ...extra }),
   });
   expect(res.status).toBe(201);
 }
@@ -59,16 +65,30 @@ function postChatResponse(sessionId: string, text: string): Promise<Response> {
 function postChatMessages(
   sessionId: string,
   messages: Array<{ id: string; role: string; parts: Array<unknown> }>,
+  agentId = "helper",
 ): Promise<Response> {
   return req("/api/chat", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      agentId: "helper",
+      agentId,
       sessionId,
       messages,
     }),
   });
+}
+
+async function postChatAsAgent(
+  agentId: string,
+  sessionId: string,
+  text: string,
+): Promise<void> {
+  const res = await postChatMessages(
+    sessionId,
+    [{ id: randomUUID(), role: "user", parts: [{ type: "text", text }] }],
+    agentId,
+  );
+  expect(res.status).toBe(200);
 }
 
 async function fetchMessages(
@@ -135,6 +155,78 @@ describe("chat turn (e2e)", () => {
     );
 
     sse.close();
+  });
+
+  it("resolves catalog refresh once for an interactive turn", async () => {
+    const sessionId = randomUUID();
+    const sse = await openSSE(
+      `${srv.baseUrl}/api/sessions/${sessionId}/stream`,
+    );
+    const refreshSpy = vi.spyOn(srv.manager, "getAgentCatalogRefresh");
+
+    try {
+      await postChat(sessionId, "single refresh boundary");
+      await sse.waitFor(isState("idle"), 15_000);
+      const helperRefreshes = refreshSpy.mock.calls.filter(
+        ([agentId]) => agentId === "helper",
+      );
+      expect(helperRefreshes).toHaveLength(1);
+    } finally {
+      refreshSpy.mockRestore();
+      sse.close();
+    }
+  });
+
+  it("emits a catalog notice when a granted tool becomes model-visible", async () => {
+    const toolName = "catalog_notice_probe";
+    const agentId = "catalog-notice-agent";
+    await createAgent(agentId, "Catalog Notice Agent", {
+      tools: [toolName],
+    });
+    const sessionId = randomUUID();
+    const sse = await openSSE(
+      `${srv.baseUrl}/api/sessions/${sessionId}/stream`,
+    );
+
+    try {
+      await postChatAsAgent(agentId, sessionId, "cache current catalog");
+      await sse.waitFor(isState("idle"), 15_000);
+
+      toolRegistry.register({
+        name: toolName,
+        toolset: "test",
+        description: "Probe catalog notice.",
+        parameters: z.object({}),
+        handler: async () => JSON.stringify({ ok: true }),
+      });
+
+      await postChatAsAgent(agentId, sessionId, "notice updated catalog");
+      const notice = await sse.waitFor(
+        (event) => event.event === "tool_catalog_notice",
+        15_000,
+      );
+      expect(notice.data).toMatchObject({
+        kind: "tool_catalog_notice",
+        agentId,
+        addedToolNames: [toolName],
+        removedToolNames: [],
+        addedHostedTools: [],
+      });
+
+      await sse.waitFor(isState("idle"), 15_000);
+      const timeline = await fetchTimeline(sessionId);
+      const event = timeline.events.find(
+        (row) => row.eventType === "session.tool_catalog.changed",
+      );
+      expect(event?.payload).toMatchObject({
+        agentId,
+        addedToolNames: [toolName],
+        removedToolNames: [],
+      });
+    } finally {
+      toolRegistry.deregister(toolName);
+      sse.close();
+    }
   });
 
   it("drives a real tool call and closes the turn", async () => {

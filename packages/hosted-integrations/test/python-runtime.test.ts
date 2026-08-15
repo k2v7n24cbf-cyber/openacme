@@ -33,7 +33,6 @@ def tool_qualys_count_assets(args, context):
 def call_tool(name, args, ctx):
     return {"dispatch": "legacy"}
 `,
-      { handlerDispatch: undefined },
     );
 
     await expect(
@@ -77,7 +76,6 @@ def after_tool_call(tool_name, args, ctx, result, auth):
     next_result["events"] = list(ctx["events"])
     return next_result
 `,
-      { handlerDispatch: undefined },
     );
 
     await expect(
@@ -117,7 +115,6 @@ def authenticate(ctx):
 def tool_qualys_count_assets(args, context):
     return {"handler": "should-not-run"}
 `,
-      { handlerDispatch: undefined },
     );
 
     await expect(
@@ -136,7 +133,7 @@ def tool_qualys_count_assets(args, context):
     });
   });
 
-  it("keeps legacy call_tool dispatch only when runtime metadata allows it", async () => {
+  it("ignores legacy call_tool routers and requires a derived handler", async () => {
     const fixture = await createPythonFixture(`
 def call_tool(name, args, ctx):
     return {"dispatch": "legacy", "tool": name}
@@ -149,9 +146,12 @@ def call_tool(name, args, ctx):
         args: {},
         context: fixture.context,
       }),
-    ).resolves.toEqual({
-      ok: true,
-      result: { dispatch: "legacy", tool: "qualys_count_assets" },
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "tool_bug",
+        message: expect.stringContaining("tool_qualys_count_assets"),
+      },
     });
   });
 
@@ -161,7 +161,6 @@ def call_tool(name, args, ctx):
 def call_tool(name, args, ctx):
     return {"dispatch": "legacy"}
 `,
-      { handlerDispatch: undefined },
     );
 
     await expect(
@@ -206,7 +205,7 @@ def list_tools():
 
   it("passes config and secrets through ToolContext", async () => {
     const fixture = await createPythonFixture(`
-def call_tool(name, args, ctx):
+def tool_qualys_count_assets(args, ctx):
     return {
         "endpoint": ctx["config"]["endpoint"],
         "secret": ctx["secrets"]["apiToken"],
@@ -238,7 +237,7 @@ def call_tool(name, args, ctx):
     const fixture = await createPythonFixture(`
 from pathlib import Path
 
-def call_tool(name, args, ctx):
+def tool_qualys_write_files(args, ctx):
     Path(ctx["run_dir"], "run.txt").write_text("run")
     Path(ctx["family_home"], "home.txt").write_text("home")
     blocked = False
@@ -271,7 +270,7 @@ def call_tool(name, args, ctx):
     const fixture = await createPythonFixture(`
 import os
 
-def call_tool(name, args, ctx):
+def tool_qualys_env(args, ctx):
     return {"leaked": os.environ.get("OPENACME_HOSTED_RUNTIME_PARENT_SECRET")}
 `);
 
@@ -289,7 +288,7 @@ def call_tool(name, args, ctx):
     const fixture = await createPythonFixture(`
 import time
 
-def call_tool(name, args, ctx):
+def tool_qualys_slow(args, ctx):
     time.sleep(1)
     return {"late": True}
 `);
@@ -313,7 +312,7 @@ def call_tool(name, args, ctx):
 
   it("normalizes raised Python exceptions as tool_bug", async () => {
     const fixture = await createPythonFixture(`
-def call_tool(name, args, ctx):
+def tool_qualys_broken(args, ctx):
     raise ValueError("bad fixture")
 `);
 
@@ -344,7 +343,7 @@ class ToolError(Exception):
         self.code = code
         super().__init__(message)
 
-def call_tool(name, args, ctx):
+def tool_qualys_filtered(args, ctx):
     raise ToolError("bad_arguments", "invalid filter field")
 `);
 
@@ -375,9 +374,6 @@ function runtime() {
 
 async function createPythonFixture(
   source: string,
-  options: { handlerDispatch?: "derived" | "legacy_call_tool" } = {
-    handlerDispatch: "legacy_call_tool",
-  },
 ) {
   const filesRoot = path.join(dataDir, "files");
   const familyHome = path.join(dataDir, "home");
@@ -397,9 +393,6 @@ async function createPythonFixture(
       runtime: {
         language: "python" as const,
         entrypoint: "qualys.py",
-        ...(options.handlerDispatch === undefined
-          ? {}
-          : { handlerDispatch: options.handlerDispatch }),
         defaultTimeoutMs: 5_000,
         inlineResultTokenLimit: 8_000,
         maxConcurrency: 1,

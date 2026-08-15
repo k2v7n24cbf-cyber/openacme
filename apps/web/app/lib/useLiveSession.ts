@@ -2,6 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { readUIMessageStream } from "ai";
 import type { OpenAcmeUIMessage } from "./types";
 import { API_BASE } from "./api";
+import {
+  isToolCatalogNotice,
+  type ToolCatalogNotice,
+} from "./toolCatalogNotices";
 
 /**
  * Subscribe to a per-session SSE channel. Feeds `ui_message_part` chunks
@@ -39,6 +43,8 @@ export function useLiveSession(
     onInboxCancelled?: (item: { messageId: string }) => void;
     /** Session title was generated after the post-turn metadata write. */
     onSessionTitle?: (title: string) => void;
+    /** UI-only session context notice; not part of chat history. */
+    onToolCatalogNotice?: (notice: ToolCatalogNotice) => void;
   }
 ): { state: "running" | "idle"; whenConnected: () => Promise<void> } {
   const [state, setState] = useState<"running" | "idle">("idle");
@@ -50,12 +56,14 @@ export function useLiveSession(
   const onInboxQueuedRef = useRef(opts?.onInboxQueued);
   const onInboxCancelledRef = useRef(opts?.onInboxCancelled);
   const onSessionTitleRef = useRef(opts?.onSessionTitle);
+  const onToolCatalogNoticeRef = useRef(opts?.onToolCatalogNotice);
   setMessagesRef.current = setMessages;
   onTaskEventRef.current = opts?.onTaskEvent;
   onDataPartRef.current = opts?.onDataPart;
   onInboxQueuedRef.current = opts?.onInboxQueued;
   onInboxCancelledRef.current = opts?.onInboxCancelled;
   onSessionTitleRef.current = opts?.onSessionTitle;
+  onToolCatalogNoticeRef.current = opts?.onToolCatalogNotice;
   // Promise that resolves on the current EventSource's `open`. Replaced
   // on every sessionId change so callers always await the live one.
   const connectedRef = useRef<{ promise: Promise<void>; resolve: () => void }>(
@@ -233,6 +241,16 @@ export function useLiveSession(
           const env = JSON.parse(e.data) as { title?: unknown };
           if (typeof env.title === "string" && env.title.trim()) {
             onSessionTitleRef.current?.(env.title);
+          }
+        } catch {
+          /* ignore */
+        }
+      },
+      tool_catalog_notice: (e) => {
+        try {
+          const env = JSON.parse(e.data) as unknown;
+          if (isToolCatalogNotice(env)) {
+            onToolCatalogNoticeRef.current?.(env);
           }
         } catch {
           /* ignore */

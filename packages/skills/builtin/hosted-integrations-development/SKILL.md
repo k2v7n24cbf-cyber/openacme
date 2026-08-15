@@ -8,7 +8,7 @@ tags:
 ---
 
 Use this skill when developing, validating, promoting, debugging, or repairing
-hosted integration tool families through the `hosted_integration_*` management
+hosted integration tool families through the `hosted_tool_*` management
 tools.
 
 This is not a script to follow blindly. Use it as the operating model for
@@ -36,18 +36,18 @@ Classify the request before editing:
 
 ## Operating boundaries
 
-- Use hosted integration management tools instead of generic filesystem access.
+- Use hosted tool management tools instead of generic filesystem access.
 - Do not delegate hosted integration source edits, examples, validation,
   promotion, debug runs, or repair buckets to Acme. You own this lifecycle; ask
   Acme only for platform setup or workforce configuration that is outside the
-  hosted integration management surface.
+  hosted tool management surface.
 - Work at the tool-family level. A family is the unit of source, shared helper
   code, manifest, runtime settings, examples, generations, and workspace home.
-- Keep native and managed tool names separate. Family manifests, examples,
-  debug runs, failure buckets, and all `hosted_integration_*` management-tool
+- Keep native and hosted registry tool names separate. Family manifests, examples,
+  debug runs, failure buckets, and all `hosted_tool_*` management-tool
   `tool_name` parameters use the family-native name such as `splunk_search`.
-  Agent Settings and model-facing invocation tools use the managed canonical
-  registry name such as `managed_splunk__splunk_search`.
+  Agent Settings and model-facing invocation tools use the hosted canonical
+  registry name such as `hosted_splunk__splunk_search`.
 - Acquire a family lock before editing. Respect the lock owner and lock TTL; if
   a lock is held by another actor, stop and report the holder and expiry.
 - Do not read, request, or return secret values. Human operators own secret
@@ -67,54 +67,54 @@ Classify the request before editing:
 
 Use the management tools by intent:
 
-- Discover families/source: `hosted_integration_family_list`,
-  `hosted_integration_source_read`, and tool-focused
-  `hosted_integration_source_view`.
-- Create or prepare work: `hosted_integration_family_create`,
-  `hosted_integration_lock_acquire`, `hosted_integration_lock_renew`,
-  `hosted_integration_draft_create`.
-- Edit draft source: `hosted_integration_draft_get`,
-  `hosted_integration_draft_patch`, `hosted_integration_draft_delete`.
-- Maintain examples: `hosted_integration_example_list`,
-  `hosted_integration_example_upsert`, `hosted_integration_example_run`.
-- Validate and promote: `hosted_integration_validate`,
-  `hosted_integration_promote`.
-- Inspect or rollback generations: `hosted_integration_generation_list`,
-  `hosted_integration_generation_get`,
-  `hosted_integration_generation_rollback`.
+- Discover families/source: `hosted_tool_family_list`,
+  `hosted_tool_source_read`, and tool-focused
+  `hosted_tool_source_view`.
+- Create or prepare work: `hosted_tool_family_create`,
+  `hosted_tool_lock_acquire`, `hosted_tool_lock_renew`,
+  `hosted_tool_draft_create`.
+- Edit draft source: `hosted_tool_draft_get`,
+  `hosted_tool_draft_patch`, `hosted_tool_draft_delete`.
+- Maintain examples: `hosted_tool_example_list`,
+  `hosted_tool_example_upsert`, `hosted_tool_example_run`.
+- Validate and promote: `hosted_tool_validate`,
+  `hosted_tool_promote`.
+- Inspect or rollback generations: `hosted_tool_generation_list`,
+  `hosted_tool_generation_get`,
+  `hosted_tool_generation_rollback`.
 - Inspect environment config metadata:
-  `hosted_integration_environment_config_list`,
-  `hosted_integration_environment_config_get`.
+  `hosted_tool_environment_config_list`,
+  `hosted_tool_environment_config_get`.
 - Inspect lifecycle readiness before acting:
-  `hosted_integration_readiness_get`.
-- Investigate runs: `hosted_integration_debug_run`,
-  `hosted_integration_run_get`, `hosted_integration_artifact_get`.
-- Repair buckets: `hosted_integration_failure_bucket_list`,
-  `hosted_integration_failure_bucket_get`,
-  `hosted_integration_failure_bucket_assign`,
-  `hosted_integration_failure_bucket_close`.
+  `hosted_tool_readiness_get`.
+- Investigate runs: `hosted_tool_debug_run`,
+  `hosted_tool_run_get`, `hosted_tool_artifact_get`.
+- Repair buckets: `hosted_tool_failure_bucket_list`,
+  `hosted_tool_failure_bucket_get`,
+  `hosted_tool_failure_bucket_assign`,
+  `hosted_tool_failure_bucket_close`.
 
 ## Request to promotion lifecycle
 
-1. Discover the current state with `hosted_integration_family_list`,
-   `hosted_integration_source_read`, and `hosted_integration_source_view` when
+1. Discover the current state with `hosted_tool_family_list`,
+   `hosted_tool_source_read`, and `hosted_tool_source_view` when
    you need one tool handler plus relevant hooks/helpers instead of a raw file
    window.
 2. Acquire the family lock with enough TTL for the edit window. Renew it before
    long validation runs if needed.
 3. Create a draft from the current generation. Keep edits scoped to the requested
    family behavior and its shared helper code.
-4. Patch draft files through `hosted_integration_draft_patch`. For large Python
+4. Patch draft files through `hosted_tool_draft_patch`. For large Python
    files, read focused windows with `start_line` and `max_lines`, then prefer
    targeted patch modes such as `replace_text` or `insert_after` with a unique
    source block. Use full-file replacement only for new files or intentionally
    small files. Keep runtime settings at the family level when they apply to
    every tool.
-5. Register or update examples with `hosted_integration_example_upsert`.
+5. Register or update examples with `hosted_tool_example_upsert`.
    Promotion requires at least one safe example for every promoted tool.
-6. Run `hosted_integration_validate`, then run safe examples with
-   `hosted_integration_example_run`.
-7. Inspect publish readiness with `hosted_integration_readiness_get`. Promote
+6. Run `hosted_tool_validate`, then run safe examples with
+   `hosted_tool_example_run`.
+7. Inspect publish readiness with `hosted_tool_readiness_get`. Promote
    only when validation, required examples, and publish readiness pass.
    Non-destructive changes can be promoted by the Tool Developer Agent;
    destructive changes stop at the human approval boundary.
@@ -126,7 +126,7 @@ Before promotion, check:
 - The draft source is the intended family only; no unrelated family was edited.
 - Every new or changed tool has at least one safe example.
 - Any reproduced bug has a regression example.
-- `hosted_integration_validate` passed after the final patch.
+- `hosted_tool_validate` passed after the final patch.
 - Required safe examples passed after the final patch.
 - Publish readiness is `ready`, or the blocker is explicitly reported.
 - Tool classification is accurate: read, write, destructive, live, cached,
@@ -154,13 +154,13 @@ and safe to run in the hosted integration runtime.
 When a production or debug run fails, the calling agent should see only that the
 tool failed. The platform and Tool Developer Agent own the repair process.
 
-1. Inspect sanitized run details with `hosted_integration_run_get`.
-2. Fetch oversized sanitized artifacts with `hosted_integration_artifact_get`
+1. Inspect sanitized run details with `hosted_tool_run_get`.
+2. Fetch oversized sanitized artifacts with `hosted_tool_artifact_get`
    when the choke point returned a response file or diagnostic artifact.
 3. Use failure-bucket tools when available to group by stable error identity,
    such as family, tool, generation, exception class, and sanitized stack shape.
 4. Assign the bucket to the Tool Developer Agent when the fix is code-owned.
-5. Reproduce with `hosted_integration_debug_run` or a new regression example.
+5. Reproduce with `hosted_tool_debug_run` or a new regression example.
 6. Patch the draft, rerun validation and the regression example, promote the
    fixed generation, then close the bucket with the generation and example IDs.
 
@@ -215,7 +215,7 @@ do not add cancellation semantics to synchronous calls.
 
 ## Readiness, Secrets, And Config
 
-Use `hosted_integration_readiness_get` before promote, debug, or repair actions
+Use `hosted_tool_readiness_get` before promote, debug, or repair actions
 when the next step depends on environment config, hosted-tool binding, publish,
 debug, or invocation readiness. Treat readiness reads as advisory
 snapshots: the API will recheck the same resolver before mutating state.

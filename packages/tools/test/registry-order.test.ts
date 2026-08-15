@@ -34,4 +34,24 @@ describe("model-facing tool emission order", () => {
       "zeta",
     ]);
   });
+
+  it("getEmittedToolNames mirrors getVercelTools filtering without building tools", () => {
+    const reg = makeRegistry(["zeta", "alpha", "mid"]);
+    reg.register({
+      name: "hidden",
+      toolset: "test",
+      description: "hidden tool",
+      parameters: z.object({}),
+      checkFn: () => false,
+      handler: async () => JSON.stringify({ ok: true }),
+    });
+
+    const selected = new Set(["zeta", "hidden", "missing"]);
+
+    expect(reg.getEmittedToolNames(selected)).toEqual(["zeta"]);
+    expect(reg.getEmittedToolNames()).toEqual(["alpha", "mid", "zeta"]);
+    expect(reg.getEmittedToolNames(selected)).toEqual(
+      Object.keys(reg.getVercelTools(selected)),
+    );
+  });
 });

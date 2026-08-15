@@ -2,59 +2,59 @@ import { describe, expect, it, afterEach } from "vitest";
 import { registry } from "../src/registry.js";
 import { toolCallContext } from "../src/session-context.js";
 import {
-  bindHostedIntegrationManagement,
-  HOSTED_INTEGRATION_MANAGEMENT_TOOL_NAMES,
-  type HostedIntegrationManagementRequest,
+  bindHostedToolManagement,
+  HOSTED_TOOL_MANAGEMENT_TOOL_NAMES,
+  type HostedToolManagementRequest,
 } from "../src/builtins/hosted-integration-management.js";
 
 afterEach(() => {
-  bindHostedIntegrationManagement(null);
+  bindHostedToolManagement(null);
 });
 
 describe("hosted integration management tools", () => {
   it("registers the complete Tool Developer Agent lifecycle tool surface", () => {
     expect(
-      HOSTED_INTEGRATION_MANAGEMENT_TOOL_NAMES.filter(
+      HOSTED_TOOL_MANAGEMENT_TOOL_NAMES.filter(
         (name) => registry.get(name) === undefined,
       ),
     ).toEqual([]);
-    expect(HOSTED_INTEGRATION_MANAGEMENT_TOOL_NAMES).toEqual([
-      "hosted_integration_family_list",
-      "hosted_integration_family_create",
-      "hosted_integration_source_read",
-      "hosted_integration_source_view",
-      "hosted_integration_lock_acquire",
-      "hosted_integration_lock_renew",
-      "hosted_integration_lock_release",
-      "hosted_integration_draft_create",
-      "hosted_integration_draft_get",
-      "hosted_integration_draft_patch",
-      "hosted_integration_draft_delete",
-      "hosted_integration_example_list",
-      "hosted_integration_example_upsert",
-      "hosted_integration_example_run",
-      "hosted_integration_validate",
-      "hosted_integration_promote",
-      "hosted_integration_generation_list",
-      "hosted_integration_generation_get",
-      "hosted_integration_generation_diff",
-      "hosted_integration_generation_rollback",
-      "hosted_integration_environment_config_list",
-      "hosted_integration_environment_config_get",
-      "hosted_integration_readiness_get",
-      "hosted_integration_debug_run",
-      "hosted_integration_run_get",
-      "hosted_integration_artifact_get",
-      "hosted_integration_failure_bucket_list",
-      "hosted_integration_failure_bucket_get",
-      "hosted_integration_failure_bucket_assign",
-      "hosted_integration_failure_bucket_close",
+    expect(HOSTED_TOOL_MANAGEMENT_TOOL_NAMES).toEqual([
+      "hosted_tool_family_list",
+      "hosted_tool_family_create",
+      "hosted_tool_source_read",
+      "hosted_tool_source_view",
+      "hosted_tool_lock_acquire",
+      "hosted_tool_lock_renew",
+      "hosted_tool_lock_release",
+      "hosted_tool_draft_create",
+      "hosted_tool_draft_get",
+      "hosted_tool_draft_patch",
+      "hosted_tool_draft_delete",
+      "hosted_tool_example_list",
+      "hosted_tool_example_upsert",
+      "hosted_tool_example_run",
+      "hosted_tool_validate",
+      "hosted_tool_promote",
+      "hosted_tool_generation_list",
+      "hosted_tool_generation_get",
+      "hosted_tool_generation_diff",
+      "hosted_tool_generation_rollback",
+      "hosted_tool_environment_config_list",
+      "hosted_tool_environment_config_get",
+      "hosted_tool_readiness_get",
+      "hosted_tool_debug_run",
+      "hosted_tool_run_get",
+      "hosted_tool_artifact_get",
+      "hosted_tool_failure_bucket_list",
+      "hosted_tool_failure_bucket_get",
+      "hosted_tool_failure_bucket_assign",
+      "hosted_tool_failure_bucket_close",
     ]);
   });
 
   it("delegates management tool calls to the bound control-plane port", async () => {
-    const calls: HostedIntegrationManagementRequest[] = [];
-    bindHostedIntegrationManagement({
+    const calls: HostedToolManagementRequest[] = [];
+    bindHostedToolManagement({
       invoke: async (request) => {
         calls.push(request);
         return { ok: true, family: { id: request.params.family_id } };
@@ -62,7 +62,7 @@ describe("hosted integration management tools", () => {
     });
 
     const result = await runTool(
-      "hosted_integration_lock_acquire",
+      "hosted_tool_lock_acquire",
       { family_id: "qualys", ttl_ms: 60_000 },
       "tool-developer",
     );
@@ -71,8 +71,8 @@ describe("hosted integration management tools", () => {
     expect(calls).toEqual([
       {
         actorId: "tool-developer",
-        toolName: "hosted_integration_lock_acquire",
-        operation: "hosted_integration_lock_acquire",
+        toolName: "hosted_tool_lock_acquire",
+        operation: "hosted_tool_lock_acquire",
         params: { family_id: "qualys", ttl_ms: 60_000 },
       },
     ]);
@@ -80,7 +80,7 @@ describe("hosted integration management tools", () => {
 
   it("returns a clear platform-unavailable error when unbound", async () => {
     const result = await runTool(
-      "hosted_integration_family_list",
+      "hosted_tool_family_list",
       {},
       "tool-developer",
     );
@@ -92,15 +92,15 @@ describe("hosted integration management tools", () => {
   });
 
   it("requires an active agent context before invoking the bound port", async () => {
-    const calls: HostedIntegrationManagementRequest[] = [];
-    bindHostedIntegrationManagement({
+    const calls: HostedToolManagementRequest[] = [];
+    bindHostedToolManagement({
       invoke: async (request) => {
         calls.push(request);
         return { ok: true };
       },
     });
 
-    const result = await runTool("hosted_integration_family_list", {});
+    const result = await runTool("hosted_tool_family_list", {});
 
     expect(result).toMatchObject({
       ok: false,
@@ -110,7 +110,7 @@ describe("hosted integration management tools", () => {
   });
 
   it("surfaces Tool Developer Agent policy success and normal-agent denial from the control-plane port", async () => {
-    bindHostedIntegrationManagement({
+    bindHostedToolManagement({
       invoke: async (request) => {
         if (request.actorId !== "tool-developer") {
           return {
@@ -126,10 +126,10 @@ describe("hosted integration management tools", () => {
     });
 
     await expect(
-      runTool("hosted_integration_family_list", {}, "tool-developer"),
+      runTool("hosted_tool_family_list", {}, "tool-developer"),
     ).resolves.toEqual({ ok: true, families: [] });
     await expect(
-      runTool("hosted_integration_family_list", {}, "analyst"),
+      runTool("hosted_tool_family_list", {}, "analyst"),
     ).resolves.toMatchObject({
       ok: false,
       error: { code: "policy_denied" },
@@ -137,8 +137,8 @@ describe("hosted integration management tools", () => {
   });
 
   it("accepts null for LLM-required optional fields and delegates them", async () => {
-    const calls: HostedIntegrationManagementRequest[] = [];
-    bindHostedIntegrationManagement({
+    const calls: HostedToolManagementRequest[] = [];
+    bindHostedToolManagement({
       invoke: async (request) => {
         calls.push(request);
         return { ok: true };
@@ -147,7 +147,7 @@ describe("hosted integration management tools", () => {
 
     await expect(
       runTool(
-        "hosted_integration_draft_create",
+        "hosted_tool_draft_create",
         {
           family_id: "qualys",
           lock_id: "lock_1",
@@ -158,7 +158,7 @@ describe("hosted integration management tools", () => {
     ).resolves.toEqual({ ok: true });
     await expect(
       runTool(
-        "hosted_integration_promote",
+        "hosted_tool_promote",
         {
           draft_id: "draft_1",
           lock_id: "lock_1",
@@ -183,8 +183,8 @@ describe("hosted integration management tools", () => {
   });
 
   it("delegates source windows and targeted draft patch modes", async () => {
-    const calls: HostedIntegrationManagementRequest[] = [];
-    bindHostedIntegrationManagement({
+    const calls: HostedToolManagementRequest[] = [];
+    bindHostedToolManagement({
       invoke: async (request) => {
         calls.push(request);
         return { ok: true };
@@ -193,7 +193,7 @@ describe("hosted integration management tools", () => {
 
     await expect(
       runTool(
-        "hosted_integration_source_read",
+        "hosted_tool_source_read",
         {
           family_id: "qualys",
           path: "qualys.py",
@@ -205,7 +205,7 @@ describe("hosted integration management tools", () => {
     ).resolves.toEqual({ ok: true });
     await expect(
       runTool(
-        "hosted_integration_draft_patch",
+        "hosted_tool_draft_patch",
         {
           draft_id: "draft_1",
           lock_id: "lock_1",
@@ -237,7 +237,7 @@ describe("hosted integration management tools", () => {
   });
 
   it("redacts secret-shaped keys and values from management tool responses", async () => {
-    bindHostedIntegrationManagement({
+    bindHostedToolManagement({
       invoke: async () => ({
         ok: true,
         environmentConfig: {
@@ -250,7 +250,7 @@ describe("hosted integration management tools", () => {
     });
 
     const result = await runTool(
-      "hosted_integration_environment_config_get",
+      "hosted_tool_environment_config_get",
       { family_id: "qualys", environment: "prod" },
       "tool-developer",
     );
@@ -269,8 +269,8 @@ describe("hosted integration management tools", () => {
   });
 
   it("delegates readiness inspection through the control-plane port", async () => {
-    const calls: HostedIntegrationManagementRequest[] = [];
-    bindHostedIntegrationManagement({
+    const calls: HostedToolManagementRequest[] = [];
+    bindHostedToolManagement({
       invoke: async (request) => {
         calls.push(request);
         return {
@@ -297,7 +297,7 @@ describe("hosted integration management tools", () => {
 
     await expect(
       runTool(
-        "hosted_integration_readiness_get",
+        "hosted_tool_readiness_get",
         {
           target_type: "environment_config",
           family_id: "qualys",
@@ -316,7 +316,7 @@ describe("hosted integration management tools", () => {
     expect(calls).toMatchObject([
       {
         actorId: "tool-developer",
-        operation: "hosted_integration_readiness_get",
+        operation: "hosted_tool_readiness_get",
         params: {
           target_type: "environment_config",
           family_id: "qualys",
@@ -327,8 +327,8 @@ describe("hosted integration management tools", () => {
   });
 
   it("rejects offline parity readiness as a product management-tool target", async () => {
-    const calls: HostedIntegrationManagementRequest[] = [];
-    bindHostedIntegrationManagement({
+    const calls: HostedToolManagementRequest[] = [];
+    bindHostedToolManagement({
       invoke: async (request) => {
         calls.push(request);
         return { ok: true };
@@ -336,7 +336,7 @@ describe("hosted integration management tools", () => {
     });
 
     const result = await runTool(
-      "hosted_integration_readiness_get",
+      "hosted_tool_readiness_get",
       { target_type: "mig" + "ration" },
       "tool-developer",
     );
@@ -351,13 +351,13 @@ describe("hosted integration management tools", () => {
   });
 
   it("rejects self-approval style destructive promotion parameters", async () => {
-    bindHostedIntegrationManagement({
+    bindHostedToolManagement({
       invoke: async () => {
         throw new Error("should not be called");
       },
     });
 
-    const output = await registry.dispatch("hosted_integration_promote", {
+    const output = await registry.dispatch("hosted_tool_promote", {
       draft_id: "draft_1",
       lock_id: "lock_1",
       approvalGranted: true,

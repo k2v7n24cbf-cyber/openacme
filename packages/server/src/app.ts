@@ -292,6 +292,8 @@ export async function createApp(
     persistenceBackend: runtime.hostedIntegrationPersistenceBackend,
     resolveAgentDef: (agentId) => manager.getAgentDef(agentId),
     listAgentDefs: () => manager.listAgents(),
+    onHostedIntegrationDeleteDraining: (familyId) =>
+      runtime.scheduleHostedIntegrationDeleteFinalization(familyId),
   });
 
   // Health check
@@ -2021,23 +2023,13 @@ export async function createApp(
  */
 const UPSTREAM_ERROR_MAX_CHARS = 4096;
 
-function buildUpstreamErrorPart(
-  err: unknown,
-  agentId: string,
-  manager: AgentManager,
-) {
+function buildUpstreamErrorPart(err: unknown, provider?: string) {
   const statusCode = extractStatusCode(err);
   const raw = extractErrorText(err);
   const message =
     raw.length > UPSTREAM_ERROR_MAX_CHARS
       ? raw.slice(0, UPSTREAM_ERROR_MAX_CHARS)
       : raw;
-  let provider: string | undefined;
-  try {
-    provider = manager.getAgent(agentId).config.model.provider;
-  } catch {
-    /* agent gone — render without provider chip */
-  }
   return {
     type: "data-upstream-error" as const,
     data: { provider, statusCode, message },
@@ -2078,16 +2070,17 @@ function persistChatTurnError(args: {
   responseMessageId: string;
   error: unknown;
   contextSnapshotId?: string;
+  provider?: string;
 }): void {
   const {
     manager,
-    agentId,
     sessionId,
     responseMessageId,
     error,
     contextSnapshotId,
+    provider,
   } = args;
-  const upstreamErrorPart = buildUpstreamErrorPart(error, agentId, manager);
+  const upstreamErrorPart = buildUpstreamErrorPart(error, provider);
   const metadata = contextSnapshotId
     ? { contextSnapshotId, contextCompressed: true }
     : undefined;
@@ -2166,6 +2159,34 @@ async function runChatTurn(args: {
     });
   }
 
+  let turnAgent: ReturnType<AgentManager["getAgent"]>;
+  let turnProvider: string | undefined;
+  try {
+    const refresh = manager.getAgentCatalogRefresh(agentId);
+    turnAgent = refresh.agent;
+    turnProvider = turnAgent.config.model.provider;
+    manager.recordToolCatalogNotice({
+      agentId,
+      sessionId,
+      responseMessageId,
+      refresh,
+    });
+  } catch (e) {
+    persistChatTurnError({
+      manager,
+      agentId,
+      sessionId,
+      responseMessageId,
+      error: e,
+    });
+    manager.dispatcher.clearInteractiveBusy(sessionId);
+    manager.broadcaster.broadcast(sessionId, {
+      kind: "session_state",
+      state: "idle",
+    });
+    return;
+  }
+
   // Preflight: compact the session in place if the next request would
   // exceed the configured threshold. The session id is preserved
   // (rename-swap), so all external references stay valid; we only
@@ -2190,8 +2211,7 @@ async function runChatTurn(args: {
     });
   };
   try {
-    const agent = manager.getAgent(agentId);
-    const prepared = await agent.prepareModelHistory(
+    const prepared = await turnAgent.prepareModelHistory(
       sessionId,
       history,
       "proactive",
@@ -2223,6 +2243,7 @@ async function runChatTurn(args: {
         responseMessageId,
         error,
         contextSnapshotId,
+        provider: turnProvider,
       });
       manager.dispatcher.clearInteractiveBusy(sessionId);
       manager.broadcaster.broadcast(sessionId, {
@@ -2245,6 +2266,7 @@ async function runChatTurn(args: {
       responseMessageId,
       error: e,
       contextSnapshotId,
+      provider: turnProvider,
     });
     manager.dispatcher.clearInteractiveBusy(sessionId);
     manager.broadcaster.broadcast(sessionId, {
@@ -2297,9 +2319,7 @@ async function runChatTurn(args: {
       return extractErrorText(err);
     },
     execute: async ({ writer }) => {
-      const agent = manager.getAgent(agentId);
-
-      const recall = await agent.applyMemoryRecall({
+      const recall = await turnAgent.applyMemoryRecall({
         sessionId,
         history,
         signal,
@@ -2307,7 +2327,7 @@ async function runChatTurn(args: {
       // Attach to the new user msg before runStream: the model sees it
       // via uiToModelMessages this turn; persisted in onFinish so future
       // loads replay identical bytes (prefix cache).
-      const recallPart = agent.buildRelevantMemoryPart(
+      const recallPart = turnAgent.buildRelevantMemoryPart(
         recall.entries,
         recall.modelContent,
       );
@@ -2321,7 +2341,7 @@ async function runChatTurn(args: {
         }
       }
 
-      const result = await agent.runStream({
+      const result = await turnAgent.runStream({
         sessionId,
         history,
         signal,
@@ -2440,8 +2460,7 @@ async function runChatTurn(args: {
           });
           const upstreamErrorPart = buildUpstreamErrorPart(
             capturedError,
-            agentId,
-            manager,
+            turnProvider,
           );
           log.warn(
             {
@@ -2499,7 +2518,7 @@ async function runChatTurn(args: {
         manager.messageStore.getHistory(sessionId),
       ) as unknown as UIMessage[];
       try {
-        manager.getAgent(agentId).fireExtractor({
+        turnAgent.fireExtractor({
           sessionId,
           sessionMessages: turnHistory,
         });
@@ -2507,7 +2526,7 @@ async function runChatTurn(args: {
         log.warn({ err: e, agentId }, "memory.extractor launch failed");
       }
       try {
-        manager.getAgent(agentId).fireTitle({
+        turnAgent.fireTitle({
           sessionId,
           sessionMessages: turnHistory,
         });

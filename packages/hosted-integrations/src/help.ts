@@ -68,7 +68,7 @@ export const HostedIntegrationToolHelpRequestSchema = z
       .string()
       .min(1)
       .describe(
-        "Managed hosted tool name, e.g. managed_qualys__qualys_cloud_agent_hostasset_count.",
+        "Hosted tool name, e.g. hosted_qualys__qualys_cloud_agent_hostasset_count.",
       ),
     tool_detail: HostedIntegrationHelpDetailSchema.default("summary").describe(
       "Use full when you need invocation details, filter/query syntax, or examples before calling a tool.",
@@ -158,7 +158,7 @@ export interface HostedIntegrationHelpGenerationStore {
 export interface ResolveHostedIntegrationToolHelpInput {
   dataDir: string;
   generations: HostedIntegrationHelpGenerationStore;
-  managedToolName: string;
+  hostedToolName: string;
   familyId: string;
   toolName: string;
   request: Omit<HostedIntegrationToolHelpRequest, "tool_name">;
@@ -228,7 +228,7 @@ export async function resolveHostedIntegrationToolHelp(
     return {
       ok: true,
       help: HostedIntegrationResolvedToolHelpSchema.parse({
-        tool_name: input.managedToolName,
+        tool_name: input.hostedToolName,
         family_id: familyId,
         family_tool_name: toolName,
         generation_id: generation.id,

@@ -50,12 +50,18 @@ const GenerationStatusStateSchema = z
   })
   .strict();
 
-export interface HostedIntegrationRegistryRefreshEvent {
-  familyId: HostedIntegrationFamilyId;
-  generationId: string;
-  reason: "promote" | "rollback";
-  toolNames: string[];
-}
+export type HostedIntegrationRegistryRefreshEvent =
+  | {
+      familyId: HostedIntegrationFamilyId;
+      generationId: string;
+      reason: "promote" | "rollback";
+      toolNames: string[];
+    }
+  | {
+      familyId: HostedIntegrationFamilyId;
+      reason: "delete";
+      toolNames: string[];
+    };
 
 export interface FileHostedIntegrationGenerationStoreOptions {
   dataDir: string;
@@ -139,6 +145,12 @@ export interface HostedIntegrationGenerationStore {
   completeInvocation(
     request: CompleteHostedIntegrationInvocationRequest,
   ): Promise<void>;
+  getInflightInvocationCount(
+    familyId: HostedIntegrationFamilyId | string,
+  ): Promise<number>;
+  hasInflightInvocations(
+    familyId: HostedIntegrationFamilyId | string,
+  ): Promise<boolean>;
   rollback(
     request: RollbackHostedIntegrationGenerationRequest,
   ): Promise<RollbackHostedIntegrationGenerationResult>;
@@ -433,6 +445,23 @@ class FileHostedIntegrationGenerationStore implements HostedIntegrationGeneratio
       return;
     }
     this.inflightByGeneration.set(generationId, nextCount);
+  }
+
+  async hasInflightInvocations(
+    familyId: HostedIntegrationFamilyId | string,
+  ): Promise<boolean> {
+    return (await this.getInflightInvocationCount(familyId)) > 0;
+  }
+
+  async getInflightInvocationCount(
+    familyId: HostedIntegrationFamilyId | string,
+  ): Promise<number> {
+    const generations = await this.listGenerations({ familyId });
+    return generations.reduce(
+      (count, generation) =>
+        count + (this.inflightByGeneration.get(generation.id) ?? 0),
+      0,
+    );
   }
 
   async rollback(

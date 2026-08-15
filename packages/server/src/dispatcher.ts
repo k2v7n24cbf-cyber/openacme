@@ -993,8 +993,10 @@ export class Dispatcher {
       };
     }
     let agent;
+    let refresh;
     try {
-      agent = this.agentManager.getAgent(agentId);
+      refresh = this.agentManager.getAgentCatalogRefresh(agentId);
+      agent = refresh.agent;
     } catch (e) {
       const message = extractErrorText(e);
       log.warn(
@@ -1025,6 +1027,12 @@ export class Dispatcher {
     const taskId =
       this.timelineTaskForSession(sessionId, this.now().getTime())?.id ??
       decision.taskId;
+    this.agentManager.recordToolCatalogNotice({
+      sessionId,
+      agentId,
+      taskId,
+      refresh,
+    });
     this.recordTimeline({
       sessionId,
       agentId,

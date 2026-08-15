@@ -1,33 +1,33 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildHostedIntegrationManagedToolName,
-  HOSTED_INTEGRATION_MANAGED_TOOL_NAME_MAX_LENGTH,
-  HostedIntegrationManagedToolNameSchema,
-  parseHostedIntegrationManagedToolName,
+  buildHostedToolName,
+  HOSTED_TOOL_NAME_MAX_LENGTH,
+  HostedToolNameSchema,
+  parseHostedToolName,
 } from "../src/index.js";
 
-describe("hosted integration managed tool naming", () => {
-  it("builds and parses managed canonical tool names", () => {
-    const name = buildHostedIntegrationManagedToolName({
+describe("hosted tool naming", () => {
+  it("builds and parses hosted canonical tool names", () => {
+    const name = buildHostedToolName({
       familyId: "splunk",
       toolName: "splunk_search",
     });
 
-    expect(name).toBe("managed_splunk__splunk_search");
-    expect(parseHostedIntegrationManagedToolName(name)).toEqual({
+    expect(name).toBe("hosted_splunk__splunk_search");
+    expect(parseHostedToolName(name)).toEqual({
       familyId: "splunk",
       toolName: "splunk_search",
     });
   });
 
   it("preserves hyphenated families and underscored native tool names", () => {
-    const name = buildHostedIntegrationManagedToolName({
+    const name = buildHostedToolName({
       familyId: "defender-alert",
       toolName: "defender_alert_get",
     });
 
-    expect(name).toBe("managed_defender-alert__defender_alert_get");
-    expect(parseHostedIntegrationManagedToolName(name)).toEqual({
+    expect(name).toBe("hosted_defender-alert__defender_alert_get");
+    expect(parseHostedToolName(name)).toEqual({
       familyId: "defender-alert",
       toolName: "defender_alert_get",
     });
@@ -35,41 +35,41 @@ describe("hosted integration managed tool naming", () => {
 
   it("rejects invalid family or native tool segments", () => {
     expect(() =>
-      buildHostedIntegrationManagedToolName({
+      buildHostedToolName({
         familyId: "Defender Alert",
         toolName: "defender_alert_get",
       }),
     ).toThrow();
     expect(() =>
-      buildHostedIntegrationManagedToolName({
+      buildHostedToolName({
         familyId: "defender-alert",
         toolName: "defender-alert-search",
       }),
     ).toThrow();
     expect(
-      HostedIntegrationManagedToolNameSchema.safeParse(
-        "managed_qualys__bad__tool",
+      HostedToolNameSchema.safeParse(
+        "hosted_qualys__bad__tool",
       ).success,
     ).toBe(false);
   });
 
-  it("rejects provider-incompatible managed names without aliasing", () => {
+  it("rejects provider-incompatible hosted names without aliasing", () => {
     const longToolName = `a_${"x".repeat(
-      HOSTED_INTEGRATION_MANAGED_TOOL_NAME_MAX_LENGTH,
+      HOSTED_TOOL_NAME_MAX_LENGTH,
     )}`;
 
     expect(() =>
-      buildHostedIntegrationManagedToolName({
+      buildHostedToolName({
         familyId: "qualys",
         toolName: longToolName,
       }),
-    ).toThrow(/invalid managed hosted integration tool name/);
+    ).toThrow(/invalid hosted tool name/);
   });
 
-  it("returns null when parsing non-managed names", () => {
-    expect(parseHostedIntegrationManagedToolName("splunk_search")).toBeNull();
+  it("returns null when parsing non-hosted names", () => {
+    expect(parseHostedToolName("splunk_search")).toBeNull();
     expect(
-      parseHostedIntegrationManagedToolName(
+      parseHostedToolName(
         "mcp_integration-hub__splunk_search",
       ),
     ).toBeNull();

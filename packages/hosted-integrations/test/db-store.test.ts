@@ -213,6 +213,100 @@ describe("DB-backed hosted integration stores", () => {
     });
   });
 
+  it("deletes a DB-backed family while preserving historical execution logs", async () => {
+    ids = ["lock_1", "source_rev_1", "draft_1", "gen_1"];
+    await writeCatalogFamily("qualys");
+    const service = createDbHostedIntegrationService({
+      db,
+      dataDir,
+      now,
+      createId,
+    });
+
+    const lock = await service.locks.acquireLock({
+      familyId: "qualys",
+      lockedBy: "agent:tool-developer",
+      ttlMs: 60_000,
+    });
+    expect(lock).toMatchObject({ ok: true, lock: { id: "lock_1" } });
+    await expect(
+      service.sourceFiles.replaceSourceFiles({
+        familyId: "qualys",
+        updatedBy: "agent:tool-developer",
+        files: {
+          "family.yaml": familyYaml("qualys"),
+          "qualys.py": "def tool_qualys_tool(args, context):\n    return {}\n",
+        },
+      }),
+    ).resolves.toEqual({ ok: true, sourceRevisionId: "source_rev_1" });
+    await expect(
+      service.drafts.createDraft({
+        familyId: "qualys",
+        lockId: "lock_1",
+        sourceRevisionId: "source_rev_1",
+      }),
+    ).resolves.toMatchObject({ ok: true, draft: { id: "draft_1" } });
+    await expect(
+      service.environmentConfigs.upsertEnvironmentConfig({
+        familyId: "qualys",
+        environment: "test_debug",
+        config: { baseUrl: "https://qualys.example" },
+        secrets: { apiKey: { configured: true } },
+        updatedBy: "human:alen",
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      service.generations.promoteDraft({
+        draftId: "draft_1",
+        promotedBy: "agent:tool-developer",
+        validation: { ok: true, diagnostics: [] },
+        sourceRevisionId: "source_rev_1",
+      }),
+    ).resolves.toMatchObject({ ok: true, generation: { id: "gen_1" } });
+    await expect(
+      service.disablements.setDisabled({
+        target: { level: "family", familyId: "qualys" },
+        disabled: true,
+        updatedBy: "agent:tool-developer",
+        reason: "cleanup coverage",
+      }),
+    ).resolves.toMatchObject({ disabled: true, key: "family:qualys" });
+    await service.gateway.executionLogs.startLog(baseLog());
+
+    await expect(
+      service.deleteFamily({
+        familyId: "qualys",
+        deletedBy: "agent:tool-developer",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      familyId: "qualys",
+      status: "deleted",
+      deleted: true,
+      generationIds: ["gen_1"],
+    });
+
+    expect(tableCount("hosted_integration_source_revisions")).toBe(0);
+    expect(tableCount("hosted_integration_source_files")).toBe(0);
+    expect(tableCount("hosted_integration_drafts")).toBe(0);
+    expect(tableCount("hosted_integration_draft_files")).toBe(0);
+    expect(tableCount("hosted_integration_environment_configs")).toBe(0);
+    expect(tableCount("hosted_integration_secret_metadata")).toBe(0);
+    expect(tableCount("hosted_integration_generations")).toBe(1);
+    expect(tableCount("hosted_integration_generation_files")).toBe(2);
+    expect(tableCount("hosted_integration_active_generations")).toBe(0);
+    expect(tableCount("hosted_integration_disablements")).toBe(0);
+    expect(tableCount("hosted_integration_execution_logs")).toBe(1);
+    expect(
+      db
+        .prepare<
+          [],
+          { status: string }
+        >("SELECT status FROM hosted_integration_generations WHERE id = 'gen_1'")
+        .get()?.status,
+    ).toBe("disabled");
+  });
+
   it("promotes drafts transactionally, materializes generation files, drains, and rolls back", async () => {
     ids = ["lock_1", "draft_1", "gen_1", "gen_2"];
     const locks = lockStore();
@@ -416,7 +510,9 @@ describe("DB-backed hosted integration stores", () => {
       },
     });
     await expect(
-      secrets.readSecretsForRuntime({ environmentConfigId: "qualys-test_debug" }),
+      secrets.readSecretsForRuntime({
+        environmentConfigId: "qualys-test_debug",
+      }),
     ).resolves.toEqual({
       QUALYS_API_KEY: "raw-token",
       QUALYS_USERNAME: "alen",
@@ -835,6 +931,13 @@ function createId(): string {
   const id = ids.shift();
   if (!id) throw new Error("test id queue exhausted");
   return id;
+}
+
+function tableCount(table: string): number {
+  const row = db
+    .prepare<[], { count: number }>(`SELECT COUNT(*) AS count FROM ${table}`)
+    .get();
+  return row?.count ?? 0;
 }
 
 function catalogWithFamily(familyId: string): HostedIntegrationCatalog {

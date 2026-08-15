@@ -44,7 +44,7 @@ export type HostedIntegrationAgentBindingGenerationPin =
 export interface HostedIntegrationAgentBindingMatrixRowInput {
   agentId: string;
   agentName: string;
-  managedToolName: string;
+  hostedToolName: string;
   familyId: string;
   toolName: string;
   bindingKind: "agent" | "internal";
@@ -72,7 +72,7 @@ export interface HostedIntegrationAgentBindingMatrixGroup {
 export interface HostedIntegrationAgentBindingMatrix {
   familyId: string;
   toolName: string;
-  managedToolName: string;
+  hostedToolName: string;
   totalCount: number;
   agentCount: number;
   internalCount: number;
@@ -87,7 +87,6 @@ export interface HostedIntegrationFamilyDetail {
     version: number;
     runtime?: {
       entrypoint?: string;
-      handlerDispatch?: "derived" | "legacy_call_tool";
     };
     runtimeConfig?: HostedIntegrationRuntimeConfigContract;
     tools: HostedIntegrationToolSpec[];
@@ -97,7 +96,7 @@ export interface HostedIntegrationFamilyDetail {
 export function buildHostedIntegrationAgentBindingMatrix(input: {
   familyId: string;
   toolName: string;
-  managedToolName: string;
+  hostedToolName: string;
   bindings: HostedIntegrationAgentBindingMatrixRowInput[];
 }): HostedIntegrationAgentBindingMatrix {
   const rows = input.bindings
@@ -105,7 +104,7 @@ export function buildHostedIntegrationAgentBindingMatrix(input: {
       (binding) =>
         binding.familyId === input.familyId &&
         binding.toolName === input.toolName &&
-        binding.managedToolName === input.managedToolName,
+        binding.hostedToolName === input.hostedToolName,
     )
     .map((binding) => ({
       ...binding,
@@ -121,7 +120,7 @@ export function buildHostedIntegrationAgentBindingMatrix(input: {
   return {
     familyId: input.familyId,
     toolName: input.toolName,
-    managedToolName: input.managedToolName,
+    hostedToolName: input.hostedToolName,
     totalCount: rows.length,
     agentCount: agentRows.length,
     internalCount: internalRows.length,

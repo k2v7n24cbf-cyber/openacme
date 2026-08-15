@@ -186,6 +186,22 @@ function buildWorkflowAgentCallMessage(prompt: string, input: unknown): string {
 // agent stops when it has no more tool calls, never because we capped it.
 const DEFAULT_MAX_STEPS = 1000;
 
+interface AgentCacheEntry {
+  agent: Agent;
+  toolCatalogGeneration: number;
+  emittedToolNames: string[];
+}
+
+export interface AgentCatalogRefreshResult {
+  agent: Agent;
+  previousGeneration: number | null;
+  currentGeneration: number;
+  rebuilt: boolean;
+  emittedToolNames: string[];
+  addedToolNames: string[];
+  removedToolNames: string[];
+}
+
 /** Pull the operator-facing message out of a `ping_user` event payload.
  *  Payload shape is `{ message: string }` per ping.ts but the column is
  *  JSON-typed so we treat it as `unknown` and narrow defensively. */
@@ -228,7 +244,7 @@ function writeAgentsMd(dataDir: string, content: string): void {
  * Routes chat requests to the correct agent.
  */
 export class AgentManager {
-  private agents = new Map<string, Agent>();
+  private agents = new Map<string, AgentCacheEntry>();
   private peerAskRunning = new Set<string>();
   private db: ReturnType<typeof createDatabase>;
   readonly sessionStore: SessionStore;
@@ -1173,14 +1189,55 @@ export class AgentManager {
    * Get or lazily create an Agent instance.
    */
   getAgent(id: string): Agent {
-    let agent = this.agents.get(id);
-    if (!agent) {
+    return this.getAgentCatalogRefresh(id).agent;
+  }
+
+  getAgentCatalogRefresh(
+    id: string,
+    options: { toolFilter?: Set<string>; excludeToolNames?: Set<string> } = {},
+  ): AgentCatalogRefreshResult {
+    let entry = this.agents.get(id);
+    const previousEntry = entry;
+    if (entry && entry.toolCatalogGeneration !== toolRegistry.generation) {
+      this.agents.delete(id);
+      entry = undefined;
+    }
+    if (!entry) {
       const def = this.agentStore.get(id);
       if (!def) throw new Error(`Agent not found: ${id}`);
-      agent = this.createAgentFromDef(def);
-      this.agents.set(id, agent);
+      const agent = this.createAgentFromDef(def);
+      entry = this.createAgentCacheEntry(agent);
+      this.agents.set(id, entry);
     }
-    return agent;
+    const emittedToolNames = this.applyToolFilter(
+      entry.emittedToolNames,
+      options.toolFilter,
+      options.excludeToolNames,
+    );
+    const previousToolNames =
+      previousEntry &&
+      previousEntry.toolCatalogGeneration !== entry.toolCatalogGeneration
+        ? this.applyToolFilter(
+            previousEntry.emittedToolNames,
+            options.toolFilter,
+            options.excludeToolNames,
+          )
+        : emittedToolNames;
+    return {
+      agent: entry.agent,
+      previousGeneration: previousEntry?.toolCatalogGeneration ?? null,
+      currentGeneration: entry.toolCatalogGeneration,
+      rebuilt:
+        previousEntry != null &&
+        previousEntry.toolCatalogGeneration !== entry.toolCatalogGeneration,
+      emittedToolNames,
+      addedToolNames: emittedToolNames.filter(
+        (name) => !previousToolNames.includes(name),
+      ),
+      removedToolNames: previousToolNames.filter(
+        (name) => !emittedToolNames.includes(name),
+      ),
+    };
   }
 
   /**
@@ -1246,7 +1303,7 @@ export class AgentManager {
     await this.toolHostManager.stopAll();
     await this.queueMcpReinit(provisioned.id);
     const agent = this.createAgentFromDef(provisioned);
-    this.agents.set(provisioned.id, agent);
+    this.agents.set(provisioned.id, this.createAgentCacheEntry(agent));
     return agent;
   }
 
@@ -2308,6 +2365,28 @@ export class AgentManager {
     });
   }
 
+  private createAgentCacheEntry(agent: Agent): AgentCacheEntry {
+    return {
+      agent,
+      toolCatalogGeneration: toolRegistry.generation,
+      emittedToolNames: toolRegistry.getEmittedToolNames(
+        new Set(agent.config.tools),
+      ),
+    };
+  }
+
+  private applyToolFilter(
+    toolNames: string[],
+    toolFilter?: Set<string>,
+    excludeToolNames?: Set<string>,
+  ): string[] {
+    return toolNames.filter(
+      (name) =>
+        (!toolFilter || toolFilter.has(name)) &&
+        (!excludeToolNames || !excludeToolNames.has(name)),
+    );
+  }
+
   private ownsPeerAskSession(
     sessionId: string,
     callerAgentId: string,
@@ -2499,10 +2578,20 @@ export class AgentManager {
         ],
       });
 
-      const agent = this.getAgent(request.targetAgentId);
+      const responseMessageId = randomUUID();
+      const refresh = this.getAgentCatalogRefresh(request.targetAgentId, {
+        excludeToolNames: new Set(["agent_ask"]),
+      });
+      const agent = refresh.agent;
       const peerAskToolFilter = new Set(
         agent.config.tools.filter((t) => t !== "agent_ask"),
       );
+      this.recordToolCatalogNotice({
+        sessionId: session.id,
+        agentId: request.targetAgentId,
+        responseMessageId,
+        refresh,
+      });
       const prepared = await agent.prepareModelHistory(
         session.id,
         sanitizeStoredHistory(
@@ -2535,7 +2624,6 @@ export class AgentManager {
       }
 
       let capturedError: unknown = null;
-      const responseMessageId = randomUUID();
       const result = await agent.runStream({
         sessionId: session.id,
         history,
@@ -2796,6 +2884,50 @@ export class AgentManager {
         "session timeline record failed",
       );
     }
+  }
+
+  recordToolCatalogNotice(input: {
+    sessionId: string;
+    agentId: string;
+    responseMessageId?: string;
+    taskId?: string | null;
+    refresh: AgentCatalogRefreshResult;
+  }): void {
+    if (!input.refresh.rebuilt) return;
+    if (
+      input.refresh.addedToolNames.length === 0 &&
+      input.refresh.removedToolNames.length === 0
+    ) {
+      return;
+    }
+    const payload = {
+      agentId: input.agentId,
+      previousGeneration: input.refresh.previousGeneration,
+      currentGeneration: input.refresh.currentGeneration,
+      addedToolNames: input.refresh.addedToolNames,
+      removedToolNames: input.refresh.removedToolNames,
+      addedHostedTools: input.refresh.addedToolNames
+        .filter((toolName) => toolName.startsWith("hosted_"))
+        .map((toolName) => ({ toolName, grantStatus: "granted" as const })),
+      ...(input.responseMessageId
+        ? { responseMessageId: input.responseMessageId }
+        : {}),
+      ...(input.taskId ? { taskId: input.taskId } : {}),
+    };
+    this.recordSessionTimeline({
+      sessionId: input.sessionId,
+      agentId: input.agentId,
+      messageId: input.responseMessageId,
+      taskId: input.taskId ?? null,
+      eventType: "session.tool_catalog.changed",
+      source: "server",
+      status: "ok",
+      payload,
+    });
+    this.broadcaster.broadcast(input.sessionId, {
+      kind: "tool_catalog_notice",
+      ...payload,
+    });
   }
 
   // ── MCP OAuth wiring ─────────────────────────────────────────────────────

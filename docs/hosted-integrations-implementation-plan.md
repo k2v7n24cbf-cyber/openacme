@@ -34,7 +34,7 @@ view-level cutover.
 - Runtime package source under `packages/hosted-integrations/src` must not
   contain generated legacy integration-hub source, replacement inventories, or
   parity fixture catalogs.
-- Active registry names use `managed_<family>__<tool>` for hosted integrations
+- Active registry names use `hosted_<family>__<tool>` for hosted integrations
   and `mcp_<server>__<tool>` for remote MCP. These surfaces are independent.
 - Active configuration uses `prod` and `test_debug` environment configs plus
   separate per-agent hosted-tool bindings. Historical config-scope references
@@ -99,10 +99,10 @@ Evidence:
   load `$hosted-integrations-development` through a real `/api/chat` turn.
 - Proves Tool Developer can create a new hosted integration family, patch
   source, register safe examples, validate, run an example, promote, and release
-  the lock through `hosted_integration_*` management tools reached from chat.
+  the lock through `hosted_tool_*` management tools reached from chat.
 - Proves Tool Developer can inspect lifecycle state through management tools:
-  source files, draft metadata, registered examples, config scopes, execution
-  logs, artifacts, generations, and generation rollback.
+  source files, draft metadata, registered examples, environment config
+  metadata, execution logs, artifacts, generations, and generation rollback.
 - Proves lock renewal and draft file deletion are covered through the same
   chat-driven lifecycle path before repair promotion.
 - Proves promoted hosted integration tools surface through `/api/tools` and can
@@ -209,7 +209,9 @@ Known implementation surfaces that need explicit slices:
 - family-level runtime settings for timeouts, inline result spillover threshold,
   concurrency, and sandbox policy
 - Python dependency declaration, validation, and generation pinning
-- migration/cutover from the current external `integration-hub` MCP setup
+- operator/test parity flows that can read legacy `integration-hub` inputs
+  without turning them into product runtime code, management-tool targets, or
+  authorization aliases
 - UI visibility for family locks and active generations
 - UI draft code editing through the same lock/draft/validation/promotion APIs
 - deterministic tool handler naming, standard family hooks, and focused source
@@ -218,8 +220,8 @@ Known implementation surfaces that need explicit slices:
   highlighting, focused code view, and generation diff UI
 - local safe hosted-tool smoke validation in the isolated test environment
 - optional OpenTelemetry wiring after execution logs exist
-- hosted-managed-tool-only help surface with summary/full tool help,
-  summary/full parameter help, and examples for all active managed hosted tools
+- hosted-tool-only help surface with summary/full tool help,
+  summary/full parameter help, and examples for all active hosted tools
 
 ## Milestone 0: Planning Baseline
 
@@ -1202,6 +1204,12 @@ Evidence:
 
 Status: done.
 
+Historical note after Milestone 24: this milestone originally kept a temporary
+`legacy_call_tool` compatibility path for early replacement fixtures. That path
+is superseded. The active runtime/schema contract is fieldless derived-only:
+manifests do not declare dispatch mode, and product runtime never dispatches
+`call_tool(name, args, context)`.
+
 Goal:
 
 - Add runtime API routes:
@@ -1560,7 +1568,7 @@ Status: done.
 
 Goal:
 
-- Add `hosted_integration_*` management tools in `packages/tools`.
+- Add `hosted_tool_*` management tools in `packages/tools`.
 - Each wrapper delegates to the Hosted Integrations API/control-plane port.
 - Add a bindable hosted integrations control-plane interface following the
   existing tools package binding style, so tool handlers do not perform raw HTTP
@@ -1601,7 +1609,7 @@ Evidence:
 
 - Red/green validation:
   `pnpm --filter @openacme/server test -- tools-hosted-integrations` first
-  exposed that `hosted_integration_promote` did not refresh the registry through
+  exposed that `hosted_tool_promote` did not refresh the registry through
   the management path and that the test was reading registry info incorrectly.
 - Green validation:
   `pnpm --filter @openacme/tools test -- hosted-integration-management`
@@ -1943,7 +1951,7 @@ Implementation notes:
   not the `tool_developer` role alone, to suppress failure-bucket callbacks so
   the validation loop does not create repair-task churn.
 - Current route authorization may temporarily key maintenance/debug authority
-  off the canonical managed Tool Developer agent id. Track this as design debt:
+  off the canonical Tool Developer agent id. Track this as design debt:
   replace it with a centralized authority resolver based on managed-agent
   template metadata and future family maintainer/lock/bucket assignment state.
 
@@ -2308,9 +2316,9 @@ Implemented:
 - Agent Settings now renders selected tool groups before unselected catalog
   groups, keeping existing hosted tool access policy visible before unrelated
   available tools.
-- Managed tool names in Agent Settings wrap to two lines with full-name hover
+- Hosted tool names in Agent Settings wrap to two lines with full-name hover
   detail, so selected hosted tools can be distinguished by operation instead of
-  being clipped at the shared `managed_<family>__...` prefix.
+  being clipped at the shared `hosted_<family>__...` prefix.
 - Hosted tool access binding rows follow the same readable-name rule and label
   the `Config scope` selector explicitly, so access policy rows remain
   understandable on mobile.
@@ -2535,7 +2543,7 @@ Evidence:
 - Preserved legacy external MCP names as
   `mcp_integration-hub__<legacyToolName>`. This early migration inventory kept
   hosted registry names equal to legacy native tool names; Milestone 11
-  supersedes that target with managed canonical registry names.
+  supersedes that target with hosted tool canonical registry names.
 - Captured family-level config keys and human-managed secret refs for the early
   config-scope model. Historical note after Milestone 18: active
   implementation uses `prod` and `test_debug` environment configs plus
@@ -2602,7 +2610,7 @@ Non-goals:
 
 TDD:
 
-- replacement family exposes the expected hosted integration tool names
+- replacement family exposes the expected hosted tool names
 - examples pass through hosted integration runtime
 - old result-file expectations map to run artifacts
 
@@ -2671,7 +2679,7 @@ Status: superseded by Milestone 11 naming-boundary hardening.
 
 The evidence below records the earlier implementation state. It is no longer
 the target naming contract. Do not reintroduce view-level hiding, cutover alias
-behavior, or remote-MCP-to-managed authorization redirects.
+behavior, or remote-MCP-to-hosted authorization redirects.
 
 Evidence:
 
@@ -2719,7 +2727,7 @@ pnpm --filter @openacme/server test -- hosted-integrations
 pnpm --filter @openacme/tools test -- hosted-integrations
 ```
 
-## Milestone 11: Managed Tool Naming Boundary
+## Milestone 11: Hosted Tool Naming Boundary
 
 Goal: make hosted integration tools and remote MCP tools independent at the
 canonical tool-name boundary. Agent Settings, access policy, model-facing tool
@@ -2729,8 +2737,8 @@ hosted tool names colliding with remote MCP names.
 Architecture contract:
 
 - family manifests keep family-native tool names, such as `splunk_search`
-- registry-facing hosted tools use `managed_<family>__<tool>`
-- managed canonical names must satisfy the model-provider tool/function name
+- registry-facing hosted tools use `hosted_<family>__<tool>`
+- hosted canonical names must satisfy the model-provider tool/function name
   pattern and length cap; invalid pairs fail validation instead of being
   truncated, hashed, aliased, or rewritten
 - remote MCP tools keep `mcp_<server>__<tool>`
@@ -2739,14 +2747,14 @@ Architecture contract:
   `source.toolName` as well as `familyId`, `familyName`, and `generationId`
 - hosted integration bindings still store `familyId`, family-native `toolName`,
   config scopes, environment, and policy data
-- the registry adapter maps canonical managed names back to
+- the registry adapter maps canonical hosted names back to
   `familyId/toolName/generationId` before dispatch
 - direct `/api/hosted-integrations/*` control-plane calls keep using
   family-native `toolName` inside their family context
 - hosted integration management-tool parameters keep using family-native
   `tool_name`
-- remote MCP entries must never enable managed hosted tools
-- managed hosted entries must never enable remote MCP tools
+- remote MCP entries must never enable hosted tools
+- hosted tool entries must never enable remote MCP tools
 - migration `replaces` metadata is operational metadata only, not an
   authorization alias
 
@@ -2754,7 +2762,7 @@ Non-goals:
 
 - No live integration-hub sync/cutover in this milestone.
 - No compatibility alias that accepts both old native hosted names and new
-  managed names in Agent Settings.
+  hosted names in Agent Settings.
 - No removal of remote MCP registrations.
 - No Agent Settings redesign beyond presenting the corrected canonical names.
 
@@ -2764,18 +2772,18 @@ Status: done.
 
 Evidence:
 
-- Added provider-safe managed hosted tool naming helpers in
+- Added provider-safe hosted tool naming helpers in
   `@openacme/hosted-integrations`.
-- Registered hosted integration tools as `managed_<family>__<tool>` while
+- Registered hosted integration tools as `hosted_<family>__<tool>` while
   preserving native family tool names in source metadata and gateway dispatch.
 - Extended hosted `ToolSource` metadata with native `source.toolName`.
 - Routed hosted registry invocations with both `canonicalToolName` and native
   `toolName`.
 - Removed default legacy integration-hub hiding from `/api/tools` and
   model-facing tool emission.
-- Proved managed hosted tools and remote MCP tools coexist as independent
+- Proved hosted tools and remote MCP tools coexist as independent
   registry surfaces.
-- Proved stale native hosted tool names are removed during managed-name refresh
+- Proved stale native hosted tool names are removed during hosted-name refresh
   so cached agents are evicted across the rename transition.
 - Green validation:
   `pnpm --filter @openacme/hosted-integrations test -- naming`
@@ -2787,14 +2795,14 @@ Goal:
 
 - Add a single hosted integration canonical-name helper in
   `@openacme/hosted-integrations` or the thin tools adapter.
-- Register hosted integration tools as `managed_<family>__<tool>`.
-- Reject provider-incompatible managed canonical names during validation or
+- Register hosted integration tools as `hosted_<family>__<tool>`.
+- Reject provider-incompatible hosted canonical names during validation or
   registry sync; do not introduce generated aliases.
 - Preserve family-native names in manifests, examples, generations, gateway
   calls, direct Hosted Integrations API calls, async jobs, disablements, run
   logs, artifacts, and failure buckets.
 - Extend hosted `ToolSource` metadata with the family-native tool name so UI
-  and runtime policy do not reverse-engineer it from the managed canonical
+  and runtime policy do not reverse-engineer it from the hosted canonical
   name.
 - Carry both `canonicalToolName` and family-native `toolName` through the
   hosted registry adapter invocation request.
@@ -2803,24 +2811,24 @@ Goal:
 
 TDD:
 
-- canonical helper builds and parses `managed_<family>__<tool>`
+- canonical helper builds and parses `hosted_<family>__<tool>`
 - invalid family/tool segments are rejected
-- provider-incompatible managed canonical names, including over-length names,
+- provider-incompatible hosted canonical names, including over-length names,
   are rejected with actionable diagnostics
 - canonical parser preserves family ids with hyphens and native tool names with
   underscores
-- hosted registry adapter exposes managed names but dispatches native
+- hosted registry adapter exposes hosted names but dispatches native
   `familyId/toolName`
 - hosted registry adapter rejects canonical collisions without treating native
   name matches as cross-layer replacements
 - `ToolInfo.source.toolName` is present for hosted tools returned by
   `/api/tools`
-- raw remote MCP and managed hosted tools can coexist in `/api/tools`
+- raw remote MCP and hosted tools can coexist in `/api/tools`
 - no view-level hiding occurs without an explicit future cutover option
-- registry observation spans record the managed canonical tool name while
+- registry observation spans record the hosted canonical tool name while
   hosted execution logs record `familyId` plus native `toolName`
 - registry refresh evicts cached agents for both removed native hosted names
-  and newly registered managed canonical names during the rename transition
+  and newly registered hosted canonical names during the rename transition
 
 Validation:
 
@@ -2838,16 +2846,16 @@ Status: done.
 Evidence:
 
 - Updated Agent Settings helpers to store hosted integration selections in
-  `agent.tools` with managed canonical names while preserving hosted bindings
+  `agent.tools` with hosted canonical names while preserving hosted bindings
   as family-native `familyId/toolName` records.
-- Updated hosted registry/runtime policy tests so `managed_*` hosted selections
+- Updated hosted registry/runtime policy tests so `hosted_*` hosted selections
   and `mcp_*` remote MCP selections do not satisfy each other.
 - Added native-name diagnostics for hosted integration management tools and
   direct hosted control-plane calls where `tool_name` must stay family-native.
 - Updated Tool Developer Agent skill coverage so developer-facing lifecycle
-  guidance names the native-vs-managed boundary explicitly.
+  guidance names the native-vs-hosted-registry boundary explicitly.
 - Updated safe-tools and hosted-integrations dogfood fixtures so consumer
-  agents call promoted hosted tools through managed canonical registry names.
+  agents call promoted hosted tools through hosted tool canonical registry names.
 - Real LLM dogfood passed the skill, create/promote, consumer invocation,
   access-denial, and failure-bucket repair scenarios in the test data dir
   `/Users/alenbohcelyan/.openamce-hosted-integrations-test-env`.
@@ -2866,45 +2874,45 @@ Evidence:
 
 Goal:
 
-- Store managed hosted tool selections in `agent.tools` using canonical
-  `managed_<family>__<tool>` names.
+- Store hosted tool selections in `agent.tools` using canonical
+  `hosted_<family>__<tool>` names.
 - Keep hosted integration bindings keyed by family-native
   `familyId/toolName`.
 - Enforce that a selected remote MCP name cannot satisfy a hosted integration
-  binding and that a selected managed hosted name cannot satisfy an MCP tool.
-- Update API route tests and dogfood fixtures to use managed canonical names
+  binding and that a selected hosted registry name cannot satisfy an MCP tool.
+- Update API route tests and dogfood fixtures to use hosted canonical names
   for model-facing calls.
 - Update the real LLM dogfood script so the developer-created native family
-  tools are consumed through managed canonical registry names.
+  tools are consumed through hosted tool canonical registry names.
 - Update Agent Settings web helpers so binding creation, default-scope editing,
-  and stale-binding pruning use `tool.source.toolName`, not the managed
+  and stale-binding pruning use `tool.source.toolName`, not the hosted
   canonical `tool.name`.
 - Update config schema tests to preserve hosted bindings as family-native
-  `familyId/toolName` records while `agent.tools` stores managed canonical
+  `familyId/toolName` records while `agent.tools` stores hosted canonical
   names.
 - Update the Tool Developer Agent skill so it explicitly says management-tool
   `tool_name`, manifest names, examples, debug runs, and failure-bucket
   references are family-native names, while Agent Settings/model-facing tools
-  use managed canonical names.
+  use hosted canonical names.
 
 TDD:
 
-- consumer agent with `managed_splunk__splunk_search` and a matching hosted
+- consumer agent with `hosted_splunk__splunk_search` and a matching hosted
   binding can invoke the hosted tool
 - consumer agent with only `mcp_integration-hub__splunk_search` cannot invoke
   the hosted tool
-- consumer agent with only `managed_splunk__splunk_search` cannot invoke the
+- consumer agent with only `hosted_splunk__splunk_search` cannot invoke the
   remote MCP tool
 - denied hosted binding still returns normalized `policy_denied`
-- `/api/tools` shows MCP and managed hosted entries as separate surfaces
-- Agent Settings selecting `managed_qualys__qualys_count_assets` stores
-  `agent.tools=["managed_qualys__qualys_count_assets"]` and a hosted binding
+- `/api/tools` shows MCP and hosted tool entries as separate surfaces
+- Agent Settings selecting `hosted_qualys__qualys_count_assets` stores
+  `agent.tools=["hosted_qualys__qualys_count_assets"]` and a hosted binding
   with `toolName="qualys_count_assets"`
 - direct `/api/hosted-integrations/invoke`, jobs, and debug runs continue to
-  accept family-native `toolName`, not managed canonical names
-- `hosted_integration_*` management tools reject or clearly diagnose managed
+  accept family-native `toolName`, not hosted canonical names
+- `hosted_tool_*` management tools reject or clearly diagnose hosted
   canonical names where family-native `tool_name` is required
-- Tool Developer Agent skill tests cover the native-vs-managed naming guidance
+- Tool Developer Agent skill tests cover the native-vs-hosted-registry naming guidance
 
 Validation:
 
@@ -2926,16 +2934,16 @@ Status: done.
 
 Evidence:
 
-- Added managed hosted canonical replacement metadata to legacy
+- Added hosted tool canonical replacement metadata to legacy
   integration-hub migration inventory entries.
-- Added migrated-family metadata for `managedToolNames` and explicit
-  legacy-MCP-to-managed-hosted replacement mappings.
+- Added migrated-family metadata for `hostedToolNames` and explicit
+  legacy-MCP-to-hosted replacement mappings.
 - Kept generated family manifests, examples, runtime execution, cache metadata,
   and promoted generation tool names family-native.
-- Validation now rejects malformed managed hosted names, malformed legacy MCP
-  names, duplicate native hosted targets, and duplicate managed hosted targets.
+- Validation now rejects malformed hosted tool names, malformed legacy MCP
+  names, duplicate native hosted targets, and duplicate hosted registry targets.
 - Server policy tests still prove replacement metadata is not an authorization
-  alias: a remote MCP-only selection cannot invoke a managed hosted tool.
+  alias: a remote MCP-only selection cannot invoke a hosted tool.
 - Green validation:
   `pnpm --filter @openacme/hosted-integrations test -- integration-hub-replacement`
   `pnpm --filter @openacme/hosted-integrations build`
@@ -2946,20 +2954,20 @@ Evidence:
 Goal:
 
 - Add explicit migration metadata that can state
-  `managed_<family>__<tool>` replaces `mcp_<server>__<tool>`.
+  `hosted_<family>__<tool>` replaces `mcp_<server>__<tool>`.
 - Keep replacement metadata out of dispatch and access policy.
 - Update integration-hub migration fixtures so hosted migrated tool names are
-  managed canonical names at registry/UI boundaries while source/runtime names
+  hosted canonical names at registry/UI boundaries while source/runtime names
   stay native.
 - Add parity tests that prove replacement metadata can be displayed or queried
   without hiding, enabling, or redirecting either tool.
 
 TDD:
 
-- migration inventory records both legacy MCP canonical name and managed
+- migration inventory records both legacy MCP canonical name and hosted
   hosted canonical name
-- replacement metadata rejects malformed MCP or managed names
-- migration fixtures promote native family tools and expose managed registry
+- replacement metadata rejects malformed MCP or hosted names
+- migration fixtures promote native family tools and expose hosted registry
   names
 - replacement metadata does not change agent allowlists or gateway policy
 
@@ -2972,14 +2980,14 @@ pnpm --filter @openacme/tools check-types
 pnpm --filter @openacme/server check-types
 ```
 
-## Milestone 12: Convert Integration-Hub To Managed Hosted Tools
+## Milestone 12: Convert Integration-Hub To Hosted Tools
 
 Status note: this milestone remains valid only for source-backed hosted
 replacement and parity goals. Any references below to config scopes or
 config-scope bindings are historical/superseded by Milestones 18 and 22.
 
-Goal: port the real legacy `integration-hub` tool implementations into managed
-hosted integration families while keeping the existing remote MCP
+Goal: port the real legacy `integration-hub` tool implementations into hosted
+tool families while keeping the existing remote MCP
 `integration-hub` server available. This milestone is conversion and parity,
 not deletion or forced cutover.
 
@@ -2987,10 +2995,10 @@ Architecture contract:
 
 - Do not delete the legacy `integration-hub` source, MCP server registration,
   or remote MCP tool surface in this milestone.
-- Managed hosted tools are added alongside remote MCP tools as independent
-  registry entries using `managed_<family>__<tool>`.
+- Hosted tools are added alongside remote MCP tools as independent
+  registry entries using `hosted_<family>__<tool>`.
 - Legacy remote MCP entries keep `mcp_integration-hub__<tool>`.
-- Replacement metadata may say a managed hosted tool replaces a remote MCP
+- Replacement metadata may say a hosted tool replaces a remote MCP
   tool, but this remains operational metadata and never becomes an
   authorization alias.
 - Port real tool code family by family from the legacy integration-hub source
@@ -2998,13 +3006,13 @@ Architecture contract:
   enough for this milestone.
 - Hosted family manifests, examples, debug runs, failure buckets, logs, and
   config-scope bindings keep family-native tool names.
-- Agent Settings can enable managed hosted replacements explicitly, per agent,
-  through the existing managed hosted tool policy path.
+- Agent Settings can enable hosted tool replacements explicitly, per agent,
+  through the existing hosted tool policy path.
 - The conversion must preserve existing env/config/secret behavior through
   hosted config scopes and human-owned secrets, not process-global env reads.
 - Explicit cache behavior may be recreated only for tools whose legacy behavior
   was explicitly cache/sync oriented.
-- Managed hosted source must not be embedded as static package code for real
+- Hosted source must not be embedded as static package code for real
   families. Agents manage source through the hosted integration source/draft
   store; promotion copies a validated snapshot into an immutable generation.
 - Runtime and `/api/tools` registry refresh must be event/index driven. Startup
@@ -3017,15 +3025,14 @@ Architecture contract:
 Non-goals:
 
 - No deletion of `integration-hub`.
-- No hidden rewrite from `mcp_integration-hub__*` to `managed_*`.
-- No compatibility alias that lets an MCP allowlist invoke managed hosted
-  tools.
+- No hidden rewrite from `mcp_integration-hub__*` to `hosted_*`.
+- No compatibility alias that lets an MCP allowlist invoke hosted tools.
 - No all-at-once cutover.
 - No canary promotion redesign.
 - No broad new integration capability beyond preserving the legacy tool
   behavior.
 
-### Slice 12.0: Five Read-Only Managed Sync Pilot
+### Slice 12.0: Five Read-Only Hosted Sync Pilot
 
 Status: done.
 
@@ -3036,28 +3043,27 @@ Evidence:
   `qualys_gav_asset_count`, `qualys_gav_asset_search`,
   `qualys_cloud_agent_hostasset_count`,
   `qualys_cloud_agent_hostasset_search`, and `qualys_vmdr_host_list`.
-- The pilot exposes the managed hosted names `managed_qualys__<tool>` while
+- The pilot exposes the hosted tool names `hosted_qualys__<tool>` while
   preserving the legacy remote MCP names `mcp_integration-hub__<tool>` as
   separate migration metadata.
 - The pilot intentionally uses generated hosted source because Slice 12.1 has
   not yet frozen the authoritative legacy `integration-hub` source tree. This
-  proves the managed sync surface, not source-backed parity.
+  proves the hosted sync surface, not source-backed parity.
 - `packages/hosted-integrations/test/integration-hub-replacement.test.ts` proves all five tools
   validate, register examples, promote, and invoke through the hosted gateway
   with an explicit Qualys config scope.
 - `packages/server/test/tools-hosted-integrations.test.ts` proves `/api/tools`
-  shows the five managed hosted tools without hiding same-target remote MCP
-  tools, and proves a remote MCP-only agent cannot invoke the managed hosted
-  names.
+  shows the five hosted tools without hiding same-target remote MCP
+  tools, and proves a remote MCP-only agent cannot invoke the hosted names.
 
 TDD:
 
 - fixture metadata must preserve native tool order and expose one example per
   pilot tool
 - hosted gateway invocation must require explicit config-scope policy binding
-- managed hosted tool names and remote MCP names must coexist in `/api/tools`
+- hosted tool names and remote MCP names must coexist in `/api/tools`
 - `mcp_integration-hub__*` selections must not authorize
-  `managed_qualys__*` invocation
+  `hosted_qualys__*` invocation
 
 Validation:
 
@@ -3087,7 +3093,7 @@ TDD:
 - inventory validation fails when an expected legacy tool has no source-backed
   conversion record unless explicitly marked unavailable with a reason
 - every source-backed tool maps exactly one
-  `mcp_integration-hub__<tool>` name to one managed hosted canonical name
+  `mcp_integration-hub__<tool>` name to one hosted tool canonical name
 - env vars are classified as hosted config keys or human-owned secret refs
 - destructive/write tools cannot be marked read-only during conversion
 
@@ -3118,7 +3124,7 @@ Goal:
 - Replace the generated Splunk migration fixture with real hosted integration
   source ported from legacy `integration-hub`.
 - Keep the remote MCP `mcp_integration-hub__splunk_search` visible and
-  independent while exposing `managed_splunk__splunk_search`.
+  independent while exposing `hosted_splunk__splunk_search`.
 - Preserve legacy request shape, config/secret mapping, result-file behavior,
   and sanitized error behavior.
 
@@ -3129,8 +3135,8 @@ TDD:
 - mock example exercises the real ported `splunk_search` implementation
 - large Splunk results spill to hosted run artifacts
 - caller-facing failures are sanitized and create hosted failure buckets
-- remote MCP-only agent selection cannot invoke the managed Splunk tool
-- managed Splunk agent selection cannot invoke the remote MCP tool
+- remote MCP-only agent selection cannot invoke the hosted Splunk tool
+- hosted Splunk agent selection cannot invoke the remote MCP tool
 
 Validation:
 
@@ -3148,8 +3154,8 @@ Goal:
 
 - Port Qualys read-only/search/list/count/fetch tools from legacy
   `integration-hub` into the `qualys` hosted family in small batches.
-- Preserve native tool names and managed registry names:
-  `qualys_*` inside family source and `managed_qualys__qualys_*` at registry
+- Preserve native tool names and hosted registry names:
+  `qualys_*` inside family source and `hosted_qualys__qualys_*` at registry
   boundaries.
 - Preserve result-file and explicit-cache behavior for the Qualys tools that
   used it.
@@ -3165,7 +3171,7 @@ TDD:
 - artifact-producing tools spill through hosted artifacts
 - cache tools use family home explicitly and do not read or write the caller
   agent workspace
-- access policy denies unbound agents for every managed Qualys batch
+- access policy denies unbound agents for every hosted Qualys batch
 
 Validation:
 
@@ -3187,8 +3193,8 @@ Goal:
   `qualys_gav_asset_count`, `qualys_gav_asset_search`,
   `qualys_cloud_agent_hostasset_count`,
   `qualys_cloud_agent_hostasset_search`, and `qualys_vmdr_host_list`.
-- Preserve the managed/remote naming boundary:
-  `managed_qualys__<tool>` never aliases or enables
+- Preserve the hosted/remote naming boundary:
+  `hosted_qualys__<tool>` never aliases or enables
   `mcp_integration-hub__<tool>`.
 
 TDD:
@@ -3239,7 +3245,7 @@ TDD:
   placeholder source
 - mock examples cover success, provider error, auth/config missing, and large
   response paths where applicable
-- managed and remote MCP tool surfaces remain independent in `/api/tools`
+- hosted and remote MCP tool surfaces remain independent in `/api/tools`
 - failure buckets are bucketized by unique hosted error type and route repair
   tasks to Tool Developer
 
@@ -3258,22 +3264,22 @@ Status: done.
 Goal:
 
 - Add an operator-visible parity report that compares legacy remote MCP tools
-  and managed hosted replacements without hiding either surface.
+  and hosted tool replacements without hiding either surface.
 - Support explicit per-agent opt-in migration in Agent Settings from
   `mcp_integration-hub__<tool>` selections to the corresponding
-  `managed_<family>__<tool>` selections and hosted bindings.
+  `hosted_<family>__<tool>` selections and hosted bindings.
 - Keep migration reversible by leaving the legacy MCP selections and server
   registration intact until a later, separately approved decommission
   milestone.
 
 TDD:
 
-- parity report lists legacy MCP name, managed hosted name, family, native tool
+- parity report lists legacy MCP name, hosted registry name, family, native tool
   name, source-backed status, examples, validation status, and latest run
   health
 - migration preview shows exact `agent.tools` and hosted binding changes before
   applying
-- applying migration never grants a managed hosted tool without an explicit
+- applying migration never grants a hosted tool without an explicit
   hosted binding and config scope
 - rollback restores the previous agent tool selection without deleting hosted
   source or legacy MCP config
@@ -3294,7 +3300,7 @@ Goal:
 
 - When target-system credentials are configured in the local test environment,
   run live safe parity checks against selected legacy remote MCP tools and
-  managed hosted tools.
+  hosted tools.
 - Store live parity results as evidence without making CI depend on external
   target systems.
 
@@ -3302,7 +3308,7 @@ TDD:
 
 - live parity runner skips with explicit diagnostics when credentials or remote
   MCP server config are absent
-- when configured, runner invokes the legacy MCP tool and managed hosted tool
+- when configured, runner invokes the legacy MCP tool and hosted tool
   with equivalent safe read-only inputs
 - sanitized result comparison records match/mismatch, artifact references, run
   ids, and failure bucket ids
@@ -3328,7 +3334,7 @@ Evidence:
 - Legacy MCP `result_path` outputs are read and summarized without embedding
   raw target-system records in the parity artifact.
 - Qualys Cloud Agent parity uses equivalent safe read-only intent with
-  schema-specific args: legacy QPS `criteria`, managed hosted GAV/QAGENT
+  schema-specific args: legacy QPS `criteria`, hosted GAV/QAGENT
   filters.
 - Live run `live_parity_0cf1c3cc-de2f-42d6-abcb-312b9a2c074d` passed against
   real Qualys APIs for all five selected read-only tools:
@@ -3338,16 +3344,16 @@ Evidence:
   Evidence artifact:
   `/Users/alenbohcelyan/.openamce-hosted-integrations-test-env/hosted-integrations/live-parity/live_parity_0cf1c3cc-de2f-42d6-abcb-312b9a2c074d.json`.
 
-## Milestone 13: Managed Tool Help Surface
+## Milestone 13: Hosted Tool Help Surface
 
-Status: done for the managed-help MVP and the first five Qualys managed tools.
+Status: done for the hosted-help MVP and the first five Qualys hosted tools.
 
 Goal:
 
-- Add a reserved built-in support tool named `managed_tool_help` so normal
+- Add a reserved built-in support tool named `hosted_tool_help` so normal
   agents can inspect how to call hosted integration tools without mixing with
   remote MCP or hosted invocation tool surfaces.
-- Support every active managed hosted tool with:
+- Support every active hosted tool with:
   - tool short summary
   - tool full detail
   - parameter short summary
@@ -3426,7 +3432,7 @@ Goal:
 
 ```json
 {
-  "tool_name": "managed_<family>__<tool>",
+  "tool_name": "hosted_<family>__<tool>",
   "family_id": "<family>",
   "family_tool_name": "<tool>",
   "generation_id": "gen_...",
@@ -3456,7 +3462,7 @@ Goal:
   - `parameters: [{ name, detail: "summary" | "full", include_examples }]`
 - Provide fallback help from `description`, `inputSchema`, and registered
   examples when explicit help metadata is not present.
-- Agent-facing `managed_tool_help` responses flow through the existing
+- Agent-facing `hosted_tool_help` responses flow through the existing
   `@openacme/tools` tool-result choke point, so oversized help spills through
   the same per-session tool-call spill path as other built-in tool results. The
   HTTP route remains a control-plane JSON endpoint.
@@ -3470,7 +3476,7 @@ TDD:
   `tool_detail: "full"` expands them with full parameter details
 - `include_examples: false` suppresses example payloads
 - large full-help output spills through the common tool-call spill path when
-  invoked as `managed_tool_help`
+  invoked as `hosted_tool_help`
 - fallback help is deterministic when explicit metadata is absent
 
 Validation:
@@ -3480,19 +3486,19 @@ pnpm --filter @openacme/hosted-integrations test -- help artifacts
 pnpm --filter @openacme/hosted-integrations check-types
 ```
 
-### Slice 13.3: Managed Help API And Built-In Tool
+### Slice 13.3: Hosted Help API And Built-In Tool
 
 Status: done.
 
 Implementation notes:
 
 - Added `POST /api/hosted-integrations/help`.
-- Added `managed_tool_help` as a normal allowlisted built-in support tool in
+- Added `hosted_tool_help` as a normal allowlisted built-in support tool in
   `@openacme/tools`.
 - Both the HTTP route and ServerRuntime binding delegate to the package-level
   resolver.
-- The route and binding require the caller agent to have `managed_tool_help`
-  and the target managed hosted tool enabled and bound.
+- The route and binding require the caller agent to have `hosted_tool_help`
+  and the target hosted tool enabled and bound.
 
 Goal:
 
@@ -3505,30 +3511,30 @@ POST /api/hosted-integrations/help
 - Add a normal agent-facing built-in tool:
 
 ```text
-managed_tool_help
+hosted_tool_help
 ```
 
-- Keep `managed_tool_help` out of `SYSTEM_TOOLS`; it must be allowlisted through
+- Keep `hosted_tool_help` out of `SYSTEM_TOOLS`; it must be allowlisted through
   Agent Settings like other user-configurable built-in tools.
-- Treat `managed_tool_help` as reserved support-tool naming. It is not a
+- Treat `hosted_tool_help` as reserved support-tool naming. It is not a
   canonical hosted invocation tool because it does not match
-  `managed_<family>__<tool>`.
-- Accept only provider-facing managed hosted names:
+  `hosted_<family>__<tool>`.
+- Accept only provider-facing hosted tool names:
 
 ```text
-managed_<family>__<tool>
+hosted_<family>__<tool>
 ```
 
 - Reject:
   - `mcp_<server>__<tool>`
   - built-in tool names
   - family-native tool names such as `qualys_gav_asset_count`
-  - malformed managed names
-- Resolve managed name to family/tool/generation through the same registry
+  - malformed hosted names
+- Resolve hosted registry name to family/tool/generation through the same registry
   naming helper used for invocation.
 - Assert hosted-tool classification uses parser/source metadata, never
-  `name.startsWith("managed_")`.
-- Enforce Agent Settings policy: an agent may request help only for managed
+  `name.startsWith("hosted_")`.
+- Enforce Agent Settings policy: an agent may request help only for hosted
   hosted tools it can see or invoke in that environment/config-scope context.
 - Follow the existing hosted integration management pattern: the built-in tool
   self-registers in `@openacme/tools`, ServerRuntime binds the in-process port,
@@ -3536,13 +3542,13 @@ managed_<family>__<tool>
 
 TDD:
 
-- route returns help for an active managed tool
+- route returns help for an active hosted tool
 - route rejects remote MCP, built-in, raw family-native, and malformed names
 - route hides help for an unbound agent
 - tool wrapper calls the bound server port and does not duplicate help logic
-- normal agents can receive `managed_tool_help`; they still cannot receive
+- normal agents can receive `hosted_tool_help`; they still cannot receive
   hosted integration management tools
-- parser/grouping regression proves `managed_tool_help` is not classified as a
+- parser/grouping regression proves `hosted_tool_help` is not classified as a
   hosted invocation tool
 - response never contains secret or config values
 
@@ -3569,7 +3575,7 @@ Implementation notes:
 
 Goal:
 
-- Promote only active managed tools with enough help for autonomous agent use.
+- Promote only active hosted tools with enough help for autonomous agent use.
 - Require, for every active tool:
   - `description`
   - `help.summary`
@@ -3609,7 +3615,7 @@ Status: done for the first five source-backed Qualys read-only tools.
 
 Goal:
 
-- Add full help metadata for the first five Qualys managed tools.
+- Add full help metadata for the first five Qualys hosted tools.
 - Treat `filter_body` as the first high-value parameter dogfood case.
 - Teach the agent that GAV filter fields are native Qualys GAV tokens, not
   response projection fields.
@@ -3632,12 +3638,12 @@ Goal:
     filter token
 - If the Qualys GAV field catalog is too large for full inline help, store it
   as a family-local reference file and expose a separate explicit quickref tool
-  in a later Qualys batch. `managed_tool_help` should explain how to discover
+  in a later Qualys batch. `hosted_tool_help` should explain how to discover
   exact fields without embedding the whole catalog in every response.
 
 TDD:
 
-- `managed_tool_help` summary for every first-batch Qualys tool is concise
+- `hosted_tool_help` summary for every first-batch Qualys tool is concise
 - full help for `qualys_cloud_agent_hostasset_count` includes filter body
   rules, field-token warnings, Cloud Agent scope rules, and examples
 - parameter summary for `filter_body.filters.field` mentions native GAV token
@@ -3662,12 +3668,12 @@ Status: done for Agent Settings grouping and focused real-LLM help dogfood.
 
 Goal:
 
-- Show `managed_tool_help` in Agent Settings as a built-in support tool,
+- Show `hosted_tool_help` in Agent Settings as a built-in support tool,
   separate from hosted invocation tools.
-- Ensure an agent with managed Qualys tools can call help before calling the
+- Ensure an agent with hosted Qualys tools can call help before calling the
   target tool.
 - Add dogfood scenarios where a consumer agent:
-  - asks for summarized help for a managed tool
+  - asks for summarized help for a hosted tool
   - asks for full help with examples
   - asks for short parameter help
   - asks for full parameter help
@@ -3676,11 +3682,11 @@ Goal:
 
 TDD:
 
-- UI grouping keeps `managed_tool_help` out of remote MCP and hosted family
+- UI grouping keeps `hosted_tool_help` out of remote MCP and hosted family
   groups unless design explicitly places it in a support-tools group
 - e2e dogfood proves the consumer agent calls help before the Qualys tool when
   filter syntax is required
-- denied agent cannot get help for a managed tool it cannot use
+- denied agent cannot get help for a hosted tool it cannot use
 - invalid caller arguments do not create Tool Developer repair buckets
 - Tool Developer test/debug failures keep execution evidence but do not create
   Tool Developer repair buckets
@@ -3709,7 +3715,7 @@ Latest validation evidence:
   `filter_body.filters: [{ field, operator, value }]` returned
   `responseCode: SUCCESS`, `count: 0`.
 - 3466 real LLM dogfood session `dogfood-help-1786644219676` called
-  `managed_tool_help`, avoided Qualys data tools, summarized the Qualys
+  `hosted_tool_help`, avoided Qualys data tools, summarized the Qualys
   `filters` array contract, and placed `operation` inside `filter_body`.
 
 ## Milestone 14: Deterministic Tool Handler Format And Focused Source Views
@@ -3756,7 +3762,7 @@ TDD:
 
 - validation fails when a manifest tool lacks `def tool_<tool_name>(args, context)`
 - validation fails when handler signature does not accept `args` and `context`
-- validation warns for legacy families that still expose only `call_tool`
+- validation rejects manifests or entrypoints that rely on legacy `call_tool`
 - validation rejects manifest handler aliases that do not match the derived name
 
 Validation:
@@ -3774,8 +3780,8 @@ Implemented:
 - Handler signature validation rejects missing handlers, async handlers,
   `*args`/`**kwargs` handlers, and handlers whose first two positional
   arguments are not exactly `args` and `context`.
-- Entry points that expose only legacy `call_tool(name, args, context)` remain
-  promotable with a `legacy_call_tool_router` warning for migrated families.
+- Entry points that expose only legacy `call_tool(name, args, context)` are
+  rejected by the active Milestone 24 contract.
 - Proposed family templates now start with the derived handler name rather than
   an arbitrary `invoke(...)` function.
 - Custom manifest handler aliases remain rejected by the strict manifest schema.
@@ -3833,8 +3839,9 @@ Implemented:
   `after_tool_call(tool_name, args, ctx, result, auth)`.
 - Missing hooks fail validation unless the matching `hookJustifications` entry
   contains a non-empty reason.
-- Legacy `call_tool`-only migrated families remain exempt from hook enforcement
-  and keep their legacy warning.
+- Historical implementation note: legacy `call_tool`-only migrated families
+  were temporarily exempt from hook enforcement. Milestone 24 removed this
+  runtime/schema compatibility path.
 - Proposed family and dependency fixtures now satisfy the hook contract through
   explicit justifications where hooks are intentionally absent.
 
@@ -3855,9 +3862,8 @@ Goal:
   directly.
 - Execute standard lifecycle hooks in deterministic order:
   `authenticate -> before_tool_call -> tool_<tool_name> -> after_tool_call`.
-- Keep a temporary compatibility path for already-promoted legacy generations
-  that only implement `call_tool`, gated by manifest/runtime compatibility
-  metadata.
+- Remove the temporary compatibility path for generations that only implement
+  `call_tool`; product runtime dispatch is derived-only.
 
 TDD:
 
@@ -3869,7 +3875,7 @@ TDD:
 - `after_tool_call` can normalize the handler result before the gateway envelope
 - runtime returns `tool_bug`/validation diagnostics when the derived handler is
   missing
-- legacy generation with compatibility metadata can still run during migration
+- legacy generation compatibility metadata is rejected
 - new promoted generation cannot rely only on arbitrary `call_tool`
 
 Validation:
@@ -3881,7 +3887,9 @@ pnpm --filter @openacme/server test -- hosted-integrations-routes
 
 Implemented:
 
-- Added `runtime.handlerDispatch` with default `derived`.
+- Historical implementation note: this slice originally added
+  `runtime.handlerDispatch` with default `derived`. Milestone 24 removed the
+  field entirely because a single allowed value carried no product decision.
 - Python runtime now dispatches derived families through
   `tool_<tool_name>(args, context)`.
 - Runtime executes available standard hooks in order:
@@ -3891,10 +3899,9 @@ Implemented:
 - `before_tool_call` may return normalized args consumed by the derived handler.
 - `after_tool_call` may return a normalized result before gateway envelope
   handling.
-- Legacy `call_tool(name, args, context)` dispatch remains available only when
-  runtime metadata explicitly sets `handlerDispatch: legacy_call_tool`.
-- Migrated integration-hub fixtures and source-backed Qualys pilot declare
-  legacy dispatch explicitly.
+- Historical implementation note: legacy dispatch was once available via
+  `handlerDispatch: legacy_call_tool`. Milestone 24 removed that option from
+  schema, runtime, validator, and replacement fixtures.
 
 Evidence:
 
@@ -3968,7 +3975,7 @@ Implemented:
 - Added HTTP control-plane route
   `POST /api/hosted-integrations/source-view`.
 - Added Tool Developer Agent management wrapper
-  `hosted_integration_source_view`.
+  `hosted_tool_source_view`.
 - Focused source access is denied to normal consumer agents unless they are
   authorized for the hosted integration management tool surface.
 
@@ -3986,7 +3993,7 @@ Status: done.
 
 Goal:
 
-- Convert the first five managed Qualys read-only tools from custom
+- Convert the first five hosted Qualys read-only tools from custom
   `call_tool` dispatch to deterministic `tool_<tool_name>` handlers.
 - Move common Qualys auth/client construction into `authenticate` and common
   request/response normalization into standard hooks where appropriate.
@@ -4073,7 +4080,7 @@ GET /api/hosted-integrations/generations/:baseGenerationId/diff/:compareGenerati
 Management tool:
 
 ```text
-hosted_integration_generation_diff
+hosted_tool_generation_diff
 ```
 
 TDD:
@@ -4113,7 +4120,7 @@ Implemented:
 - Added HTTP route
   `GET /api/hosted-integrations/generations/:baseGenerationId/diff/:compareGenerationId`.
 - Added Tool Developer Agent management wrapper
-  `hosted_integration_generation_diff`.
+  `hosted_tool_generation_diff`.
 - Normal consumer agents are denied generation diff access.
 
 Evidence:
@@ -4134,16 +4141,16 @@ Goal:
   editing and operations surface.
 - Build on Milestone 14 source contracts and Milestone 15 generation diff so the
   UI does not invent separate parsing or lifecycle rules.
-- Make every Managed Tools screen comply with the human-native UX principles
+- Make every Hosted Tools screen comply with the human-native UX principles
   and canonical UI language in
-  `docs/hosted-integrations-architecture.md#human-native-managed-tools-ux`.
+  `docs/hosted-integrations-architecture.md#human-native-hosted-tools-ux`.
 
 Human-ready acceptance bar:
 
 - every tab has one clear job and one obvious primary action
 - the user-facing words for the same concept are identical across tabs
 - `Edit`, `Save`, `Validate`, `Test`, `Publish`, `Rollback`, `Discard`,
-  `Version`, `Tool`, `Managed tool`, `Family`, `Config scope`,
+  `Version`, `Tool`, `Hosted tool`, `Family`, `Config scope`,
   `Execution log`, and `Failure bucket` are used consistently
 - internal terms such as `lock`, `draft`, `generation id`, and
   `source revision id` appear only as metadata or detail fields
@@ -4345,13 +4352,13 @@ Browser validation note:
   Newly promoted deterministic handler-format generations satisfy the focused
   source contract.
 
-### Slice 16.2: Managed Tools Human-Ready UX Pass
+### Slice 16.2: Hosted Tools Human-Ready UX Pass
 
 Status: done.
 
 Goal:
 
-- Redesign the active Managed Tools route as a calm, human-native admin surface
+- Redesign the active Hosted Tools route as a calm, human-native admin surface
   while preserving full lifecycle capability.
 - Remove redundant registry/family/workbench chrome and replace technical
   primitives with canonical lifecycle language.
@@ -4445,11 +4452,11 @@ TDD:
   `Publish`; internal verbs such as `promote` appear only in API, management
   tool, or diagnostic contexts
 - every repeatable UX confusion found while reviewing or implementing this
-  surface is added back to the canonical Human-Native Managed Tools UX
+  surface is added back to the canonical Human-Native Hosted Tools UX
   principles before the slice is considered complete
 - Agent Settings catalog tests prove hosted integration management tools are
   not rendered as ordinary selectable tools for normal consumer agents; hosted
-  invocation tools and `managed_tool_help` remain visible
+  invocation tools and `hosted_tool_help` remain visible
 
 Acceptance:
 
@@ -4577,7 +4584,7 @@ Implemented so far:
     instead of showing generic missing-source copy
   - Version empty states now name the selected family and distinguish missing
     previous-version selection from a family with no published versions
-- Refined the human-native UX contract from the active Managed Tools examples:
+- Refined the human-native UX contract from the active Hosted Tools examples:
   selection context belongs to navigation, named chrome must own a task, draft
   creation is folded behind edit, publish is validation-gated, and controls
   should transform in place for the same lifecycle lane.
@@ -4618,7 +4625,7 @@ Implemented so far:
   visible in the first viewport, edit mode transforms `Edit` into `Unlock`, and
   mobile Files edit mode keeps the file selector, path field, save/delete
   actions, and changed-source editor within the working viewport.
-- Tightened Test/Debug/Validate/Publish state behavior in the Managed Tools
+- Tightened Test/Debug/Validate/Publish state behavior in the Hosted Tools
   route:
   - read-only Test hides save/run-example actions until an editable draft and
     selected example exist
@@ -4797,7 +4804,7 @@ Implemented so far:
   - Log row buttons now use a single synthesized accessible label, so hidden
     mobile/desktop duplicate metadata does not make run rows noisy in snapshots
     or assistive review
-- Tuned the canonical Human-Native Managed Tools UX principles after the active
+- Tuned the canonical Human-Native Hosted Tools UX principles after the active
   route review:
   - reduced duplicated principle wording into sharper rules for selection
     ownership, user-task naming, explicit edit mode, state-derived workspaces,
@@ -4885,7 +4892,7 @@ Implemented so far:
     and this implementation-plan acceptance record
   - filtered hosted integration management tools out of the normal Agent
     Settings tool catalog after browser review showed them listed next to
-    consumer invocation tools; hosted invocation tools and `managed_tool_help`
+    consumer invocation tools; hosted invocation tools and `hosted_tool_help`
     remain available
   - made `Publish` depend on a current human-owned editable change set with a
     passed latest validation, rather than merely existing as static page chrome
@@ -4950,7 +4957,7 @@ Goal:
 
 Non-goals:
 
-- No change to agent-facing managed tool names.
+- No change to agent-facing hosted tool names.
 - No remote MCP path.
 - No cache-by-default behavior.
 - No requirement to migrate historical local dev/test file-backed data unless a
@@ -5269,7 +5276,7 @@ Why this is rectification:
 - The current config-scope model is too flexible for the intended product
   boundary. It lets operational purposes such as `demo` and `parity` appear as
   first-class family config sets next to real runtime environments.
-- That creates human confusion in Managed Tools and Agent Settings: a user sees
+- That creates human confusion in Hosted Tools and Agent Settings: a user sees
   multiple Qualys configs without knowing which one is the actual environment
   and which one is an agent/internal-runner override.
 - The correct boundary is narrower: family-level environment configs are shared
@@ -5348,7 +5355,7 @@ environment)`.
   and migration readiness.
 - API, management-tool, and skill surfaces are part of the contract. A resolver,
   route, or lifecycle operation is not complete until the Hosted Integrations
-  API exposes it where needed, the relevant `hosted_integration_*` management
+  API exposes it where needed, the relevant `hosted_tool_*` management
   tool wraps that API without duplicating logic, and the
   `hosted-integrations-development` skill teaches the Tool Developer Agent how
   to use the surface.
@@ -5404,9 +5411,9 @@ Slice-owned work area goals:
 Contract:
 
 - Active public management tools are
-  `hosted_integration_environment_config_list`,
-  `hosted_integration_environment_config_get`, and
-  `hosted_integration_readiness_get`. Legacy
+  `hosted_tool_environment_config_list`,
+  `hosted_tool_environment_config_get`, and
+  `hosted_tool_readiness_get`. Legacy
   `hosted_integration_config_scope_*` tools are removed from active tool
   registry, runtime dispatch, Tool Developer template, dogfood prompts, and
   active tests. They are not compatibility aliases.
@@ -5428,7 +5435,7 @@ Contract:
   agent definitions are rewritten to the new binding shape by a one-way
   migration; active schemas and runtime paths reject the legacy binding shape
   after migration.
-- `hosted_integration_readiness_get` is a single strict discriminated tool:
+- `hosted_tool_readiness_get` is a single strict discriminated tool:
   `target_type="environment_config"` requires `family_id` and `environment`;
   `target_type="binding"` requires `agent_id`, `family_id`, and `tool_name`;
   `target_type="publish"` requires `draft_id`;
@@ -5485,7 +5492,7 @@ TDD:
 - the legacy-reference inventory is checked into the slice close-out notes or
   recorded in the milestone evidence section, and every remaining match has an
   allowed classification
-- Tool wrapper tests prove `hosted_integration_readiness_get` validates the
+- Tool wrapper tests prove `hosted_tool_readiness_get` validates the
   discriminated input contract and delegates to the control plane.
 - Route tests prove readiness APIs expose all six readiness target kinds and
   mutation routes return resolver-coded blocked errors.
@@ -5565,7 +5572,7 @@ TDD:
   normal not-found response; they do not behave as aliases
 - DB schema has a uniqueness guarantee for `(family_id, environment)`
 - file-backed storage derives ids from family/environment and refuses custom ids
-- Managed Tools Config tab labels these records as environment configs, not
+- Hosted Tools Config tab labels these records as environment configs, not
   agent-specific config clones
 - management-tool schemas stop exposing `config_scope` names for new calls
 
@@ -5600,8 +5607,8 @@ Evidence so far:
   `GET /api/hosted-integrations/environment-configs`,
   `GET /api/hosted-integrations/environment-configs/:familyId/:environment`,
   `PUT /api/hosted-integrations/environment-configs/:familyId/:environment`,
-  `hosted_integration_environment_config_list`, and
-  `hosted_integration_environment_config_get`.
+  `hosted_tool_environment_config_list`, and
+  `hosted_tool_environment_config_get`.
 - Added server route coverage proving canonical id creation, secret metadata
   sanitization, detail/list reads, and invalid environment rejection.
 - Added active secret metadata route:
@@ -5613,7 +5620,7 @@ Evidence so far:
   old URLs now receive the platform default 404 and do not behave as aliases.
 - Migrated debug-run parameters, live parity, safe E2E, dogfood E2E, Tool
   Developer template, bundled hosted-integrations skill, Agent Settings, and
-  Managed Tools admin copy to environment config terminology.
+  Hosted Tools admin copy to environment config terminology.
 
 ### Slice 18.2: Agent Binding Overrides And Migration
 
@@ -5628,14 +5635,14 @@ Goal:
   config scopes such as `demo`, `parity`, or per-agent clones.
 - Migrate existing `test`, `demo`, and `parity` scope usage to `test_debug`
   environment configs plus agent binding metadata.
-- Rewrite existing agent definitions and managed-runner bindings to the new
+- Rewrite existing agent definitions and hosted-runner bindings to the new
   hosted-tool binding shape before they can be used by active runtime paths.
 - Extend the agent hosted-tool binding contract with:
   `allowedEnvironments`, `defaultEnvironment`, `generationPin`,
   `bindingKind`, optional `purpose`, optional `bindingNote`, `updatedAt`,
   and `updatedBy`.
 - Make normal runtime invocation resolve environment config and generation from
-  the invoking agent's binding. The model-facing managed tool call does not
+  the invoking agent's binding. The model-facing hosted tool call does not
   carry environment or config identifiers.
 - Convert live parity and debug/dogfood runners to internal bindings against
   `test_debug`.
@@ -5765,7 +5772,7 @@ Evidence so far:
 - Migrated server runtime dispatch, debug-run management parameters, live
   parity, migration fixtures, safe E2E, dogfood E2E, and app-route agent
   settings fixtures to hosted-tool binding shape.
-- Added Tool Developer access to `hosted_integration_source_view` and updated
+- Added Tool Developer access to `hosted_tool_source_view` and updated
   the hosted-integrations development skill so repairs can inspect one selected
   tool handler plus hooks/helpers instead of raw source windows.
 - Dogfood evidence is green:
@@ -5806,12 +5813,12 @@ Goal:
   `/readiness/bindings/:agentId/:familyId/:toolName`,
   `/readiness/drafts/:draftId/publish`, `/readiness/debug`, and
   `/readiness/migration`.
-- Add or update the `hosted_integration_readiness_get` management tool so the
+- Add or update the `hosted_tool_readiness_get` management tool so the
   Tool Developer Agent can inspect the same resolver state without direct store
   access.
 - Update `hosted-integrations-development` skill wording so it uses
   `environment config`, `hosted-tool binding`, readiness codes, and the
-  `hosted_integration_readiness_get` flow instead of legacy config-scope
+  `hosted_tool_readiness_get` flow instead of legacy config-scope
   language.
 
 Contract:
@@ -5857,7 +5864,7 @@ Contract:
   the relevant resolver immediately before changing state.
 - If OpenAcme exposes hosted integration lifecycle tools through an internal
   MCP-compatible transport later, that transport is only a wrapper over the same
-  `hosted_integration_*` OpenAcme tool definitions and Hosted Integrations API.
+  `hosted_tool_*` OpenAcme tool definitions and Hosted Integrations API.
   It must not behave like an external MCP server and must not share allowlist
   identity with remote MCP tools.
 
@@ -5892,12 +5899,12 @@ TDD:
   route-local error strings
 - API route tests cover the readiness read endpoints and prove they return the
   same resolver result shape as blocked mutations
-- `hosted_integration_readiness_get` wrapper tests prove the management tool
+- `hosted_tool_readiness_get` wrapper tests prove the management tool
   delegates to the API/control-plane surface and does not reimplement readiness
   decisions
 - gateway tests prove runtime dispatch is not called when invocation readiness
   is anything other than `ready`
-- web tests prove Managed Tools and Agent Settings render action disabled/hidden
+- web tests prove Hosted Tools and Agent Settings render action disabled/hidden
   states from resolver codes instead of local heuristics
 - skill tests or fixture checks prove `hosted-integrations-development` no
   longer teaches legacy config-scope tools for new work and includes the
@@ -5979,11 +5986,11 @@ Evidence so far:
   gateway environment/policy readiness blocking, and publish mutation/job/debug
   resolver-coded blockers are validated. Slice 18.3 is closed.
 
-### Slice 18.4: Managed Tools Agent Matrix
+### Slice 18.4: Hosted Tools Agent Matrix
 
 Goal:
 
-- Add a Managed Tools settings matrix for the selected family/tool showing each
+- Add a Hosted Tools settings matrix for the selected family/tool showing each
   agent that can use it, the agent's default environment, whether it follows the
   active generation or is pinned to a generation/version, and any binding note.
 - Add a read-only matrix API endpoint:
@@ -6001,20 +6008,20 @@ Goal:
 Non-goals:
 
 - No secret value editor in the agent matrix.
-- No duplicate Agent Settings surface inside Managed Tools; the matrix is
+- No duplicate Agent Settings surface inside Hosted Tools; the matrix is
   read-only inspection for the selected hosted tool.
 - No arbitrary environment creation from the UI.
 
 TDD:
 
-- Managed Tools shows an agent matrix for a selected family/tool with agent,
+- Hosted Tools shows an agent matrix for a selected family/tool with agent,
   default environment, version/generation selection, and binding note state
 - the agent matrix API returns a read-only projection derived from
   `AgentDefinition` bindings plus hosted tool catalog state
 - internal bindings are visually separated from ordinary agent bindings
 - matrix rows show sanitized binding details and no secret values
 - binding writes remain owned by Agent Settings through `PATCH /api/agents/:id`;
-  Managed Tools does not create a second binding write path or store
+  Hosted Tools does not create a second binding write path or store
 - removed agents or disabled tools do not appear as active bindings
 - Config tab shows exactly `prod` and `test_debug` rows for a family where those
   configs exist, with missing states for unset required env/secret keys
@@ -6026,7 +6033,7 @@ TDD:
   preserving historical audit identifiers in detail view when present
 - Agent Settings cannot accidentally allow every config that shares the same
   environment label
-- Agent Settings and Managed Tools matrix do not expose controls for per-agent
+- Agent Settings and Hosted Tools matrix do not expose controls for per-agent
   config values, secret refs, endpoint overrides, tenant overrides, credential
   selectors, custom config ids, or config revision pins
 
@@ -6042,7 +6049,7 @@ Evidence:
 
 - `packages/server/src/routes/hosted-integrations.ts` exposes the read-only
   family/tool agent binding matrix and derives rows from `AgentDefinition`
-  hosted integration bindings plus the managed tool name boundary.
+  hosted integration bindings plus the hosted tool name boundary.
 - `apps/web/app/routes/settings.tsx` shows a selected-tool `Agents` tab with
   ordinary agent bindings separated from internal bindings, generation state,
   default/allowed environment state, and binding notes.
@@ -6110,7 +6117,7 @@ TDD:
   explicitly declares an empty runtime config contract
 - publish failure responses include sanitized missing key names and never include
   secret values
-- Managed Tools Publish lane shows production readiness blockers before showing
+- Hosted Tools Publish lane shows production readiness blockers before showing
   `Publish`
 
 Validation:
@@ -6169,7 +6176,7 @@ TDD:
   work instead of `config scope`
 - `qualys-live-parity`, `qualys-live-demo`, and `environment: "test"` are not
   recreated by startup, live parity, debug, or Agent Settings flows
-- a migrated normal agent can invoke one Qualys managed read-only tool through
+- a migrated normal agent can invoke one Qualys hosted read-only tool through
   its hosted-tool binding
 - the Tool Developer Agent can run a debug call against `test_debug` without
   creating a maintenance failure bucket
@@ -6204,7 +6211,7 @@ Evidence:
 - Added a Qualys `runtimeConfig` contract to the source-backed five-tool pilot:
   required non-secret config key `QUALYS_VM_URL`, required secret keys
   `QUALYS_USERNAME` and `QUALYS_PASSWORD`.
-- Live parity now seeds only `qualys-test_debug` and calls managed tools with
+- Live parity now seeds only `qualys-test_debug` and calls hosted tools with
   an internal hosted-tool binding instead of creating `qualys-live-parity` or
   `qualys-live-demo` environment records.
 - Cleaned the local test env active surface:
@@ -6356,7 +6363,7 @@ Goal:
 - Make the live parity runner family-aware for the first non-Qualys family:
   `splunk/splunk_search`.
 - Add Splunk parity case construction from the existing migrated Splunk fixture.
-- Seed the managed Splunk parity target through the same generic fixture
+- Seed the hosted Splunk parity target through the same generic fixture
   promotion path as Qualys, writing only the canonical `splunk-test_debug`
   environment config.
 - Resolve Splunk runtime config from legacy remote MCP env/config and explicit
@@ -6369,20 +6376,20 @@ Non-goals:
 
 - No destructive Splunk operations.
 - No broad Microsoft Graph, MDE, or defender-alert parity in this slice.
-- No hidden fallback from managed hosted names to remote MCP names.
+- No hidden fallback from hosted tool names to remote MCP names.
 - No arbitrary environment config labels.
 
 TDD:
 
-- `defaultSplunkLiveParityCases()` returns the `splunk_search` managed/legacy
+- `defaultSplunkLiveParityCases()` returns the `splunk_search` hosted/legacy
   mapping from the migrated family fixture.
-- live parity can run a Splunk case with fake managed/legacy clients, compares
+- live parity can run a Splunk case with fake hosted/legacy clients, compares
   result-count summaries, and writes sanitized evidence.
 - missing `SPLUNK_BASE_URL` or `SPLUNK_TOKEN` causes a skipped result with
   explicit diagnostics.
-- an expired JWT-form `SPLUNK_TOKEN` causes a skipped result before managed or
+- an expired JWT-form `SPLUNK_TOKEN` causes a skipped result before hosted or
   legacy target calls are made.
-- seeding a Splunk managed parity target creates only
+- seeding a Splunk hosted parity target creates only
   `splunk-test_debug`, stores `SPLUNK_BASE_URL` as non-secret config, stores
   only write-only `SPLUNK_TOKEN` metadata, and does not expose the raw token.
 - the existing Qualys parity runner behavior and canonical
@@ -6403,7 +6410,7 @@ curl -sS -m 5 http://127.0.0.1:3466/api/health
 Evidence:
 
 - Added family-aware live parity plumbing:
-  `defaultSplunkLiveParityCases()`, generic managed parity seeding, Splunk
+  `defaultSplunkLiveParityCases()`, generic hosted parity seeding, Splunk
   runtime config resolution, and `OPENACME_LIVE_PARITY_FAMILY=splunk` operator
   selection.
 - The operator script now passes family-native shell env overrides into the
@@ -6424,7 +6431,7 @@ Evidence:
   `OPENACME_DATA_DIR=/Users/alenbohcelyan/.openamce-hosted-integrations-test-env`,
   `OPENACME_LEGACY_MCP_DATA_DIR=/Users/alenbohcelyan/.openacme`, and
   `OPENACME_LIVE_PARITY_FAMILY=splunk`.
-  The first live attempt proved the managed hosted Splunk call succeeded and
+  The first live attempt proved the hosted Splunk call succeeded and
   seeded only `splunk-test_debug`; the legacy remote MCP call reached Splunk but
   returned `401 call not properly authenticated`. Artifact:
   `/Users/alenbohcelyan/.openamce-hosted-integrations-test-env/hosted-integrations/live-parity/live_parity_c1b9cb4e-09d3-40f1-a4ee-5aa445cd54b4.json`.
@@ -6443,7 +6450,7 @@ Evidence:
   `OPENACME_LIVE_PARITY_FAMILY=splunk`; both the isolated test env and
   `~/.openacme/mcp.json` still exposed a `SPLUNK_TOKEN` expiring at
   `2026-08-14T14:57:55.000Z`, so the command again returned `status:
-  "skipped"` with the same expiry diagnostic before calling managed or legacy
+"skipped"` with the same expiry diagnostic before calling hosted or legacy
   targets.
 - Splunk skip diagnostics were tightened on 2026-08-14 so credential problems
   also report the non-secret config source. The focused validation
@@ -6479,7 +6486,7 @@ Goal:
 - Make live parity family selection explicit: only source-backed parity
   families are selectable by the operator command.
 - Return an explicit skipped result for unsupported families instead of
-  throwing a generic script error or attempting fake managed/legacy comparison.
+  throwing a generic script error or attempting fake hosted/legacy comparison.
 
 Non-goals:
 
@@ -6495,7 +6502,7 @@ TDD:
 - `defaultLiveParityCasesForFamily("msgraph" | "mde" | "defender-alert")`
   returns a source-backed eligibility diagnostic and no cases.
 - `OPENACME_LIVE_PARITY_FAMILY=<unsupported>` prints a skipped live parity
-  result and exits successfully, with no managed or legacy calls.
+  result and exits successfully, with no hosted or legacy calls.
 - 3466 remains running against the isolated hosted-integrations test
   environment after the slice.
 
@@ -6600,8 +6607,8 @@ Evidence:
   default `msgraph_get` service-root args. The default Graph parity path is `/`
   because the configured tenant credentials can fetch the Graph service root
   without directory read permissions; `/organization` and `/users` both reached
-  Graph from managed and legacy clients but returned Graph `403
-  Authorization_RequestDenied`.
+  Graph from hosted and legacy clients but returned Graph `403
+Authorization_RequestDenied`.
 - Deterministic validation on 2026-08-14:
   - `pnpm --filter @openacme/hosted-integrations test -- integration-hub-replacement` passed:
     18 passed, 1 skipped.
@@ -6612,7 +6619,7 @@ Evidence:
   - `pnpm --filter @openacme/server check-types` passed.
 - Live Microsoft Graph parity on 2026-08-14:
   `OPENACME_DATA_DIR=/Users/alenbohcelyan/.openamce-hosted-integrations-test-env OPENACME_LIVE_PARITY_FAMILY=msgraph pnpm --filter @openacme/server integration-hub:parity`
-  returned `status: "pass"` with one `match` case. Managed and legacy summaries
+  returned `status: "pass"` with one `match` case. Hosted and legacy summaries
   matched: `resultCount: 72`, `pagesFetched: 1`, `truncated: false`,
   `payloadKind: "object"`. Artifact:
   `/Users/alenbohcelyan/.openamce-hosted-integrations-test-env/hosted-integrations/live-parity/live_parity_9ff86d05-0f4f-438e-8399-0d4fa086b7de.json`.
@@ -6712,10 +6719,10 @@ Evidence:
   `OPENACME_DATA_DIR=/Users/alenbohcelyan/.openamce-hosted-integrations-test-env OPENACME_LIVE_PARITY_FAMILY=mde pnpm --filter @openacme/server integration-hub:parity`
   returned `status: "skipped"` with diagnostics
   `MDE_TENANT_ID is not configured (checked legacy MCP env, runner config
-  override, runner secret override)`, `MDE_CLIENT_ID is not configured (checked
-  legacy MCP env, runner config override, runner secret override)`, and
+override, runner secret override)`, `MDE_CLIENT_ID is not configured (checked
+legacy MCP env, runner config override, runner secret override)`, and
   `MDE_CLIENT_SECRET is not configured (checked legacy MCP env, runner config
-  override, runner secret override)`. This is the expected operator result until
+override, runner secret override)`. This is the expected operator result until
   MDE-specific credentials are configured.
 - 3466 health check passed after validation:
   `http://127.0.0.1:3466/api/health`.
@@ -6812,10 +6819,10 @@ Evidence:
   `OPENACME_DATA_DIR=/Users/alenbohcelyan/.openamce-hosted-integrations-test-env OPENACME_LIVE_PARITY_FAMILY=defender-alert pnpm --filter @openacme/server integration-hub:parity`
   returned `status: "skipped"` with diagnostics
   `DEFENDER_TENANT_ID is not configured (checked legacy MCP env, runner config
-  override, runner secret override)`, `DEFENDER_CLIENT_ID is not configured
-  (checked legacy MCP env, runner config override, runner secret override)`, and
+override, runner secret override)`, `DEFENDER_CLIENT_ID is not configured
+(checked legacy MCP env, runner config override, runner secret override)`, and
   `DEFENDER_CLIENT_SECRET is not configured (checked legacy MCP env, runner
-  config override, runner secret override)`. This is the expected operator
+config override, runner secret override)`. This is the expected operator
   result until defender-alert-specific credentials and a real alert id are
   configured.
 - 3466 health check passed after validation:
@@ -6861,9 +6868,9 @@ Evidence:
     environment configs are provided.
   - `GET /api/hosted-integrations/families` returned active family ids including
     `defender-alert`, `mde`, `msgraph`, `qualys`, and `splunk`.
-  - `GET /api/tools` returned 16 managed hosted tools and included
-    `managed_mde__mde_get`, `managed_defender-alert__defender_alert_get`, and
-    `managed_msgraph__msgraph_get`; `managed_tool_help` was also present.
+  - `GET /api/tools` returned 16 hosted tools and included
+    `hosted_mde__mde_get`, `hosted_defender-alert__defender_alert_get`, and
+    `hosted_msgraph__msgraph_get`; `hosted_tool_help` was also present.
   - `curl -sS -m 5 http://127.0.0.1:3466/api/health` returned
     `{"status":"ok","version":"0.14.0","agents":3,"skills":3}`.
 - Live parity credential status after the source-backed ports:
@@ -6906,11 +6913,11 @@ Contract:
   `environment_config`, `binding`, `publish`, `debug`, and `invocation`.
 - There is no `resolveMigrationReadiness`, no product readiness route for
   legacy integration-hub migration/import, and no
-  `hosted_integration_readiness_get` target_type of legacy migration/import.
+  `hosted_tool_readiness_get` target_type of legacy migration/import.
   Removed legacy URLs may have explicit 404 tombstones to avoid SPA fallback
   ambiguity; those tombstones must not return readiness payloads.
 - Offline parity/replacement tooling may keep replacement metadata such as
-  `managed_<family>__<tool> replaces mcp_integration-hub__<tool>`, but that
+  `hosted_<family>__<tool> replaces mcp_integration-hub__<tool>`, but that
   metadata is operational evidence only. It is not an authorization alias, not a
   readiness state, and not a product lifecycle operation.
 - Test scripts and operator scripts may create sample hosted tools, read legacy
@@ -6919,7 +6926,7 @@ Contract:
   create a second lifecycle implementation.
 - Management tools, API handlers, runtime dispatch, bundled skills, UI, and
   agent settings must describe parity/replacement work as offline/operator
-  workflow when needed, not as a managed hosted tool lifecycle capability.
+  workflow when needed, not as a hosted tool lifecycle capability.
 
 ### Slice 20.1: Remove Product Migration Readiness Surface
 
@@ -6944,7 +6951,7 @@ TDD:
 - Route tests prove `/api/hosted-integrations/readiness/migration` returns the
   platform's normal not-found response.
 - Management-tool tests prove
-  `hosted_integration_readiness_get({ target_type: "migration" })` is rejected
+  `hosted_tool_readiness_get({ target_type: "migration" })` is rejected
   before invoking the bound control-plane port.
 - Runtime management-tool tests prove migration readiness cannot be requested
   through the server port.
@@ -6969,7 +6976,7 @@ Evidence on 2026-08-15:
   `resolveMigrationReadiness` from the hosted integration readiness resolver and
   package readiness exports.
 - Removed the management-tool schema target for legacy migration/import
-  readiness and updated `hosted_integration_readiness_get` wording to the five
+  readiness and updated `hosted_tool_readiness_get` wording to the five
   product readiness targets.
 - Added direct management-tool argument parsing so invalid management tool
   params are rejected before the bound control-plane port is invoked, even when
@@ -7087,7 +7094,7 @@ Implementation decisions:
 Non-goals:
 
 - No automatic agent setting rewrite.
-- No hidden remote MCP to managed tool alias.
+- No hidden remote MCP to hosted tool alias.
 - No default cache behavior.
 
 TDD:
@@ -7155,7 +7162,7 @@ Implementation decisions:
 TDD:
 
 - Operator script test proves seeded tools appear as hosted generations and
-  managed registry tools.
+  hosted registry tools.
 - Live parity test proves runner can execute from seeded/active hosted
   generations.
 - Sanitization test scans parity artifacts for known secret markers.
@@ -7233,7 +7240,7 @@ TDD:
   and old migration test filename references
 - document scan keeps current final acceptance commands on
   `integration-hub-replacement`
-- current canonical contract names environment configs, managed/MCP separation,
+- current canonical contract names environment configs, hosted/MCP separation,
   offline parity/test-input boundaries, and Tool Developer
 
 Validation:
@@ -7511,7 +7518,7 @@ TDD:
   the generation runtime config contract.
 - API and management-tool wrappers must not pre-require an environment config
   before the gateway/runtime-config contract decision. This includes debug
-  routes, Tool Developer `hosted_integration_debug_run`, and async job creation.
+  routes, Tool Developer `hosted_tool_debug_run`, and async job creation.
 - Add one shared resolver in `packages/hosted-integrations` for execution config
   resolution, used by gateway invocation, debug routes, Tool Developer debug,
   async job creation, and debug/invocation readiness. The resolver input is
@@ -7559,8 +7566,8 @@ TDD:
 - Binding `defaultEnvironment` must be in `allowedEnvironments`.
 - Binding with custom config id, config values, endpoint override, credential
   selector, or config revision pin rejects.
-- Managed tool allowlist alone is insufficient; hosted-tool binding is required.
-- Remote MCP allowlist cannot authorize managed hosted tools, and managed
+- Hosted tool allowlist alone is insufficient; hosted-tool binding is required.
+- Remote MCP allowlist cannot authorize hosted tools, and hosted
   hosted allowlist cannot authorize remote MCP tools.
 - Generation pin resolves only from the binding.
 
@@ -7603,7 +7610,7 @@ TDD:
   config is missing/incomplete.
 - `/api/hosted-integrations/readiness/debug`,
   `/api/hosted-integrations/readiness/invocation`, and
-  `hosted_integration_readiness_get` return ready environment readiness for
+  `hosted_tool_readiness_get` return ready environment readiness for
   config-free tools after policy/generation checks, without requiring an
   environment config record.
 - Hosted Tools debug controls and log rendering have config-backed and
@@ -7648,7 +7655,7 @@ TDD:
 - Skill scan finds no active `config scope`, `config-scope`, or `configScopeId`
   guidance.
 - Skill examples use only `prod` and `test_debug`.
-- Managed/native tool naming guidance remains intact.
+- Hosted/native tool naming guidance remains intact.
 
 ### Slice 22.8: No Backward Compatibility Proof
 
@@ -7728,22 +7735,27 @@ rg -n "qualys-live-demo|qualys-live-parity|demo config|parity config|environment
 ## Next Implementation Order
 
 The package skeleton, MVP lifecycle, management tools, failure loop, Agent
-Settings integration, first Qualys managed-help dogfood, local/real-LLM
+Settings integration, first Qualys hosted-help dogfood, local/real-LLM
 dogfood, deterministic source model, human-native editor, DB-backed
 persistence, first live Qualys parity validation, Milestone 18 rectification,
 Milestone 20 offline parity/test-input boundary, and Milestone 21 historical
 artifact hygiene have already landed in the isolated worktree.
+Milestone 22 has since become the active environment-config boundary contract.
+Milestone 23's tool catalog revision/session notice work, Milestone 24's
+derived-only runtime rectification, Milestone 25's hosted family delete, and
+Milestone 26's isolated test-env rectification have landed.
 
 Recommended future order:
 
-1. Milestone 22 environment config boundary audit.
-2. Any newly identified production hardening slices from parity or dogfood
+1. Keep newly identified production hardening slices from parity or dogfood
    findings.
 
 Why this order:
 
+- The accepted Milestone 23-26 correction packet is validation-backed and ready
+  to remain the current baseline.
 - The deterministic source model, rich editor, generation diff, DB persistence,
-  and hosted/managed tool boundary are now implemented enough for broader
+  and hosted/hosted tool boundary are now implemented enough for broader
   parity validation.
 - Milestone 18 corrected the product-boundary issue that dogfood surfaced:
   internal/agent-specific purposes are now modeled as hosted-tool bindings, not
@@ -7752,40 +7764,53 @@ Why this order:
 Expected final acceptance validation:
 
 ```text
-pnpm --filter @openacme/hosted-integrations test -- integration-hub-replacement validation python-runtime readiness environment-configs hosted-tool-bindings help source-view generation-diff db-store store-contract naming
+pnpm --filter @openacme/hosted-integrations test -- integration-hub-replacement validation python-runtime readiness environment-configs hosted-tool-bindings help source-view generation-diff db-store store-contract naming family-delete draining
 pnpm --filter @openacme/hosted-integrations check-types
 pnpm --filter @openacme/hosted-integrations check-types:test-support
 pnpm --filter @openacme/hosted-integrations build
 pnpm --filter @openacme/server test -- hosted-integrations-routes tools-hosted-integrations hosted-integration-live-parity hosted-integrations-legacy-surface runtime
 pnpm --filter @openacme/server check-types
 pnpm --filter @openacme/server check-types:operator
-pnpm --filter @openacme/tools test -- hosted-integration-management hosted-integration-help
+pnpm --filter @openacme/tools test -- hosted-integration-management hosted-integration-help registry-order
 pnpm --filter @openacme/tools check-types
-pnpm --filter web test -- hosted-integration-agent-settings hosted-integrations-admin hosted-integrations-rich-editor
+pnpm --filter web test -- hosted-integration-agent-settings hosted-integrations-admin hosted-integrations-rich-editor tool-catalog-notices
 pnpm --filter web check-types
+pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/chat.e2e.ts test/e2e/tasks.e2e.ts test/e2e/session-timeline.e2e.ts -t "resolves catalog refresh once|emits a catalog notice|agent_ask target sessions emit catalog notices|dispatcher turns emit catalog notices|filters durable timeline events by eventType"
 curl -sS -m 5 http://127.0.0.1:3466/api/health
 ```
 
 Current final acceptance validation on 2026-08-15:
 
-- `pnpm --filter @openacme/hosted-integrations test -- integration-hub-replacement validation python-runtime readiness environment-configs hosted-tool-bindings help source-view generation-diff db-store store-contract naming`
-  passed: 105 passed, 1 skipped.
+- `pnpm --filter @openacme/hosted-integrations test -- integration-hub-replacement validation python-runtime readiness environment-configs hosted-tool-bindings help source-view generation-diff db-store store-contract naming family-delete draining --reporter=dot`
+  passed: 111 passed, 1 skipped.
 - `pnpm --filter @openacme/hosted-integrations check-types` passed.
 - `pnpm --filter @openacme/hosted-integrations check-types:test-support`
   passed.
 - `pnpm --filter @openacme/hosted-integrations build` passed.
 - `pnpm --filter @openacme/server test -- hosted-integrations-routes tools-hosted-integrations hosted-integration-live-parity hosted-integrations-legacy-surface runtime`
-  passed: 81 passed.
+  passed: 84 passed.
 - `pnpm --filter @openacme/server check-types` passed.
 - `pnpm --filter @openacme/server check-types:operator` passed.
-- `pnpm --filter @openacme/tools test -- hosted-integration-management hosted-integration-help`
-  passed: 16 passed.
+- `pnpm --filter @openacme/tools test -- hosted-integration-management hosted-integration-help registry-order --reporter=dot`
+  passed: 19 passed.
 - `pnpm --filter @openacme/tools check-types` passed.
-- `pnpm --filter web test -- hosted-integration-agent-settings hosted-integrations-admin hosted-integrations-rich-editor`
-  passed: 43 passed.
+- `pnpm --filter web test -- hosted-integration-agent-settings hosted-integrations-admin hosted-integrations-rich-editor tool-catalog-notices --reporter=dot`
+  passed: 45 passed.
 - `pnpm --filter web check-types` passed.
+- `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/chat.e2e.ts test/e2e/tasks.e2e.ts test/e2e/session-timeline.e2e.ts -t "resolves catalog refresh once|emits a catalog notice|agent_ask target sessions emit catalog notices|dispatcher turns emit catalog notices|filters durable timeline events by eventType" --reporter=dot`
+  passed: 5 passed, 21 skipped.
+- The isolated local test env was rectified with
+  `OPENACME_DATA_DIR="$HOME/.openamce-hosted-integrations-test-env" pnpm --filter @openacme/server exec tsx scripts/hosted-integrations-rectify-derived-only-data.ts`;
+  stale legacy dispatch artifacts were archived under that env's
+  `archived-legacy` directory while family environment config and secret
+  metadata remained in place.
+- Test-env scan returned no matches for `handlerDispatch`, `legacy_call_tool`,
+  or `def call_tool(` in active hosted source, generation, and draft surfaces.
 - `curl -sS -m 5 http://127.0.0.1:3466/api/health` returned
   `{"status":"ok","version":"0.14.0","agents":3,"skills":3}`.
+- `GET /api/tools` on port 3466 returned 39 hosted tools using canonical
+  `hosted_<family>__<tool>` business names and `hosted_tool_*` management-tool
+  names.
 - Live Qualys parity passed with five matching cases:
   `live_parity_dbda7b87-fa48-4198-b082-a45089e42ade`.
 - Live Microsoft Graph parity passed with one matching service-root case:
@@ -7806,3 +7831,593 @@ Current final acceptance validation on 2026-08-15:
 - Live MDE and defender-alert remain credential-gated until their family-native
   credentials are configured; current diagnostics explicitly say legacy MCP env,
   runner config override, and runner secret override were checked.
+
+## Milestone 23: Tool Catalog Revision And Session Notice
+
+Goal:
+
+- Let already-open chat sessions pick up hosted tool catalog changes on the
+  next turn without requiring a new session.
+- Keep the existing explicit Agent Settings grant model: an agent can only call
+  tools listed in `agent.tools` with the corresponding hosted-tool binding data
+  when config is required.
+- Avoid introducing a new granting/capability system for this milestone.
+- Treat the registry revision as a cache-invalidation signal for cached Agent
+  instances, not as an access-policy source.
+
+Non-goals:
+
+- No mid-flight model request mutation. A turn already sent to the model keeps
+  the tool schema snapshot captured at turn start.
+- No implicit access to newly promoted business hosted tools unless Agent
+  Settings has already granted that exact `hosted_<family>__<tool>` name.
+- No wildcard/prefix grant mechanism and no remote MCP/hosted-tool grant
+  unification.
+
+### Slice 23.1: ToolRegistry Revision And Emitted-Name Snapshot Helper
+
+Status: done.
+
+Goal:
+
+- ToolRegistry revision contract: use the existing `toolRegistry.generation`
+  counter as the canonical catalog revision exposed to cache consumers.
+- ToolRegistry snapshot helper: add a small public helper for emitted tool-name
+  snapshots, for example `getEmittedToolNames(toolNames?, options?)`, that uses
+  the same filtering path as `getDefinitions()`/`getVercelTools()` without
+  constructing tool execution closures or JSON schemas.
+- Hosted lifecycle integration: promotion, delete, registry sync, and registry
+  remove paths must bump the registry generation through normal ToolRegistry
+  `register`/`deregister` behavior. Hosted adapter `clear` invalidates by
+  deregistering every registered hosted family tool.
+
+TDD:
+
+- `ToolRegistry.generation` is stable across read-only `getInfo()` and
+  `getVercelTools()` calls.
+- `ToolRegistry.generation` increments on register and deregister; hosted
+  `syncFamily`, `removeFamily`, and adapter `clear` paths invalidate through
+  those existing registry operations.
+- ToolRegistry emitted-name helper returns exactly the names that
+  `getVercelTools()` would expose for the same `toolNames` filter and `checkFn`
+  state, without creating executable tool objects.
+
+Evidence:
+
+- `pnpm --filter @openacme/tools exec vitest run test/registry-order.test.ts --reporter=dot`
+  passed.
+- `pnpm --filter @openacme/tools build` passed so downstream server tests use
+  the refreshed `@openacme/tools` package output.
+
+### Slice 23.2: Agent Cache Revision Invalidation
+
+Status: done.
+
+Goal:
+
+- Agent cache invalidation: cache Agent instances with the catalog generation
+  they were built from and evict/rebuild on the next `getAgent()` cache hit when
+  the current registry generation differs.
+- Runtime scope: hosted tools are not per-agent MCP servers. They are global
+  ToolRegistry entries whose availability to a specific agent is filtered by
+  that agent's `agent.tools` allowlist and hosted-tool bindings at Agent
+  creation/turn execution time.
+- Authorization boundary: Agent Settings remains the only user-facing grant
+  surface for business hosted tools; revision invalidation only refreshes
+  schemas for agents that are already configured to receive those tools.
+
+TDD:
+
+- A cached Agent built at catalog generation `N` is reused while the registry
+  remains at `N`.
+- A cached Agent built at catalog generation `N` is evicted and rebuilt before
+  the next turn when the registry is at `N + 1`.
+- Agent cache entries carry `agent`, `toolCatalogGeneration`, and the base
+  model-facing tool-name snapshot for that agent. The base snapshot must be
+  computed through ToolRegistry emission rules including registered tool
+  presence and per-tool `checkFn` gating; it must not be derived from the raw
+  allowlist alone.
+- If `ToolRegistry.generation` changes but the effective model-facing tool-name
+  snapshot is unchanged, the Agent is still rebuilt but the refresh result marks
+  no added/removed effective tool names. This prevents downstream notice
+  producers from showing noisy notices for idempotent hosted registry syncs that
+  replace equivalent entries.
+
+Evidence:
+
+- `pnpm --filter @openacme/server exec vitest run test/app-routes.test.ts -t "rebuilds cached agents" --reporter=dot`
+  passed. The test registers the granted probe before agent creation, proves
+  cache reuse while the catalog generation is stable, then registers an
+  unselected tool to bump the catalog and proves the agent rebuilds with no
+  added/removed effective tool names.
+- `pnpm --filter @openacme/server exec vitest run test/hosted-integrations-routes.test.ts -t "evicts cached agents|removes.*api/tools|delete" --reporter=dot`
+  passed, covering hosted family delete/draining registry removal and cached
+  agent eviction behavior.
+- `pnpm --filter @openacme/server check-types` passed.
+
+### Slice 23.3: Session-Aware Turn Refresh And Catalog Notice Event
+
+Status: done.
+
+Goal:
+
+- Session-aware turn entrypoint: `getAgent(id)` can stay the generic cache
+  accessor, but chat-visible catalog notices must be emitted from a
+  session-aware turn boundary that has `sessionId` and the pending response/turn
+  identity. Interactive chat, autonomous dispatcher turns, and `agent_ask`
+  target turns are the relevant boundaries.
+- Turn-scoped agent resolution: each turn resolves the Agent/cache refresh once
+  and reuses that Agent for preflight, memory recall, model execution, post-turn
+  extractor/title work, and notice emission. Interactive chat must not call a
+  fresh `getAgent(agentId)` separately for preflight and execution in a way that
+  can observe two different catalog generations inside one turn.
+- Chat visibility: when a session activation rebuilds because the tool catalog
+  revision changed, persist a session timeline event and broadcast a UI-only
+  session context notice that tells the user which newly available tools were
+  noticed and added to that turn's model-facing tool set. Do not persist this
+  notice as a user/assistant chat message and do not materialize it into the
+  model input.
+- Event contract: use session timeline event type
+  `session.tool_catalog.changed` and SSE kind `tool_catalog_notice`. The payload
+  contains only sanitized metadata: `agentId`, `previousGeneration`,
+  `currentGeneration`, `addedToolNames`, `removedToolNames`,
+  `addedHostedTools` with Agent Settings grant status, and optional
+  `responseMessageId`/`taskId`. It must not include tool arguments, config
+  values, secrets, source code, or raw registry entry objects.
+
+TDD:
+
+- Interactive chat resolves the Agent once per turn and uses the same cache
+  refresh result for preflight compression, memory recall, `runStream`, and
+  post-turn extractor/title hooks.
+- Autonomous dispatcher turns and `agent_ask` target turns use the same
+  session-aware refresh helper and record/broadcast equivalent catalog notices.
+- Session-aware turn refresh computes the turn-effective snapshot by applying
+  any turn-level `toolFilter` to the refreshed Agent before recording a notice.
+  This keeps `agent_ask` and other restricted calls from reporting tools that
+  were not actually offered to that model request.
+- Rebuild on generation mismatch returns a refresh result to the session-aware
+  turn boundary; that boundary records the sanitized session timeline/context
+  event with previous generation, current generation, added tool names, removed
+  tool names, response/turn anchor, and whether each added hosted tool was
+  already granted by Agent Settings.
+
+Evidence:
+
+- `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/chat.e2e.ts -t "resolves catalog refresh once|emits a catalog notice" --reporter=dot`
+  passed. This proves interactive turns resolve one catalog refresh boundary
+  and emit a metadata-only `tool_catalog_notice` plus durable
+  `session.tool_catalog.changed` timeline event when a granted tool becomes
+  model-visible.
+- `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/tasks.e2e.ts -t "agent_ask target sessions emit catalog notices|dispatcher turns emit catalog notices" --reporter=dot`
+  passed. This proves `agent_ask` target sessions and autonomous dispatcher
+  turns use the same refresh/notice seam.
+- `pnpm --filter @openacme/server check-types` passed.
+
+### Slice 23.4: Timeline Filter And Chat UI Rendering
+
+Status: done.
+
+Goal:
+
+- Finding: the current chat UI does not render session timeline events by
+  default. `GET /api/sessions/:id/timeline` exists as an operator/API surface,
+  but `useLiveSession` only handles live stream events such as
+  `ui_message_part`, `messages_appended`, `session_state`, `session_title`,
+  `task_event`, inbox queue events, and usage events.
+- Finding: persisting the catalog notice as a normal user or assistant message
+  would make the explanation part of canonical chat history and risk leaking it
+  into later model input. That is the wrong surface for an explanatory UI
+  event.
+- Consume the explicit UI-only session broadcast event for catalog context
+  notices, separate from `messages_appended`.
+- Recover the durable session timeline event written by Slice 23.3 so page
+  reloads and forensic review can show when the session noticed the catalog
+  change.
+- Extend the session timeline store and `GET /api/sessions/:id/timeline` with
+  an `eventType` filter so reload recovery can fetch only
+  `session.tool_catalog.changed` records instead of scanning a broad timeline
+  page and possibly missing older notices behind the limit.
+- `useLiveSession` must handle the new broadcast event and keep it in a UI-side
+  notice collection rather than in `messages`.
+- Initial history load and running-to-idle refresh must merge relevant catalog
+  notices from `GET /api/sessions/:id/timeline` by event type, so the notice
+  survives refresh and late page load.
+- Both full-page chat (`apps/web/app/routes/index.tsx`) and the Acme panel
+  (`apps/web/app/components/AcmePanel.tsx`, through the shared `useChatSession`
+  path) render the same catalog notice model. The copy should name added tools,
+  removed tools if any, and the fact that Agent Settings had already granted any
+  added hosted tool that became model-visible.
+- Notices are anchored to a response/turn id when available and otherwise
+  sorted by timeline timestamp. The UI renders them between conversation items
+  without changing message order or message ids.
+- Non-change: this notice does not grant access, does not alter `agent.tools`,
+  does not create hosted-tool bindings, and does not enter model context.
+
+TDD:
+
+- `useLiveSession` handles `tool_catalog_notice` separately from
+  `messages_appended` so catalog notices do not become canonical chat history.
+- Timeline store and route tests prove `eventType=session.tool_catalog.changed`
+  filters only catalog notices and paginates deterministically.
+- Initial session history load or running-to-idle refresh can recover these
+  notices from `GET /api/sessions/:id/timeline` by event type, so a page reload
+  does not lose the explanation.
+- Full-page chat and the Acme panel render catalog context notices inline with
+  conversation context, using the same visual pattern as modal/context notices,
+  so the user can see when a new tool became available in the session and why.
+
+Evidence:
+
+- `pnpm --filter @openacme/server exec vitest run --config vitest.e2e.config.ts test/e2e/session-timeline.e2e.ts -t "filters durable timeline events by eventType" --reporter=dot`
+  passed. This proves `GET /api/sessions/:id/timeline?eventType=session.tool_catalog.changed`
+  returns only catalog notice events.
+- `pnpm --filter web test -- tool-catalog-notices --reporter=dot` passed.
+  This proves the web parser accepts only `session.tool_catalog.changed`
+  timeline payloads and dedupes notice state.
+- `pnpm --filter web check-types`, `pnpm --filter @openacme/db build`, and
+  `pnpm --filter @openacme/server check-types` passed.
+- UI implementation notes: `useLiveSession` handles `tool_catalog_notice` via
+  a dedicated callback, not `messages_appended`; full-page chat and Acme panel
+  render `ToolCatalogNotice` from UI-side notice state; session load and
+  running-to-idle refresh recover notices through the timeline `eventType`
+  filter.
+
+### Slice 23.5: Access Boundary And Draining Proof
+
+Status: done.
+
+Goal:
+
+- Draining scope: publish/update/delete draining waits only for in-flight
+  hosted tool invocations against the affected generation or family, across
+  whichever agents started those calls. Idle agents and open sessions with no
+  active affected tool call do not block draining.
+- Preserve the hosted tool / remote MCP naming boundary and the existing Agent
+  Settings grant model.
+
+TDD:
+
+- A same-session follow-up turn can see a newly registered hosted management
+  tool when the agent definition already includes that management tool.
+- A same-session follow-up turn can see a promoted business hosted tool only
+  when `agent.tools` already includes the exact canonical hosted tool name.
+- Removing or deleting a hosted family invalidates cached Agents that selected
+  removed hosted tools and prevents the removed tools from being emitted on the
+  next turn.
+- Draining tests prove a long-running call from one agent blocks only the
+  affected generation/family finalization, while unrelated hosted tools and
+  idle agents continue normally.
+- In-flight turns continue using their starting tool schema snapshot and fail
+  through the existing gateway readiness/draining checks if the referenced
+  generation becomes unavailable.
+- Regression coverage proves remote MCP tool names cannot grant hosted tools
+  and hosted tool names cannot enable remote MCP tools.
+
+Evidence:
+
+- `pnpm --filter @openacme/hosted-integrations test -- draining naming`
+  passed. This covers hosted draining behavior and canonical naming boundary.
+- `pnpm --filter @openacme/server exec vitest run test/tools-hosted-integrations.test.ts -t "without hiding remote MCP|cannot invoke|canonical hosted" --reporter=dot`
+  passed. This proves hosted replacements do not hide remote MCP tools in
+  `/api/tools`.
+- `pnpm --filter @openacme/server exec vitest run test/hosted-integrations-routes.test.ts -t "refreshes /api/tools|deletes a hosted family|drains active invocations|drains real gateway" --reporter=dot`
+  passed. This covers promotion registry refresh, cached agent eviction,
+  hosted family delete, and delete-draining behavior.
+- Slice 23.3 e2e evidence proves same-session follow-up turns pick up newly
+  model-visible granted tools through catalog refresh without requiring a new
+  session.
+
+## Milestone 24: Derived-Only Runtime Contract Rectification
+
+Status: done.
+
+Goal:
+
+- Remove the temporary `legacy_call_tool` compatibility path and the
+  now-useless `handlerDispatch` field from product hosted integration
+  runtime/schema/validation.
+- Keep the single accepted tool mapping rule:
+  `def tool_<tool_name>(args, context)`.
+- Ensure integration-hub replacement fixtures used by tests/operator workflows
+  also generate derived handler source, so test inputs do not reintroduce a
+  product-style legacy dispatch contract.
+- Preserve legacy remote MCP references only as parity/source evidence, not as
+  hosted runtime dispatch behavior.
+
+Non-goals:
+
+- No migration fallback for already-promoted legacy hosted generations.
+- No manifest handler aliases.
+- No `call_tool(name, args, context)` runtime dispatch in product code.
+
+### Slice 24.1: Schema, Runtime, Validation, And Fixture Cleanup
+
+Status: done.
+
+Goal:
+
+- Remove `runtime.handlerDispatch` from the manifest schema.
+- Remove Python runtime dispatch to module-level `call_tool`.
+- Make validation reject legacy dispatch manifests and entrypoints that lack
+  deterministic handlers.
+- Convert route, management-tool, promotion, and integration-hub replacement
+  fixtures to deterministic handlers with standard hooks where validation runs.
+
+TDD:
+
+- schema rejects any `handlerDispatch` runtime field
+- runtime ignores module-level `call_tool` and returns a normal missing-handler
+  failure when the deterministic handler is absent
+- validation rejects explicit legacy dispatch metadata
+- promoted/draft route fixtures validate with
+  `tool_<tool_name>(args, context)` and standard hooks
+- integration-hub replacement fixtures validate/promote without generating
+  legacy dispatch source
+
+Evidence:
+
+- `pnpm --filter @openacme/hosted-integrations test -- validation python-runtime promotion integration-hub-replacement --reporter=dot`
+  passed: 55 passed, 1 skipped.
+- `pnpm --filter @openacme/server exec vitest run test/hosted-integrations-routes.test.ts test/tools-hosted-integrations.test.ts -t "invokes selected hosted integration|runs examples and promotes|failure bucket repair|creates drafts|readiness|promotes a draft|deletes a hosted family|drains active invocations|requires human approval" --reporter=dot`
+  passed: 11 passed, 44 skipped.
+- `pnpm --filter @openacme/server check-types` passed.
+
+### Slice 24.2: Remove Redundant Dispatch Field
+
+Status: done.
+
+Goal:
+
+- Remove the redundant `runtime.handlerDispatch` field entirely after Slice
+  24.1 proved there is only one valid dispatch behavior.
+- Keep source-view manifest excerpts focused on useful runtime facts:
+  `entrypoint` plus selected tool metadata.
+- Ensure runtime fixture helpers build requests without dispatch metadata.
+- Remove stale dispatch metadata from active web admin types and real LLM
+  dogfood source generation.
+
+TDD:
+
+- runtime settings schema rejects any `handlerDispatch` field because the schema
+  is strict
+- focused source-view manifest excerpt no longer exposes `handlerDispatch`
+- Python runtime tests pass without injecting dispatch metadata
+- product source scan finds no active `handlerDispatch` references
+- active web/server script surfaces contain no `handlerDispatch` type and no
+  generated `def call_tool` dogfood source
+
+Evidence:
+
+- `pnpm --filter @openacme/hosted-integrations test -- schemas source-view validation python-runtime --reporter=dot`
+  passed.
+- `pnpm --filter @openacme/hosted-integrations check-types` passed.
+- `pnpm --filter web check-types` passed.
+- `pnpm --filter @openacme/server check-types` passed.
+- `pnpm --filter @openacme/server check-types:operator` passed.
+- Product source scan returned no matches:
+  `rg -n "handlerDispatch" packages/hosted-integrations/src packages/server/src packages/tools/src packages/skills/builtin/hosted-integrations-development/SKILL.md docs/hosted-integrations-architecture.md`.
+- Active UI/script scan returned no matches:
+  `rg -n "handlerDispatch|def call_tool\\(" apps/web/app apps/web/test packages/server/scripts packages/server/test-support packages/hosted-integrations/test-support packages/tools/src packages/server/src packages/hosted-integrations/src -g '!**/dist/**'`.
+
+### Slice 24.3: Remove Duplicate Plan Artifact
+
+Status: done.
+
+Goal:
+
+- Keep `docs/hosted-integrations-implementation-plan.md` as the single
+  canonical hosted integrations implementation plan.
+- Remove stale duplicate plan artifacts that can mislead future agent work with
+  superseded wording such as `managed_<family>__<tool>`,
+  `integration-hub-import`, `handlerDispatch`, or legacy router references.
+
+TDD:
+
+- duplicate plan artifact path does not exist
+- repo scan finds no references to the duplicate path
+- canonical plan and architecture remain the only hosted integrations planning
+  documents used by this workstream
+
+Evidence:
+
+- Removed the untracked stale duplicate plan snapshot.
+- Shell existence check for the stale duplicate path passed.
+- Repository reference scan for the stale duplicate plan naming pattern returned
+  no matches.
+
+## Milestone 25: Hosted Family Delete And Draining Rectification
+
+Status: done.
+
+Goal:
+
+- Add an explicit Tool Developer-only API delete action for removing an
+  incorrect hosted family from active lifecycle and registry surfaces.
+- Delete active/proposed source, drafts, locks, active pointers, environment
+  configs, secret files, disablements, and workspaces for the target family.
+- Keep promoted generation rows/files, historical runs, artifacts, approvals,
+  and failure buckets as forensic evidence; DB-backed stores disable retained
+  generations so cold-start registry sync cannot re-expose them.
+- Remove the family's hosted registry tools immediately and evict agents using
+  those tools.
+- If the family has in-flight invocations, return `delete_draining`, disable the
+  family for new calls, remove registry tools immediately, and finalize cleanup
+  automatically when in-flight count reaches zero.
+
+Non-goals:
+
+- No human-facing custom delete workflow beyond the Tool Developer-only API
+  route in this slice.
+- No durable delete-operation store in the first implementation slice.
+- No restart-resilient delete-draining sweeper in the first implementation
+  slice.
+
+### Slice 25.1: API Delete, Registry Removal, And Agent Eviction
+
+Status: done.
+
+Goal:
+
+- Implement `DELETE /api/hosted-integrations/families/:familyId`.
+- Require Tool Developer actor authorization for delete.
+- Route family deletion through the hosted integrations service and package
+  deleter seam instead of route-local cleanup.
+- Remove the family's hosted registry tools immediately and evict cached agents
+  that selected those hosted tools.
+
+TDD:
+
+- `DELETE /api/hosted-integrations/families/:familyId` requires Tool Developer
+  actor authorization.
+- Deleting a promoted family removes it from `/api/hosted-integrations/families`.
+- Deleting a promoted family removes `hosted_<family>__<tool>` from `/api/tools`.
+- Deleting a family evicts cached agents that selected the removed hosted tool.
+
+Evidence:
+
+- `pnpm --filter @openacme/server exec vitest run test/hosted-integrations-routes.test.ts -t "deletes a hosted family|drains active invocations|drains real gateway|requires Tool Developer" --reporter=dot`
+  passed: 3 passed, 43 skipped.
+- `pnpm --filter @openacme/server check-types` passed.
+
+### Slice 25.2: Delete Cleanup Contract For File And DB Stores
+
+Status: done.
+
+Goal:
+
+- File-backed deletion removes active/proposed source, drafts, locks, active
+  generation pointers, environment configs, secret files, family disablements,
+  and workspaces.
+- DB-backed deletion removes mutable lifecycle state and secret metadata while
+  retaining immutable generation rows/files, historical execution logs,
+  artifacts, approvals, and failure buckets as forensic evidence.
+- DB-backed deletion disables retained generations so registry cold-start sync
+  cannot re-expose deleted family tools.
+
+TDD:
+
+- Deleting a family clears its source, disablements, env configs, secrets,
+  drafts, locks, active generation pointer, and workspaces.
+- DB-backed deletion retains immutable generation rows/files with disabled
+  status and preserves execution logs.
+- Deletion is idempotent for already-deleted or partially deleted families.
+
+Evidence:
+
+- `pnpm --filter @openacme/hosted-integrations exec vitest run test/family-delete.test.ts test/db-store.test.ts test/draining.test.ts --reporter=dot`
+  passed: 18 passed.
+- File-backed deletion now preserves generation files as forensic evidence,
+  removes the active pointer, and writes disabled generation state.
+- DB-backed deletion retains generation rows/files, disables retained
+  generations, and preserves execution logs.
+- `pnpm --filter @openacme/hosted-integrations check-types` passed.
+- `pnpm --filter @openacme/hosted-integrations build` passed.
+
+### Slice 25.3: Delete-Draining First Slice
+
+Status: done.
+
+Goal:
+
+- If the target family has in-flight invocations, return `delete_draining`
+  instead of deleting mutable state immediately.
+- Record a family-level `delete_draining` disablement so new calls fail before
+  runtime dispatch.
+- Remove registry tools immediately even while final cleanup waits for the
+  in-flight count to reach zero.
+- Finalize cleanup automatically after the in-flight invocation count reaches
+  zero.
+
+TDD:
+
+- Deleting a family with in-flight invocations returns `delete_draining`,
+  records a family-level `delete_draining` disablement, and removes the hosted
+  registry tool before final cleanup.
+- Draining finalization deletes the family after the outstanding invocation is
+  completed.
+- Draining blocks only the affected family; unrelated hosted tools and idle
+  agents do not block finalization.
+
+Evidence:
+
+- `pnpm --filter @openacme/hosted-integrations exec vitest run test/family-delete.test.ts test/db-store.test.ts test/draining.test.ts --reporter=dot`
+  passed: 18 passed.
+- `pnpm --filter @openacme/server exec vitest run test/hosted-integrations-routes.test.ts -t "deletes a hosted family|drains active invocations|drains real gateway|requires Tool Developer" --reporter=dot`
+  passed: 3 passed, 43 skipped.
+- `pnpm --filter @openacme/server check-types` passed.
+
+Technical debt:
+
+- Delete-draining finalization currently uses an in-process runtime timer that
+  starts only after a `DELETE` request returns `delete_draining`. This is
+  acceptable for the first slice, but it is not restart-resilient and does not
+  provide a first-class UI-readable operation record. Move this to a durable
+  hosted family lifecycle operation store plus startup/runtime sweeper: record
+  `delete_draining`, current in-flight count, started/completed timestamps,
+  last error, and finalization status; resume finalization after server restart
+  by scanning pending delete operations or family-level `delete_draining`
+  disablements.
+
+## Milestone 26: Isolated Test Env Derived-Only Data Rectification
+
+Status: done.
+
+Goal:
+
+- Keep the product runtime strictly derived-only with no legacy dispatch
+  compatibility.
+- Provide an operator/test-env script that can clean isolated hosted
+  integrations data dirs after the runtime contract removes
+  `runtime.handlerDispatch`.
+- Repair only harmless stale `runtime.handlerDispatch=derived` metadata by
+  removing the field.
+- Archive legacy `legacy_call_tool` generations, active pointers, source
+  families, proposed-family records, locks, and drafts that cannot satisfy the
+  deterministic `def tool_<tool_name>(args, context)` mapping.
+- Preserve family environment config and secret metadata so credentials do not
+  need to be re-entered after local test-env cleanup.
+
+Non-goals:
+
+- No product runtime fallback for stale generation metadata.
+- No migration route, management tool, or automatic startup compatibility path.
+- No edits to local prod data.
+
+### Slice 26.1: Operator Script And Local Test Env Health
+
+Status: done.
+
+Goal:
+
+- Add `packages/server/scripts/hosted-integrations-rectify-derived-only-data.ts`
+  as an explicit operator script for isolated data-dir cleanup.
+- Run it against
+  `$HOME/.openamce-hosted-integrations-test-env` only.
+- Prove the test server boots on port 3466 after cleanup.
+
+TDD:
+
+- Operator typecheck includes the rectification script.
+- Running the script removes active boot-blocking `handlerDispatch` data from
+  active hosted source/generation/draft surfaces.
+- Environment config and secret metadata files remain present after cleanup.
+- `OPENACME_DATA_DIR="$HOME/.openamce-hosted-integrations-test-env"`
+  `OPENACME_PORT=3466` server boot reaches `/api/health`.
+- `/api/tools` on the test server exposes canonical hosted names, not legacy
+  non-hosted naming or remote-MCP aliases.
+
+Evidence:
+
+- `pnpm --filter @openacme/server check-types:operator` passed.
+- `OPENACME_DATA_DIR="$HOME/.openamce-hosted-integrations-test-env" pnpm --filter @openacme/server exec tsx scripts/hosted-integrations-rectify-derived-only-data.ts`
+  completed successfully and archived stale legacy hosted artifacts under the
+  isolated test env's `archived-legacy` directory.
+- Active test-env scan over hosted source, generation, and draft surfaces
+  returned no matches for `handlerDispatch`, `legacy_call_tool`, or
+  `def call_tool(`.
+- `curl -sS -m 5 http://127.0.0.1:3466/api/health` returned
+  `{"status":"ok","version":"0.14.0","agents":3,"skills":3}`.
+- `GET /api/tools` on port 3466 returned 39 hosted tools using canonical
+  `hosted_<family>__<tool>` business names and `hosted_tool_*` management-tool
+  names.

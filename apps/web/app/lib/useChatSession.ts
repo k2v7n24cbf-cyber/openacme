@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { toast } from "sonner";
 import type { UIMessage } from "ai";
 import { useLiveSession } from "./useLiveSession";
@@ -8,6 +15,11 @@ import {
   UPLOAD_LIMITS,
   type OpenAcmeUIMessage,
 } from "./types";
+import {
+  catalogNoticesFromTimeline,
+  mergeCatalogNotices,
+  type ToolCatalogNotice,
+} from "./toolCatalogNotices";
 
 export interface PendingAttachment {
   localId: string;
@@ -37,6 +49,23 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
     p,
     new Promise<null>((r) => setTimeout(() => r(null), ms)),
   ]);
+}
+
+function fetchCatalogNotices(
+  sessionId: string,
+  setCatalogNotices: Dispatch<SetStateAction<ToolCatalogNotice[]>>,
+) {
+  fetch(
+    `${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/timeline?eventType=session.tool_catalog.changed&includeForensics=0&limit=100`,
+  )
+    .then((r) => (r.ok ? r.json() : null))
+    .then((data: { events?: unknown[] } | null) => {
+      const notices = catalogNoticesFromTimeline(data?.events ?? []);
+      if (notices.length > 0) {
+        setCatalogNotices((prev) => mergeCatalogNotices(prev, notices));
+      }
+    })
+    .catch(() => {});
 }
 
 /**
@@ -70,6 +99,7 @@ export function useChatSession(opts: {
   >([]);
   const [isDragging, setIsDragging] = useState(false);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
+  const [catalogNotices, setCatalogNotices] = useState<ToolCatalogNotice[]>([]);
   const [statusBoard, setStatusBoard] = useState<Record<string, StatusEntry>>(
     {}
   );
@@ -85,6 +115,7 @@ export function useChatSession(opts: {
   useEffect(() => {
     sessionIdRef.current = sessionId;
     setStatusBoard({});
+    setCatalogNotices([]);
   }, [sessionId]);
   useEffect(() => {
     agentIdRef.current = agentId;
@@ -132,6 +163,9 @@ export function useChatSession(opts: {
       onInboxCancelled: ({ messageId }) => {
         setQueuedMessages((q) => q.filter((m) => m.id !== messageId));
       },
+      onToolCatalogNotice: (notice) => {
+        setCatalogNotices((prev) => mergeCatalogNotices(prev, [notice]));
+      },
     }
   );
   const isLiveRunning = liveSession.state === "running";
@@ -150,7 +184,13 @@ export function useChatSession(opts: {
         if (data) setMessages(data);
       })
       .catch(() => {});
+    fetchCatalogNotices(sessionId, setCatalogNotices);
   }, [isLiveRunning, sessionId]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    fetchCatalogNotices(sessionId, setCatalogNotices);
+  }, [sessionId]);
 
   const stop = useCallback(async () => {
     const sid = sessionIdRef.current;
@@ -429,6 +469,7 @@ export function useChatSession(opts: {
     setInput,
     submitting,
     error,
+    catalogNotices,
     queuedMessages,
     cancelQueued,
     statusBoard,

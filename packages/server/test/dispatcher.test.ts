@@ -41,12 +41,28 @@ function fakeManager(
   const manager = {
     listAgents: () => defs,
     getAgentDef: (id: string) => defs.find((agent) => agent.id === id) ?? null,
+    getAgentCatalogRefresh: (id: string) => ({
+      agent: {
+        runAutonomous: async ({ sessionId }: { sessionId: string }) => {
+          calls.push({ agentId: id, sessionId });
+          await turn(sessionId);
+        },
+      },
+      rebuilt: false,
+      previousGeneration: 0,
+      currentGeneration: 0,
+      previousToolNames: [],
+      currentToolNames: [],
+      addedToolNames: [],
+      removedToolNames: [],
+    }),
     getAgent: (id: string) => ({
       runAutonomous: async ({ sessionId }: { sessionId: string }) => {
         calls.push({ agentId: id, sessionId });
         await turn(sessionId);
       },
     }),
+    recordToolCatalogNotice: () => {},
   } as unknown as AgentManager;
   return { manager, calls };
 }

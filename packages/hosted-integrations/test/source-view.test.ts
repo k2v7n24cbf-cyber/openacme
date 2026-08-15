@@ -40,6 +40,7 @@ describe("hosted integration focused source view", () => {
         },
       },
     });
+    expect(view.manifest.runtime).toEqual({ entrypoint: "qualys.py" });
     expect(view.source.selectedHandler?.name).toBe(
       "tool_qualys_cloud_agent_hostasset_count",
     );

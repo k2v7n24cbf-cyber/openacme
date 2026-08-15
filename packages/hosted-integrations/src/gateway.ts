@@ -269,15 +269,17 @@ const ExecutionLogEntrySchema: z.ZodType<HostedIntegrationExecutionLogEntry> = z
     actorId: z.string().min(1),
     environmentConfigId: z.string().min(1).nullable(),
     configRevision: z.number().int().positive().nullable(),
-    executionPurpose: z.enum([
-      "consumer",
-      "debug",
-      "example",
-      "regression",
-      "validation",
-      "parity",
-      "dogfood",
-    ]).default("consumer"),
+    executionPurpose: z
+      .enum([
+        "consumer",
+        "debug",
+        "example",
+        "regression",
+        "validation",
+        "parity",
+        "dogfood",
+      ])
+      .default("consumer"),
     sanitizedArgs: JsonObjectSchema,
     status: z.enum(["running", "succeeded", "failed"]),
     startedAt: z.string().datetime({ offset: true }),
@@ -511,10 +513,8 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
     const environment = HostedIntegrationEnvironmentSchema.parse(
       policy.resolvedEnvironment ?? request.environment,
     );
-    const environmentConfig = await this.environmentConfigs.getEnvironmentConfig(
-      familyId,
-      environment,
-    );
+    const environmentConfig =
+      await this.environmentConfigs.getEnvironmentConfig(familyId, environment);
     const resolvedEnvironmentConfig =
       environmentConfig && environmentConfig.familyId === familyId
         ? environmentConfig
@@ -556,10 +556,12 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
         executionConfig.configRevision ?? 0,
     });
     if (executionConfig.mode === "config_backed") {
-      const environmentConfigDisablement = await this.disablements.findDisabled({
-        familyId,
-        environmentConfigId: executionConfig.environmentConfigId,
-      });
+      const environmentConfigDisablement = await this.disablements.findDisabled(
+        {
+          familyId,
+          environmentConfigId: executionConfig.environmentConfigId,
+        },
+      );
       if (environmentConfigDisablement) {
         await this.generations.completeInvocation({ leaseId: lease.lease.id });
         return disabledFailure(environmentConfigDisablement);
@@ -630,8 +632,8 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
       toolName,
       generationId: generation.id,
       actorId: request.actor.id,
-      environmentConfigId: executionConfig.environmentConfigId,
-      configRevision: executionConfig.configRevision,
+      environmentConfigId: executionConfig.environmentConfigId ?? null,
+      configRevision: executionConfig.configRevision ?? null,
       executionPurpose: executionConfig.executionPurpose,
       sanitizedArgs: sanitizeJsonObject(args),
       status: "running",

@@ -734,9 +734,7 @@ class DbHostedIntegrationDraftStore implements HostedIntegrationDraftStore {
   }
 }
 
-class DbHostedIntegrationEnvironmentConfigStore
-  implements HostedIntegrationEnvironmentConfigStore
-{
+class DbHostedIntegrationEnvironmentConfigStore implements HostedIntegrationEnvironmentConfigStore {
   private readonly db: HostedIntegrationSqlDatabase;
   private readonly catalog: HostedIntegrationCatalog;
   private readonly now: () => Date;
@@ -751,7 +749,9 @@ class DbHostedIntegrationEnvironmentConfigStore
     this.now = options.now ?? (() => new Date());
   }
 
-  async listEnvironmentConfigs(): Promise<HostedIntegrationEnvironmentConfig[]> {
+  async listEnvironmentConfigs(): Promise<
+    HostedIntegrationEnvironmentConfig[]
+  > {
     return this.db
       .prepare<[], EnvironmentConfigRow>(
         "SELECT id, family_id, environment, revision, config_json, " +
@@ -810,7 +810,10 @@ class DbHostedIntegrationEnvironmentConfigStore
       return { ok: false, reason: "family_not_found" };
     }
 
-    const existing = await this.getEnvironmentConfig(familyId, environment.data);
+    const existing = await this.getEnvironmentConfig(
+      familyId,
+      environment.data,
+    );
     const environmentConfig = HostedIntegrationEnvironmentConfigSchema.parse({
       id: hostedIntegrationEnvironmentConfigId(familyId, environment.data),
       familyId,
@@ -1354,6 +1357,26 @@ class DbHostedIntegrationGenerationStore implements HostedIntegrationGenerationS
         )
         .run(lease.generation_id);
     }
+  }
+
+  async hasInflightInvocations(
+    familyId: HostedIntegrationFamilyId | string,
+  ): Promise<boolean> {
+    return (await this.getInflightInvocationCount(familyId)) > 0;
+  }
+
+  async getInflightInvocationCount(
+    familyId: HostedIntegrationFamilyId | string,
+  ): Promise<number> {
+    const parsed = HostedIntegrationFamilyIdSchema.parse(familyId);
+    return (
+      this.db
+        .prepare<
+          [string],
+          { count: number }
+        >("SELECT COUNT(*) AS count FROM hosted_integration_generation_invocations " + "WHERE family_id = ? AND completed_at IS NULL")
+        .get(parsed)?.count ?? 0
+    );
   }
 
   async rollback(
@@ -2540,15 +2563,17 @@ const ExecutionLogEntrySchema: z.ZodType<HostedIntegrationExecutionLogEntry> = z
     actorId: z.string().min(1),
     environmentConfigId: z.string().min(1).nullable(),
     configRevision: z.number().int().positive().nullable(),
-    executionPurpose: z.enum([
-      "consumer",
-      "debug",
-      "example",
-      "regression",
-      "validation",
-      "parity",
-      "dogfood",
-    ]).default("consumer"),
+    executionPurpose: z
+      .enum([
+        "consumer",
+        "debug",
+        "example",
+        "regression",
+        "validation",
+        "parity",
+        "dogfood",
+      ])
+      .default("consumer"),
     sanitizedArgs: JsonObjectSchema,
     status: z.enum(["running", "succeeded", "failed"]),
     startedAt: z.string().datetime({ offset: true }),

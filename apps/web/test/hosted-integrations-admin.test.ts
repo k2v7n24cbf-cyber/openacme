@@ -75,12 +75,12 @@ describe("hosted integrations admin view model", () => {
     const matrix = buildHostedIntegrationAgentBindingMatrix({
       familyId: "qualys",
       toolName: "qualys_count_assets",
-      managedToolName: "managed_qualys__qualys_count_assets",
+      hostedToolName: "hosted_qualys__qualys_count_assets",
       bindings: [
         {
           agentId: "internal-parity",
           agentName: "Internal Parity",
-          managedToolName: "managed_qualys__qualys_count_assets",
+          hostedToolName: "hosted_qualys__qualys_count_assets",
           familyId: "qualys",
           toolName: "qualys_count_assets",
           bindingKind: "internal",
@@ -94,7 +94,7 @@ describe("hosted integrations admin view model", () => {
         {
           agentId: "analyst",
           agentName: "Analyst",
-          managedToolName: "managed_qualys__qualys_count_assets",
+          hostedToolName: "hosted_qualys__qualys_count_assets",
           familyId: "qualys",
           toolName: "qualys_count_assets",
           bindingKind: "agent",
@@ -111,7 +111,7 @@ describe("hosted integrations admin view model", () => {
     expect(matrix).toMatchObject({
       familyId: "qualys",
       toolName: "qualys_count_assets",
-      managedToolName: "managed_qualys__qualys_count_assets",
+      hostedToolName: "hosted_qualys__qualys_count_assets",
       totalCount: 2,
       agentCount: 1,
       internalCount: 1,

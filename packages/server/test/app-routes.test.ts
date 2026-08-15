@@ -3,10 +3,12 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigSchema } from "@openacme/config";
+import { registry as toolRegistry } from "@openacme/tools";
 import { createApp } from "../src/app.js";
 import type { AgentManager } from "../src/agent-manager.js";
 import { repairTaskSourceSessions } from "../src/task-source-provenance.js";
 import type { Hono } from "hono";
+import { z } from "zod";
 
 /**
  * Route-level tests over a real createApp() against a temp data dir.
@@ -61,8 +63,9 @@ async function createAgent(
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ id, name, ...extra }),
   });
-  expect(res.status).toBe(201);
-  return (await res.json()) as { id: string };
+  const body = await res.json();
+  expect(res.status, JSON.stringify(body)).toBe(201);
+  return body as { id: string };
 }
 
 // Uploads sniff magic bytes and only accept the allowed MIME set —
@@ -353,7 +356,7 @@ describe("agents CRUD", () => {
 
   it("persists hosted integration access bindings from agent settings", async () => {
     await createAgent("helper", "Helper", {
-      tools: ["managed_qualys__qualys_count_assets"],
+      tools: ["hosted_qualys__qualys_count_assets"],
     });
 
     const binding = {
@@ -393,6 +396,43 @@ describe("agents CRUD", () => {
 
     const agent = manager.getAgent("helper");
     expect(agent.config.tools).not.toContain("agent_ask");
+  });
+
+  it("rebuilds cached agents when the tool catalog generation changes", async () => {
+    toolRegistry.register({
+      name: "catalog_revision_probe",
+      toolset: "test",
+      description: "Probe catalog revision invalidation.",
+      parameters: z.object({}),
+      handler: async () => JSON.stringify({ ok: true }),
+    });
+    try {
+      await createAgent("helper", "Helper", {
+        tools: ["catalog_revision_probe"],
+      });
+      const cached = manager.getAgent("helper");
+      expect(manager.getAgent("helper")).toBe(cached);
+
+      toolRegistry.register({
+        name: "catalog_revision_unselected_bump",
+        toolset: "test",
+        description: "Unselected probe catalog revision invalidation.",
+        parameters: z.object({}),
+        handler: async () => JSON.stringify({ ok: true }),
+      });
+      const refresh = manager.getAgentCatalogRefresh("helper");
+      expect(refresh.agent).not.toBe(cached);
+      expect(refresh.rebuilt).toBe(true);
+      expect(refresh.emittedToolNames).toContain("catalog_revision_probe");
+      expect(refresh.emittedToolNames).not.toContain(
+        "catalog_revision_unselected_bump",
+      );
+      expect(refresh.addedToolNames).toEqual([]);
+      expect(refresh.removedToolNames).toEqual([]);
+    } finally {
+      toolRegistry.deregister("catalog_revision_unselected_bump");
+      toolRegistry.deregister("catalog_revision_probe");
+    }
   });
 
   it("persists and validates per-agent parallel session setting", async () => {

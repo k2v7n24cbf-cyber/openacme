@@ -163,7 +163,7 @@ export interface HostedIntegrationFocusedSourceView {
   entrypointPath: string;
   mode: "focused" | "full_family";
   manifest: {
-    runtime: Pick<FamilyManifest["runtime"], "entrypoint" | "handlerDispatch">;
+    runtime: Pick<FamilyManifest["runtime"], "entrypoint">;
     tool: HostedIntegrationToolSpec;
   };
   source: {
@@ -392,7 +392,6 @@ function manifestExcerpt(
   return {
     runtime: {
       entrypoint: manifest.runtime.entrypoint,
-      handlerDispatch: manifest.runtime.handlerDispatch,
     },
     tool,
   };

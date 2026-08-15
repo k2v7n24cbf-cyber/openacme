@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConfigSchema, loadGlobalMcpServers } from "@openacme/config";
-import { HOSTED_INTEGRATION_MANAGEMENT_TOOL_NAMES } from "@openacme/tools";
+import { HOSTED_TOOL_MANAGEMENT_TOOL_NAMES } from "@openacme/tools";
 import { AgentManager } from "../src/agent-manager.js";
 
 /**
@@ -251,7 +251,7 @@ describe("AgentManager.ensureManagedAgents", () => {
     expect(toolDeveloper.name).toBe("Tool Developer");
     expect(toolDeveloper.managed).toBe(true);
     expect(toolDeveloper.tools).toEqual(
-      expect.arrayContaining([...HOSTED_INTEGRATION_MANAGEMENT_TOOL_NAMES]),
+      expect.arrayContaining([...HOSTED_TOOL_MANAGEMENT_TOOL_NAMES]),
     );
     expect(toolDeveloper.skills).toEqual(["hosted-integrations-development"]);
 
@@ -308,7 +308,7 @@ describe("AgentManager.ensureManagedAgents", () => {
       "Do not delegate hosted integration source edits",
     );
     expect(hostedIntegrationSkill?.body).toContain(
-      "managed_splunk__splunk_search",
+      "hosted_splunk__splunk_search",
     );
     expect(hostedIntegrationSkill?.body).toContain(
       "Do not read, request, or return secret values",

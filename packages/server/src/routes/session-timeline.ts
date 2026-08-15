@@ -40,6 +40,9 @@ export function registerSessionTimelineRoutes(
     const filter: SessionTimelineFilter = {
       sessionId,
       ...(source ? { source } : {}),
+      ...(c.req.query("eventType")
+        ? { eventType: c.req.query("eventType") }
+        : {}),
       ...(c.req.query("traceId") ? { traceId: c.req.query("traceId") } : {}),
       ...(c.req.query("forensicRunId")
         ? { forensicRunId: c.req.query("forensicRunId") }
@@ -189,6 +192,7 @@ function matchesFilter(
 ): boolean {
   if (event.sessionId !== filter.sessionId) return false;
   if (filter.source && event.source !== filter.source) return false;
+  if (filter.eventType && event.eventType !== filter.eventType) return false;
   if (filter.traceId && event.traceId !== filter.traceId) return false;
   if (filter.forensicRunId && event.forensicRunId !== filter.forensicRunId) {
     return false;

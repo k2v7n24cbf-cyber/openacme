@@ -56,6 +56,21 @@ export type SessionBroadcastEvent =
       title: string;
     }
   | {
+      /** UI-only notice that this session picked up a newer tool catalog. */
+      kind: "tool_catalog_notice";
+      agentId: string;
+      previousGeneration: number | null;
+      currentGeneration: number;
+      addedToolNames: string[];
+      removedToolNames: string[];
+      addedHostedTools: Array<{
+        toolName: string;
+        grantStatus: "granted";
+      }>;
+      responseMessageId?: string;
+      taskId?: string;
+    }
+  | {
       kind: "task_event";
       /** A TaskEventRow from the EventStore — already serialized form
        *  is fine since SSE wraps everything in JSON. The client

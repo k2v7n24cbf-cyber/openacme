@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { X, Plus, Paperclip, SquareArrowOutUpRight } from "lucide-react";
 import { Button } from "@/app/components/ui/button";
 import { AttachmentChip } from "@/app/components/AttachmentChip";
 import { MessageBubble } from "@/app/components/chat/MessageBubble";
+import { ToolCatalogNotice } from "@/app/components/chat/ToolCatalogNotice";
 import { ChatComposer } from "@/app/components/chat/ChatComposer";
 import { useChatSession } from "@/app/lib/useChatSession";
 import { useCurrentView, type CurrentView } from "@/app/lib/CurrentViewContext";
@@ -215,19 +216,36 @@ export function AcmePanel() {
           </div>
         ) : (
           chat.messages.map((m, i) => (
-            <MessageBubble
-              key={m.id}
-              message={m}
-              agent={acme ?? undefined}
-              sessionId={sessionId}
-              isStreaming={
-                chat.isStreaming &&
-                m.role === "assistant" &&
-                i === chat.messages.length - 1
-              }
-            />
+            <Fragment key={m.id}>
+              {chat.catalogNotices
+                .filter((notice) => notice.responseMessageId === m.id)
+                .map((notice) => (
+                  <ToolCatalogNotice
+                    key={`${notice.currentGeneration}-${notice.responseMessageId}`}
+                    notice={notice}
+                  />
+                ))}
+              <MessageBubble
+                message={m}
+                agent={acme ?? undefined}
+                sessionId={sessionId}
+                isStreaming={
+                  chat.isStreaming &&
+                  m.role === "assistant" &&
+                  i === chat.messages.length - 1
+                }
+              />
+            </Fragment>
           ))
         )}
+        {chat.catalogNotices
+          .filter((notice) => !notice.responseMessageId)
+          .map((notice) => (
+            <ToolCatalogNotice
+              key={`${notice.currentGeneration}-${notice.ts ?? ""}`}
+              notice={notice}
+            />
+          ))}
         {chat.error && (
           <div role="alert" className="mt-3 border border-destructive bg-paper-sunk px-3 py-2 font-mono text-[12px] text-destructive">
             {chat.error.message}

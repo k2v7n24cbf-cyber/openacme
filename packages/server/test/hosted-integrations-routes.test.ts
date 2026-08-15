@@ -88,7 +88,6 @@ version: 1
 runtime:
   language: python
   entrypoint: ${id}.py
-  handlerDispatch: legacy_call_tool
   defaultTimeoutMs: 30000
   inlineResultTokenLimit: 8000
   maxConcurrency: 2
@@ -160,7 +159,6 @@ version: 1
 runtime:
   language: python
   entrypoint: qualys.py
-  handlerDispatch: legacy_call_tool
   defaultTimeoutMs: 30000
   inlineResultTokenLimit: 8000
   maxConcurrency: 2
@@ -226,7 +224,6 @@ version: 1
 runtime:
   language: python
   entrypoint: qualys.py
-  handlerDispatch: legacy_call_tool
   defaultTimeoutMs: 30000
   inlineResultTokenLimit: 8000
   maxConcurrency: 2
@@ -628,8 +625,7 @@ describe("hosted integrations draft control plane routes", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           lockId,
-          content:
-            "def call_tool(name, args, context):\n    return {'ok': True}\n",
+          content: pythonTool("return {'ok': True}"),
         }),
       },
     );
@@ -841,9 +837,7 @@ describe("hosted integrations environment config routes", () => {
     expect(listBody.environmentConfigs).toHaveLength(1);
     expect(JSON.stringify(listBody)).not.toContain("must-not-survive");
 
-    res = await req(
-      "/api/hosted-integrations/environment-configs/qualys/prod",
-    );
+    res = await req("/api/hosted-integrations/environment-configs/qualys/prod");
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({
       environmentConfig: { id: "qualys-prod", environment: "prod" },
@@ -919,7 +913,6 @@ describe("hosted integrations environment config routes", () => {
     });
     expect(JSON.stringify(body)).not.toContain("api-user");
   });
-
 });
 
 describe("hosted integrations readiness routes", () => {
@@ -947,15 +940,18 @@ describe("hosted integrations readiness routes", () => {
       },
     });
 
-    res = await req("/api/hosted-integrations/environment-configs/qualys/prod", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        config: { endpoint: "https://qualys.example.test" },
-        secrets: { apiToken: { configured: false } },
-        updatedBy: "human:alen",
-      }),
-    });
+    res = await req(
+      "/api/hosted-integrations/environment-configs/qualys/prod",
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          config: { endpoint: "https://qualys.example.test" },
+          secrets: { apiToken: { configured: false } },
+          updatedBy: "human:alen",
+        }),
+      },
+    );
     expect(res.status).toBe(200);
 
     res = await req(
@@ -1158,7 +1154,7 @@ describe("hosted integrations invocation routes", () => {
     });
   });
 
-  it("returns managed tool help only for agent-bound hosted tools", async () => {
+  it("returns hosted tool help only for agent-bound hosted tools", async () => {
     writeFamily(
       "qualys",
       familyYaml("qualys", "Qualys", "qualys_count_assets").replace(
@@ -1189,7 +1185,7 @@ describe("hosted integrations invocation routes", () => {
         role: "",
         model: { provider: "anthropic", model: "claude-sonnet-4-6" },
         persona: "Use hosted integrations.",
-        tools: ["managed_tool_help", "managed_qualys__qualys_count_assets"],
+        tools: ["hosted_tool_help", "hosted_qualys__qualys_count_assets"],
         hostedIntegrationBindings: [
           {
             familyId: "qualys",
@@ -1210,7 +1206,7 @@ describe("hosted integrations invocation routes", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         actor: { id: "analyst", kind: "agent", roles: ["agent"] },
-        tool_name: "managed_qualys__qualys_count_assets",
+        tool_name: "hosted_qualys__qualys_count_assets",
         tool_detail: "full",
         parameters: [
           {
@@ -1225,7 +1221,7 @@ describe("hosted integrations invocation routes", () => {
     expect(await res.json()).toMatchObject({
       ok: true,
       help: {
-        tool_name: "managed_qualys__qualys_count_assets",
+        tool_name: "hosted_qualys__qualys_count_assets",
         tool_help: {
           summary: "Count Qualys assets with a read-only request.",
           full: "Full count assets help.\n",
@@ -1246,7 +1242,7 @@ describe("hosted integrations invocation routes", () => {
         role: "",
         model: { provider: "anthropic", model: "claude-sonnet-4-6" },
         persona: "Use hosted integrations.",
-        tools: ["managed_qualys__qualys_count_assets"],
+        tools: ["hosted_qualys__qualys_count_assets"],
         hostedIntegrationBindings: [
           {
             familyId: "qualys",
@@ -1266,7 +1262,7 @@ describe("hosted integrations invocation routes", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         actor: { id: "analyst-no-help", kind: "agent", roles: ["agent"] },
-        tool_name: "managed_qualys__qualys_count_assets",
+        tool_name: "hosted_qualys__qualys_count_assets",
       }),
     });
     expect(res.status).toBe(403);
@@ -1274,7 +1270,7 @@ describe("hosted integrations invocation routes", () => {
       ok: false,
       error: {
         code: "policy_denied",
-        message: "managed tool help is not enabled for agent",
+        message: "hosted tool help is not enabled for agent",
       },
     });
 
@@ -1283,7 +1279,7 @@ describe("hosted integrations invocation routes", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         actor: { id: "unbound", kind: "agent", roles: ["agent"] },
-        tool_name: "managed_qualys__qualys_count_assets",
+        tool_name: "hosted_qualys__qualys_count_assets",
       }),
     });
     expect(res.status).toBe(403);
@@ -1310,7 +1306,7 @@ describe("hosted integrations invocation routes", () => {
         role: "",
         model: { provider: "anthropic", model: "claude-sonnet-4-6" },
         persona: "Use hosted integrations.",
-        tools: ["managed_qualys__qualys_count_assets"],
+        tools: ["hosted_qualys__qualys_count_assets"],
         hostedIntegrationBindings: [
           {
             familyId: "qualys",
@@ -1333,7 +1329,7 @@ describe("hosted integrations invocation routes", () => {
         role: "",
         model: { provider: "anthropic", model: "claude-sonnet-4-6" },
         persona: "Run parity.",
-        tools: ["managed_qualys__qualys_count_assets"],
+        tools: ["hosted_qualys__qualys_count_assets"],
         hostedIntegrationBindings: [
           {
             familyId: "qualys",
@@ -1356,7 +1352,7 @@ describe("hosted integrations invocation routes", () => {
         role: "",
         model: { provider: "anthropic", model: "claude-sonnet-4-6" },
         persona: "Use a different hosted tool.",
-        tools: ["managed_qualys__qualys_other_tool"],
+        tools: ["hosted_qualys__qualys_other_tool"],
         hostedIntegrationBindings: [
           {
             familyId: "qualys",
@@ -1382,7 +1378,7 @@ describe("hosted integrations invocation routes", () => {
       ok: true,
       familyId: "qualys",
       toolName: "qualys_count_assets",
-      managedToolName: "managed_qualys__qualys_count_assets",
+      hostedToolName: "hosted_qualys__qualys_count_assets",
       bindings: [
         {
           agentId: "matrix-analyst",
@@ -1403,9 +1399,9 @@ describe("hosted integrations invocation routes", () => {
         },
       ],
     });
-    expect(body.bindings.map((row: { agentId: string }) => row.agentId)).toEqual(
-      ["matrix-analyst", "matrix-internal"],
-    );
+    expect(
+      body.bindings.map((row: { agentId: string }) => row.agentId),
+    ).toEqual(["matrix-analyst", "matrix-internal"]);
     expect(JSON.stringify(body)).not.toContain("secret");
     expect(JSON.stringify(body)).not.toContain("endpoint");
   });
@@ -1415,7 +1411,10 @@ describe("hosted integrations invocation routes", () => {
       "qualys",
       asyncFamilyYaml("qualys", "Qualys", "qualys_export_assets"),
       {
-        "qualys.py": pythonTool("return {'queued': True}"),
+        "qualys.py": pythonTool(
+          "return {'queued': True}",
+          "qualys_export_assets",
+        ),
       },
     );
     await promoteFamily("qualys");
@@ -1534,7 +1533,7 @@ describe("hosted integrations invocation routes", () => {
     });
 
     writeFamily("jira", asyncFamilyYaml("jira", "Jira", "jira_export_issues"), {
-      "jira.py": pythonTool("return {'queued': True}"),
+      "jira.py": pythonTool("return {'queued': True}", "jira_export_issues"),
     });
     await promoteFamily("jira");
     await seedEnvironmentConfig("jira", "test_debug");
@@ -1564,7 +1563,10 @@ describe("hosted integrations invocation routes", () => {
       "qualys",
       asyncFamilyYaml("qualys", "Qualys", "qualys_export_assets"),
       {
-        "qualys.py": pythonTool("return {'queued': True}"),
+        "qualys.py": pythonTool(
+          "return {'queued': True}",
+          "qualys_export_assets",
+        ),
       },
     );
     await promoteFamily("qualys");
@@ -1726,13 +1728,15 @@ describe("hosted integrations invocation routes", () => {
       },
     );
     await promoteFamilyWithService("qualys");
-    await runtime.hostedIntegrationService.environmentConfigs.upsertEnvironmentConfig({
-      familyId: "qualys",
-      environment: "test_debug",
-      config: { endpoint: "https://qualys.example.test" },
-      secrets: { apiToken: { configured: true } },
-      updatedBy: "human:alen",
-    });
+    await runtime.hostedIntegrationService.environmentConfigs.upsertEnvironmentConfig(
+      {
+        familyId: "qualys",
+        environment: "test_debug",
+        config: { endpoint: "https://qualys.example.test" },
+        secrets: { apiToken: { configured: true } },
+        updatedBy: "human:alen",
+      },
+    );
     await runtime.hostedIntegrationService.secrets.writeHumanOwnedSecrets({
       environmentConfigId: "qualys-test_debug",
       secrets: { apiToken: "raw-token-123" },
@@ -2741,7 +2745,7 @@ describe("hosted integrations example execution and promotion routes", () => {
 
   it("refreshes /api/tools and evicts affected agents after promotion", async () => {
     await createAgentViaRoutes("qualys-agent", [
-      "managed_qualys__qualys_count_assets",
+      "hosted_qualys__qualys_count_assets",
     ]);
     const cachedAgent = manager.getAgent("qualys-agent");
     const { draftId, lockId } = await createDraftViaRoutes(
@@ -2769,10 +2773,10 @@ describe("hosted integrations example execution and promotion routes", () => {
     expect(toolsBody.toolsets).toContain("hosted-integrations");
     expect(
       toolsBody.tools.find(
-        (tool) => tool.name === "managed_qualys__qualys_count_assets",
+        (tool) => tool.name === "hosted_qualys__qualys_count_assets",
       ),
     ).toMatchObject({
-      name: "managed_qualys__qualys_count_assets",
+      name: "hosted_qualys__qualys_count_assets",
       toolset: "hosted-integrations",
       source: {
         kind: "hosted_integration",
@@ -2786,9 +2790,236 @@ describe("hosted integrations example execution and promotion routes", () => {
     expect(manager.getAgent("qualys-agent")).not.toBe(cachedAgent);
   });
 
+  it("deletes a hosted family through the API and removes its registry tools", async () => {
+    await createAgentViaRoutes("qualys-agent", [
+      "hosted_qualys__qualys_count_assets",
+    ]);
+    const cachedAgent = manager.getAgent("qualys-agent");
+    const { draftId, lockId } = await createDraftViaRoutes(
+      pythonTool("return {'count': 5}"),
+    );
+    await upsertSmokeExample(draftId, lockId);
+    let res = await req(`/api/hosted-integrations/drafts/${draftId}/promote`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ actor: toolDeveloperActor(), lockId }),
+    });
+    expect(res.status).toBe(200);
+    res = await req("/api/hosted-integrations/disablements", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actor: toolDeveloperActor(),
+        target: { level: "family", familyId: "qualys" },
+        disabled: true,
+        reason: "delete cleanup coverage",
+      }),
+    });
+    expect(res.status).toBe(200);
+
+    res = await req("/api/hosted-integrations/families/qualys", {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ actor: toolDeveloperActor() }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      ok: true,
+      familyId: "qualys",
+      status: "deleted",
+      generationIds: expect.any(Array),
+    });
+
+    res = await req("/api/hosted-integrations/families");
+    expect(res.status).toBe(200);
+    expect(
+      ((await res.json()) as { families: Array<{ id: string }> }).families.some(
+        (family) => family.id === "qualys",
+      ),
+    ).toBe(false);
+
+    res = await req("/api/tools");
+    expect(res.status).toBe(200);
+    expect(
+      ((await res.json()) as { tools: Array<{ name: string }> }).tools.some(
+        (tool) => tool.name === "hosted_qualys__qualys_count_assets",
+      ),
+    ).toBe(false);
+    expect(manager.getAgent("qualys-agent")).not.toBe(cachedAgent);
+
+    res = await req("/api/hosted-integrations/families/qualys/source/files");
+    expect(res.status).toBe(404);
+    res = await req("/api/hosted-integrations/disablements");
+    expect(
+      ((await res.json()) as { disablements: Array<{ key: string }> })
+        .disablements,
+    ).toEqual([]);
+  });
+
+  it("drains active invocations before finalizing hosted family delete", async () => {
+    const { draftId, lockId } = await createDraftViaRoutes(
+      pythonTool("return {'count': 5}"),
+    );
+    await upsertSmokeExample(draftId, lockId);
+    let res = await req(`/api/hosted-integrations/drafts/${draftId}/promote`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ actor: toolDeveloperActor(), lockId }),
+    });
+    expect(res.status).toBe(200);
+    const lease =
+      await runtime.hostedIntegrationService.generations.beginInvocation({
+        familyId: "qualys",
+      });
+    expect(lease).toMatchObject({ ok: true });
+
+    res = await req("/api/hosted-integrations/families/qualys", {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ actor: toolDeveloperActor() }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      ok: true,
+      familyId: "qualys",
+      status: "delete_draining",
+      deleted: false,
+      inflightInvocations: 1,
+    });
+
+    res = await req("/api/tools");
+    expect(res.status).toBe(200);
+    expect(
+      ((await res.json()) as { tools: Array<{ name: string }> }).tools.some(
+        (tool) => tool.name === "hosted_qualys__qualys_count_assets",
+      ),
+    ).toBe(false);
+    res = await req("/api/hosted-integrations/disablements");
+    expect(await res.json()).toMatchObject({
+      disablements: [
+        {
+          key: "family:qualys",
+          disabled: true,
+          reason: "delete_draining",
+        },
+      ],
+    });
+
+    if (lease.ok) {
+      await runtime.hostedIntegrationService.generations.completeInvocation({
+        leaseId: lease.lease.id,
+      });
+    }
+    res = await req("/api/hosted-integrations/families/qualys", {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ actor: toolDeveloperActor() }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      ok: true,
+      familyId: "qualys",
+      status: "deleted",
+    });
+    res = await req("/api/hosted-integrations/families");
+    expect(
+      ((await res.json()) as { families: Array<{ id: string }> }).families.some(
+        (family) => family.id === "qualys",
+      ),
+    ).toBe(false);
+  });
+
+  it("drains real gateway invocations before finalizing hosted family delete", async () => {
+    const { draftId, lockId } = await createDraftViaRoutes(`
+import time
+
+def authenticate(ctx):
+    return {}
+
+def before_tool_call(tool_name, args, ctx, auth):
+    return args
+
+def after_tool_call(tool_name, args, ctx, result, auth):
+    return result
+
+def tool_qualys_count_assets(args, context):
+    time.sleep(1.5)
+    return {}
+
+`);
+    await upsertSmokeExample(draftId, lockId);
+    let res = await req(`/api/hosted-integrations/drafts/${draftId}/promote`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ actor: toolDeveloperActor(), lockId }),
+    });
+    const promotedBody = await res.json();
+    if (res.status !== 200) {
+      throw new Error(
+        `promote failed: ${res.status} ${JSON.stringify(promotedBody)}`,
+      );
+    }
+
+    const invokePromise = req("/api/hosted-integrations/invoke", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actor: agentActor(),
+        familyId: "qualys",
+        toolName: "qualys_count_assets",
+        args: {},
+        hostedToolBindings: [
+          {
+            agentId: "agent:analyst",
+            familyId: "qualys",
+            toolName: "qualys_count_assets",
+            allowedEnvironments: ["test_debug"],
+            defaultEnvironment: "test_debug",
+            generationPin: { type: "current" },
+            bindingKind: "agent",
+            updatedAt: "2026-08-14T10:00:00.000Z",
+            updatedBy: "human:test",
+          },
+        ],
+      }),
+    });
+    await waitForHostedIntegrationInflightCount("qualys", 1);
+
+    res = await req("/api/hosted-integrations/families/qualys", {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ actor: toolDeveloperActor() }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      ok: true,
+      familyId: "qualys",
+      status: "delete_draining",
+      deleted: false,
+      inflightInvocations: 1,
+    });
+
+    const invoked = await invokePromise;
+    const invokedBody = await invoked.json();
+    if (invoked.status !== 200) {
+      throw new Error(
+        `invoke failed: ${invoked.status} ${JSON.stringify(invokedBody)}`,
+      );
+    }
+    expect(invokedBody).toMatchObject({ ok: true });
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+
+    res = await req("/api/hosted-integrations/families");
+    expect(
+      ((await res.json()) as { families: Array<{ id: string }> }).families.some(
+        (family) => family.id === "qualys",
+      ),
+    ).toBe(false);
+  });
+
   it("requires human approval for destructive promotion", async () => {
     const { draftId, lockId } = await createDraftViaRoutes(
-      pythonTool("return {'deleted': True}"),
+      pythonTool("return {'deleted': True}", "qualys_delete_asset"),
       destructiveFamilyYaml(),
     );
     await upsertSmokeExample(
@@ -2919,8 +3150,9 @@ async function promoteDraftViaRoutes(
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ actor: toolDeveloperActor(), lockId }),
   });
-  expect(res.status).toBe(200);
-  return ((await res.json()) as { generation: { id: string } }).generation.id;
+  const body = await res.json();
+  expect(res.status, JSON.stringify(body)).toBe(200);
+  return (body as { generation: { id: string } }).generation.id;
 }
 
 async function readDraftLockId(draftId: string): Promise<string> {
@@ -3085,16 +3317,51 @@ async function promoteFamilyWithService(familyId: string): Promise<string> {
   return generation.generation.id;
 }
 
-function pythonTool(body: string): string {
-  return `def call_tool(name, args, ctx):\n    ${body}\n`;
+function pythonTool(body: string, toolName = "qualys_count_assets"): string {
+  return [
+    "def authenticate(ctx):",
+    "    return {}",
+    "",
+    "def before_tool_call(tool_name, args, ctx, auth):",
+    "    return args",
+    "",
+    "def after_tool_call(tool_name, args, ctx, result, auth):",
+    "    return result",
+    "",
+    `def tool_${toolName}(args, context):`,
+    "    ctx = context",
+    `    ${body}`,
+    "",
+  ].join("\n");
 }
 
 function expectNoValidationErrors(validation: {
   ok: boolean;
   diagnostics: Array<{ severity: string }>;
 }): void {
-  expect(validation.ok).toBe(true);
+  expect(validation.ok, JSON.stringify(validation)).toBe(true);
   expect(
     validation.diagnostics.filter((item) => item.severity === "error"),
   ).toEqual([]);
+}
+
+async function waitForHostedIntegrationInflightCount(
+  familyId: string,
+  expected: number,
+  timeoutMs = 2_000,
+): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const actual =
+      await runtime.hostedIntegrationService.generations.getInflightInvocationCount(
+        familyId,
+      );
+    if (actual === expected) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  const actual =
+    await runtime.hostedIntegrationService.generations.getInflightInvocationCount(
+      familyId,
+    );
+  expect(actual).toBe(expected);
 }

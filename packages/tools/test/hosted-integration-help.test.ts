@@ -2,28 +2,28 @@ import { afterEach, describe, expect, it } from "vitest";
 import { registry } from "../src/registry.js";
 import { toolCallContext } from "../src/session-context.js";
 import {
-  bindManagedToolHelp,
-  MANAGED_TOOL_HELP_TOOL_NAME,
-  type ManagedToolHelpRequest,
+  bindHostedToolHelp,
+  HOSTED_TOOL_HELP_TOOL_NAME,
+  type HostedToolHelpRequest,
 } from "../src/builtins/hosted-integration-help.js";
 
 afterEach(() => {
-  bindManagedToolHelp(null);
+  bindHostedToolHelp(null);
 });
 
-describe("managed tool help", () => {
+describe("hosted tool help", () => {
   it("registers as a support built-in rather than a hosted invocation tool", () => {
-    const entry = registry.get(MANAGED_TOOL_HELP_TOOL_NAME);
+    const entry = registry.get(HOSTED_TOOL_HELP_TOOL_NAME);
     expect(entry).toMatchObject({
-      name: "managed_tool_help",
+      name: "hosted_tool_help",
       toolset: "hosted-integration-support",
     });
     expect(entry?.source).toBeUndefined();
   });
 
   it("delegates help requests to the bound server port", async () => {
-    const calls: ManagedToolHelpRequest[] = [];
-    bindManagedToolHelp({
+    const calls: HostedToolHelpRequest[] = [];
+    bindHostedToolHelp({
       invoke: async (request) => {
         calls.push(request);
         return { ok: true, help: { tool_name: request.params.tool_name } };
@@ -32,7 +32,7 @@ describe("managed tool help", () => {
 
     const result = await runHelpTool(
       {
-        tool_name: "managed_qualys__qualys_count_assets",
+        tool_name: "hosted_qualys__qualys_count_assets",
         tool_detail: "summary",
         include_examples: true,
       },
@@ -41,13 +41,13 @@ describe("managed tool help", () => {
 
     expect(result).toEqual({
       ok: true,
-      help: { tool_name: "managed_qualys__qualys_count_assets" },
+      help: { tool_name: "hosted_qualys__qualys_count_assets" },
     });
     expect(calls).toEqual([
       {
         actorId: "analyst",
         params: {
-          tool_name: "managed_qualys__qualys_count_assets",
+          tool_name: "hosted_qualys__qualys_count_assets",
           tool_detail: "summary",
           include_examples: true,
         },
@@ -56,8 +56,8 @@ describe("managed tool help", () => {
   });
 
   it("treats null parameters as omitted because models often emit nullable optional fields", async () => {
-    const calls: ManagedToolHelpRequest[] = [];
-    bindManagedToolHelp({
+    const calls: HostedToolHelpRequest[] = [];
+    bindHostedToolHelp({
       invoke: async (request) => {
         calls.push(request);
         return { ok: true, help: { tool_name: request.params.tool_name } };
@@ -67,7 +67,7 @@ describe("managed tool help", () => {
     await expect(
       runHelpTool(
         {
-          tool_name: "managed_qualys__qualys_cloud_agent_hostasset_count",
+          tool_name: "hosted_qualys__qualys_cloud_agent_hostasset_count",
           tool_detail: "full",
           include_examples: true,
           parameters: null,
@@ -77,11 +77,11 @@ describe("managed tool help", () => {
     ).resolves.toMatchObject({
       ok: true,
       help: {
-        tool_name: "managed_qualys__qualys_cloud_agent_hostasset_count",
+        tool_name: "hosted_qualys__qualys_cloud_agent_hostasset_count",
       },
     });
     expect(calls[0]?.params).toMatchObject({
-      tool_name: "managed_qualys__qualys_cloud_agent_hostasset_count",
+      tool_name: "hosted_qualys__qualys_cloud_agent_hostasset_count",
       tool_detail: "full",
       include_examples: true,
     });
@@ -89,31 +89,31 @@ describe("managed tool help", () => {
   });
 
   it("requires active agent context", async () => {
-    bindManagedToolHelp({
+    bindHostedToolHelp({
       invoke: async () => ({ ok: true }),
     });
 
     await expect(
-      runHelpTool({ tool_name: "managed_qualys__qualys_count_assets" }),
+      runHelpTool({ tool_name: "hosted_qualys__qualys_count_assets" }),
     ).resolves.toMatchObject({
       ok: false,
       error: { code: "policy_denied" },
     });
   });
 
-  it("rejects names outside the managed hosted invocation namespace", async () => {
-    bindManagedToolHelp({
+  it("rejects names outside the hosted invocation namespace", async () => {
+    bindHostedToolHelp({
       invoke: async () => ({ ok: true }),
     });
 
     await expect(
       runHelpTool({ tool_name: "mcp_integration-hub__qualys_count_assets" }, "analyst"),
-    ).rejects.toThrow(/managed hosted integration tool name/);
+    ).rejects.toThrow(/hosted tool name/);
   });
 });
 
 async function runHelpTool(args: Record<string, unknown>, agentId?: string) {
-  const entry = registry.get(MANAGED_TOOL_HELP_TOOL_NAME);
+  const entry = registry.get(HOSTED_TOOL_HELP_TOOL_NAME);
   expect(entry).toBeDefined();
   const raw = agentId
     ? await toolCallContext.run(

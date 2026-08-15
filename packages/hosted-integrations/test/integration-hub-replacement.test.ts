@@ -64,15 +64,15 @@ describe("legacy integration-hub replacement inventory", () => {
     );
   });
 
-  it("records explicit legacy MCP to managed hosted replacement metadata", () => {
+  it("records explicit legacy MCP to hosted tool replacement metadata", () => {
     for (const entry of LEGACY_INTEGRATION_HUB_INVENTORY.tools) {
       expect(entry.legacyMcpToolName).toBe(
         `mcp_integration-hub__${entry.legacyToolName}`,
       );
-      expect(entry.managedHostedToolName).toBe(
-        `managed_${entry.familyId}__${entry.hostedToolName}`,
+      expect(entry.hostedRegistryToolName).toBe(
+        `hosted_${entry.familyId}__${entry.hostedToolName}`,
       );
-      expect(entry.managedHostedToolName).not.toBe(entry.legacyMcpToolName);
+      expect(entry.hostedRegistryToolName).not.toBe(entry.legacyMcpToolName);
     }
   });
 
@@ -98,14 +98,14 @@ describe("legacy integration-hub replacement inventory", () => {
           legacyToolName: "tool_a",
           legacyMcpToolName: "mcp_integration-hub__tool_a",
           hostedToolName: "duplicate_target",
-          managedHostedToolName: "managed_qualys__duplicate_target",
+          hostedRegistryToolName: "hosted_qualys__duplicate_target",
         },
         {
           ...LEGACY_INTEGRATION_HUB_INVENTORY.tools[1]!,
           legacyToolName: "tool_b",
           legacyMcpToolName: "mcp_integration-hub__tool_b",
           hostedToolName: "duplicate_target",
-          managedHostedToolName: "managed_qualys__duplicate_target",
+          hostedRegistryToolName: "hosted_qualys__duplicate_target",
         },
       ],
     };
@@ -121,21 +121,21 @@ describe("legacy integration-hub replacement inventory", () => {
       diagnostics: [
         "missing legacy tool: missing_tool",
         "duplicate hosted tool: duplicate_target",
-        "duplicate managed hosted tool: managed_qualys__duplicate_target",
+        "duplicate hosted registry tool: hosted_qualys__duplicate_target",
       ],
     });
   });
 
-  it("rejects malformed legacy MCP and managed hosted names", () => {
+  it("rejects malformed legacy MCP and hosted registry names", () => {
     const inventory: LegacyIntegrationHubInventory = {
       ...LEGACY_INTEGRATION_HUB_INVENTORY,
       tools: [
         {
           ...LEGACY_INTEGRATION_HUB_INVENTORY.tools[0]!,
           legacyToolName: "tool_a",
-          legacyMcpToolName: "managed_qualys__tool_a",
+          legacyMcpToolName: "hosted_qualys__tool_a",
           hostedToolName: "tool_a",
-          managedHostedToolName: "mcp_integration-hub__tool_a",
+          hostedRegistryToolName: "mcp_integration-hub__tool_a",
         },
       ],
     };
@@ -145,8 +145,8 @@ describe("legacy integration-hub replacement inventory", () => {
     ).toEqual({
       ok: false,
       diagnostics: [
-        "invalid managed hosted tool name: mcp_integration-hub__tool_a",
-        "invalid mcp name: managed_qualys__tool_a",
+        "invalid hosted registry tool name: mcp_integration-hub__tool_a",
+        "invalid mcp name: hosted_qualys__tool_a",
       ],
     });
   });
@@ -173,8 +173,8 @@ describe("legacy integration-hub first replacement family", () => {
       FIRST_LEGACY_INTEGRATION_HUB_REPLACEMENT_FAMILY.replacementToolNames,
     );
     expect(
-      FIRST_LEGACY_INTEGRATION_HUB_REPLACEMENT_FAMILY.managedToolNames,
-    ).toEqual(["managed_splunk__splunk_search"]);
+      FIRST_LEGACY_INTEGRATION_HUB_REPLACEMENT_FAMILY.hostedToolNames,
+    ).toEqual(["hosted_splunk__splunk_search"]);
     expect(
       FIRST_LEGACY_INTEGRATION_HUB_REPLACEMENT_FAMILY.replacementMappings,
     ).toEqual([
@@ -182,7 +182,7 @@ describe("legacy integration-hub first replacement family", () => {
         familyId: "splunk",
         hostedToolName: "splunk_search",
         legacyMcpToolName: "mcp_integration-hub__splunk_search",
-        managedHostedToolName: "managed_splunk__splunk_search",
+        hostedRegistryToolName: "hosted_splunk__splunk_search",
       },
     ]);
   });
@@ -273,15 +273,15 @@ describe("legacy integration-hub first replacement family", () => {
 });
 
 describe("legacy integration-hub replacement security families", () => {
-  it("syncs a five-tool read-only Qualys pilot as managed hosted tools", async () => {
+  it("syncs a five-tool read-only Qualys pilot as hosted tools", async () => {
     const fixture = LEGACY_INTEGRATION_HUB_FIVE_READONLY_TOOL_SYNC_FAMILY;
     expect(fixture.familyId).toBe("qualys");
     expect(fixture.replacementToolNames).toEqual([
       ...LEGACY_INTEGRATION_HUB_FIVE_READONLY_SYNC_TOOL_NAMES,
     ]);
-    expect(fixture.managedToolNames).toEqual(
+    expect(fixture.hostedToolNames).toEqual(
       fixture.replacementToolNames.map(
-        (toolName) => `managed_qualys__${toolName}`,
+        (toolName) => `hosted_qualys__${toolName}`,
       ),
     );
     expect(fixture.legacyMcpToolNames).toEqual(
@@ -632,9 +632,9 @@ describe("legacy integration-hub replacement security families", () => {
       expect(generation.tools?.map((tool) => tool.name)).toEqual(
         fixture.replacementToolNames,
       );
-      expect(fixture.managedToolNames).toEqual(
+      expect(fixture.hostedToolNames).toEqual(
         fixture.replacementMappings.map(
-          (mapping) => mapping.managedHostedToolName,
+          (mapping) => mapping.hostedRegistryToolName,
         ),
       );
       expect(

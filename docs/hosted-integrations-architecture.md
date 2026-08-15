@@ -21,7 +21,7 @@ Agent / UI / API
 
 Hosted integrations are not compiled OpenAcme built-in tools. They are also not
 external MCP servers. They are hosted by OpenAcme, surfaced through the normal
-OpenAcme tool registry, and maintained through a managed development lifecycle.
+OpenAcme tool registry, and maintained through a hosted tool development lifecycle.
 
 Product principle: OpenAcme is agent-first, but human-native. Agents should be
 able to develop, validate, repair, and promote hosted integrations
@@ -131,60 +131,60 @@ MCP tools keep their existing canonical names, for example:
 mcp_<server>__<tool>
 ```
 
-Hosted integration tools use managed canonical names:
+Hosted integration tools use hosted canonical names:
 
 ```text
-managed_<family>__<tool>
-managed_qualys__qualys_count_assets
-managed_qualys__qualys_list_assets
-managed_splunk__splunk_search
-managed_msgraph__msgraph_get
-managed_mde__mde_get
+hosted_<family>__<tool>
+hosted_qualys__qualys_count_assets
+hosted_qualys__qualys_list_assets
+hosted_splunk__splunk_search
+hosted_msgraph__msgraph_get
+hosted_mde__mde_get
 ```
 
-Managed canonical names must be valid model-provider tool/function names. The
+Hosted tool canonical names must be valid model-provider tool/function names. The
 canonical-name helper owns the provider-compatible pattern and length cap. It
 must reject a family/tool pair that cannot be exposed safely instead of
 silently truncating, hashing, aliasing, or rewriting the public tool name.
 Family ids may contain hyphens, native tool names may contain underscores, and
 the `__` separator keeps parsing unambiguous.
 
-The family manifest still owns family-native tool names. The managed prefix is
+The family manifest still owns family-native tool names. The hosted prefix is
 added only at the OpenAcme tool registry boundary. Runtime, examples, generation
 metadata, direct Hosted Integrations API calls, async jobs, disablements,
 execution logs, failure buckets, artifacts, and family source keep the
 family-native tool name plus the family id. Agent Settings, model-facing tool
-schemas, and registry dispatch use the managed canonical name.
+schemas, and registry dispatch use the hosted canonical name.
 
 Registry metadata for a hosted integration tool must carry both names:
 
 ```text
-name: managed_splunk__splunk_search
+name: hosted_splunk__splunk_search
 source.familyId: splunk
 source.toolName: splunk_search
 source.generationId: gen_...
 ```
 
-The registry adapter maps the managed canonical name selected by an agent back
+The registry adapter maps the hosted canonical name selected by an agent back
 to the family-native `source.toolName` before invoking the Hosted Integration
-Gateway. Policy checks use the managed canonical name for `agent.tools` and the
+Gateway. Policy checks use the hosted canonical name for `agent.tools` and the
 family-native name for hosted integration bindings.
 
 Hosted integration management tools remain family-scoped. Their `family_id`,
 `tool_name`, example, debug-run, and failure-bucket parameters use
-family-native tool names, not managed canonical names. The Tool Developer Agent
+family-native tool names, not hosted canonical names. The Tool Developer Agent
 skill must teach this distinction explicitly so developer agents do not put
-`managed_<family>__<tool>` names into family manifests, examples, debug runs, or
+`hosted_<family>__<tool>` names into family manifests, examples, debug runs, or
 bindings.
 
-Remote MCP tools and managed hosted integration tools are independent tool
-surfaces. A remote MCP allowlist entry must not enable a managed tool, and a
-managed allowlist entry must not enable a remote MCP tool. Offline
-parity/replacement metadata may declare that a managed tool replaces a legacy MCP
+Remote MCP tools and hosted tools are independent tool
+surfaces. A remote MCP allowlist entry must not enable a hosted tool, and a
+hosted tool allowlist entry must not enable a remote MCP tool. Offline
+parity/replacement metadata may declare that a hosted tool replaces a legacy MCP
 tool, for example:
 
 ```text
-managed_splunk__splunk_search replaces mcp_integration-hub__splunk_search
+hosted_splunk__splunk_search replaces mcp_integration-hub__splunk_search
 ```
 
 That relationship is offline operational metadata for parity checks,
@@ -197,9 +197,9 @@ integration lifecycle work.
 
 Live parity validation is an operator command, not CI-required behavior. The
 runner connects to the selected legacy MCP server and invokes the matching
-managed hosted tool with equivalent safe read-only intent. Equivalence may use
-different argument shapes when the legacy and managed schemas differ; for
-example, legacy Qualys Cloud Agent QPS tools use `criteria`, while managed
+hosted tool with equivalent safe read-only intent. Equivalence may use
+different argument shapes when the legacy and hosted schemas differ; for
+example, legacy Qualys Cloud Agent QPS tools use `criteria`, while hosted
 source-backed Qualys tools use GAV `filter_body` plus the hosted QAGENT
 constraint. The runner writes sanitized evidence only: match/mismatch status,
 summary fingerprints, hosted run ids, failure bucket ids when present, and
@@ -207,18 +207,18 @@ artifact references. It must not write target-system state unless the tool is
 classified write/destructive and separately approved.
 
 Integration-hub parity/replacement work is additive until a later decommission
-milestone is explicitly approved. Developing a managed hosted replacement for a
+milestone is explicitly approved. Developing a hosted tool replacement for a
 legacy `integration-hub` tool must not delete the legacy source, remove the
 remote MCP server, or hide the remote MCP tool. The hosted replacement appears as a
-separate managed registry entry, and agents opt in by selecting that managed
+separate hosted registry entry, and agents opt in by selecting that hosted
 tool plus a hosted-tool binding. Parity reports may recommend a replacement,
 but the platform must not silently rewrite `mcp_integration-hub__<tool>`
-selections to `managed_<family>__<tool>`.
+selections to `hosted_<family>__<tool>`.
 
 Integration-hub tool definitions, examples, and environment config blocks may
 be read by operator/test scripts as parity inputs. They are not hosted
 integration runtime code and must not be embedded into application runtime
-modules, package root exports, managed tool schemas, readiness resolvers, or
+modules, package root exports, hosted tool schemas, readiness resolvers, or
 HTTP routes. Test scripts that seed hosted replacement tools and run parity are
 allowed when they are clearly outside the product runtime and write through the
 normal hosted integration store/API boundaries; they must not create a second
@@ -273,7 +273,7 @@ environment config revision pins. If a future product needs tenant/profile level
 config isolation, it must be introduced as a new first-class primitive rather
 than by extending agent bindings or resurrecting custom config scopes.
 
-The Managed Tools settings surface should show the family-level environment
+The Hosted Tools settings surface should show the family-level environment
 configs and, on the same screen, an agent matrix for that family/tool: which
 agents can use the tool, which environment each agent defaults to, whether the
 agent follows the current active generation or is pinned to a specific
@@ -291,12 +291,12 @@ unselected catalog groups. An existing agent's active tool/access policy is the
 primary inspection target; unselected tools are available catalog choices, not
 the first thing a human should scan.
 
-Long managed tool names in Agent Settings should wrap enough to distinguish the
+Long hosted tool names in Agent Settings should wrap enough to distinguish the
 actual operation. Truncating every selected hosted tool at the common
-`managed_<family>__...` prefix hides the policy target and forces the user to
+`hosted_<family>__...` prefix hides the policy target and forces the user to
 infer access from descriptions. The same rule applies to hosted tool access
 binding rows; environment and generation controls should be labeled directly,
-not left as unlabeled selects next to a clipped managed name.
+not left as unlabeled selects next to a clipped hosted registry name.
 
 Environment config selection is platform-owned. Normal hosted tool schemas must
 not ask the model to provide credential, tenant, environment, or config
@@ -439,6 +439,66 @@ contain stale hosted integration tool schemas. Existing in-flight turns finish
 with the tool schema snapshot they started with; new turns use the refreshed
 schema set.
 
+The registry revision is a cache-invalidation signal, not an authorization
+model. Cached Agent instances are built against the current
+`ToolRegistry.generation`; if the registry generation changes, the next
+activation rebuilds the Agent before emitting model-facing tool schemas. Agent
+Settings still owns the grant: the agent only receives exact tool names already
+listed in its configured tool allowlist and hosted-tool binding data. This lets
+already-open sessions pick up hosted tool changes on the next turn without
+introducing wildcard grants or mixing remote MCP grants with hosted tools.
+
+Hosted tools are global ToolRegistry entries, not per-agent MCP servers. Agent
+specificity is applied by the existing agent tool allowlist and hosted-tool
+binding resolver when an Agent is built or a turn emits model-facing tools.
+Draining is also not per-agent: update/delete lifecycle waits only for active
+invocation leases against the affected generation or family, regardless of which
+agent started them. Idle agents and sessions without an in-flight affected call
+do not block draining.
+
+When a session picks up a newer catalog generation, the platform should make
+that fact visible in the chat without adding model-visible history. Generic
+agent lookup does not know the session, so catalog refresh returns enough
+metadata for session-aware turn entrypoints such as interactive chat,
+autonomous dispatcher turns, and `agent_ask` target turns to record the
+sanitized session timeline event and broadcast a UI-only session context
+notice. The notice contains the previous generation, the new generation,
+added/removed effective tool names, a response/turn anchor, and whether each
+added hosted tool was already granted through Agent Settings. If the registry
+generation changed but the effective model-facing tool-name set did not, the
+Agent is rebuilt but no chat notice is shown. The chat UI renders notices inline
+using the same pattern as other context notices, and reloads can recover them
+from the session timeline by event type. This event is explanatory only; it
+must not expand the agent's access or become a user/assistant message in the
+model input.
+
+Each turn should resolve the Agent and catalog-refresh metadata once, then reuse
+that resolved Agent through preflight, memory recall, model execution, and
+post-turn hooks. This prevents a single turn from preparing context against one
+tool catalog generation and executing against another. Effective tool-name
+snapshots must be derived from the same ToolRegistry emission rules as the
+provider call, including registered tool presence, per-tool `checkFn` gating,
+and turn-level filters such as `agent_ask` excluding itself. The registry should
+provide a lightweight emitted-name helper so this snapshot does not require
+constructing provider tool objects or JSON schemas.
+
+UI delivery is explicit because timeline persistence and chat rendering are
+separate surfaces. `useLiveSession` must handle the catalog notice as its own
+SSE event, not as `messages_appended`; full-page chat and the Acme panel keep
+the notice in UI-side state and render it between messages. History reloads
+merge matching timeline events back into that UI-side notice state. This keeps
+the human explanation durable and visible while preserving canonical chat
+history as only user/assistant conversation.
+
+The catalog notice contract uses durable timeline event type
+`session.tool_catalog.changed` and SSE kind `tool_catalog_notice`. The payload
+is metadata-only: agent id, previous/current catalog generation, added/removed
+effective tool names, hosted-tool grant status for added hosted tools, and
+optional response message/task anchors. It must never include tool arguments,
+config values, secrets, source code, or raw registry entries. The timeline API
+supports filtering by `eventType` so UI reload recovery can fetch catalog
+notices directly instead of scanning unrelated timeline pages.
+
 The schema snapshot must include the hosted integration generation id for each
 tool. When `registry.getVercelTools()` creates callable adapters for a turn, the
 adapter carries that generation id into the gateway invocation. This prevents a
@@ -447,9 +507,9 @@ newer generation after promotion. If the captured generation is no longer
 available for draining, the gateway returns a normalized stale-generation tool
 failure before runtime dispatch.
 
-## Human-Native Managed Tools UX
+## Human-Native Hosted Tools UX
 
-Managed Tools is a human-native admin surface over the same hosted integration
+Hosted Tools is a human-native admin surface over the same hosted integration
 control plane used by agents. The UI must let an authorized human inspect and
 change every lifecycle detail without exposing the human to unnecessary
 internal choreography.
@@ -467,7 +527,7 @@ The surface follows these principles:
   duplicate primary navigation identities for the same family.
 - **Navigable state is URL-addressable**: selected family, selected tool,
   primary tab, and meaningful sub-tab state belong in the URL for top-level
-  Managed Tools surfaces. Refresh, back/forward, and shared links should restore
+  Hosted Tools surfaces. Refresh, back/forward, and shared links should restore
   the user's work location instead of falling back to the first family or a
   default tab. Component memory can cache transient edit fields, but it must not
   be the only source for navigation identity.
@@ -491,7 +551,7 @@ The surface follows these principles:
   end-of-list tabs to align cleanly; otherwise later tabs can never become the
   first readable item and the viewport exposes partial labels from earlier
   tasks.
-- **Top-level placement is cross-viewport**: if Managed Tools is promoted to a
+- **Top-level placement is cross-viewport**: if Hosted Tools is promoted to a
   top-level product surface, both desktop and mobile primary navigation expose
   it, and command/search navigation can route to it by name. Mobile bottom
   navigation stays a single row; adding a surface must not wrap the bar into a
@@ -776,7 +836,7 @@ operate on right now?`, the UI should show task guidance or omit the action
   immediately under its top-level parent with a small branch marker, and label
   the count separately, so the table stays calm while parameter counts do not
   contradict the executable schema.
-- **Runtime env requirements must be explicit**: the Managed Tools surface must
+- **Runtime env requirements must be explicit**: the Hosted Tools surface must
   show `prod` and `test_debug` environment configs, non-secret config key names,
   secret key names, and configured/missing secret status before a human runs
   tests or debug. Secret values are write-only: humans can set or rotate a
@@ -807,7 +867,7 @@ operate on right now?`, the UI should show task guidance or omit the action
   framed boxes.
 - **Tool mapping is navigable**: the UI must make the relationship between
   family-native tool name, handler function, input schema, help, examples, and
-  promoted managed registry name visible. Clicking a tool should focus the
+  promoted hosted registry name visible. Clicking a tool should focus the
   relevant handler and de-emphasize unrelated handlers by default.
 - **No duplicate facts or microcopy**: the same family name, tool name,
   version, lock state, status, count, description, or action explanation should
@@ -857,7 +917,7 @@ operate on right now?`, the UI should show task guidance or omit the action
   human-review objections should tune the canonical principles instead of
   remaining only in chat history or local implementation memory.
 
-UX language must be consistent across every Managed Tools surface. The same
+UX language must be consistent across every Hosted Tools surface. The same
 platform concept must always use the same user-facing term. Do not call the
 same action `Edit` in one tab, `Acquire lock` in another, and `Create draft` in
 a third. Canonical UI terms are:
@@ -874,7 +934,7 @@ Version: human-facing label for generation/source revision history.
 Current: the active source, files, help, or version currently served to agents.
 Changes: the editable work set being prepared for validation and publishing.
 Tool: family-native callable operation in the selected family.
-Managed tool: model-facing registry tool name `managed_<family>__<tool>`.
+Hosted tool: model-facing registry tool name `hosted_<family>__<tool>`.
 Family: hosted integration ownership/reload unit.
 Environment config: family-level `prod` or `test_debug` runtime config.
 Hosted-tool binding: per-agent access, default environment, and generation pin.
@@ -893,7 +953,7 @@ run directory
 artifact id
 ```
 
-Every Managed Tools page or tab is human-ready only when:
+Every Hosted Tools page or tab is human-ready only when:
 
 - the user can tell what family/tool/version they are viewing within three
   seconds
@@ -982,9 +1042,9 @@ Every Managed Tools page or tab is human-ready only when:
 - any new repeated UX problem found during review is folded back into these
   principles and the matching implementation-plan acceptance notes
 
-## Managed Tool Help
+## Hosted Tool Help
 
-Hosted integrations need a hosted-managed-tool-only help surface so normal
+Hosted integrations need a hosted-tool-only help surface so normal
 agents can learn how to call agent-developed tools without memorizing every
 target-system detail in prompt text.
 
@@ -992,26 +1052,26 @@ The platform exposes this as a reserved built-in support tool, not as a remote
 MCP helper and not as a canonical hosted integration invocation tool:
 
 ```text
-managed_tool_help
+hosted_tool_help
 ```
 
-`managed_tool_help` intentionally starts with `managed_` for agent-facing
+`hosted_tool_help` intentionally starts with `hosted_tool_` for agent-facing
 clarity, but it is not a valid hosted tool name because canonical hosted
 integration invocation tools must contain exactly one family/tool separator:
 
 ```text
-managed_<family>__<tool>
+hosted_<family>__<tool>
 ```
 
-`managed_tool_help` accepts only managed hosted integration names:
+`hosted_tool_help` accepts only hosted tool names:
 
 ```text
-managed_<family>__<tool>
+hosted_<family>__<tool>
 ```
 
 It must reject remote MCP names, built-in tool names, and family-native names.
 Any code that classifies hosted integration invocation tools must use the
-canonical parser/source metadata, not a raw `managed_` prefix check. This keeps
+canonical parser/source metadata, not a raw `hosted_` prefix check. This keeps
 the hosted integration surface independent from the MCP surface and prevents
 the help support tool from being treated as a hosted family tool.
 
@@ -1019,7 +1079,7 @@ The help request supports four levels of information:
 
 ```json
 {
-  "tool_name": "managed_qualys__qualys_cloud_agent_hostasset_count",
+  "tool_name": "hosted_qualys__qualys_cloud_agent_hostasset_count",
   "tool_detail": "summary",
   "include_examples": true,
   "parameters": [
@@ -1049,7 +1109,7 @@ The response is normalized across all hosted tools:
 
 ```json
 {
-  "tool_name": "managed_qualys__qualys_cloud_agent_hostasset_count",
+  "tool_name": "hosted_qualys__qualys_cloud_agent_hostasset_count",
   "family_id": "qualys",
   "family_tool_name": "qualys_cloud_agent_hostasset_count",
   "generation_id": "gen_...",
@@ -1110,24 +1170,24 @@ tools:
 For large target-system vocabularies, help should not bloat the model-facing
 tool description. The help metadata may point to a family-local reference file
 or a family-local reference tool. Qualys GAV filter fields are the first case:
-the tool description stays short, `managed_tool_help` explains the filter-body
+the tool description stays short, `hosted_tool_help` explains the filter-body
 contract, and a Qualys quickref/reference tool can perform domain lookup when
 the agent needs exact field discovery.
 
 Access policy applies to help:
 
-- `managed_tool_help` itself is selectable from Agent Settings like an ordinary
+- `hosted_tool_help` itself is selectable from Agent Settings like an ordinary
   built-in tool; it is not an always-on system tool
-- an agent can ask for help only for managed tools it can see or invoke
+- an agent can ask for help only for hosted tools it can see or invoke
 - management-only tools remain hidden from normal agents
 - secret values and config values are never returned
 - disabled tools may return high-level help plus disabled status, but not
   invocation guidance that bypasses the disablement
-- agent-facing `managed_tool_help` responses pass through the common
+- agent-facing `hosted_tool_help` responses pass through the common
   tool-result spillover choke point; the HTTP help route returns normal
   control-plane JSON
 
-Promotion validation should require enough help for active managed tools:
+Promotion validation should require enough help for active hosted tools:
 
 - every active tool has a short description for selection
 - every active tool has a `help.summary`
@@ -1216,16 +1276,9 @@ after_tool_call
 gateway response masking/artifact spillover/logging
 ```
 
-The runtime dispatch mode is declared on family runtime settings:
-
-```yaml
-runtime:
-  handlerDispatch: derived
-```
-
-`derived` is the default and calls `tool_<tool_name>(args, context)`.
-`legacy_call_tool` is reserved for migrated generations that still expose
-`call_tool(name, args, context)`. New families should not use legacy dispatch.
+Hosted integration manifests do not declare a dispatch mode. Product runtime
+always calls `tool_<tool_name>(args, context)` by convention and does not
+provide a `call_tool(name, args, context)` compatibility dispatch path.
 The Python runtime executes available standard hooks around derived handlers in
 the order above. If a hook is absent because the manifest contains a matching
 `hookJustifications` entry, runtime treats it as a no-op. `authenticate`
@@ -1249,11 +1302,10 @@ hookJustifications:
 The draft validator enforces the first part of this contract before promotion:
 for every non-removed manifest tool, the Python entrypoint must expose a
 top-level `tool_<tool_name>(args, context)` handler. The validator inspects the
-entrypoint with Python AST rather than model inference or text guessing. A
-legacy entrypoint that exposes only `call_tool(name, args, context)` remains
-promotable for existing migrated families, but receives a
-`legacy_call_tool_router` warning. Manifest-level handler aliases are not part
-of the schema; the derived handler name is the only accepted mapping.
+entrypoint with Python AST rather than model inference or text guessing.
+Entrypoints that expose only `call_tool(name, args, context)` fail validation.
+Manifest-level handler aliases are not part of the schema; the derived handler
+name is the only accepted mapping.
 
 For new-format families, the same AST-backed validator also checks standard
 hook functions when no `hookJustifications` entry is present:
@@ -1283,14 +1335,14 @@ POST /api/hosted-integrations/source-view
 The Tool Developer Agent-facing management wrapper is:
 
 ```text
-hosted_integration_source_view
+hosted_tool_source_view
 ```
 
 Both accept a family-native `toolName`/`tool_name`, optional draft or generation
 target, and focused-view options for hooks, shared helpers, full-family source,
 helper depth, helper snippet count, and max source size. These are management
 surfaces; normal consumer agents must not receive focused source access merely
-because they can invoke the managed tool.
+because they can invoke the hosted tool.
 
 This lets an investigating agent read only the failing tool's executable code
 and input contract by default, while still making the full family source
@@ -1690,35 +1742,35 @@ agents should not receive these tools.
 Expected management tools:
 
 ```text
-hosted_integration_family_list
-hosted_integration_family_create
-hosted_integration_source_read
-hosted_integration_lock_acquire
-hosted_integration_lock_renew
-hosted_integration_lock_release
-hosted_integration_draft_create
-hosted_integration_draft_get
-hosted_integration_draft_patch
-hosted_integration_draft_delete
-hosted_integration_example_list
-hosted_integration_example_upsert
-hosted_integration_example_run
-hosted_integration_validate
-hosted_integration_promote
-hosted_integration_generation_list
-hosted_integration_generation_get
-hosted_integration_generation_diff
-hosted_integration_generation_rollback
-hosted_integration_environment_config_list
-hosted_integration_environment_config_get
-hosted_integration_readiness_get
-hosted_integration_debug_run
-hosted_integration_run_get
-hosted_integration_artifact_get
-hosted_integration_failure_bucket_list
-hosted_integration_failure_bucket_get
-hosted_integration_failure_bucket_assign
-hosted_integration_failure_bucket_close
+hosted_tool_family_list
+hosted_tool_family_create
+hosted_tool_source_read
+hosted_tool_lock_acquire
+hosted_tool_lock_renew
+hosted_tool_lock_release
+hosted_tool_draft_create
+hosted_tool_draft_get
+hosted_tool_draft_patch
+hosted_tool_draft_delete
+hosted_tool_example_list
+hosted_tool_example_upsert
+hosted_tool_example_run
+hosted_tool_validate
+hosted_tool_promote
+hosted_tool_generation_list
+hosted_tool_generation_get
+hosted_tool_generation_diff
+hosted_tool_generation_rollback
+hosted_tool_environment_config_list
+hosted_tool_environment_config_get
+hosted_tool_readiness_get
+hosted_tool_debug_run
+hosted_tool_run_get
+hosted_tool_artifact_get
+hosted_tool_failure_bucket_list
+hosted_tool_failure_bucket_get
+hosted_tool_failure_bucket_assign
+hosted_tool_failure_bucket_close
 ```
 
 These tools should wrap the Hosted Integrations API. They should not duplicate
@@ -1732,99 +1784,102 @@ own runtime.
 Mapping from management tools to API routes:
 
 ```text
-hosted_integration_family_list
+hosted_tool_family_list
   -> GET /api/hosted-integrations/families
 
-hosted_integration_family_create
+hosted_tool_family_create
   -> POST /api/hosted-integrations/families
 
-hosted_integration_source_read
+hosted family delete API
+  -> DELETE /api/hosted-integrations/families/:familyId
+
+hosted_tool_source_read
   -> GET /api/hosted-integrations/families/:familyId
   -> GET /api/hosted-integrations/families/:familyId/source/files
   -> GET /api/hosted-integrations/families/:familyId/source/files/*path
   -> GET /api/hosted-integrations/drafts/:draftId/files/*path
 
-hosted_integration_lock_acquire
+hosted_tool_lock_acquire
   -> POST /api/hosted-integrations/families/:familyId/lock
 
-hosted_integration_lock_renew
+hosted_tool_lock_renew
   -> POST /api/hosted-integrations/locks/:lockId/renew
 
-hosted_integration_lock_release
+hosted_tool_lock_release
   -> DELETE /api/hosted-integrations/locks/:lockId
 
-hosted_integration_draft_create
+hosted_tool_draft_create
   -> POST /api/hosted-integrations/families/:familyId/drafts
 
-hosted_integration_draft_get
+hosted_tool_draft_get
   -> GET /api/hosted-integrations/drafts/:draftId
   -> GET /api/hosted-integrations/drafts/:draftId/files
   -> GET /api/hosted-integrations/drafts/:draftId/files/*path
 
-hosted_integration_draft_patch
+hosted_tool_draft_patch
   -> PUT /api/hosted-integrations/drafts/:draftId/files/*path
 
-hosted_integration_draft_delete
+hosted_tool_draft_delete
   -> DELETE /api/hosted-integrations/drafts/:draftId/files/*path
 
-hosted_integration_example_list
+hosted_tool_example_list
   -> GET /api/hosted-integrations/drafts/:draftId/examples
 
-hosted_integration_example_upsert
+hosted_tool_example_upsert
   -> POST /api/hosted-integrations/drafts/:draftId/examples
 
-hosted_integration_example_run
+hosted_tool_example_run
   -> POST /api/hosted-integrations/drafts/:draftId/run-example
 
-hosted_integration_validate
+hosted_tool_validate
   -> POST /api/hosted-integrations/drafts/:draftId/validate
 
-hosted_integration_promote
+hosted_tool_promote
   -> POST /api/hosted-integrations/drafts/:draftId/promote
 
-hosted_integration_generation_list
+hosted_tool_generation_list
   -> GET /api/hosted-integrations/generations
 
-hosted_integration_generation_get
+hosted_tool_generation_get
   -> GET /api/hosted-integrations/generations/:generationId
 
-hosted_integration_generation_diff
+hosted_tool_generation_diff
   -> GET /api/hosted-integrations/generations/:baseGenerationId/diff/:compareGenerationId
 
-hosted_integration_generation_rollback
+hosted_tool_generation_rollback
   -> POST /api/hosted-integrations/generations/:generationId/rollback
 
-hosted_integration_environment_config_list
+hosted_tool_environment_config_list
   -> GET /api/hosted-integrations/environment-configs
 
-hosted_integration_environment_config_get
+hosted_tool_environment_config_get
   -> GET /api/hosted-integrations/environment-configs/:familyId/:environment
 
-hosted_integration_readiness_get
+hosted_tool_readiness_get
   -> GET /api/hosted-integrations/readiness/environment-configs/:familyId/:environment
   -> GET /api/hosted-integrations/readiness/bindings/:agentId/:familyId/:toolName
   -> GET /api/hosted-integrations/readiness/drafts/:draftId/publish
   -> GET /api/hosted-integrations/readiness/debug
 
-hosted_integration_debug_run
+hosted_tool_debug_run
   -> POST /api/hosted-integrations/debug-runs
 
-hosted_integration_run_get
+hosted_tool_run_get
   -> GET /api/hosted-integrations/runs/:runId
 
-hosted_integration_artifact_get
+hosted_tool_artifact_get
   -> GET /api/hosted-integrations/runs/:runId/artifacts/:name
 
-hosted_integration_failure_bucket_list
+hosted_tool_failure_bucket_list
   -> GET /api/hosted-integrations/failure-buckets
 
-hosted_integration_failure_bucket_get
+hosted_tool_failure_bucket_get
   -> GET /api/hosted-integrations/failure-buckets/:bucketId
 
-hosted_integration_failure_bucket_assign
+hosted_tool_failure_bucket_assign
   -> POST /api/hosted-integrations/failure-buckets/:bucketId/assign
 
-hosted_integration_failure_bucket_close
+hosted_tool_failure_bucket_close
   -> POST /api/hosted-integrations/failure-buckets/:bucketId/close
 ```
 
@@ -1836,9 +1891,9 @@ The management-tool surface is the agent-facing OpenAcme built-in tool surface
 for hosted integration lifecycle work. It is not an external MCP server and does
 not use remote MCP discovery. If OpenAcme exposes these tools through an
 internal MCP-compatible protocol later, that protocol is only a transport over
-the same `hosted_integration_*` OpenAcme tool definitions and Hosted
+the same `hosted_tool_*` OpenAcme tool definitions and Hosted
 Integrations API routes; it must not create a second lifecycle implementation or
-let remote MCP allowlist entries enable managed hosted tools.
+let remote MCP allowlist entries enable hosted tools.
 
 ## API Surface
 
@@ -1861,6 +1916,7 @@ Family and tool discovery:
 GET /api/hosted-integrations/families
 POST /api/hosted-integrations/families
 GET /api/hosted-integrations/families/:familyId
+DELETE /api/hosted-integrations/families/:familyId
 GET /api/hosted-integrations/families/:familyId/tools
 GET /api/hosted-integrations/families/:familyId/tools/:toolName/agent-bindings
 ```
@@ -1869,6 +1925,23 @@ GET /api/hosted-integrations/families/:familyId/tools/:toolName/agent-bindings
 and settings surfaces. Proposed draft families are included only when the caller
 explicitly requests `includeProposed=true`, so creation/review flows can inspect
 them without polluting primary runtime navigation.
+
+`DELETE /families/:familyId` is a Tool Developer maintenance action for
+removing an incorrect or retired hosted family from active lifecycle and
+registry surfaces. If the family has in-flight invocations, delete enters
+`delete_draining`: the family is operationally disabled, hosted registry tools
+are removed for new turns/calls, and existing leased invocations may complete
+against their captured generation. When in-flight count reaches zero, the
+runtime finalizes deletion automatically. If no invocation is in flight, the
+same request finalizes synchronously.
+
+Finalization removes active/proposed source, drafts, locks, active pointers,
+environment configs, secret files, disablements, workspaces, and hosted tool
+registry exposure. Promoted generation history is immutable: DB-backed stores
+retain generation rows/files and mark the family generations disabled so
+cold-start registry sync cannot re-expose them. Historical run logs, artifacts,
+approvals, and failure buckets remain forensic evidence and are not purged by
+this endpoint.
 
 `GET /families/:familyId/tools/:toolName/agent-bindings` is a read-only matrix
 view derived from `AgentDefinition` bindings plus hosted tool catalog state. It
@@ -2095,7 +2168,7 @@ GET /api/hosted-integrations/generations/:baseGenerationId/diff/:compareGenerati
 The Tool Developer Agent management wrapper is:
 
 ```text
-hosted_integration_generation_diff
+hosted_tool_generation_diff
 ```
 
 Supported modes are `summary`, `unified`, `manifest`, and `tool_focused`.
@@ -2477,7 +2550,7 @@ These remain implementation choices, not unresolved product direction:
 - exact retention defaults for successful and failed run artifacts
 - exact policy file/schema shape
 - maintenance/debug authority source. MVP may guard platform maintenance
-  surfaces with the canonical managed Tool Developer agent id, but this is a
+  surfaces with the canonical Tool Developer agent id, but this is a
   refactor target. The durable model should resolve authority from platform
   managed-agent/template metadata and, when family-level ownership exists, the
   family maintainer/active lock/failure-bucket assignment rather than a

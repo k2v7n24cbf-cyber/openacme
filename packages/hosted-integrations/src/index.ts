@@ -184,14 +184,14 @@ export {
   type HostedIntegrationSqlDatabase,
 } from "./db-store.js";
 export {
-  buildHostedIntegrationManagedToolName,
-  parseHostedIntegrationManagedToolName,
-  HostedIntegrationManagedToolNameSchema,
-  HOSTED_INTEGRATION_MANAGED_TOOL_NAME_MAX_LENGTH,
-  HOSTED_INTEGRATION_MANAGED_TOOL_PREFIX,
-  HOSTED_INTEGRATION_MANAGED_TOOL_SEPARATOR,
-  type HostedIntegrationManagedToolName,
-  type HostedIntegrationManagedToolNameParts,
+  buildHostedToolName,
+  parseHostedToolName,
+  HostedToolNameSchema,
+  HOSTED_TOOL_NAME_MAX_LENGTH,
+  HOSTED_TOOL_PREFIX,
+  HOSTED_TOOL_SEPARATOR,
+  type HostedToolName,
+  type HostedToolNameParts,
 } from "./naming.js";
 export { resolveHostedIntegrationCachePath } from "./cache.js";
 export {
@@ -278,6 +278,13 @@ export {
   type HostedIntegrationRetentionSweepResult,
   type HostedIntegrationRetentionSweeper,
 } from "./retention.js";
+export {
+  createDbHostedIntegrationFamilyDeleter,
+  createFileHostedIntegrationFamilyDeleter,
+  type DeleteHostedIntegrationFamilyRequest,
+  type DeleteHostedIntegrationFamilyResult,
+  type HostedIntegrationFamilyDeleter,
+} from "./family-delete.js";
 export {
   createFileHostedIntegrationGenerationStore,
   type BeginHostedIntegrationInvocationRequest,

@@ -50,6 +50,7 @@ export interface SessionTimelineEvent {
 
 export interface SessionTimelineFilter {
   sessionId: string;
+  eventType?: string;
   source?: string;
   traceId?: string;
   forensicRunId?: string;
@@ -133,6 +134,10 @@ function buildWhere(
   if (filter.source) {
     conds.push("source = @source");
     params.source = filter.source;
+  }
+  if (filter.eventType) {
+    conds.push("event_type = @eventType");
+    params.eventType = filter.eventType;
   }
   if (filter.traceId) {
     conds.push("trace_id = @traceId");

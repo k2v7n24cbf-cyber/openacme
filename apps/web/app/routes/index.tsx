@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useState,
   useRef,
   useEffect,
@@ -15,12 +16,18 @@ import { HomeView } from "../components/HomeView";
 import { useLiveSession } from "../lib/useLiveSession";
 import { AttachmentChip } from "../components/AttachmentChip";
 import { MessageBubble } from "../components/chat/MessageBubble";
+import { ToolCatalogNotice } from "../components/chat/ToolCatalogNotice";
 import { ChatComposer } from "../components/chat/ChatComposer";
 import {
   buildSkillRefParts,
   type SkillIndexEntry,
 } from "../lib/skill-mentions";
 import { API_BASE } from "../lib/api";
+import {
+  catalogNoticesFromTimeline,
+  mergeCatalogNotices,
+  type ToolCatalogNotice as ToolCatalogNoticeModel,
+} from "../lib/toolCatalogNotices";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { z } from "zod";
 import { Button } from "@/app/components/ui/button";
@@ -263,6 +270,9 @@ function ChatPage() {
     parts: OpenAcmeUIMessage["parts"];
   };
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
+  const [catalogNotices, setCatalogNotices] = useState<
+    ToolCatalogNoticeModel[]
+  >([]);
 
   // `data-status` board: same id replaces; empty message clears.
   const [statusBoard, setStatusBoard] = useState<
@@ -277,7 +287,22 @@ function ChatPage() {
 
   useEffect(() => {
     setStatusBoard({});
+    setCatalogNotices([]);
   }, [activeSessionId]);
+
+  const loadCatalogNotices = useCallback((sessionId: string) => {
+    fetch(
+      `${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/timeline?eventType=session.tool_catalog.changed&includeForensics=0&limit=100`,
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { events?: unknown[] } | null) => {
+        const notices = catalogNoticesFromTimeline(data?.events ?? []);
+        if (notices.length > 0) {
+          setCatalogNotices((prev) => mergeCatalogNotices(prev, notices));
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const liveSession = useLiveSession(
     activeSessionId || null,
@@ -322,6 +347,9 @@ function ChatPage() {
       onSessionTitle: (title) => {
         setActiveSessionTitle(title);
       },
+      onToolCatalogNotice: (notice) => {
+        setCatalogNotices((prev) => mergeCatalogNotices(prev, [notice]));
+      },
     }
   );
   const isLiveRunning = liveSession.state === "running";
@@ -348,7 +376,8 @@ function ChatPage() {
         if (data?.title) setActiveSessionTitle(data.title);
       })
       .catch(() => {});
-  }, [isLiveRunning, activeSessionId]);
+    loadCatalogNotices(sid);
+  }, [isLiveRunning, activeSessionId, loadCatalogNotices]);
 
   // Server-owned turn — survives tab close; explicit cancel only.
   const stop = useCallback(async () => {
@@ -523,8 +552,9 @@ function ChatPage() {
         setHistoryLoading(false);
         toast.error("Failed to load messages");
       });
+    loadCatalogNotices(activeSessionId);
     return () => ctrl.abort();
-  }, [activeSessionId, clearMissingSession, setMessages]);
+  }, [activeSessionId, clearMissingSession, setMessages, loadCatalogNotices]);
 
   // Layout-effect (not useEffect) so the scroll lands BEFORE paint —
   // without this, opening a session paints scrollTop=0 for one frame
@@ -1149,24 +1179,41 @@ function ChatPage() {
           >
             <div className="mx-auto max-w-3xl px-3 py-4 md:px-6 md:py-6">
               {messages.map((msg, i) => (
-                <MessageBubble
-                  key={msg.id}
-                  message={msg}
-                  agent={activeAgent}
-                  sessionId={activeSessionId}
-                  isStreaming={
-                    isStreaming &&
-                    msg.role === "assistant" &&
-                    i === messages.length - 1
-                  }
-                  pingAnswered={messages
-                    .slice(i + 1)
-                    .some((m) => m.role === "user")}
-                  fileLinks={fileLinks}
-                  onOpenFile={setPreviewTarget}
-                  skills={orderedSkills}
-                />
+                <Fragment key={msg.id}>
+                  {catalogNotices
+                    .filter((notice) => notice.responseMessageId === msg.id)
+                    .map((notice) => (
+                      <ToolCatalogNotice
+                        key={`${notice.currentGeneration}-${notice.responseMessageId}`}
+                        notice={notice}
+                      />
+                    ))}
+                  <MessageBubble
+                    message={msg}
+                    agent={activeAgent}
+                    sessionId={activeSessionId}
+                    isStreaming={
+                      isStreaming &&
+                      msg.role === "assistant" &&
+                      i === messages.length - 1
+                    }
+                    pingAnswered={messages
+                      .slice(i + 1)
+                      .some((m) => m.role === "user")}
+                    fileLinks={fileLinks}
+                    onOpenFile={setPreviewTarget}
+                    skills={orderedSkills}
+                  />
+                </Fragment>
               ))}
+              {catalogNotices
+                .filter((notice) => !notice.responseMessageId)
+                .map((notice) => (
+                  <ToolCatalogNotice
+                    key={`${notice.currentGeneration}-${notice.ts ?? ""}`}
+                    notice={notice}
+                  />
+                ))}
               {error && (
                 <div role="alert" className="mt-4 border border-destructive bg-paper-sunk px-3 py-2 font-mono text-[12px] text-destructive section-enter">
                   <span className="mr-2 text-[10px] uppercase tracking-[0.08em]">Error</span>

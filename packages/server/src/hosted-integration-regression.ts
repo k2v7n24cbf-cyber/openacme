@@ -114,10 +114,11 @@ export async function validateHostedIntegrationRegressionClose(input: {
     actorId: input.actorId,
     input: example.args,
   });
-  const environmentConfig = await input.service.environmentConfigs.getEnvironmentConfig(
-    input.bucket.familyId,
-    "test_debug",
-  );
+  const environmentConfig =
+    await input.service.environmentConfigs.getEnvironmentConfig(
+      input.bucket.familyId,
+      "test_debug",
+    );
   const executionConfig = resolveHostedIntegrationExecutionConfig({
     familyId: input.bucket.familyId,
     environment: "test_debug",
@@ -126,15 +127,16 @@ export async function validateHostedIntegrationRegressionClose(input: {
     environmentConfig,
     executionPurpose: "regression",
   });
-  if (!executionConfig.ok) return { ok: false, code: "regression_example_failed", runId: run.id };
+  if (!executionConfig.ok)
+    return { ok: false, code: "regression_example_failed", runId: run.id };
   await input.service.gateway.executionLogs.startLog({
     runId: run.id,
     familyId: input.bucket.familyId,
     toolName: example.toolName,
     generationId: generation.id,
     actorId: input.actorId,
-    environmentConfigId: executionConfig.environmentConfigId,
-    configRevision: executionConfig.configRevision,
+    environmentConfigId: executionConfig.environmentConfigId ?? null,
+    configRevision: executionConfig.configRevision ?? null,
     executionPurpose: executionConfig.executionPurpose,
     sanitizedArgs: JsonObjectSchema.parse(example.args),
     status: "running",

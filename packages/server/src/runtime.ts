@@ -21,7 +21,7 @@ import {
   generationFilesRoot,
   isHostedIntegrationToolVisibleForSelection,
   listFilesUnderRoot,
-  parseHostedIntegrationManagedToolName,
+  parseHostedToolName,
   readTextFileUnderRoot,
   resolveAgentHostedToolBindingReadiness,
   resolveDebugReadiness,
@@ -43,15 +43,15 @@ import {
   JsonObjectSchema,
 } from "@openacme/hosted-integrations";
 import {
-  bindManagedToolHelp,
-  bindHostedIntegrationManagement,
+  bindHostedToolHelp,
+  bindHostedToolManagement,
   HostedIntegrationToolRegistryAdapter,
-  MANAGED_TOOL_HELP_TOOL_NAME,
+  HOSTED_TOOL_HELP_TOOL_NAME,
   registry as toolRegistry,
   type HostedIntegrationRegistrySnapshot,
-  type HostedIntegrationManagementRequest,
+  type HostedToolManagementRequest,
   type HostedIntegrationToolInvokeRequest,
-  type ManagedToolHelpRequest,
+  type HostedToolHelpRequest,
 } from "@openacme/tools";
 import { jsonSchemaToZod } from "@openacme/mcp-client";
 import {
@@ -72,6 +72,7 @@ import { validateHostedIntegrationRegressionClose } from "./hosted-integration-r
 
 const log = createLogger("server.workflow-runtime");
 const DEFAULT_WORKFLOW_DISPATCHER_INTERVAL_MS = 60_000;
+const HOSTED_INTEGRATION_DELETE_DRAIN_POLL_MS = 1_000;
 const HOSTED_INTEGRATION_REPAIR_AGENT_ID = "tool-developer";
 const HOSTED_INTEGRATION_REPAIR_TASK_CREATOR = "system:hosted-integrations";
 const HOSTED_INTEGRATION_REPAIR_MARKER_PREFIX =
@@ -104,6 +105,7 @@ export class ServerRuntime {
   private readonly workflowDispatcherNow: () => Date;
   private workflowDispatcherTimer: NodeJS.Timeout | null = null;
   private workflowDispatcherTickInFlight: Promise<void> | null = null;
+  private readonly hostedIntegrationDeleteDrainPolls = new Set<string>();
 
   constructor(config: Config, opts?: ServerRuntimeOptions) {
     this.dataDir = config.dataDir;
@@ -126,21 +128,24 @@ export class ServerRuntime {
       this.hostedIntegrationPersistenceBackend =
         opts.hostedIntegrationPersistenceBackend ?? "file";
     } else {
-      const hostedIntegrationRuntime = createHostedIntegrationServiceForRuntime(config, {
-        onRegistryRefresh: (event) =>
-          this.refreshHostedIntegrationRegistry(event),
-        onFailureBucketRecorded: (event) =>
-          this.createHostedIntegrationRepairTask(event),
-      });
+      const hostedIntegrationRuntime = createHostedIntegrationServiceForRuntime(
+        config,
+        {
+          onRegistryRefresh: (event) =>
+            this.refreshHostedIntegrationRegistry(event),
+          onFailureBucketRecorded: (event) =>
+            this.createHostedIntegrationRepairTask(event),
+        },
+      );
       this.hostedIntegrationService = hostedIntegrationRuntime.service;
       this.hostedIntegrationPersistenceBackend =
         hostedIntegrationRuntime.backend;
     }
-    bindHostedIntegrationManagement({
-      invoke: (request) => this.invokeHostedIntegrationManagement(request),
+    bindHostedToolManagement({
+      invoke: (request) => this.invokeHostedToolManagement(request),
     });
-    bindManagedToolHelp({
-      invoke: (request) => this.invokeManagedToolHelp(request),
+    bindHostedToolHelp({
+      invoke: (request) => this.invokeHostedToolHelp(request),
     });
     this.workflowExecutionPorts = {
       agent: this.workflowAgentRuntime,
@@ -267,16 +272,16 @@ export class ServerRuntime {
     });
   }
 
-  private async invokeManagedToolHelp(
-    request: ManagedToolHelpRequest,
+  private async invokeHostedToolHelp(
+    request: HostedToolHelpRequest,
   ): Promise<unknown> {
     const def = this.agentManager.getAgentDef(request.actorId);
-    if (!def || !def.tools.includes(MANAGED_TOOL_HELP_TOOL_NAME)) {
+    if (!def || !def.tools.includes(HOSTED_TOOL_HELP_TOOL_NAME)) {
       return {
         ok: false,
         error: {
           code: "policy_denied",
-          message: "agent cannot use managed tool help",
+          message: "agent cannot use hosted tool help",
         },
       };
     }
@@ -284,16 +289,14 @@ export class ServerRuntime {
     const parsedRequest = HostedIntegrationToolHelpRequestSchema.parse(
       request.params,
     );
-    const parsedName = parseHostedIntegrationManagedToolName(
-      parsedRequest.tool_name,
-    );
+    const parsedName = parseHostedToolName(parsedRequest.tool_name);
     if (!parsedName) {
       return {
         ok: false,
         error: {
           code: "bad_arguments",
           message:
-            "tool_name must be a managed hosted integration tool name like managed_<family>__<tool>",
+            "tool_name must be a hosted tool name like hosted_<family>__<tool>",
         },
       };
     }
@@ -316,7 +319,7 @@ export class ServerRuntime {
     const result = await resolveHostedIntegrationToolHelp({
       dataDir: this.dataDir,
       generations: this.hostedIntegrationService.generations,
-      managedToolName: parsedRequest.tool_name,
+      hostedToolName: parsedRequest.tool_name,
       familyId: parsedName.familyId,
       toolName: parsedName.toolName,
       request: {
@@ -361,19 +364,19 @@ export class ServerRuntime {
     });
   }
 
-  private async invokeHostedIntegrationManagement(
-    request: HostedIntegrationManagementRequest,
+  private async invokeHostedToolManagement(
+    request: HostedToolManagementRequest,
   ): Promise<unknown> {
-    const denied = this.hostedIntegrationManagementDenied(request);
+    const denied = this.hostedToolManagementDenied(request);
     if (denied) return denied;
     const p = request.params;
     switch (request.operation) {
-      case "hosted_integration_family_list":
+      case "hosted_tool_family_list":
         return {
           ok: true,
           families: await this.hostedIntegrationService.listFamilies(),
         };
-      case "hosted_integration_family_create": {
+      case "hosted_tool_family_create": {
         const result =
           await this.hostedIntegrationService.proposedFamilies.createProposedFamily(
             {
@@ -394,11 +397,11 @@ export class ServerRuntime {
             }
           : { ok: false, error: { code: result.reason } };
       }
-      case "hosted_integration_source_read":
+      case "hosted_tool_source_read":
         return this.readHostedIntegrationSource(p);
-      case "hosted_integration_source_view":
+      case "hosted_tool_source_view":
         return this.readHostedIntegrationSourceView(p);
-      case "hosted_integration_lock_acquire": {
+      case "hosted_tool_lock_acquire": {
         const result = await this.hostedIntegrationService.locks.acquireLock({
           familyId: stringParam(p, "family_id"),
           lockedBy: request.actorId,
@@ -408,7 +411,7 @@ export class ServerRuntime {
           ? { ok: true, lock: result.lock }
           : { ok: false, error: { code: result.reason }, lock: result.lock };
       }
-      case "hosted_integration_lock_renew": {
+      case "hosted_tool_lock_renew": {
         const result = await this.hostedIntegrationService.locks.renewLock({
           lockId: stringParam(p, "lock_id"),
           lockedBy: request.actorId,
@@ -421,7 +424,7 @@ export class ServerRuntime {
           ...("lock" in result ? { lock: result.lock } : {}),
         };
       }
-      case "hosted_integration_lock_release": {
+      case "hosted_tool_lock_release": {
         const result = await this.hostedIntegrationService.locks.releaseLock({
           lockId: stringParam(p, "lock_id"),
           lockedBy: request.actorId,
@@ -433,7 +436,7 @@ export class ServerRuntime {
           ...("lock" in result ? { lock: result.lock } : {}),
         };
       }
-      case "hosted_integration_draft_create": {
+      case "hosted_tool_draft_create": {
         const familyId = stringParam(p, "family_id");
         const result = await this.hostedIntegrationService.drafts.createDraft({
           familyId,
@@ -449,9 +452,9 @@ export class ServerRuntime {
           ? { ok: true, draft: result.draft }
           : { ok: false, error: { code: result.reason } };
       }
-      case "hosted_integration_draft_get":
+      case "hosted_tool_draft_get":
         return this.readHostedIntegrationDraft(p);
-      case "hosted_integration_draft_patch": {
+      case "hosted_tool_draft_patch": {
         const patch = await this.applyHostedIntegrationDraftPatch(p);
         if (!patch.ok) return patch;
         const result =
@@ -465,7 +468,7 @@ export class ServerRuntime {
           ? { ok: true, mode: patch.mode }
           : { ok: false, error: { code: result.reason } };
       }
-      case "hosted_integration_draft_delete": {
+      case "hosted_tool_draft_delete": {
         const result =
           await this.hostedIntegrationService.drafts.deleteDraftFile({
             draftId: stringParam(p, "draft_id"),
@@ -476,14 +479,14 @@ export class ServerRuntime {
           ? { ok: true }
           : { ok: false, error: { code: result.reason } };
       }
-      case "hosted_integration_example_list":
+      case "hosted_tool_example_list":
         return {
           ok: true,
           examples: await this.hostedIntegrationService.examples.listExamples(
             stringParam(p, "draft_id"),
           ),
         };
-      case "hosted_integration_example_upsert": {
+      case "hosted_tool_example_upsert": {
         const result =
           await this.hostedIntegrationService.examples.upsertExample({
             draftId: stringParam(p, "draft_id"),
@@ -500,15 +503,15 @@ export class ServerRuntime {
               },
             };
       }
-      case "hosted_integration_example_run":
+      case "hosted_tool_example_run":
         return this.runHostedIntegrationDraftExample(request);
-      case "hosted_integration_validate":
+      case "hosted_tool_validate":
         return this.hostedIntegrationService.validator.validateDraft(
           stringParam(p, "draft_id"),
         );
-      case "hosted_integration_promote":
+      case "hosted_tool_promote":
         return this.promoteHostedIntegrationDraft(request);
-      case "hosted_integration_generation_list":
+      case "hosted_tool_generation_list":
         return {
           ok: true,
           generations:
@@ -516,7 +519,7 @@ export class ServerRuntime {
               familyId: optionalStringParam(p, "family_id") ?? undefined,
             }),
         };
-      case "hosted_integration_generation_get": {
+      case "hosted_tool_generation_get": {
         const generation =
           await this.hostedIntegrationService.generations.getGeneration(
             stringParam(p, "generation_id"),
@@ -525,9 +528,9 @@ export class ServerRuntime {
           ? { ok: true, generation }
           : { ok: false, error: { code: "not_found" } };
       }
-      case "hosted_integration_generation_diff":
+      case "hosted_tool_generation_diff":
         return this.diffHostedIntegrationGenerations(p);
-      case "hosted_integration_generation_rollback": {
+      case "hosted_tool_generation_rollback": {
         const generation =
           await this.hostedIntegrationService.generations.getGeneration(
             stringParam(p, "generation_id"),
@@ -544,13 +547,13 @@ export class ServerRuntime {
           ? { ok: true, activeGeneration: result.activeGeneration }
           : { ok: false, error: { code: result.reason } };
       }
-      case "hosted_integration_environment_config_list":
+      case "hosted_tool_environment_config_list":
         return {
           ok: true,
           environmentConfigs:
             await this.hostedIntegrationService.environmentConfigs.listEnvironmentConfigs(),
         };
-      case "hosted_integration_environment_config_get": {
+      case "hosted_tool_environment_config_get": {
         const environmentConfig =
           await this.hostedIntegrationService.environmentConfigs.getEnvironmentConfig(
             stringParam(p, "family_id"),
@@ -560,11 +563,11 @@ export class ServerRuntime {
           ? { ok: true, environmentConfig }
           : { ok: false, error: { code: "not_found" } };
       }
-      case "hosted_integration_readiness_get":
+      case "hosted_tool_readiness_get":
         return this.readHostedIntegrationReadiness(request);
-      case "hosted_integration_debug_run":
+      case "hosted_tool_debug_run":
         return this.invokeHostedIntegrationDebugRun(request);
-      case "hosted_integration_run_get": {
+      case "hosted_tool_run_get": {
         const run =
           await this.hostedIntegrationService.gateway.executionLogs.getRunLog(
             stringParam(p, "run_id"),
@@ -573,7 +576,7 @@ export class ServerRuntime {
           ? { ok: true, run }
           : { ok: false, error: { code: "not_found" } };
       }
-      case "hosted_integration_artifact_get": {
+      case "hosted_tool_artifact_get": {
         const runId = stringParam(p, "run_id");
         const run =
           await this.hostedIntegrationService.gateway.executionLogs.getRunLog(
@@ -588,7 +591,7 @@ export class ServerRuntime {
           });
         return { ok: true, runId, name: stringParam(p, "name"), content };
       }
-      case "hosted_integration_failure_bucket_list": {
+      case "hosted_tool_failure_bucket_list": {
         const familyId = optionalStringParam(p, "family_id");
         const buckets =
           await this.hostedIntegrationService.failureBuckets.listBuckets();
@@ -599,7 +602,7 @@ export class ServerRuntime {
             : buckets,
         };
       }
-      case "hosted_integration_failure_bucket_get": {
+      case "hosted_tool_failure_bucket_get": {
         const bucket =
           await this.hostedIntegrationService.failureBuckets.getBucket(
             stringParam(p, "bucket_id"),
@@ -608,7 +611,7 @@ export class ServerRuntime {
           ? { ok: true, bucket }
           : { ok: false, error: { code: "not_found" } };
       }
-      case "hosted_integration_failure_bucket_assign": {
+      case "hosted_tool_failure_bucket_assign": {
         const result =
           await this.hostedIntegrationService.failureBuckets.assignBucket({
             bucketId: stringParam(p, "bucket_id"),
@@ -618,7 +621,7 @@ export class ServerRuntime {
           ? { ok: true, bucket: result.bucket }
           : { ok: false, error: { code: result.reason } };
       }
-      case "hosted_integration_failure_bucket_close":
+      case "hosted_tool_failure_bucket_close":
         return this.closeHostedIntegrationFailureBucket(request);
       default:
         return {
@@ -632,8 +635,8 @@ export class ServerRuntime {
     }
   }
 
-  private hostedIntegrationManagementDenied(
-    request: HostedIntegrationManagementRequest,
+  private hostedToolManagementDenied(
+    request: HostedToolManagementRequest,
   ): { ok: false; error: { code: string; message: string } } | null {
     if (request.actorId === "web-settings") return null;
     const def = this.agentManager.getAgentDef(request.actorId);
@@ -878,9 +881,7 @@ export class ServerRuntime {
     });
   }
 
-  private async readGenerationDiffSnapshot(
-    generationId: string,
-  ): Promise<
+  private async readGenerationDiffSnapshot(generationId: string): Promise<
     | {
         ok: true;
         snapshot: {
@@ -1027,7 +1028,7 @@ export class ServerRuntime {
   }
 
   private async invokeHostedIntegrationDebugRun(
-    request: HostedIntegrationManagementRequest,
+    request: HostedToolManagementRequest,
   ): Promise<unknown> {
     const p = request.params;
     const operationClass = optionalStringParam(p, "operation_class") ?? "read";
@@ -1069,7 +1070,7 @@ export class ServerRuntime {
   }
 
   private async readHostedIntegrationReadiness(
-    request: HostedIntegrationManagementRequest,
+    request: HostedToolManagementRequest,
   ): Promise<unknown> {
     const p = request.params;
     const targetType = stringParam(p, "target_type");
@@ -1105,9 +1106,8 @@ export class ServerRuntime {
       }
       case "publish": {
         const draftId = stringParam(p, "draft_id");
-        const draft = await this.hostedIntegrationService.drafts.getDraft(
-          draftId,
-        );
+        const draft =
+          await this.hostedIntegrationService.drafts.getDraft(draftId);
         const validation = draft
           ? await this.hostedIntegrationService.validator.validateDraft(draftId)
           : null;
@@ -1124,7 +1124,8 @@ export class ServerRuntime {
       case "debug": {
         const familyId = stringParam(p, "family_id");
         const toolName = nativeHostedIntegrationToolNameParam(p, "tool_name");
-        const environment = optionalStringParam(p, "environment") ?? "test_debug";
+        const environment =
+          optionalStringParam(p, "environment") ?? "test_debug";
         const family = await this.hostedIntegrationService.getFamily(familyId);
         const tool = family?.manifest.tools.find(
           (candidate) => candidate.name === toolName,
@@ -1153,7 +1154,11 @@ export class ServerRuntime {
           executionPurpose: "debug",
         });
         const readiness = resolveDebugReadiness({
-          actor: { id: request.actorId, kind: "agent", roles: ["tool_developer"] },
+          actor: {
+            id: request.actorId,
+            kind: "agent",
+            roles: ["tool_developer"],
+          },
           familyId,
           toolName,
           environment,
@@ -1257,7 +1262,7 @@ export class ServerRuntime {
   }
 
   private async closeHostedIntegrationFailureBucket(
-    request: HostedIntegrationManagementRequest,
+    request: HostedToolManagementRequest,
   ): Promise<unknown> {
     const params = request.params;
     const bucket = await this.hostedIntegrationService.failureBuckets.getBucket(
@@ -1292,7 +1297,7 @@ export class ServerRuntime {
   }
 
   private async runHostedIntegrationDraftExample(
-    request: HostedIntegrationManagementRequest,
+    request: HostedToolManagementRequest,
   ): Promise<unknown> {
     const p = request.params;
     const draftId = stringParam(p, "draft_id");
@@ -1340,8 +1345,8 @@ export class ServerRuntime {
       toolName: example.toolName,
       generationId: draftGenerationId,
       actorId: request.actorId,
-      environmentConfigId: executionConfig.environmentConfigId,
-      configRevision: executionConfig.configRevision,
+      environmentConfigId: executionConfig.environmentConfigId ?? null,
+      configRevision: executionConfig.configRevision ?? null,
       executionPurpose: executionConfig.executionPurpose,
       sanitizedArgs: JsonObjectSchema.parse(example.args),
       status: "running",
@@ -1412,7 +1417,7 @@ export class ServerRuntime {
   }
 
   private async promoteHostedIntegrationDraft(
-    request: HostedIntegrationManagementRequest,
+    request: HostedToolManagementRequest,
   ): Promise<unknown> {
     const p = request.params;
     const draftId = stringParam(p, "draft_id");
@@ -1592,6 +1597,13 @@ export class ServerRuntime {
   private async refreshHostedIntegrationRegistry(
     event?: HostedIntegrationRegistryRefreshEvent,
   ): Promise<void> {
+    if (event?.reason === "delete") {
+      const removedToolNames = this.hostedIntegrationToolRegistry.removeFamily(
+        event.familyId,
+      );
+      this.agentManager.evictAgentsUsingTools(new Set(removedToolNames));
+      return;
+    }
     const generations = event
       ? [
           await this.hostedIntegrationService.generations.getGeneration(
@@ -1627,6 +1639,36 @@ export class ServerRuntime {
     this.agentManager.evictAgentsUsingTools(changedToolNames);
   }
 
+  scheduleHostedIntegrationDeleteFinalization(familyId: string): void {
+    if (this.hostedIntegrationDeleteDrainPolls.has(familyId)) return;
+    this.hostedIntegrationDeleteDrainPolls.add(familyId);
+    this.pollHostedIntegrationDeleteFinalization(familyId);
+  }
+
+  private pollHostedIntegrationDeleteFinalization(familyId: string): void {
+    const timer = setTimeout(async () => {
+      try {
+        const result = await this.hostedIntegrationService.deleteFamily({
+          familyId,
+          deletedBy: "system:delete-drain",
+        });
+        if (result.status === "delete_draining") {
+          this.pollHostedIntegrationDeleteFinalization(familyId);
+          return;
+        }
+      } catch (error) {
+        log.warn(
+          { err: error, familyId },
+          "hosted integration delete finalization failed",
+        );
+        this.pollHostedIntegrationDeleteFinalization(familyId);
+        return;
+      }
+      this.hostedIntegrationDeleteDrainPolls.delete(familyId);
+    }, HOSTED_INTEGRATION_DELETE_DRAIN_POLL_MS);
+    if (typeof timer.unref === "function") timer.unref();
+  }
+
   private async hostedIntegrationRegistrySnapshot(
     generation: HostedIntegrationGeneration,
   ): Promise<HostedIntegrationRegistrySnapshot | null> {
@@ -1644,6 +1686,7 @@ export class ServerRuntime {
       familyId: generation.familyId,
       familyName: family?.summary.name ?? generation.familyId,
       generationId: generation.id,
+      runtimeConfig: generation.runtimeConfig,
       tools: tools.map((tool) => ({
         name: tool.name,
         description: tool.description,
@@ -1827,9 +1870,9 @@ function nativeHostedIntegrationToolNameParam(
   name: string,
 ): string {
   const value = stringParam(params, name);
-  if (parseHostedIntegrationManagedToolName(value)) {
+  if (parseHostedToolName(value)) {
     throw new Error(
-      `${name} must be a family-native hosted integration tool name, not a managed canonical registry name`,
+      `${name} must be a family-native hosted tool name, not a canonical hosted registry name`,
     );
   }
   return value;

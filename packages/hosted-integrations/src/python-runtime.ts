@@ -110,9 +110,6 @@ def load_module(entrypoint):
     spec.loader.exec_module(module)
     return module
 
-def call_legacy_tool(module, req):
-    return module.call_tool(req["toolName"], req.get("args") or {}, req["context"])
-
 def call_optional_hook(module, name, *args):
     hook = getattr(module, name, None)
     if hook is None:
@@ -154,11 +151,6 @@ def call_derived_tool(module, req):
     )
     return result if normalized_result is None else normalized_result
 
-def call_tool(module, req):
-    if req["runtime"].get("handlerDispatch", "derived") == "legacy_call_tool":
-        return call_legacy_tool(module, req)
-    return call_derived_tool(module, req)
-
 def run(req):
     out_buf = io.StringIO()
     err_buf = io.StringIO()
@@ -177,7 +169,7 @@ def run(req):
                     "stderr": err_buf.getvalue(),
                 }
             if operation == "call_tool":
-                result = call_tool(module, req)
+                result = call_derived_tool(module, req)
                 return {
                     "ok": True,
                     "result": to_jsonable(result),

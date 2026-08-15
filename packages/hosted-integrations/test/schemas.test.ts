@@ -110,6 +110,13 @@ describe("hosted integration schemas", () => {
         defaultTimeoutMs: 0,
       }).success,
     ).toBe(false);
+
+    expect(
+      HostedIntegrationRuntimeSettingsSchema.safeParse({
+        ...minimalManifest.runtime,
+        handlerDispatch: "derived",
+      }).success,
+    ).toBe(false);
   });
 
   it("exports stable lifecycle domain types", () => {

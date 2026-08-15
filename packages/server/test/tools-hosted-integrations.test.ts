@@ -20,7 +20,7 @@ import { createApp } from "../src/app.js";
 
 let dataDir: string | null = null;
 let closeApp: (() => Promise<void>) | null = null;
-const MANAGED_QUALYS_COUNT_ASSETS = "managed_qualys__qualys_count_assets";
+const HOSTED_QUALYS_COUNT_ASSETS = "hosted_qualys__qualys_count_assets";
 
 afterEach(async () => {
   await closeApp?.();
@@ -99,9 +99,9 @@ describe("/api/tools hosted integration surfacing", () => {
     };
     expect(body.toolsets).toContain("hosted-integrations");
     expect(
-      body.tools.find((tool) => tool.name === MANAGED_QUALYS_COUNT_ASSETS),
+      body.tools.find((tool) => tool.name === HOSTED_QUALYS_COUNT_ASSETS),
     ).toMatchObject({
-      name: MANAGED_QUALYS_COUNT_ASSETS,
+      name: HOSTED_QUALYS_COUNT_ASSETS,
       toolset: "hosted-integrations",
       source: {
         kind: "hosted_integration",
@@ -193,12 +193,12 @@ describe("/api/tools hosted integration surfacing", () => {
         index,
         nativeToolName,
       ] of fixture.replacementToolNames.entries()) {
-        const managedToolName = fixture.managedToolNames[index]!;
+        const hostedToolName = fixture.hostedToolNames[index]!;
         const legacyMcpToolName = fixture.legacyMcpToolNames[index]!;
         expect(
-          body.tools.find((tool) => tool.name === managedToolName),
+          body.tools.find((tool) => tool.name === hostedToolName),
         ).toMatchObject({
-          name: managedToolName,
+          name: hostedToolName,
           toolset: "hosted-integrations",
           source: {
             kind: "hosted_integration",
@@ -220,8 +220,8 @@ describe("/api/tools hosted integration surfacing", () => {
           name: "Pilot Analyst",
           role: "",
           model: { provider: "anthropic", model: "claude-sonnet-4-6" },
-          persona: "Use managed hosted integration pilot tools.",
-          tools: fixture.managedToolNames,
+          persona: "Use hosted registry integration pilot tools.",
+          tools: fixture.hostedToolNames,
           hostedIntegrationBindings: fixture.replacementToolNames.map(
             (toolName) => hostedToolBinding(toolName),
           ),
@@ -242,15 +242,15 @@ describe("/api/tools hosted integration surfacing", () => {
       );
 
       const tools = toolRegistry.getVercelTools(
-        new Set(fixture.managedToolNames),
+        new Set(fixture.hostedToolNames),
       ) as Record<
         string,
         { execute: (args: Record<string, unknown>) => Promise<string> }
       >;
       for (const [
         index,
-        managedToolName,
-      ] of fixture.managedToolNames.entries()) {
+        hostedToolName,
+      ] of fixture.hostedToolNames.entries()) {
         const output = await toolCallContext.run(
           {
             agentId: "pilot-analyst",
@@ -262,7 +262,7 @@ describe("/api/tools hosted integration surfacing", () => {
               "workspace",
             ),
           },
-          () => tools[managedToolName]!.execute({ pilot: true }),
+          () => tools[hostedToolName]!.execute({ pilot: true }),
         );
         const parsed = JSON.parse(output);
         expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
@@ -292,7 +292,7 @@ describe("/api/tools hosted integration surfacing", () => {
             "workspace",
           ),
         },
-        () => tools[fixture.managedToolNames[0]!]!.execute({}),
+        () => tools[fixture.hostedToolNames[0]!]!.execute({}),
       );
       expect(JSON.parse(deniedOutput)).toMatchObject({
         ok: false,
@@ -353,7 +353,7 @@ describe("/api/tools hosted integration surfacing", () => {
         role: "",
         model: { provider: "anthropic", model: "claude-sonnet-4-6" },
         persona: "Use hosted integrations.",
-        tools: ["managed_tool_help", MANAGED_QUALYS_COUNT_ASSETS],
+        tools: ["hosted_tool_help", HOSTED_QUALYS_COUNT_ASSETS],
         hostedIntegrationBindings: [
           hostedToolBinding("qualys_count_assets"),
         ],
@@ -361,7 +361,7 @@ describe("/api/tools hosted integration surfacing", () => {
     );
 
     const tools = toolRegistry.getVercelTools(
-      new Set(["managed_tool_help", MANAGED_QUALYS_COUNT_ASSETS]),
+      new Set(["hosted_tool_help", HOSTED_QUALYS_COUNT_ASSETS]),
     ) as Record<
       string,
       { execute: (args: Record<string, unknown>) => Promise<string> }
@@ -372,7 +372,7 @@ describe("/api/tools hosted integration surfacing", () => {
         sessionId: "session_1",
         workspaceDir: path.join(dataDir, "agents", "analyst", "workspace"),
       },
-      () => tools[MANAGED_QUALYS_COUNT_ASSETS]!.execute({}),
+      () => tools[HOSTED_QUALYS_COUNT_ASSETS]!.execute({}),
     );
 
     const parsed = JSON.parse(output);
@@ -397,8 +397,8 @@ describe("/api/tools hosted integration surfacing", () => {
         workspaceDir: path.join(dataDir, "agents", "analyst", "workspace"),
       },
       () =>
-        tools.managed_tool_help!.execute({
-          tool_name: MANAGED_QUALYS_COUNT_ASSETS,
+        tools.hosted_tool_help!.execute({
+          tool_name: HOSTED_QUALYS_COUNT_ASSETS,
           tool_detail: "summary",
           include_examples: false,
         }),
@@ -406,7 +406,7 @@ describe("/api/tools hosted integration surfacing", () => {
     expect(JSON.parse(helpOutput)).toMatchObject({
       ok: true,
       help: {
-        tool_name: MANAGED_QUALYS_COUNT_ASSETS,
+        tool_name: HOSTED_QUALYS_COUNT_ASSETS,
         tool_help: {
           summary: "Count Qualys assets.",
         },
@@ -445,7 +445,7 @@ describe("/api/tools hosted integration surfacing", () => {
         sessionId: "session_2",
         workspaceDir: path.join(dataDir, "agents", "blocked", "workspace"),
       },
-      () => tools[MANAGED_QUALYS_COUNT_ASSETS]!.execute({}),
+      () => tools[HOSTED_QUALYS_COUNT_ASSETS]!.execute({}),
     );
     expect(JSON.parse(deniedOutput)).toMatchObject({
       ok: false,
@@ -460,7 +460,7 @@ describe("/api/tools hosted integration surfacing", () => {
         sessionId: "session_3",
         workspaceDir: path.join(dataDir, "agents", "mcp-only", "workspace"),
       },
-      () => tools[MANAGED_QUALYS_COUNT_ASSETS]!.execute({}),
+      () => tools[HOSTED_QUALYS_COUNT_ASSETS]!.execute({}),
     );
     expect(JSON.parse(mcpOnlyOutput)).toMatchObject({
       ok: false,
@@ -476,7 +476,7 @@ describe("/api/tools hosted integration surfacing", () => {
     writeFamily(
       dataDir,
       [
-        "def call_tool(name, args, ctx):",
+        "def tool_qualys_count_assets(args, context):",
         "    raise ValueError('agent-visible failure should stay generic')",
         "",
       ].join("\n"),
@@ -526,7 +526,7 @@ describe("/api/tools hosted integration surfacing", () => {
         role: "",
         model: { provider: "anthropic", model: "claude-sonnet-4-6" },
         persona: "Use hosted integrations.",
-        tools: [MANAGED_QUALYS_COUNT_ASSETS],
+        tools: [HOSTED_QUALYS_COUNT_ASSETS],
         hostedIntegrationBindings: [
           hostedToolBinding("qualys_count_assets"),
         ],
@@ -534,7 +534,7 @@ describe("/api/tools hosted integration surfacing", () => {
     );
 
     const tools = toolRegistry.getVercelTools(
-      new Set([MANAGED_QUALYS_COUNT_ASSETS]),
+      new Set([HOSTED_QUALYS_COUNT_ASSETS]),
     ) as Record<
       string,
       { execute: (args: Record<string, unknown>) => Promise<string> }
@@ -545,7 +545,7 @@ describe("/api/tools hosted integration surfacing", () => {
         sessionId: "session_1",
         workspaceDir: path.join(dataDir, "agents", "analyst", "workspace"),
       },
-      () => tools[MANAGED_QUALYS_COUNT_ASSETS]!.execute({}),
+      () => tools[HOSTED_QUALYS_COUNT_ASSETS]!.execute({}),
     );
 
     expect(JSON.parse(output)).toEqual({
@@ -553,7 +553,7 @@ describe("/api/tools hosted integration surfacing", () => {
       error: { code: "tool_failed", message: "tool failed" },
       familyId: "qualys",
       toolName: "qualys_count_assets",
-      canonicalToolName: MANAGED_QUALYS_COUNT_ASSETS,
+      canonicalToolName: HOSTED_QUALYS_COUNT_ASSETS,
       generationId: "gen_1",
     });
     expect(output).not.toContain("bucket");
@@ -578,7 +578,7 @@ describe("/api/tools hosted integration surfacing", () => {
         role: "",
         model: { provider: "anthropic", model: "claude-sonnet-4-6" },
         persona: "Manage hosted integrations.",
-        tools: ["hosted_integration_family_list"],
+        tools: ["hosted_tool_family_list"],
       }),
     );
     await manager.createAgent(
@@ -593,7 +593,7 @@ describe("/api/tools hosted integration surfacing", () => {
     );
 
     const tools = toolRegistry.getVercelTools(
-      new Set(["hosted_integration_family_list"]),
+      new Set(["hosted_tool_family_list"]),
     ) as Record<
       string,
       { execute: (args: Record<string, unknown>) => Promise<string> }
@@ -609,7 +609,7 @@ describe("/api/tools hosted integration surfacing", () => {
           "workspace",
         ),
       },
-      () => tools.hosted_integration_family_list!.execute({}),
+      () => tools.hosted_tool_family_list!.execute({}),
     );
     expect(JSON.parse(allowedOutput)).toMatchObject({
       ok: true,
@@ -628,7 +628,7 @@ describe("/api/tools hosted integration surfacing", () => {
         sessionId: "session_2",
         workspaceDir: path.join(dataDir, "agents", "analyst", "workspace"),
       },
-      () => tools.hosted_integration_family_list!.execute({}),
+      () => tools.hosted_tool_family_list!.execute({}),
     );
     expect(JSON.parse(deniedOutput)).toMatchObject({
       ok: false,
@@ -650,16 +650,16 @@ describe("/api/tools hosted integration surfacing", () => {
     const { manager, close } = await createApp(config);
     closeApp = close;
     const managementToolNames = [
-      "hosted_integration_family_create",
-      "hosted_integration_source_read",
-      "hosted_integration_source_view",
-      "hosted_integration_lock_acquire",
-      "hosted_integration_draft_create",
-      "hosted_integration_draft_patch",
-      "hosted_integration_example_upsert",
-      "hosted_integration_example_run",
-      "hosted_integration_promote",
-      "hosted_integration_readiness_get",
+      "hosted_tool_family_create",
+      "hosted_tool_source_read",
+      "hosted_tool_source_view",
+      "hosted_tool_lock_acquire",
+      "hosted_tool_draft_create",
+      "hosted_tool_draft_patch",
+      "hosted_tool_example_upsert",
+      "hosted_tool_example_run",
+      "hosted_tool_promote",
+      "hosted_tool_readiness_get",
     ];
     await manager.createAgent(
       AgentDefinitionSchema.parse({
@@ -696,27 +696,27 @@ describe("/api/tools hosted integration surfacing", () => {
       );
 
     await expect(
-      call("hosted_integration_family_create", {
+      call("hosted_tool_family_create", {
         family_id: "bad-family",
         name: "Bad Family",
-        tool_name: "managed_qualys__qualys_count_assets",
+        tool_name: "hosted_qualys__qualys_count_assets",
       }),
     ).resolves.toMatchObject({
       ok: false,
       error: {
         code: "invalid_params",
         message:
-          "tool_name: must be a family-native hosted integration tool name, not a managed canonical registry name",
+          "tool_name: must be a family-native hosted tool name, not a canonical hosted registry name",
       },
     });
 
-    const lock = await call("hosted_integration_lock_acquire", {
+    const lock = await call("hosted_tool_lock_acquire", {
       family_id: "qualys",
       ttl_ms: 60_000,
     });
     expect(lock).toMatchObject({ ok: true, lock: { familyId: "qualys" } });
 
-    const draft = await call("hosted_integration_draft_create", {
+    const draft = await call("hosted_tool_draft_create", {
       family_id: "qualys",
       lock_id: lock.lock.id,
       source_revision_id: "source_rev_1",
@@ -724,7 +724,7 @@ describe("/api/tools hosted integration surfacing", () => {
     expect(draft).toMatchObject({ ok: true, draft: { familyId: "qualys" } });
 
     await expect(
-      call("hosted_integration_source_read", {
+      call("hosted_tool_source_read", {
         draft_id: draft.draft.id,
         path: "qualys.py",
         start_line: 2,
@@ -733,19 +733,15 @@ describe("/api/tools hosted integration surfacing", () => {
     ).resolves.toMatchObject({
       ok: true,
       path: "qualys.py",
-      content: [
-        "    return {",
-        "        'count': 1,",
-        "        'endpoint': ctx['config']['endpoint'],",
-      ].join("\n"),
-      totalLines: 7,
+      content: expect.stringContaining("def before_tool_call"),
+      totalLines: 17,
       startLine: 2,
       endLine: 4,
       truncated: true,
     });
 
     await expect(
-      call("hosted_integration_source_view", {
+      call("hosted_tool_source_view", {
         draft_id: draft.draft.id,
         family_id: "qualys",
         tool_name: "qualys_count_assets",
@@ -756,16 +752,19 @@ describe("/api/tools hosted integration surfacing", () => {
         mode: "focused",
         familyId: "qualys",
         toolName: "qualys_count_assets",
-        diagnostics: [
-          {
-            code: "selected_handler_missing",
+        diagnostics: [],
+        source: {
+          selectedHandler: {
+            source: expect.stringContaining(
+              "def tool_qualys_count_assets(args, context):",
+            ),
           },
-        ],
+        },
       },
     });
 
     await expect(
-      call("hosted_integration_readiness_get", {
+      call("hosted_tool_readiness_get", {
         target_type: "environment_config",
         family_id: "qualys",
         environment: "prod",
@@ -780,7 +779,7 @@ describe("/api/tools hosted integration surfacing", () => {
     });
 
     await expect(
-      call("hosted_integration_readiness_get", {
+      call("hosted_tool_readiness_get", {
         target_type: "mig" + "ration",
       }),
     ).resolves.toMatchObject({
@@ -791,7 +790,7 @@ describe("/api/tools hosted integration surfacing", () => {
     });
 
     await expect(
-      call("hosted_integration_draft_patch", {
+      call("hosted_tool_draft_patch", {
         draft_id: draft.draft.id,
         lock_id: lock.lock.id,
         path: "qualys.py",
@@ -808,18 +807,18 @@ describe("/api/tools hosted integration surfacing", () => {
     ).resolves.toMatchObject({ ok: true, mode: "replace_text" });
 
     await expect(
-      call("hosted_integration_draft_patch", {
+      call("hosted_tool_draft_patch", {
         draft_id: draft.draft.id,
         lock_id: lock.lock.id,
         path: "qualys.py",
         mode: "insert_after",
-        anchor_text: "def call_tool(name, args, ctx):",
+        anchor_text: "def tool_qualys_count_assets(args, context):",
         insert_text: "\n    # patched through targeted management edit",
       }),
     ).resolves.toMatchObject({ ok: true, mode: "insert_after" });
 
     await expect(
-      call("hosted_integration_example_upsert", {
+      call("hosted_tool_example_upsert", {
         draft_id: draft.draft.id,
         lock_id: lock.lock.id,
         example: {
@@ -833,7 +832,7 @@ describe("/api/tools hosted integration surfacing", () => {
       }),
     ).resolves.toMatchObject({ ok: true });
 
-    const run = await call("hosted_integration_example_run", {
+    const run = await call("hosted_tool_example_run", {
       draft_id: draft.draft.id,
       example_id: "smoke_count",
     });
@@ -842,7 +841,7 @@ describe("/api/tools hosted integration surfacing", () => {
       envelope: { ok: true, result: { count: 7, mode: "draft-example" } },
     });
 
-    const promoted = await call("hosted_integration_promote", {
+    const promoted = await call("hosted_tool_promote", {
       draft_id: draft.draft.id,
       lock_id: lock.lock.id,
     });
@@ -857,7 +856,7 @@ describe("/api/tools hosted integration surfacing", () => {
     expect(
       toolRegistry
         .getInfo()
-        .find((tool) => tool.name === MANAGED_QUALYS_COUNT_ASSETS)?.source,
+        .find((tool) => tool.name === HOSTED_QUALYS_COUNT_ASSETS)?.source,
     ).toMatchObject({
       kind: "hosted_integration",
       familyId: "qualys",
@@ -914,7 +913,7 @@ describe("/api/tools hosted integration surfacing", () => {
         lockId: lock.lock.id,
         path: "qualys.py",
         content: [
-          "def call_tool(name, args, ctx):",
+          "def tool_qualys_count_assets(args, context):",
           "    return {'fixed': True}",
           "",
         ].join("\n"),
@@ -941,10 +940,10 @@ describe("/api/tools hosted integration surfacing", () => {
     if (!promoted.ok) throw new Error("failed to promote fix generation");
 
     const managementToolNames = [
-      "hosted_integration_failure_bucket_list",
-      "hosted_integration_failure_bucket_get",
-      "hosted_integration_failure_bucket_assign",
-      "hosted_integration_failure_bucket_close",
+      "hosted_tool_failure_bucket_list",
+      "hosted_tool_failure_bucket_get",
+      "hosted_tool_failure_bucket_assign",
+      "hosted_tool_failure_bucket_close",
     ];
     await manager.createAgent(
       AgentDefinitionSchema.parse({
@@ -990,13 +989,13 @@ describe("/api/tools hosted integration surfacing", () => {
       );
 
     await expect(
-      call("hosted_integration_failure_bucket_list", {}, "analyst"),
+      call("hosted_tool_failure_bucket_list", {}, "analyst"),
     ).resolves.toMatchObject({
       ok: false,
       error: { code: "policy_denied" },
     });
 
-    const listed = await call("hosted_integration_failure_bucket_list", {
+    const listed = await call("hosted_tool_failure_bucket_list", {
       family_id: "qualys",
     });
     expect(listed).toMatchObject({
@@ -1005,7 +1004,7 @@ describe("/api/tools hosted integration surfacing", () => {
     });
 
     await expect(
-      call("hosted_integration_failure_bucket_get", {
+      call("hosted_tool_failure_bucket_get", {
         bucket_id: seeded.bucket.id,
       }),
     ).resolves.toMatchObject({
@@ -1014,7 +1013,7 @@ describe("/api/tools hosted integration surfacing", () => {
     });
 
     await expect(
-      call("hosted_integration_failure_bucket_assign", {
+      call("hosted_tool_failure_bucket_assign", {
         bucket_id: seeded.bucket.id,
         assigned_to: "tool-developer",
       }),
@@ -1024,7 +1023,7 @@ describe("/api/tools hosted integration surfacing", () => {
     });
 
     await expect(
-      call("hosted_integration_failure_bucket_close", {
+      call("hosted_tool_failure_bucket_close", {
         bucket_id: seeded.bucket.id,
         draft_id: draft.draft.id,
         generation_id: promoted.generation.id,
@@ -1035,7 +1034,7 @@ describe("/api/tools hosted integration surfacing", () => {
       error: { code: "regression_example_not_found" },
     });
 
-    const closeRegression = await call("hosted_integration_failure_bucket_close", {
+    const closeRegression = await call("hosted_tool_failure_bucket_close", {
       bucket_id: seeded.bucket.id,
       draft_id: draft.draft.id,
       generation_id: promoted.generation.id,
@@ -1090,7 +1089,7 @@ describe("/api/tools hosted integration surfacing", () => {
         role: "",
         model: { provider: "anthropic", model: "claude-sonnet-4-6" },
         persona: "Inspect hosted integrations.",
-        tools: ["hosted_integration_source_view"],
+        tools: ["hosted_tool_source_view"],
       }),
     );
     await manager.createAgent(
@@ -1105,7 +1104,7 @@ describe("/api/tools hosted integration surfacing", () => {
     );
 
     const tools = toolRegistry.getVercelTools(
-      new Set(["hosted_integration_source_view"]),
+      new Set(["hosted_tool_source_view"]),
     ) as Record<
       string,
       { execute: (args: Record<string, unknown>) => Promise<string> }
@@ -1119,7 +1118,7 @@ describe("/api/tools hosted integration surfacing", () => {
             workspaceDir: path.join(dataDir!, "agents", agentId, "workspace"),
           },
           () =>
-            tools.hosted_integration_source_view!.execute({
+            tools.hosted_tool_source_view!.execute({
               draft_id: draft.draft.id,
               family_id: "qualys",
               tool_name: "qualys_count_assets",
@@ -1153,7 +1152,10 @@ describe("/api/tools hosted integration surfacing", () => {
 
   it("exposes generation diffs through authorized management tools", async () => {
     dataDir = mkdtempSync(path.join(tmpdir(), "openacme-tools-hosted-"));
-    writeFamily(dataDir, "def call_tool(name, args, ctx):\n    return {'count': 1}\n");
+    writeFamily(
+      dataDir,
+      "def tool_qualys_count_assets(args, context):\n    return {'count': 1}\n",
+    );
     const locks = createFileHostedIntegrationLockStore({
       dataDir,
       createId: () => "lock_1",
@@ -1181,7 +1183,8 @@ describe("/api/tools hosted integration surfacing", () => {
       sourceRevisionId: "source_rev_1",
       files: {
         "family.yaml": familyYaml(),
-        "qualys.py": "def call_tool(name, args, ctx):\n    return {'count': 1}\n",
+        "qualys.py":
+          "def tool_qualys_count_assets(args, context):\n    return {'count': 1}\n",
       },
     });
     if (!firstDraft.ok) throw new Error(firstDraft.reason);
@@ -1198,7 +1201,8 @@ describe("/api/tools hosted integration surfacing", () => {
       sourceRevisionId: "source_rev_2",
       files: {
         "family.yaml": familyYaml(),
-        "qualys.py": "def call_tool(name, args, ctx):\n    return {'count': 2}\n",
+        "qualys.py":
+          "def tool_qualys_count_assets(args, context):\n    return {'count': 2}\n",
       },
     });
     if (!secondDraft.ok) throw new Error(secondDraft.reason);
@@ -1222,7 +1226,7 @@ describe("/api/tools hosted integration surfacing", () => {
         role: "",
         model: { provider: "anthropic", model: "claude-sonnet-4-6" },
         persona: "Compare hosted integrations.",
-        tools: ["hosted_integration_generation_diff"],
+        tools: ["hosted_tool_generation_diff"],
       }),
     );
     await manager.createAgent(
@@ -1237,7 +1241,7 @@ describe("/api/tools hosted integration surfacing", () => {
     );
 
     const tools = toolRegistry.getVercelTools(
-      new Set(["hosted_integration_generation_diff"]),
+      new Set(["hosted_tool_generation_diff"]),
     ) as Record<
       string,
       { execute: (args: Record<string, unknown>) => Promise<string> }
@@ -1251,7 +1255,7 @@ describe("/api/tools hosted integration surfacing", () => {
             workspaceDir: path.join(dataDir!, "agents", agentId, "workspace"),
           },
           () =>
-            tools.hosted_integration_generation_diff!.execute({
+            tools.hosted_tool_generation_diff!.execute({
               base_generation_id: first.generation.id,
               compare_generation_id: second.generation.id,
               mode: "unified",
@@ -1300,7 +1304,17 @@ function writeFamily(
     path.join(dir, "qualys.py"),
     source ??
       [
-        "def call_tool(name, args, ctx):",
+        "def authenticate(ctx):",
+        "    return {}",
+        "",
+        "def before_tool_call(tool_name, args, ctx, auth):",
+        "    return args",
+        "",
+        "def after_tool_call(tool_name, args, ctx, result, auth):",
+        "    return result",
+        "",
+        "def tool_qualys_count_assets(args, context):",
+        "    ctx = context",
         "    return {",
         "        'count': 1,",
         "        'endpoint': ctx['config']['endpoint'],",
@@ -1398,7 +1412,6 @@ version: 1
 runtime:
   language: python
   entrypoint: qualys.py
-  handlerDispatch: legacy_call_tool
   defaultTimeoutMs: 30000
   inlineResultTokenLimit: 8000
   maxConcurrency: 2

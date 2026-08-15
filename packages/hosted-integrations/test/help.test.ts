@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  buildHostedIntegrationManagedToolName,
+  buildHostedToolName,
   createFileHostedIntegrationCatalog,
   createFileHostedIntegrationDraftStore,
   createFileHostedIntegrationDraftValidator,
@@ -48,7 +48,7 @@ examples:
 `,
       },
     });
-    const managedToolName = buildHostedIntegrationManagedToolName({
+    const hostedToolName = buildHostedToolName({
       familyId: "qualys",
       toolName: "qualys_count_assets",
     });
@@ -56,7 +56,7 @@ examples:
     const result = await resolveHostedIntegrationToolHelp({
       dataDir,
       generations,
-      managedToolName,
+      hostedToolName,
       familyId: "qualys",
       toolName: "qualys_count_assets",
       request: {
@@ -75,7 +75,7 @@ examples:
     expect(result).toMatchObject({
       ok: true,
       help: {
-        tool_name: managedToolName,
+        tool_name: hostedToolName,
         family_id: "qualys",
         family_tool_name: "qualys_count_assets",
         generation_id: "gen_1",
@@ -134,7 +134,7 @@ examples:
     const result = await resolveHostedIntegrationToolHelp({
       dataDir,
       generations,
-      managedToolName: "managed_qualys__qualys_count_assets",
+      hostedToolName: "hosted_qualys__qualys_count_assets",
       familyId: "qualys",
       toolName: "qualys_count_assets",
       request: {
@@ -175,7 +175,7 @@ examples:
     const result = await resolveHostedIntegrationToolHelp({
       dataDir,
       generations,
-      managedToolName: "managed_qualys__qualys_count_assets",
+      hostedToolName: "hosted_qualys__qualys_count_assets",
       familyId: "qualys",
       toolName: "qualys_count_assets",
       request: {
@@ -234,7 +234,7 @@ examples:
     const result = await resolveHostedIntegrationToolHelp({
       dataDir,
       generations,
-      managedToolName: "managed_qualys__qualys_count_assets",
+      hostedToolName: "hosted_qualys__qualys_count_assets",
       familyId: "qualys",
       toolName: "qualys_count_assets",
       request: {
@@ -266,7 +266,7 @@ examples:
     const result = await resolveHostedIntegrationToolHelp({
       dataDir,
       generations,
-      managedToolName: "managed_qualys__qualys_count_assets",
+      hostedToolName: "hosted_qualys__qualys_count_assets",
       familyId: "qualys",
       toolName: "qualys_count_assets",
       request: {

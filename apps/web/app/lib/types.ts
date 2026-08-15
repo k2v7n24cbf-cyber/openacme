@@ -119,10 +119,7 @@ export interface HomePayload {
   idle: SessionSummary[];
 }
 
-export type OpenAcmeUIMessage = UIMessage<
-  MessageMetadata,
-  OpenAcmeDataParts
->;
+export type OpenAcmeUIMessage = UIMessage<MessageMetadata, OpenAcmeDataParts>;
 
 export interface ToolInfo {
   name: string;
@@ -135,6 +132,10 @@ export interface ToolInfo {
     familyName: string;
     toolName: string;
     generationId: string;
+    runtimeConfig?: {
+      requiredConfigKeys?: string[];
+      requiredSecretKeys?: string[];
+    };
   };
   /** Always-on tool merged into every agent regardless of the agent's
    *  `tools` config — hidden from the picker. */

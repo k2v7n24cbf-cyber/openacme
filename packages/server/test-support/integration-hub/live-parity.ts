@@ -24,11 +24,11 @@ import { ToolRegistry } from "@openacme/tools";
 export interface LiveParityToolCase {
   familyId: string;
   toolName: string;
-  managedHostedToolName: string;
+  hostedToolName: string;
   legacyServerName: string;
   legacyMcpToolName: string;
   args: Record<string, unknown>;
-  managedArgs?: Record<string, unknown>;
+  hostedArgs?: Record<string, unknown>;
   legacyArgs?: Record<string, unknown>;
 }
 
@@ -38,7 +38,7 @@ export interface LiveParityRunnerOptions {
   familyConfig?: Record<string, string>;
   familySecrets?: Record<string, string>;
   service?: HostedIntegrationService;
-  managedClient?: ManagedHostedParityClient;
+  hostedClient?: HostedParityClient;
   legacyClient?: LegacyMcpParityClient;
   cases?: LiveParityToolCase[];
   now?: () => Date;
@@ -59,7 +59,7 @@ export interface LegacyMcpParityClient {
   close(): Promise<void>;
 }
 
-export interface ManagedHostedParityClient {
+export interface HostedParityClient {
   prepare(
     config: Record<string, string>,
     secrets: Record<string, string>,
@@ -79,11 +79,11 @@ export interface LiveParityRunResult {
 export interface LiveParityCaseResult {
   familyId: string;
   toolName: string;
-  managedHostedToolName: string;
+  hostedToolName: string;
   legacyMcpToolName: string;
   status: "match" | "mismatch" | "error";
   comparison: "match" | "mismatch" | "not_compared";
-  managed: SanitizedToolResult;
+  hosted: SanitizedToolResult;
   legacy: SanitizedToolResult;
   hostedRunId?: string;
   failureBucketId?: string;
@@ -162,22 +162,22 @@ export async function runHostedIntegrationLiveParity(
   if (!liveConfig.ok) return skipped(runId, liveConfig.diagnostics);
 
   const service = options.service;
-  const managedClient =
-    options.managedClient ??
-    new DefaultManagedHostedParityClient(
+  const hostedClient =
+    options.hostedClient ??
+    new DefaultHostedParityClient(
       service ??
         createFileHostedIntegrationService({
           dataDir: options.dataDir,
         }),
       familyId,
     );
-  const ownsManagedClient = !options.managedClient;
+  const ownsHostedClient = !options.hostedClient;
   const legacyClient =
     options.legacyClient ?? new DefaultLegacyMcpParityClient();
   const ownsLegacyClient = !options.legacyClient;
 
   try {
-    await managedClient.prepare(liveConfig.config, liveConfig.secrets);
+    await hostedClient.prepare(liveConfig.config, liveConfig.secrets);
     const connected = await legacyClient.connect(serverName, legacyConfig);
     if (!connected.ok) {
       return skipped(runId, [
@@ -188,7 +188,7 @@ export async function runHostedIntegrationLiveParity(
 
     const results: LiveParityCaseResult[] = [];
     for (const testCase of cases) {
-      results.push(await runParityCase(managedClient, legacyClient, testCase));
+      results.push(await runParityCase(hostedClient, legacyClient, testCase));
     }
 
     const status = results.every((result) => result.status === "match")
@@ -206,7 +206,7 @@ export async function runHostedIntegrationLiveParity(
     return result;
   } finally {
     if (ownsLegacyClient) await legacyClient.close();
-    if (ownsManagedClient) await managedClient.close();
+    if (ownsHostedClient) await hostedClient.close();
   }
 }
 
@@ -285,7 +285,7 @@ function liveParityCasesFromFixture(
     return {
       familyId: example.familyId,
       toolName: example.toolName,
-      managedHostedToolName: mapping.managedHostedToolName,
+      hostedToolName: mapping.hostedRegistryToolName,
       legacyServerName: "integration-hub",
       legacyMcpToolName: mapping.legacyMcpToolName,
       args: example.args,
@@ -295,11 +295,11 @@ function liveParityCasesFromFixture(
 
 function qualysLegacyArgumentOverrides(
   toolName: string,
-  managedArgs: Record<string, unknown>,
-): Pick<LiveParityToolCase, "managedArgs" | "legacyArgs"> {
+  hostedArgs: Record<string, unknown>,
+): Pick<LiveParityToolCase, "hostedArgs" | "legacyArgs"> {
   if (toolName === "qualys_cloud_agent_hostasset_count") {
     return {
-      managedArgs: {},
+      hostedArgs: {},
       legacyArgs: {
         criteria: [
           { field: "tagName", operator: "EQUALS", value: "Cloud Agent" },
@@ -309,8 +309,8 @@ function qualysLegacyArgumentOverrides(
   }
   if (toolName === "qualys_cloud_agent_hostasset_search") {
     return {
-      managedArgs: {
-        ...withoutKey(managedArgs, "filter_body"),
+      hostedArgs: {
+        ...withoutKey(hostedArgs, "filter_body"),
         page_size: 2,
         max_pages: 1,
       },
@@ -326,10 +326,10 @@ function qualysLegacyArgumentOverrides(
 }
 
 function splunkLegacyArgumentOverrides(
-  managedArgs: Record<string, unknown>,
-): Pick<LiveParityToolCase, "managedArgs" | "legacyArgs"> {
+  hostedArgs: Record<string, unknown>,
+): Pick<LiveParityToolCase, "hostedArgs" | "legacyArgs"> {
   return {
-    legacyArgs: withoutKey(managedArgs, "limit"),
+    legacyArgs: withoutKey(hostedArgs, "limit"),
   };
 }
 
@@ -684,15 +684,15 @@ function missingLiveConfigDiagnostic(
   )})`;
 }
 
-export async function seedQualysManagedParityTarget(
+export async function seedQualysHostedParityTarget(
   service: HostedIntegrationService,
   config: Record<string, string>,
   secrets: Record<string, string>,
 ): Promise<void> {
-  return seedManagedParityTarget(service, "qualys", config, secrets);
+  return seedHostedParityTarget(service, "qualys", config, secrets);
 }
 
-export async function seedManagedParityTarget(
+export async function seedHostedParityTarget(
   service: HostedIntegrationService,
   familyId: string,
   config: Record<string, string>,
@@ -706,7 +706,7 @@ export async function seedManagedParityTarget(
   });
   if (!lock.ok) {
     throw new Error(
-      `qualys family is locked by ${lock.lock.lockedBy}; live parity cannot mutate managed test target`,
+      `qualys family is locked by ${lock.lock.lockedBy}; live parity cannot mutate hosted test target`,
     );
   }
   const created = await service.drafts.createDraftFromFiles({
@@ -726,7 +726,7 @@ export async function seedManagedParityTarget(
   const validation = await service.validator.validateDraft(created.draft.id);
   if (!validation.ok) {
     throw new Error(
-      `live parity managed target validation failed: ${validation.diagnostics
+      `live parity hosted target validation failed: ${validation.diagnostics
         .map((diagnostic) => diagnostic.message)
         .join("; ")}`,
     );
@@ -783,42 +783,42 @@ function parityFixtureForFamily(
 }
 
 async function runParityCase(
-  managedClient: ManagedHostedParityClient,
+  hostedClient: HostedParityClient,
   legacyClient: LegacyMcpParityClient,
   testCase: LiveParityToolCase,
 ): Promise<LiveParityCaseResult> {
-  const managed = await callManagedTool(managedClient, testCase);
+  const hosted = await callHostedTool(hostedClient, testCase);
   const legacy = await callLegacyTool(legacyClient, testCase);
   const comparison =
-    managed.ok && legacy.ok
-      ? compareSanitizedResults(testCase, managed, legacy)
+    hosted.ok && legacy.ok
+      ? compareSanitizedResults(testCase, hosted, legacy)
       : "not_compared";
   const status =
     comparison === "match"
       ? "match"
-      : managed.ok && legacy.ok
+      : hosted.ok && legacy.ok
         ? "mismatch"
         : "error";
   return {
     familyId: testCase.familyId,
     toolName: testCase.toolName,
-    managedHostedToolName: testCase.managedHostedToolName,
+    hostedToolName: testCase.hostedToolName,
     legacyMcpToolName: testCase.legacyMcpToolName,
     status,
     comparison,
-    managed,
+    hosted,
     legacy,
-    hostedRunId: managed.runId,
-    failureBucketId: managed.failureBucketId,
+    hostedRunId: hosted.runId,
+    failureBucketId: hosted.failureBucketId,
   };
 }
 
-async function callManagedTool(
-  managedClient: ManagedHostedParityClient,
+async function callHostedTool(
+  hostedClient: HostedParityClient,
   testCase: LiveParityToolCase,
 ): Promise<SanitizedToolResult> {
   try {
-    const result = await managedClient.callTool(testCase);
+    const result = await hostedClient.callTool(testCase);
     return sanitizeToolResult(result);
   } catch (error) {
     return sanitizeThrown(error);
@@ -861,11 +861,11 @@ async function resolveLegacyPayload(value: unknown): Promise<unknown> {
 
 function compareSanitizedResults(
   testCase: LiveParityToolCase,
-  managed: SanitizedToolResult,
+  hosted: SanitizedToolResult,
   legacy: SanitizedToolResult,
 ): "match" | "mismatch" {
   if (testCase.toolName.endsWith("_count")) {
-    return managed.summary["count"] === legacy.summary["count"]
+    return hosted.summary["count"] === legacy.summary["count"]
       ? "match"
       : "mismatch";
   }
@@ -873,11 +873,11 @@ function compareSanitizedResults(
     testCase.toolName.endsWith("_search") ||
     testCase.toolName.endsWith("_list")
   ) {
-    return managed.summary["resultCount"] === legacy.summary["resultCount"]
+    return hosted.summary["resultCount"] === legacy.summary["resultCount"]
       ? "match"
       : "mismatch";
   }
-  return JSON.stringify(managed.summary) === JSON.stringify(legacy.summary)
+  return JSON.stringify(hosted.summary) === JSON.stringify(legacy.summary)
     ? "match"
     : "mismatch";
 }
@@ -1160,7 +1160,7 @@ class DefaultLegacyMcpParityClient implements LegacyMcpParityClient {
   }
 }
 
-class DefaultManagedHostedParityClient implements ManagedHostedParityClient {
+class DefaultHostedParityClient implements HostedParityClient {
   constructor(
     private readonly service: HostedIntegrationService,
     private readonly familyId: string,
@@ -1170,7 +1170,7 @@ class DefaultManagedHostedParityClient implements ManagedHostedParityClient {
     config: Record<string, string>,
     secrets: Record<string, string>,
   ): Promise<void> {
-    return seedManagedParityTarget(this.service, this.familyId, config, secrets);
+    return seedHostedParityTarget(this.service, this.familyId, config, secrets);
   }
 
   callTool(testCase: LiveParityToolCase): Promise<unknown> {
@@ -1180,7 +1180,7 @@ class DefaultManagedHostedParityClient implements ManagedHostedParityClient {
       toolName: testCase.toolName,
       environment: DEFAULT_ENVIRONMENT,
       args: JsonObjectSchema.parse(
-        testCase.managedArgs ?? testCase.args,
+        testCase.hostedArgs ?? testCase.args,
       ) as JsonObject,
       hostedToolBindings: [
         liveParityHostedToolBinding(testCase),

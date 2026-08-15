@@ -15,13 +15,13 @@ import {
   JsonObjectSchema,
   buildHostedIntegrationFocusedSourceView,
   buildHostedIntegrationGenerationDiff,
-  buildHostedIntegrationManagedToolName,
+  buildHostedToolName,
   evaluateHostedIntegrationPolicy,
   evaluateHostedIntegrationPromotionApproval,
   generationFilesRoot,
   isHostedIntegrationToolVisibleForSelection,
   listFilesUnderRoot,
-  parseHostedIntegrationManagedToolName,
+  parseHostedToolName,
   readTextFileUnderRoot,
   resolveAgentHostedToolBindingReadiness,
   resolveDebugReadiness,
@@ -48,7 +48,7 @@ import { resolveMember } from "../middleware/auth.js";
 import { validateHostedIntegrationRegressionClose } from "../hosted-integration-regression.js";
 
 const DEFAULT_LOCK_TTL_MS = 30 * 60 * 1000;
-const MANAGED_TOOL_HELP_TOOL_NAME = "managed_tool_help";
+const HOSTED_TOOL_HELP_TOOL_NAME = "hosted_tool_help";
 
 export interface HostedIntegrationRouteOptions {
   authStore?: AuthStore;
@@ -66,6 +66,7 @@ export interface HostedIntegrationRouteOptions {
     tools: string[];
     hostedIntegrationBindings?: unknown[];
   }>;
+  onHostedIntegrationDeleteDraining?: (familyId: string) => void;
 }
 
 export function registerHostedIntegrationRoutes(
@@ -122,7 +123,8 @@ export function registerHostedIntegrationRoutes(
             familyId,
             toolName,
             hostedToolBindings: (
-              options.resolveAgentDef?.(agentId)?.hostedIntegrationBindings ?? []
+              options.resolveAgentDef?.(agentId)?.hostedIntegrationBindings ??
+              []
             ).map((binding) =>
               isRecord(binding) && !("agentId" in binding)
                 ? { agentId, ...binding }
@@ -251,7 +253,8 @@ export function registerHostedIntegrationRoutes(
           environmentReadiness: executionConfig.ok
             ? executionConfig.readiness
             : executionConfig.error,
-          capturedGenerationId: c.req.query("capturedGenerationId") ?? undefined,
+          capturedGenerationId:
+            c.req.query("capturedGenerationId") ?? undefined,
           resolvedGenerationId: activeGeneration?.id,
         }),
       });
@@ -319,7 +322,7 @@ export function registerHostedIntegrationRoutes(
         if (!family || !tool || tool.lifecycle === "removed") {
           return c.json({ ok: false, error: { code: "tool_not_found" } }, 404);
         }
-        const managedToolName = buildHostedIntegrationManagedToolName({
+        const hostedToolName = buildHostedToolName({
           familyId,
           toolName,
         });
@@ -343,20 +346,18 @@ export function registerHostedIntegrationRoutes(
             ) {
               return null;
             }
-            if (!agent.tools.includes(managedToolName)) return null;
+            if (!agent.tools.includes(hostedToolName)) return null;
             return {
               agentId: agent.id,
               agentName: agent.name ?? agent.id,
-              managedToolName,
+              hostedToolName,
               familyId,
               toolName,
               bindingKind: parsed.data.bindingKind,
               allowedEnvironments: parsed.data.allowedEnvironments,
               defaultEnvironment: parsed.data.defaultEnvironment,
               generationPin: parsed.data.generationPin,
-              ...(parsed.data.purpose
-                ? { purpose: parsed.data.purpose }
-                : {}),
+              ...(parsed.data.purpose ? { purpose: parsed.data.purpose } : {}),
               ...(parsed.data.bindingNote
                 ? { bindingNote: parsed.data.bindingNote }
                 : {}),
@@ -375,7 +376,7 @@ export function registerHostedIntegrationRoutes(
           ok: true,
           familyId,
           toolName,
-          managedToolName,
+          hostedToolName,
           bindings,
         });
       } catch (error) {
@@ -391,7 +392,8 @@ export function registerHostedIntegrationRoutes(
         actor: actorField(body),
         familyId: stringField(body, "familyId"),
         toolName: stringField(body, "toolName"),
-        environment: optionalStringField(body, "requestedEnvironment") ?? "test_debug",
+        environment:
+          optionalStringField(body, "requestedEnvironment") ?? "test_debug",
         args: JsonObjectSchema.parse(objectField(body, "args")),
         hostedToolBindings: hostedToolBindingsField(body),
         requestedEnvironment:
@@ -433,9 +435,7 @@ export function registerHostedIntegrationRoutes(
           ? body.parameters
           : undefined,
       });
-      const parsedName = parseHostedIntegrationManagedToolName(
-        request.tool_name,
-      );
+      const parsedName = parseHostedToolName(request.tool_name);
       if (!parsedName) {
         return c.json(
           {
@@ -443,7 +443,7 @@ export function registerHostedIntegrationRoutes(
             error: {
               code: "bad_arguments",
               message:
-                "tool_name must be a managed hosted integration tool name like managed_<family>__<tool>",
+                "tool_name must be a hosted tool name like hosted_<family>__<tool>",
             },
           },
           400,
@@ -461,7 +461,7 @@ export function registerHostedIntegrationRoutes(
       const result = await resolveHostedIntegrationToolHelp({
         dataDir: options.dataDir,
         generations: service.generations,
-        managedToolName: request.tool_name,
+        hostedToolName: request.tool_name,
         familyId: parsedName.familyId,
         toolName: parsedName.toolName,
         request: {
@@ -554,14 +554,14 @@ export function registerHostedIntegrationRoutes(
       if (generation.familyId !== familyId || generation.status !== "active") {
         return c.json({ ok: false, error: { code: "stale_generation" } }, 404);
       }
-      const environment =
-        (policy.resolvedEnvironment ?? requestedEnvironment ?? "test_debug") as
-          | "prod"
-          | "test_debug";
-      const environmentConfig = await service.environmentConfigs.getEnvironmentConfig(
-        familyId,
-        environment,
-      );
+      const environment = (policy.resolvedEnvironment ??
+        requestedEnvironment ??
+        "test_debug") as "prod" | "test_debug";
+      const environmentConfig =
+        await service.environmentConfigs.getEnvironmentConfig(
+          familyId,
+          environment,
+        );
       const executionConfig = resolveHostedIntegrationExecutionConfig({
         familyId,
         environment,
@@ -710,7 +710,8 @@ export function registerHostedIntegrationRoutes(
       }
       const familyId = stringField(body, "familyId");
       const toolName = stringField(body, "toolName");
-      const environment = optionalStringField(body, "environment") ?? "test_debug";
+      const environment =
+        optionalStringField(body, "environment") ?? "test_debug";
       const result = await service.gateway.invoke({
         actor,
         familyId,
@@ -979,6 +980,26 @@ export function registerHostedIntegrationRoutes(
         { error: result.reason },
         result.reason === "duplicate_family" ? 409 : 400,
       );
+    } catch (error) {
+      return invalidRequest(c, error);
+    }
+  });
+
+  app.delete("/api/hosted-integrations/families/:family", async (c) => {
+    try {
+      const body = await readJsonObject(c);
+      const actor = actorField(body);
+      if (!isToolDeveloperActor(actor)) {
+        return c.json({ ok: false, error: { code: "policy_denied" } }, 403);
+      }
+      const result = await service.deleteFamily({
+        familyId: c.req.param("family"),
+        deletedBy: actor.id,
+      });
+      if (result.status === "delete_draining") {
+        options.onHostedIntegrationDeleteDraining?.(result.familyId);
+      }
+      return c.json(result);
     } catch (error) {
       return invalidRequest(c, error);
     }
@@ -1686,13 +1707,15 @@ export function registerHostedIntegrationRoutes(
     async (c) => {
       try {
         const body = await readJsonObject(c);
-        const result = await service.environmentConfigs.upsertEnvironmentConfig({
-          familyId: c.req.param("familyId"),
-          environment: c.req.param("environment"),
-          config: JsonObjectSchema.parse(objectField(body, "config")),
-          secrets: optionalSecretMetadata(body),
-          updatedBy: stringField(body, "updatedBy"),
-        });
+        const result = await service.environmentConfigs.upsertEnvironmentConfig(
+          {
+            familyId: c.req.param("familyId"),
+            environment: c.req.param("environment"),
+            config: JsonObjectSchema.parse(objectField(body, "config")),
+            secrets: optionalSecretMetadata(body),
+            updatedBy: stringField(body, "updatedBy"),
+          },
+        );
         if (result.ok) {
           return c.json({
             environmentConfig: result.environmentConfig,
@@ -1734,14 +1757,15 @@ export function registerHostedIntegrationRoutes(
           environmentConfigId: existing.id,
           secretNames: Object.keys(existing.secrets),
         });
-        const result =
-          await service.environmentConfigs.upsertEnvironmentConfig({
+        const result = await service.environmentConfigs.upsertEnvironmentConfig(
+          {
             familyId: existing.familyId,
             environment: existing.environment,
             config: existing.config,
             secrets: metadata.secrets,
             updatedBy: stringField(body, "updatedBy"),
-          });
+          },
+        );
         if (!result.ok) return c.json({ error: result.reason }, 409);
         return c.json({
           metadata,
@@ -1752,7 +1776,6 @@ export function registerHostedIntegrationRoutes(
       }
     },
   );
-
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -1928,12 +1951,12 @@ function hostedIntegrationHelpAccess(
       },
     };
   }
-  if (!def.tools.includes(MANAGED_TOOL_HELP_TOOL_NAME)) {
+  if (!def.tools.includes(HOSTED_TOOL_HELP_TOOL_NAME)) {
     return {
       ok: false,
       error: {
         code: "policy_denied",
-        message: "managed tool help is not enabled for agent",
+        message: "hosted tool help is not enabled for agent",
       },
     };
   }
@@ -1987,7 +2010,9 @@ function resolveEnvironmentConfigReadinessForRoute(
   familyId: string,
   environment: string,
   environmentConfig: Awaited<
-    ReturnType<HostedIntegrationService["environmentConfigs"]["getEnvironmentConfig"]>
+    ReturnType<
+      HostedIntegrationService["environmentConfigs"]["getEnvironmentConfig"]
+    >
   >,
   requiredKeys?: {
     requiredConfigKeys?: string[];
@@ -2025,8 +2050,7 @@ async function resolvePublishReadinessForDraft(input: {
   }
 
   const manifest = await readDraftManifest(input.service, input.draftId);
-  const runtimeConfigContract =
-    resolveRuntimeConfigContractReadiness(manifest);
+  const runtimeConfigContract = resolveRuntimeConfigContractReadiness(manifest);
   const productionEnvironmentReadiness =
     runtimeConfigContract.contract.status === "requires"
       ? resolveEnvironmentConfigReadinessForRoute(
@@ -2325,8 +2349,8 @@ async function runDraftExampleRoute(
       toolName: example.toolName,
       generationId: draftGenerationId,
       actorId: actor.id,
-      environmentConfigId: executionConfig.environmentConfigId,
-      configRevision: executionConfig.configRevision,
+      environmentConfigId: executionConfig.environmentConfigId ?? null,
+      configRevision: executionConfig.configRevision ?? null,
       executionPurpose: executionConfig.executionPurpose,
       sanitizedArgs: JsonObjectSchema.parse(example.args),
       status: "running",

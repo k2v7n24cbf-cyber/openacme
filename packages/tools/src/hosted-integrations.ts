@@ -1,5 +1,8 @@
 import type { z } from "zod";
-import { buildHostedIntegrationManagedToolName } from "@openacme/hosted-integrations";
+import {
+  buildHostedToolName,
+  type HostedIntegrationRuntimeConfigContract,
+} from "@openacme/hosted-integrations";
 import { getCurrentAgentId } from "./session-context.js";
 import type { ToolEntry } from "./types.js";
 import type { ToolRegistry } from "./registry.js";
@@ -16,6 +19,7 @@ export interface HostedIntegrationRegistrySnapshot {
   familyId: string;
   familyName: string;
   generationId: string;
+  runtimeConfig?: HostedIntegrationRuntimeConfigContract;
   tools: HostedIntegrationRegistryTool[];
 }
 
@@ -63,7 +67,7 @@ export class HostedIntegrationToolRegistryAdapter {
   ): HostedIntegrationRegistrySyncResult {
     const previous = this.currentRegisteredNamesForFamily(snapshot.familyId);
     for (const tool of snapshot.tools) {
-      const canonicalToolName = buildHostedIntegrationManagedToolName({
+      const canonicalToolName = buildHostedToolName({
         familyId: snapshot.familyId,
         toolName: tool.name,
       });
@@ -71,10 +75,7 @@ export class HostedIntegrationToolRegistryAdapter {
       const sameHostedFamily =
         existing?.source?.kind === "hosted_integration" &&
         existing.source.familyId === snapshot.familyId;
-      if (
-        existing &&
-        !(previous.has(canonicalToolName) || sameHostedFamily)
-      ) {
+      if (existing && !(previous.has(canonicalToolName) || sameHostedFamily)) {
         return {
           ok: false,
           reason: "tool_name_collision",
@@ -86,7 +87,7 @@ export class HostedIntegrationToolRegistryAdapter {
 
     const next = new Set(
       snapshot.tools.map((tool) =>
-        buildHostedIntegrationManagedToolName({
+        buildHostedToolName({
           familyId: snapshot.familyId,
           toolName: tool.name,
         }),
@@ -120,8 +121,8 @@ export class HostedIntegrationToolRegistryAdapter {
   }
 
   removeFamily(familyId: string): string[] {
-    const previous = this.registeredByFamily.get(familyId);
-    if (!previous) return [];
+    const previous = this.currentRegisteredNamesForFamily(familyId);
+    if (previous.size === 0) return [];
     const removed = [...previous];
     for (const name of removed) this.registry.deregister(name);
     this.registeredByFamily.delete(familyId);
@@ -141,7 +142,7 @@ export class HostedIntegrationToolRegistryAdapter {
     tool: HostedIntegrationRegistryTool,
   ): ToolEntry {
     const generationId = snapshot.generationId;
-    const canonicalToolName = buildHostedIntegrationManagedToolName({
+    const canonicalToolName = buildHostedToolName({
       familyId: snapshot.familyId,
       toolName: tool.name,
     });
@@ -157,6 +158,7 @@ export class HostedIntegrationToolRegistryAdapter {
         familyName: snapshot.familyName,
         toolName: tool.name,
         generationId,
+        runtimeConfig: snapshot.runtimeConfig,
       },
       handler: async (args) => {
         const actorId = getCurrentAgentId();

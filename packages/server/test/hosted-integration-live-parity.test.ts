@@ -9,17 +9,17 @@ import {
   defaultSplunkLiveParityCases,
   liveParityHostedToolBinding,
   runHostedIntegrationLiveParity,
-  seedManagedParityTarget,
-  seedQualysManagedParityTarget,
+  seedHostedParityTarget,
+  seedQualysHostedParityTarget,
   type LegacyMcpParityClient,
   type LiveParityToolCase,
-  type ManagedHostedParityClient,
+  type HostedParityClient,
 } from "../test-support/integration-hub/live-parity.js";
 
 const testCase: LiveParityToolCase = {
   familyId: "qualys",
   toolName: "qualys_gav_asset_count",
-  managedHostedToolName: "managed_qualys__qualys_gav_asset_count",
+  hostedToolName: "hosted_qualys__qualys_gav_asset_count",
   legacyServerName: "integration-hub",
   legacyMcpToolName: "mcp_integration-hub__qualys_gav_asset_count",
   args: {
@@ -38,7 +38,7 @@ const testCase: LiveParityToolCase = {
 const splunkTestCase: LiveParityToolCase = {
   familyId: "splunk",
   toolName: "splunk_search",
-  managedHostedToolName: "managed_splunk__splunk_search",
+  hostedToolName: "hosted_splunk__splunk_search",
   legacyServerName: "integration-hub",
   legacyMcpToolName: "mcp_integration-hub__splunk_search",
   args: { query: 'index=main "login"', limit: 2 },
@@ -48,7 +48,7 @@ const splunkTestCase: LiveParityToolCase = {
 const msgraphTestCase: LiveParityToolCase = {
   familyId: "msgraph",
   toolName: "msgraph_get",
-  managedHostedToolName: "managed_msgraph__msgraph_get",
+  hostedToolName: "hosted_msgraph__msgraph_get",
   legacyServerName: "integration-hub",
   legacyMcpToolName: "mcp_integration-hub__msgraph_get",
   args: { path: "/" },
@@ -57,7 +57,7 @@ const msgraphTestCase: LiveParityToolCase = {
 const mdeTestCase: LiveParityToolCase = {
   familyId: "mde",
   toolName: "mde_get",
-  managedHostedToolName: "managed_mde__mde_get",
+  hostedToolName: "hosted_mde__mde_get",
   legacyServerName: "integration-hub",
   legacyMcpToolName: "mcp_integration-hub__mde_get",
   args: { path: "/machines", params: { "$top": "1" } },
@@ -66,7 +66,7 @@ const mdeTestCase: LiveParityToolCase = {
 const defenderAlertTestCase: LiveParityToolCase = {
   familyId: "defender-alert",
   toolName: "defender_alert_get",
-  managedHostedToolName: "managed_defender-alert__defender_alert_get",
+  hostedToolName: "hosted_defender-alert__defender_alert_get",
   legacyServerName: "integration-hub",
   legacyMcpToolName: "mcp_integration-hub__defender_alert_get",
   args: { graph_alert_id: "sample-alert-id" },
@@ -120,7 +120,7 @@ describe("hosted integration live parity runner", () => {
     const result = await runHostedIntegrationLiveParity({
       dataDir,
       cases: [testCase],
-      managedClient: fakeManagedClient(),
+      hostedClient: fakeHostedClient(),
       legacyClient: fakeLegacyClient(),
       createId: () => "live_parity_skip_mcp",
     });
@@ -148,7 +148,7 @@ describe("hosted integration live parity runner", () => {
     const result = await runHostedIntegrationLiveParity({
       dataDir,
       cases: [testCase],
-      managedClient: fakeManagedClient(),
+      hostedClient: fakeHostedClient(),
       legacyClient: fakeLegacyClient(),
       createId: () => "live_parity_skip_creds",
     });
@@ -173,7 +173,7 @@ describe("hosted integration live parity runner", () => {
     const result = await runHostedIntegrationLiveParity({
       dataDir,
       cases: [splunkTestCase],
-      managedClient: fakeManagedClient(),
+      hostedClient: fakeHostedClient(),
       legacyClient: fakeLegacyClient(),
       createId: () => "live_parity_skip_splunk_creds",
     });
@@ -186,7 +186,7 @@ describe("hosted integration live parity runner", () => {
 
   it("skips before target calls when a Splunk JWT token is expired", async () => {
     const dataDir = tempDir();
-    const managed = fakeManagedClient();
+    const hosted = fakeHostedClient();
     const legacy = fakeLegacyClient();
     saveGlobalMcpServers(dataDir, {
       "integration-hub": {
@@ -202,7 +202,7 @@ describe("hosted integration live parity runner", () => {
     const result = await runHostedIntegrationLiveParity({
       dataDir,
       cases: [splunkTestCase],
-      managedClient: managed,
+      hostedClient: hosted,
       legacyClient: legacy,
       now: () => new Date("2026-08-14T16:29:06.000Z"),
       createId: () => "live_parity_skip_splunk_expired",
@@ -215,7 +215,7 @@ describe("hosted integration live parity runner", () => {
         "SPLUNK_TOKEN expired at 2026-08-14T14:57:55.000Z (source: legacy MCP env)",
       ],
     });
-    expect(managed.prepared).toEqual([]);
+    expect(hosted.prepared).toEqual([]);
     expect(legacy.calls).toEqual([]);
   });
 
@@ -231,7 +231,7 @@ describe("hosted integration live parity runner", () => {
         },
       },
     });
-    const managed = fakeManagedClient({
+    const hosted = fakeHostedClient({
       ok: true,
       result: { result_count: 1, results: [{ id: 1 }] },
       runId: "hosted_splunk_override_run_1",
@@ -243,7 +243,7 @@ describe("hosted integration live parity runner", () => {
     const result = await runHostedIntegrationLiveParity({
       dataDir,
       cases: [splunkTestCase],
-      managedClient: managed,
+      hostedClient: hosted,
       legacyClient: legacy,
       familyConfig: {
         SPLUNK_BASE_URL: "https://override-splunk.example.test",
@@ -255,7 +255,7 @@ describe("hosted integration live parity runner", () => {
 
     expect(result.status).toBe("pass");
     expect(result.diagnostics).toEqual([]);
-    expect(managed.prepared).toEqual([
+    expect(hosted.prepared).toEqual([
       {
         config: { SPLUNK_BASE_URL: "https://override-splunk.example.test" },
         secrets: { SPLUNK_TOKEN: "fresh-runner-token" },
@@ -276,7 +276,7 @@ describe("hosted integration live parity runner", () => {
     const result = await runHostedIntegrationLiveParity({
       dataDir,
       cases: [msgraphTestCase],
-      managedClient: fakeManagedClient(),
+      hostedClient: fakeHostedClient(),
       legacyClient: fakeLegacyClient(),
       createId: () => "live_parity_skip_msgraph_creds",
     });
@@ -305,7 +305,7 @@ describe("hosted integration live parity runner", () => {
     const result = await runHostedIntegrationLiveParity({
       dataDir,
       cases: [mdeTestCase],
-      managedClient: fakeManagedClient(),
+      hostedClient: fakeHostedClient(),
       legacyClient: fakeLegacyClient(),
       createId: () => "live_parity_skip_mde_creds",
     });
@@ -334,7 +334,7 @@ describe("hosted integration live parity runner", () => {
     const result = await runHostedIntegrationLiveParity({
       dataDir,
       cases: [defenderAlertTestCase],
-      managedClient: fakeManagedClient(),
+      hostedClient: fakeHostedClient(),
       legacyClient: fakeLegacyClient(),
       createId: () => "live_parity_skip_defender_alert_creds",
     });
@@ -358,7 +358,7 @@ describe("hosted integration live parity runner", () => {
         },
       },
     });
-    const managed = fakeManagedClient({
+    const hosted = fakeHostedClient({
       ok: true,
       result: { result_count: 2, results: [{ id: 1 }, { id: 2 }] },
       runId: "hosted_splunk_run_1",
@@ -373,13 +373,13 @@ describe("hosted integration live parity runner", () => {
     const result = await runHostedIntegrationLiveParity({
       dataDir,
       cases: [splunkTestCase],
-      managedClient: managed,
+      hostedClient: hosted,
       legacyClient: legacy,
       createId: () => "live_parity_splunk_pass",
     });
 
     expect(result.status).toBe("pass");
-    expect(managed.prepared).toEqual([
+    expect(hosted.prepared).toEqual([
       {
         config: { SPLUNK_BASE_URL: "https://splunk.example.test" },
         secrets: { SPLUNK_TOKEN: "raw-splunk-token" },
@@ -397,7 +397,7 @@ describe("hosted integration live parity runner", () => {
       status: "match",
       comparison: "match",
       hostedRunId: "hosted_splunk_run_1",
-      managed: { summary: { resultCount: 2, payloadKind: "object" } },
+      hosted: { summary: { resultCount: 2, payloadKind: "object" } },
       legacy: { summary: { resultCount: 2, payloadKind: "object" } },
     });
     const artifact = readFileSync(result.artifactPath!, "utf-8");
@@ -406,7 +406,7 @@ describe("hosted integration live parity runner", () => {
   });
 
 
-  it("invokes legacy MCP and managed hosted tools, then writes sanitized evidence", async () => {
+  it("invokes legacy MCP and hosted tools, then writes sanitized evidence", async () => {
     const dataDir = tempDir();
     saveGlobalMcpServers(dataDir, {
       "integration-hub": {
@@ -419,7 +419,7 @@ describe("hosted integration live parity runner", () => {
         },
       },
     });
-    const managed = fakeManagedClient({
+    const hosted = fakeHostedClient({
       ok: true,
       result: { count: 7, used_filter_body: true },
       runId: "hosted_run_1",
@@ -431,13 +431,13 @@ describe("hosted integration live parity runner", () => {
     const result = await runHostedIntegrationLiveParity({
       dataDir,
       cases: [testCase],
-      managedClient: managed,
+      hostedClient: hosted,
       legacyClient: legacy,
       createId: () => "live_parity_pass",
     });
 
     expect(result.status).toBe("pass");
-    expect(managed.prepared).toEqual([
+    expect(hosted.prepared).toEqual([
       {
         config: expect.objectContaining({
           QUALYS_VM_URL: "https://qualys.example.test",
@@ -459,7 +459,7 @@ describe("hosted integration live parity runner", () => {
       status: "match",
       comparison: "match",
       hostedRunId: "hosted_run_1",
-      managed: {
+      hosted: {
         ok: true,
         summary: { count: 7, usedFilterBody: true, payloadKind: "object" },
       },
@@ -491,7 +491,7 @@ describe("hosted integration live parity runner", () => {
     const result = await runHostedIntegrationLiveParity({
       dataDir,
       cases: [testCase],
-      managedClient: fakeManagedClient({
+      hostedClient: fakeHostedClient({
         ok: true,
         result: { count: 42, used_filter_body: true },
       }),
@@ -510,7 +510,7 @@ describe("hosted integration live parity runner", () => {
     expect(result.cases[0]).toMatchObject({
       status: "match",
       comparison: "match",
-      managed: { summary: { count: 42, usedFilterBody: true } },
+      hosted: { summary: { count: 42, usedFilterBody: true } },
       legacy: { summary: { count: 42, pagesFetched: 1, truncated: false } },
     });
   });
@@ -541,7 +541,7 @@ describe("hosted integration live parity runner", () => {
     const result = await runHostedIntegrationLiveParity({
       dataDir,
       cases: [testCase],
-      managedClient: fakeManagedClient({
+      hostedClient: fakeHostedClient({
         ok: true,
         result: { count: 2, results: [{ id: 1 }, { id: 2 }] },
       }),
@@ -581,7 +581,7 @@ describe("hosted integration live parity runner", () => {
     const dataDir = tempDir();
     const service = createFileHostedIntegrationService({ dataDir });
     try {
-      await seedQualysManagedParityTarget(
+      await seedQualysHostedParityTarget(
         service,
         { QUALYS_VM_URL: "https://qualys.example.test" },
         {
@@ -613,7 +613,7 @@ describe("hosted integration live parity runner", () => {
     const dataDir = tempDir();
     const service = createFileHostedIntegrationService({ dataDir });
     try {
-      await seedManagedParityTarget(
+      await seedHostedParityTarget(
         service,
         "splunk",
         { SPLUNK_BASE_URL: "https://splunk.example.test" },
@@ -641,7 +641,7 @@ function tempDir(): string {
   return dir;
 }
 
-function fakeManagedClient(result: unknown = { ok: true, result: {} }) {
+function fakeHostedClient(result: unknown = { ok: true, result: {} }) {
   const prepared: Array<{
     config: Record<string, string>;
     secrets: Record<string, string>;
@@ -655,7 +655,7 @@ function fakeManagedClient(result: unknown = { ok: true, result: {} }) {
       return result;
     },
     async close() {},
-  } satisfies ManagedHostedParityClient & {
+  } satisfies HostedParityClient & {
     prepared: typeof prepared;
   };
 }

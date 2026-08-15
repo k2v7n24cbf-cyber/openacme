@@ -241,7 +241,7 @@ describe("hosted integration draft validation", () => {
     );
   });
 
-  it("warns when an explicitly legacy Python entrypoint only exposes call_tool", async () => {
+  it("rejects explicit legacy dispatch metadata", async () => {
     const validator = await setupDraft(
       familyYaml().replace(
         "entrypoint: qualys.py",
@@ -262,12 +262,13 @@ describe("hosted integration draft validation", () => {
 
     const result = await validator.validateDraft("draft_1");
 
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
     expect(result.diagnostics).toContainEqual(
       expect.objectContaining({
-        severity: "warning",
-        code: "legacy_call_tool_router",
-        path: "$.runtime.entrypoint",
+        severity: "error",
+        code: "manifest_invalid",
+        path: "$.runtime",
+        message: expect.stringContaining("handlerDispatch"),
       }),
     );
   });

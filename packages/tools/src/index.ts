@@ -98,17 +98,17 @@ export {
   withToolObservationSpan,
 } from "./observation.js";
 export {
-  bindHostedIntegrationManagement,
-  HOSTED_INTEGRATION_MANAGEMENT_TOOL_NAMES,
-  type HostedIntegrationManagementBindings,
-  type HostedIntegrationManagementRequest,
-  type HostedIntegrationManagementToolName,
+  bindHostedToolManagement,
+  HOSTED_TOOL_MANAGEMENT_TOOL_NAMES,
+  type HostedToolManagementBindings,
+  type HostedToolManagementRequest,
+  type HostedToolManagementToolName,
 } from "./builtins/hosted-integration-management.js";
 export {
-  bindManagedToolHelp,
-  MANAGED_TOOL_HELP_TOOL_NAME,
-  type ManagedToolHelpBindings,
-  type ManagedToolHelpRequest,
+  bindHostedToolHelp,
+  HOSTED_TOOL_HELP_TOOL_NAME,
+  type HostedToolHelpBindings,
+  type HostedToolHelpRequest,
 } from "./builtins/hosted-integration-help.js";
 export { SYSTEM_TOOLS, type SystemTool } from "./system.js";
 export {

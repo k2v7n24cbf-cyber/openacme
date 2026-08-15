@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { serve, type ServerType } from "@hono/node-server";
 import { loadConfig } from "@openacme/config";
-import { buildHostedIntegrationManagedToolName } from "@openacme/hosted-integrations";
+import { buildHostedToolName } from "@openacme/hosted-integrations";
 import { createApp } from "../src/app.js";
 
 const dataDir =
@@ -17,9 +17,9 @@ const deniedId = `real-dogfood-denied-${suffix}`;
 const echoTool = `real_echo_${suffix}`;
 const largeTool = `real_large_${suffix}`;
 const flakyTool = `real_flaky_${suffix}`;
-const managedEchoTool = managedToolName(echoTool);
-const managedLargeTool = managedToolName(largeTool);
-const managedFlakyTool = managedToolName(flakyTool);
+const managedEchoTool = hostedToolName(echoTool);
+const managedLargeTool = hostedToolName(largeTool);
+const managedFlakyTool = hostedToolName(flakyTool);
 const modelToolDeadlineMs =
   positiveInteger(process.env["OPENACME_E2E_TOOL_TIMEOUT_MS"]) ?? 480_000;
 const modelToolAttemptDeadlineMs =
@@ -115,7 +115,7 @@ async function runDogfood(): Promise<void> {
       "tool-developer",
       [
         "Create a new non-destructive hosted integration family.",
-        "Call `hosted_integration_family_create` exactly once with this JSON argument:",
+        "Call `hosted_tool_family_create` exactly once with this JSON argument:",
         jsonBlock({
           family_id: familyId,
           name: "Real LLM Dogfood Tools",
@@ -123,7 +123,7 @@ async function runDogfood(): Promise<void> {
           ttl_ms: editLockTtlMs,
         }),
       ].join("\n"),
-      "hosted_integration_family_create",
+      "hosted_tool_family_create",
     );
     expectObject(created, { ok: true });
     lockId = stringField(created, "lock.id");
@@ -132,25 +132,25 @@ async function runDogfood(): Promise<void> {
     await expectOk(
       askForTool(
         "tool-developer",
-        promptForTool("hosted_integration_draft_patch", {
+        promptForTool("hosted_tool_draft_patch", {
           draft_id: draftId,
           lock_id: lockId,
           path: "family.yaml",
           content: familyYaml(),
         }),
-        "hosted_integration_draft_patch",
+        "hosted_tool_draft_patch",
       ),
     );
     await expectOk(
       askForTool(
         "tool-developer",
-        promptForTool("hosted_integration_draft_patch", {
+        promptForTool("hosted_tool_draft_patch", {
           draft_id: draftId,
           lock_id: lockId,
           path: "real_dogfood_tools.py",
           content: toolsPython(false),
         }),
-        "hosted_integration_draft_patch",
+        "hosted_tool_draft_patch",
       ),
     );
 
@@ -162,7 +162,7 @@ async function runDogfood(): Promise<void> {
       await expectOk(
         askForTool(
           "tool-developer",
-          promptForTool("hosted_integration_example_upsert", {
+          promptForTool("hosted_tool_example_upsert", {
             draft_id: draftId,
             lock_id: lockId,
             example: {
@@ -174,39 +174,39 @@ async function runDogfood(): Promise<void> {
               expected: {},
             },
           }),
-          "hosted_integration_example_upsert",
+          "hosted_tool_example_upsert",
         ),
       );
     }
 
     const source = await askForTool(
       "tool-developer",
-      promptForTool("hosted_integration_source_read", {
+      promptForTool("hosted_tool_source_read", {
         family_id: null,
         draft_id: draftId,
         path: "family.yaml",
       }),
-      "hosted_integration_source_read",
+      "hosted_tool_source_read",
     );
     expectObject(source, { ok: true, path: "family.yaml" });
     assertIncludes(source, "content", `id: ${familyId}`);
 
     const draft = await askForTool(
       "tool-developer",
-      promptForTool("hosted_integration_draft_get", {
+      promptForTool("hosted_tool_draft_get", {
         draft_id: draftId,
         path: null,
       }),
-      "hosted_integration_draft_get",
+      "hosted_tool_draft_get",
     );
     expectObject(draft, { ok: true, draft: { id: draftId, familyId } });
 
     const listedExamples = await askForTool(
       "tool-developer",
-      promptForTool("hosted_integration_example_list", {
+      promptForTool("hosted_tool_example_list", {
         draft_id: draftId,
       }),
-      "hosted_integration_example_list",
+      "hosted_tool_example_list",
     );
     assertJsonIncludes(listedExamples, "echo_smoke");
     assertJsonIncludes(listedExamples, "flaky_smoke");
@@ -214,18 +214,18 @@ async function runDogfood(): Promise<void> {
     await expectOk(
       askForTool(
         "tool-developer",
-        promptForTool("hosted_integration_validate", { draft_id: draftId }),
-        "hosted_integration_validate",
+        promptForTool("hosted_tool_validate", { draft_id: draftId }),
+        "hosted_tool_validate",
       ),
     );
 
     const echoRun = await askForTool(
       "tool-developer",
-      promptForTool("hosted_integration_example_run", {
+      promptForTool("hosted_tool_example_run", {
         draft_id: draftId,
         example_id: "echo_smoke",
       }),
-      "hosted_integration_example_run",
+      "hosted_tool_example_run",
     );
     expectObject(echoRun, {
       ok: true,
@@ -235,14 +235,14 @@ async function runDogfood(): Promise<void> {
     const promoted = await askForTool(
       "tool-developer",
       [
-        promptForTool("hosted_integration_promote", {
+        promptForTool("hosted_tool_promote", {
           draft_id: draftId,
           lock_id: lockId,
           approval_id: null,
         }),
         "`approval_id: null` means no approval record is needed for this non-destructive promotion.",
       ].join("\n"),
-      "hosted_integration_promote",
+      "hosted_tool_promote",
     );
     expectObject(promoted, {
       ok: true,
@@ -253,8 +253,8 @@ async function runDogfood(): Promise<void> {
     await expectOk(
       askForTool(
         "tool-developer",
-        promptForTool("hosted_integration_lock_release", { lock_id: lockId }),
-        "hosted_integration_lock_release",
+        promptForTool("hosted_tool_lock_release", { lock_id: lockId }),
+        "hosted_tool_lock_release",
       ),
     );
   });
@@ -263,18 +263,18 @@ async function runDogfood(): Promise<void> {
     await configureScope();
     const environmentConfigs = await askForTool(
       "tool-developer",
-      promptForTool("hosted_integration_environment_config_list", {}),
-      "hosted_integration_environment_config_list",
+      promptForTool("hosted_tool_environment_config_list", {}),
+      "hosted_tool_environment_config_list",
     );
     assertJsonIncludes(environmentConfigs, environmentConfigId);
 
     const environmentConfig = await askForTool(
       "tool-developer",
-      promptForTool("hosted_integration_environment_config_get", {
+      promptForTool("hosted_tool_environment_config_get", {
         family_id: familyId,
         environment: "test_debug",
       }),
-      "hosted_integration_environment_config_get",
+      "hosted_tool_environment_config_get",
     );
     expectObject(environmentConfig, {
       ok: true,
@@ -292,7 +292,7 @@ async function runDogfood(): Promise<void> {
       consumerId,
       [
         `Get usage help for \`${managedEchoTool}\` before calling it.`,
-        "Call `managed_tool_help` exactly once with this JSON argument:",
+        "Call `hosted_tool_help` exactly once with this JSON argument:",
         jsonBlock({
           tool_name: managedEchoTool,
           tool_detail: "summary",
@@ -306,7 +306,7 @@ async function runDogfood(): Promise<void> {
           ],
         }),
       ].join("\n"),
-      "managed_tool_help",
+      "hosted_tool_help",
     );
     expectObject(help, {
       ok: true,
@@ -353,8 +353,8 @@ async function runDogfood(): Promise<void> {
 
     const run = await askForTool(
       "tool-developer",
-      promptForTool("hosted_integration_run_get", { run_id: largeRunId }),
-      "hosted_integration_run_get",
+      promptForTool("hosted_tool_run_get", { run_id: largeRunId }),
+      "hosted_tool_run_get",
     );
     expectObject(run, {
       ok: true,
@@ -369,11 +369,11 @@ async function runDogfood(): Promise<void> {
 
     const artifact = await askForTool(
       "tool-developer",
-      promptForTool("hosted_integration_artifact_get", {
+      promptForTool("hosted_tool_artifact_get", {
         run_id: largeRunId,
         name: "output.json",
       }),
-      "hosted_integration_artifact_get",
+      "hosted_tool_artifact_get",
     );
     expectObject(artifact, {
       ok: true,
@@ -420,10 +420,10 @@ async function runDogfood(): Promise<void> {
 
     const buckets = await askForTool(
       "tool-developer",
-      promptForTool("hosted_integration_failure_bucket_list", {
+      promptForTool("hosted_tool_failure_bucket_list", {
         family_id: familyId,
       }),
-      "hosted_integration_failure_bucket_list",
+      "hosted_tool_failure_bucket_list",
     );
     failureBucketId = stringField(buckets, "buckets.0.id");
 
@@ -448,82 +448,82 @@ async function runDogfood(): Promise<void> {
     await expectOk(
       askForTool(
         "tool-developer",
-        promptForTool("hosted_integration_failure_bucket_assign", {
+        promptForTool("hosted_tool_failure_bucket_assign", {
           bucket_id: failureBucketId,
           assigned_to: "tool-developer",
         }),
-        "hosted_integration_failure_bucket_assign",
+        "hosted_tool_failure_bucket_assign",
       ),
     );
 
     const repairLock = await askForTool(
       "tool-developer",
-      promptForTool("hosted_integration_lock_acquire", {
+      promptForTool("hosted_tool_lock_acquire", {
         family_id: familyId,
         ttl_ms: editLockTtlMs,
       }),
-      "hosted_integration_lock_acquire",
+      "hosted_tool_lock_acquire",
     );
     const repairLockId = stringField(repairLock, "lock.id");
 
     await expectOk(
       askForTool(
         "tool-developer",
-        promptForTool("hosted_integration_lock_renew", {
+        promptForTool("hosted_tool_lock_renew", {
           lock_id: repairLockId,
           ttl_ms: editLockTtlMs,
         }),
-        "hosted_integration_lock_renew",
+        "hosted_tool_lock_renew",
       ),
     );
 
     const repairDraft = await askForTool(
       "tool-developer",
       [
-        promptForTool("hosted_integration_draft_create", {
+        promptForTool("hosted_tool_draft_create", {
           family_id: familyId,
           lock_id: repairLockId,
           source_revision_id: null,
         }),
         "`source_revision_id: null` means use the current source revision.",
       ].join("\n"),
-      "hosted_integration_draft_create",
+      "hosted_tool_draft_create",
     );
     const repairDraftId = stringField(repairDraft, "draft.id");
 
     await expectOk(
       askForTool(
         "tool-developer",
-        promptForTool("hosted_integration_draft_patch", {
+        promptForTool("hosted_tool_draft_patch", {
           draft_id: repairDraftId,
           lock_id: repairLockId,
           path: "scratch.txt",
           content: "temporary repair note\n",
         }),
-        "hosted_integration_draft_patch",
+        "hosted_tool_draft_patch",
       ),
     );
     await expectOk(
       askForTool(
         "tool-developer",
-        promptForTool("hosted_integration_draft_delete", {
+        promptForTool("hosted_tool_draft_delete", {
           draft_id: repairDraftId,
           lock_id: repairLockId,
           path: "scratch.txt",
         }),
-        "hosted_integration_draft_delete",
+        "hosted_tool_draft_delete",
       ),
     );
 
     const repairSourceWindow = await askForTool(
       "tool-developer",
-      promptForTool("hosted_integration_source_read", {
+      promptForTool("hosted_tool_source_read", {
         draft_id: repairDraftId,
         path: "real_dogfood_tools.py",
         start_line: 12,
         max_lines: 8,
       }),
-      "hosted_integration_source_read",
+      "hosted_tool_source_read",
     );
     expectObject(repairSourceWindow, {
       ok: true,
@@ -539,7 +539,7 @@ async function runDogfood(): Promise<void> {
     await expectOk(
       askForTool(
         "tool-developer",
-        promptForTool("hosted_integration_draft_patch", {
+        promptForTool("hosted_tool_draft_patch", {
           draft_id: repairDraftId,
           lock_id: repairLockId,
           path: "real_dogfood_tools.py",
@@ -548,14 +548,14 @@ async function runDogfood(): Promise<void> {
             "            raise RuntimeError('real_dogfood_unique_failure_marker')",
           new_text: "            return {'recovered': True}",
         }),
-        "hosted_integration_draft_patch",
+        "hosted_tool_draft_patch",
       ),
     );
 
     await expectOk(
       askForTool(
         "tool-developer",
-        promptForTool("hosted_integration_example_upsert", {
+        promptForTool("hosted_tool_example_upsert", {
           draft_id: repairDraftId,
           lock_id: repairLockId,
           example: {
@@ -567,17 +567,17 @@ async function runDogfood(): Promise<void> {
             expected: {},
           },
         }),
-        "hosted_integration_example_upsert",
+        "hosted_tool_example_upsert",
       ),
     );
 
     const regression = await askForTool(
       "tool-developer",
-      promptForTool("hosted_integration_example_run", {
+      promptForTool("hosted_tool_example_run", {
         draft_id: repairDraftId,
         example_id: "flaky_regression",
       }),
-      "hosted_integration_example_run",
+      "hosted_tool_example_run",
     );
     expectObject(regression, {
       ok: true,
@@ -587,20 +587,20 @@ async function runDogfood(): Promise<void> {
     const repaired = await askForTool(
       "tool-developer",
       [
-        promptForTool("hosted_integration_promote", {
+        promptForTool("hosted_tool_promote", {
           draft_id: repairDraftId,
           lock_id: repairLockId,
           approval_id: null,
         }),
         "`approval_id: null` means no approval record is needed for this non-destructive promotion.",
       ].join("\n"),
-      "hosted_integration_promote",
+      "hosted_tool_promote",
     );
     const repairGenerationId = stringField(repaired, "generation.id");
 
     const debugRun = await askForTool(
       "tool-developer",
-      promptForTool("hosted_integration_debug_run", {
+      promptForTool("hosted_tool_debug_run", {
         family_id: familyId,
         tool_name: flakyTool,
         environment: "test_debug",
@@ -608,7 +608,7 @@ async function runDogfood(): Promise<void> {
         generation_id: repairGenerationId,
         operation_class: "read",
       }),
-      "hosted_integration_debug_run",
+      "hosted_tool_debug_run",
     );
     expectObject(debugRun, {
       ok: true,
@@ -618,13 +618,13 @@ async function runDogfood(): Promise<void> {
 
     const closed = await askForTool(
       "tool-developer",
-      promptForTool("hosted_integration_failure_bucket_close", {
+      promptForTool("hosted_tool_failure_bucket_close", {
         bucket_id: failureBucketId,
         draft_id: repairDraftId,
         generation_id: repairGenerationId,
         regression_example_id: "flaky_regression",
       }),
-      "hosted_integration_failure_bucket_close",
+      "hosted_tool_failure_bucket_close",
     );
     expectObject(closed, {
       ok: true,
@@ -633,20 +633,20 @@ async function runDogfood(): Promise<void> {
 
     const generations = await askForTool(
       "tool-developer",
-      promptForTool("hosted_integration_generation_list", {
+      promptForTool("hosted_tool_generation_list", {
         family_id: familyId,
       }),
-      "hosted_integration_generation_list",
+      "hosted_tool_generation_list",
     );
     assertJsonIncludes(generations, generationId);
     assertJsonIncludes(generations, repairGenerationId);
 
     const generation = await askForTool(
       "tool-developer",
-      promptForTool("hosted_integration_generation_get", {
+      promptForTool("hosted_tool_generation_get", {
         generation_id: repairGenerationId,
       }),
-      "hosted_integration_generation_get",
+      "hosted_tool_generation_get",
     );
     expectObject(generation, {
       ok: true,
@@ -655,10 +655,10 @@ async function runDogfood(): Promise<void> {
 
     const rollback = await askForTool(
       "tool-developer",
-      promptForTool("hosted_integration_generation_rollback", {
+      promptForTool("hosted_tool_generation_rollback", {
         generation_id: generationId,
       }),
-      "hosted_integration_generation_rollback",
+      "hosted_tool_generation_rollback",
     );
     expectObject(rollback, {
       ok: true,
@@ -824,8 +824,8 @@ async function createConsumerAgent(id: string, tools: string[]): Promise<void> {
   await createAgent(id, "Real Dogfood Consumer", {
     role: "Consumes real LLM dogfood hosted integrations.",
     persona:
-      "When asked to use hosted integration help, call managed_tool_help exactly once. When asked to use a hosted integration, call the requested tool exactly once with the requested arguments.",
-    tools: ["managed_tool_help", ...tools.map(managedToolName)],
+      "When asked to use hosted integration help, call hosted_tool_help exactly once. When asked to use a hosted integration, call the requested tool exactly once with the requested arguments.",
+    tools: ["hosted_tool_help", ...tools.map(hostedToolName)],
     hostedIntegrationBindings: tools.map((toolName) => ({
       familyId,
       toolName,
@@ -839,8 +839,8 @@ async function createConsumerAgent(id: string, tools: string[]): Promise<void> {
   });
 }
 
-function managedToolName(toolName: string): string {
-  return buildHostedIntegrationManagedToolName({ familyId, toolName });
+function hostedToolName(toolName: string): string {
+  return buildHostedToolName({ familyId, toolName });
 }
 
 async function createAgent(
@@ -1139,23 +1139,32 @@ function toolsPython(repaired: boolean): string {
     ? "            return {'recovered': True}"
     : "            raise RuntimeError('real_dogfood_unique_failure_marker')";
   return [
-    "def call_tool(name, args, ctx):",
-    `    if name == '${echoTool}':`,
-    "        text = args.get('text')",
-    "        if not isinstance(text, str):",
-    "            raise ValueError('text must be a string')",
-    "        return {'echo': text}",
-    `    if name == '${largeTool}':`,
-    "        repeat = args.get('repeat')",
-    "        if not isinstance(repeat, int) or repeat < 1:",
-    "            raise ValueError('repeat must be a positive integer')",
-    "        return {'payload': 'REAL-DOGFOOD-LARGE-' * repeat}",
-    `    if name == '${flakyTool}':`,
-    "        mode = args.get('mode')",
-    "        if mode == 'fail':",
+    "def authenticate(ctx):",
+    "    return {}",
+    "",
+    "def before_tool_call(tool_name, args, ctx, auth):",
+    "    return args",
+    "",
+    "def after_tool_call(tool_name, args, ctx, result, auth):",
+    "    return result",
+    "",
+    `def tool_${echoTool}(args, context):`,
+    "    text = args.get('text')",
+    "    if not isinstance(text, str):",
+    "        raise ValueError('text must be a string')",
+    "    return {'echo': text}",
+    "",
+    `def tool_${largeTool}(args, context):`,
+    "    repeat = args.get('repeat')",
+    "    if not isinstance(repeat, int) or repeat < 1:",
+    "        raise ValueError('repeat must be a positive integer')",
+    "    return {'payload': 'REAL-DOGFOOD-LARGE-' * repeat}",
+    "",
+    `def tool_${flakyTool}(args, context):`,
+    "    mode = args.get('mode')",
+    "    if mode == 'fail':",
     flakyFail,
-    "        return {'mode': mode}",
-    "    raise ValueError('unknown tool')",
+    "    return {'mode': mode}",
     "",
   ].join("\n");
 }

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildHostedIntegrationManagedToolName } from "@openacme/hosted-integrations";
+import { buildHostedToolName } from "@openacme/hosted-integrations";
 import { registry as toolRegistry, toolCallContext } from "@openacme/tools";
 import { startE2EServer, type E2EServer } from "./support/harness.js";
 import { makeClient } from "./support/client.js";
@@ -9,9 +9,9 @@ import { makeClient } from "./support/client.js";
 const FAMILY_ID = "safe-tools";
 const TEST_ENVIRONMENT = "test_debug";
 const LOCKED_BY = "agent:tool-developer";
-const MANAGED_SAFE_ECHO = managedToolName("safe_echo");
-const MANAGED_SAFE_SUM = managedToolName("safe_sum");
-const MANAGED_SAFE_LARGE_RESULT = managedToolName("safe_large_result");
+const HOSTED_SAFE_ECHO = hostedToolName("safe_echo");
+const HOSTED_SAFE_SUM = hostedToolName("safe_sum");
+const HOSTED_SAFE_LARGE_RESULT = hostedToolName("safe_large_result");
 
 let srv: E2EServer;
 let c: ReturnType<typeof makeClient>;
@@ -106,7 +106,7 @@ describe("hosted integrations safe tools (e2e)", () => {
     const toolsBody = await c.json("/api/tools");
     expect(toolsBody.toolsets).toContain("hosted-integrations");
     for (const toolName of ["safe_echo", "safe_sum", "safe_large_result"]) {
-      const canonicalToolName = managedToolName(toolName);
+      const canonicalToolName = hostedToolName(toolName);
       expect(
         toolsBody.tools.find(
           (tool: { name: string }) => tool.name === canonicalToolName,
@@ -130,7 +130,7 @@ describe("hosted integrations safe tools (e2e)", () => {
     await c.createAgent("safe-agent", "Safe Agent", {
       role: "Runs safe hosted integration smoke tools.",
       persona: "Use safe hosted integrations.",
-      tools: [MANAGED_SAFE_ECHO, MANAGED_SAFE_SUM, MANAGED_SAFE_LARGE_RESULT],
+      tools: [HOSTED_SAFE_ECHO, HOSTED_SAFE_SUM, HOSTED_SAFE_LARGE_RESULT],
       hostedIntegrationBindings: [
         {
           familyId: FAMILY_ID,
@@ -166,13 +166,13 @@ describe("hosted integrations safe tools (e2e)", () => {
     });
 
     const tools = toolRegistry.getVercelTools(
-      new Set([MANAGED_SAFE_ECHO, MANAGED_SAFE_SUM, MANAGED_SAFE_LARGE_RESULT]),
+      new Set([HOSTED_SAFE_ECHO, HOSTED_SAFE_SUM, HOSTED_SAFE_LARGE_RESULT]),
     ) as Record<
       string,
       { execute: (args: Record<string, unknown>) => Promise<string> }
     >;
 
-    const echo = await invokeAgentTool(tools[MANAGED_SAFE_ECHO]!, {
+    const echo = await invokeAgentTool(tools[HOSTED_SAFE_ECHO]!, {
       text: "agent settings path",
     });
     expect(echo).toMatchObject({
@@ -182,7 +182,7 @@ describe("hosted integrations safe tools (e2e)", () => {
       envelope: { ok: true, result: { echo: "agent settings path" } },
     });
 
-    const sum = await invokeAgentTool(tools[MANAGED_SAFE_SUM]!, {
+    const sum = await invokeAgentTool(tools[HOSTED_SAFE_SUM]!, {
       values: [10, 20, 12],
     });
     expect(sum).toMatchObject({
@@ -192,7 +192,7 @@ describe("hosted integrations safe tools (e2e)", () => {
       envelope: { ok: true, result: { sum: 42, count: 3 } },
     });
 
-    const large = await invokeAgentTool(tools[MANAGED_SAFE_LARGE_RESULT]!, {
+    const large = await invokeAgentTool(tools[HOSTED_SAFE_LARGE_RESULT]!, {
       repeat: 120,
     });
     expect(large).toMatchObject({
@@ -212,8 +212,8 @@ describe("hosted integrations safe tools (e2e)", () => {
   });
 });
 
-function managedToolName(toolName: string): string {
-  return buildHostedIntegrationManagedToolName({
+function hostedToolName(toolName: string): string {
+  return buildHostedToolName({
     familyId: FAMILY_ID,
     toolName,
   });

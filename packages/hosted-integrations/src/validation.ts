@@ -263,28 +263,6 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
     const activeTools = manifest.tools
       .map((tool, index) => ({ tool, index }))
       .filter(({ tool }) => tool.lifecycle !== "removed");
-    const expectedHandlers = activeTools.map(({ tool }) =>
-      derivedPythonHandlerName(tool.name),
-    );
-    const hasAnyDerivedHandler = expectedHandlers.some((handlerName) =>
-      functions.has(handlerName),
-    );
-
-    if (
-      !hasAnyDerivedHandler &&
-      functions.has("call_tool") &&
-      manifest.runtime.handlerDispatch === "legacy_call_tool"
-    ) {
-      diagnostics.push({
-        severity: "warning",
-        code: "legacy_call_tool_router",
-        path: "$.runtime.entrypoint",
-        message:
-          "entrypoint only exposes legacy call_tool(name, args, context); new families must define tool_<tool_name>(args, context)",
-      });
-      return;
-    }
-
     for (const { tool, index } of activeTools) {
       const handlerName = derivedPythonHandlerName(tool.name);
       const handler = functions.get(handlerName);

@@ -56,7 +56,7 @@ describe("hosted integrations legacy surface cleanup", () => {
     expect(skill).not.toContain(["config", "scope"].join("-"));
   });
 
-  it("keeps managed tools constrained to prod and test_debug environment labels", () => {
+  it("keeps hosted tools constrained to prod and test_debug environment labels", () => {
     const managementTools = readActiveSurface(
       "packages/tools/src/builtins/hosted-integration-management.ts",
     );

@@ -3,42 +3,42 @@ import {
   HostedIntegrationHelpDetailSchema,
   HostedIntegrationParameterHelpRequestSchema,
   HostedIntegrationToolHelpRequestSchema,
-  parseHostedIntegrationManagedToolName,
+  parseHostedToolName,
 } from "@openacme/hosted-integrations";
 import { registry } from "../registry.js";
 import { getCurrentAgentId } from "../session-context.js";
 
-export const MANAGED_TOOL_HELP_TOOL_NAME = "managed_tool_help";
+export const HOSTED_TOOL_HELP_TOOL_NAME = "hosted_tool_help";
 
-export interface ManagedToolHelpRequest {
+export interface HostedToolHelpRequest {
   actorId: string;
   params: Record<string, unknown>;
 }
 
-export interface ManagedToolHelpBindings {
-  invoke(request: ManagedToolHelpRequest): Promise<unknown>;
+export interface HostedToolHelpBindings {
+  invoke(request: HostedToolHelpRequest): Promise<unknown>;
 }
 
-let bindings: ManagedToolHelpBindings | null = null;
+let bindings: HostedToolHelpBindings | null = null;
 
-export function bindManagedToolHelp(b: ManagedToolHelpBindings | null): void {
+export function bindHostedToolHelp(b: HostedToolHelpBindings | null): void {
   bindings = b;
 }
 
-const ManagedToolName = z
+const HostedToolName = z
   .string()
   .min(1)
   .describe(
-    "Managed hosted integration tool name, e.g. managed_qualys__qualys_cloud_agent_hostasset_count.",
+    "Hosted tool name, e.g. hosted_qualys__qualys_cloud_agent_hostasset_count.",
   )
   .refine(
-    (value) => parseHostedIntegrationManagedToolName(value) !== null,
-    "must be a managed hosted integration tool name like managed_<family>__<tool>",
+    (value) => parseHostedToolName(value) !== null,
+    "must be a hosted tool name like hosted_<family>__<tool>",
   );
 
 const parameters = z
   .object({
-    tool_name: ManagedToolName,
+    tool_name: HostedToolName,
     tool_detail: HostedIntegrationHelpDetailSchema.default("summary").describe(
       "Use full before constructing a call, especially for filter/query/body syntax.",
     ),
@@ -57,16 +57,16 @@ const parameters = z
   .strict();
 
 registry.register({
-  name: MANAGED_TOOL_HELP_TOOL_NAME,
+  name: HOSTED_TOOL_HELP_TOOL_NAME,
   toolset: "hosted-integration-support",
   description:
-    "Get usage help for an allowed managed hosted integration tool. Use this before calling tools with filters, query DSLs, request bodies, pagination, or unfamiliar parameters; request parameter-specific full details through the parameters field.",
+    "Get usage help for an allowed hosted tool. Use this before calling tools with filters, query DSLs, request bodies, pagination, or unfamiliar parameters; request parameter-specific full details through the parameters field.",
   parameters,
   parallelSafe: true,
-  handler: async (args) => invokeManagedToolHelp(args),
+  handler: async (args) => invokeHostedToolHelp(args),
 });
 
-async function invokeManagedToolHelp(
+async function invokeHostedToolHelp(
   args: Record<string, unknown>,
 ): Promise<string> {
   if (!bindings) {
@@ -75,7 +75,7 @@ async function invokeManagedToolHelp(
       error: {
         code: "platform_unavailable",
         message:
-          "managed tool help is not initialized — ServerRuntime must bind it.",
+          "hosted tool help is not initialized — ServerRuntime must bind it.",
       },
     });
   }
@@ -85,7 +85,7 @@ async function invokeManagedToolHelp(
       ok: false,
       error: {
         code: "policy_denied",
-        message: "managed tool help requires an active agent context.",
+        message: "hosted tool help requires an active agent context.",
       },
     });
   }

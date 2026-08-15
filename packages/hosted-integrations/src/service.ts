@@ -35,6 +35,13 @@ import {
   type HostedIntegrationFailureBucketStore,
 } from "./failure-buckets.js";
 import {
+  createDbHostedIntegrationFamilyDeleter,
+  createFileHostedIntegrationFamilyDeleter,
+  type DeleteHostedIntegrationFamilyRequest,
+  type DeleteHostedIntegrationFamilyResult,
+  type HostedIntegrationFamilyDeleter,
+} from "./family-delete.js";
+import {
   createFileHostedIntegrationGenerationStore,
   type HostedIntegrationRegistryRefreshEvent,
   type HostedIntegrationGenerationStore,
@@ -118,6 +125,9 @@ export interface HostedIntegrationService {
     familyId: HostedIntegrationFamilyId | string,
   ): Promise<HostedIntegrationFamilyDetail | null>;
   getDiagnostics(): Promise<HostedIntegrationCatalogDiagnostic[]>;
+  deleteFamily(
+    request: DeleteHostedIntegrationFamilyRequest,
+  ): Promise<DeleteHostedIntegrationFamilyResult>;
   start(): Promise<void>;
   close(): Promise<void>;
 }
@@ -131,8 +141,7 @@ export interface FileHostedIntegrationServiceOptions extends FileHostedIntegrati
   ) => void | Promise<void>;
 }
 
-export interface DbHostedIntegrationServiceOptions
-  extends FileHostedIntegrationServiceOptions {
+export interface DbHostedIntegrationServiceOptions extends FileHostedIntegrationServiceOptions {
   db: HostedIntegrationSqlDatabase;
   now?: () => Date;
   createId?: () => string;
@@ -188,6 +197,12 @@ export function createFileHostedIntegrationService(
     failureBuckets,
     onFailureBucketRecorded: options.onFailureBucketRecorded,
   });
+  const deleteFamily = createFileHostedIntegrationFamilyDeleter({
+    ...options,
+    generations,
+    disablements,
+    onRegistryRefresh: options.onRegistryRefresh,
+  });
   return new FileHostedIntegrationService({
     catalog,
     locks,
@@ -206,6 +221,7 @@ export function createFileHostedIntegrationService(
     failureBuckets,
     retention,
     gateway,
+    deleteFamily,
   });
 }
 
@@ -263,6 +279,12 @@ export function createDbHostedIntegrationService(
     idempotency,
     onFailureBucketRecorded: options.onFailureBucketRecorded,
   });
+  const deleteFamily = createDbHostedIntegrationFamilyDeleter({
+    ...options,
+    generations,
+    disablements,
+    onRegistryRefresh: options.onRegistryRefresh,
+  });
   return new FileHostedIntegrationService({
     catalog,
     locks,
@@ -281,6 +303,7 @@ export function createDbHostedIntegrationService(
     failureBuckets,
     retention,
     gateway,
+    deleteFamily,
   });
 }
 
@@ -303,6 +326,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
   readonly gateway: HostedIntegrationGateway;
 
   private readonly catalog: HostedIntegrationCatalog;
+  private readonly deleteFamilyImpl: HostedIntegrationFamilyDeleter;
 
   constructor(parts: {
     catalog: HostedIntegrationCatalog;
@@ -322,6 +346,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     failureBuckets: HostedIntegrationFailureBucketStore;
     retention: HostedIntegrationRetentionSweeper;
     gateway: HostedIntegrationGateway;
+    deleteFamily: HostedIntegrationFamilyDeleter;
   }) {
     this.catalog = parts.catalog;
     this.locks = parts.locks;
@@ -340,6 +365,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     this.failureBuckets = parts.failureBuckets;
     this.retention = parts.retention;
     this.gateway = parts.gateway;
+    this.deleteFamilyImpl = parts.deleteFamily;
   }
 
   async start(): Promise<void> {
@@ -367,5 +393,11 @@ class FileHostedIntegrationService implements HostedIntegrationService {
 
   getDiagnostics(): Promise<HostedIntegrationCatalogDiagnostic[]> {
     return this.catalog.getDiagnostics();
+  }
+
+  deleteFamily(
+    request: DeleteHostedIntegrationFamilyRequest,
+  ): Promise<DeleteHostedIntegrationFamilyResult> {
+    return this.deleteFamilyImpl(request);
   }
 }

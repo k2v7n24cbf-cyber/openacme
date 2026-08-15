@@ -48,6 +48,10 @@ export type ToolSource = {
   familyName: string;
   toolName: string;
   generationId: string;
+  runtimeConfig?: {
+    requiredConfigKeys?: string[];
+    requiredSecretKeys?: string[];
+  };
 };
 
 /**

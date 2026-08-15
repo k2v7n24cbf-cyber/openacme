@@ -3475,7 +3475,7 @@ function HostedIntegrationDraftEditor({
         ok: true;
         familyId: string;
         toolName: string;
-        managedToolName: string;
+        hostedToolName: string;
         bindings: HostedIntegrationAgentBindingMatrixRowInput[];
       }>(
         `/api/hosted-integrations/families/${encodeURIComponent(row.id)}/tools/${encodeURIComponent(selectedToolName)}/agent-bindings`,
@@ -3485,7 +3485,7 @@ function HostedIntegrationDraftEditor({
         buildHostedIntegrationAgentBindingMatrix({
           familyId: body.familyId,
           toolName: body.toolName,
-          managedToolName: body.managedToolName,
+          hostedToolName: body.hostedToolName,
           bindings: body.bindings,
         }),
       );
@@ -5099,7 +5099,7 @@ function HostedIntegrationDraftEditor({
                   <div className="flex flex-wrap items-center justify-between gap-3 border-b border-paper-rule pb-3">
                     <div className="min-w-0">
                       <div className="truncate font-mono text-[12px] text-ink">
-                        {agentBindingMatrix.managedToolName}
+                        {agentBindingMatrix.hostedToolName}
                       </div>
                       <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                         {agentBindingMatrix.agentCount} agents ·{" "}

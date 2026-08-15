@@ -390,6 +390,24 @@ export class ToolRegistry {
   }
 
   /**
+   * Names that would be emitted to the model for the given tool filter.
+   * Mirrors getVercelTools/getDefinitions filtering without building schemas
+   * or executable tool objects.
+   */
+  getEmittedToolNames(
+    toolNames?: Set<string>,
+    options: ToolRegistryViewOptions = {}
+  ): string[] {
+    const result: string[] = [];
+    for (const entry of this.sortedEntries(options)) {
+      if (toolNames && !toolNames.has(entry.name)) continue;
+      if (entry.checkFn && !entry.checkFn()) continue;
+      result.push(entry.name);
+    }
+    return result;
+  }
+
+  /**
    * Get tools as a Vercel AI SDK `tools` object for generateText/streamText.
    */
   getVercelTools(

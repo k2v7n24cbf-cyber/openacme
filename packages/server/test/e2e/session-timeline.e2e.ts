@@ -110,6 +110,37 @@ describe("session timeline observability (e2e)", () => {
     expect(serialized).not.toContain("result.post-spill.txt");
   });
 
+  it("filters durable timeline events by eventType", async () => {
+    const sessionId = randomUUID();
+    srv.manager.sessionStore.create("timeline-agent", { id: sessionId });
+    srv.manager.recordSessionTimeline({
+      sessionId,
+      agentId: "timeline-agent",
+      eventType: "session.user_message.received",
+      source: "server",
+      status: "accepted",
+      payload: { ignored: true },
+    });
+    srv.manager.recordSessionTimeline({
+      sessionId,
+      agentId: "timeline-agent",
+      eventType: "session.tool_catalog.changed",
+      source: "server",
+      status: "ok",
+      payload: { addedToolNames: ["catalog_filter_probe"] },
+    });
+
+    const timeline = await c.json(
+      `/api/sessions/${sessionId}/timeline?eventType=session.tool_catalog.changed&limit=10`,
+    );
+    expect(timeline.events.map((event: { eventType: string }) => event.eventType)).toEqual([
+      "session.tool_catalog.changed",
+    ]);
+    expect(timeline.events[0]?.payload).toMatchObject({
+      addedToolNames: ["catalog_filter_probe"],
+    });
+  });
+
   it("merges sanitized compression helper forensic events", async () => {
     const sessionId = randomUUID();
     const forensicRunId = randomUUID();

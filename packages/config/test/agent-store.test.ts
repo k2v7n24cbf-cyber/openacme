@@ -216,7 +216,7 @@ describe("file-based AgentStore (folder + AGENT.md)", () => {
     const store = createAgentStore(dir);
     const agent = {
       ...makeAgent("hosted"),
-      tools: ["managed_qualys__qualys_count_assets"],
+      tools: ["hosted_qualys__qualys_count_assets"],
       hostedIntegrationBindings: [
         {
           familyId: "qualys",
@@ -248,7 +248,7 @@ describe("file-based AgentStore (folder + AGENT.md)", () => {
     const defaultLegacyKey = ["defaultConfig", "Id"].join("Scope");
     const agent = {
       ...makeAgent("legacy-hosted"),
-      tools: ["managed_qualys__qualys_count_assets"],
+      tools: ["hosted_qualys__qualys_count_assets"],
       hostedIntegrationBindings: [
         {
           familyId: "qualys",

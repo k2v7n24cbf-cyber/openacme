@@ -185,7 +185,6 @@ export const HostedIntegrationRuntimeSettingsSchema = z
   .object({
     language: z.literal("python"),
     entrypoint: z.string().min(1),
-    handlerDispatch: z.enum(["derived", "legacy_call_tool"]).default("derived"),
     defaultTimeoutMs: z.number().int().positive(),
     inlineResultTokenLimit: z.number().int().positive(),
     maxConcurrency: z.number().int().positive(),

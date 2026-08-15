@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { z } from "zod";
+import { registry as toolRegistry } from "@openacme/tools";
 import { startE2EServer, openSSE, type E2EServer } from "./support/harness.js";
 import { makeClient, isState, waitUntil } from "./support/client.js";
 
@@ -152,7 +154,7 @@ describe("task tools (e2e)", () => {
       return !!a?.parts.some(
         (p) => p?.type === "tool-agent_ask" && p.state === "output-available",
       );
-    });
+    }, { timeoutMs: 20_000 });
     const a = (await c.messages(sessionId)).find(
       (m) => m.role === "assistant",
     )!;
@@ -167,18 +169,90 @@ describe("task tools (e2e)", () => {
     ).toBe(true);
   });
 
-  it("an agent can ask itself in a fresh session", async () => {
-    const { sessionId } = await c.chat(
+  it("agent_ask target sessions emit catalog notices on granted tool refresh", async () => {
+    const toolName = "agent_ask_catalog_notice_probe";
+    await c.createAgent("notice-worker", "Notice Worker", {
+      tools: [toolName],
+    });
+
+    const first = await c.chat(
       "helper",
-      'ask self [[mock:tool:agent_ask:{"agent_id":"helper","message":"self answer"}]]',
+      'ask notice worker [[mock:tool:agent_ask:{"agent_id":"notice-worker","message":"before notice"}]]',
     );
     await waitUntil(async () => {
-      const msgs = await c.messages(sessionId);
+      const msgs = await c.messages(first.sessionId);
       const a = msgs.find((m) => m.role === "assistant");
       return !!a?.parts.some(
         (p) => p?.type === "tool-agent_ask" && p.state === "output-available",
       );
     });
+    const firstAssistant = (await c.messages(first.sessionId)).find(
+      (m) => m.role === "assistant",
+    )!;
+    const firstToolPart = firstAssistant.parts.find(
+      (p) => p?.type === "tool-agent_ask",
+    );
+    const peerSessionId = findJsonField(firstToolPart, "session_id");
+    expect(peerSessionId).toBeTruthy();
+
+    const sse = await openSSE(
+      `${srv.baseUrl}/api/sessions/${peerSessionId}/stream`,
+    );
+    try {
+      toolRegistry.register({
+        name: toolName,
+        toolset: "test",
+        description: "Agent ask catalog notice probe.",
+        parameters: z.object({}),
+        handler: async () => JSON.stringify({ ok: true }),
+      });
+      const second = await c.chat(
+        "helper",
+        `ask notice worker again [[mock:tool:agent_ask:{"agent_id":"notice-worker","session_id":"${peerSessionId}","message":"after notice"}]]`,
+      );
+      const notice = await sse.waitFor(
+        (event) => event.event === "tool_catalog_notice",
+        15_000,
+      );
+      expect(notice.data).toMatchObject({
+        kind: "tool_catalog_notice",
+        agentId: "notice-worker",
+        addedToolNames: [toolName],
+        removedToolNames: [],
+      });
+      await waitUntil(
+        async () => {
+          const msgs = await c.messages(second.sessionId);
+          const a = msgs.find((m) => m.role === "assistant");
+          return !!a?.parts.some(
+            (p) =>
+              p?.type === "tool-agent_ask" && p.state === "output-available",
+          );
+        },
+        { timeoutMs: 20_000 },
+      );
+    } finally {
+      toolRegistry.deregister(toolName);
+      sse.close();
+    }
+  });
+
+  it("an agent can ask itself in a fresh session", async () => {
+    const { sessionId } = await c.chat(
+      "helper",
+      'ask self [[mock:tool:agent_ask:{"agent_id":"helper","message":"self answer"}]]',
+    );
+    await waitUntil(
+      async () => {
+        const msgs = await c.messages(sessionId);
+        const a = msgs.find((m) => m.role === "assistant");
+        return !!a?.parts.some(
+          (p) =>
+            p?.type === "tool-agent_ask" && p.state === "output-available",
+        );
+      },
+      { timeoutMs: 20_000 },
+    );
     const a = (await c.messages(sessionId)).find(
       (m) => m.role === "assistant",
     )!;
@@ -275,6 +349,63 @@ describe("autonomous dispatch (e2e)", () => {
     await sse.waitFor(isState("idle"), 12_000);
 
     sse.close();
+  });
+
+  it("dispatcher turns emit catalog notices on granted tool refresh", async () => {
+    const toolName = "dispatcher_catalog_notice_probe";
+    await c.createAgent("dispatch-notice-worker", "Dispatch Notice Worker", {
+      tools: [toolName],
+    });
+    const session = srv.manager.sessionStore.create("dispatch-notice-worker");
+    const sessionId = session.id;
+    const sse = await openSSE(
+      `${srv.baseUrl}/api/sessions/${sessionId}/stream`,
+    );
+
+    const deliver = (text: string) => {
+      const messageId = randomUUID();
+      srv.manager.inboxStore.deliver({
+        agentId: "dispatch-notice-worker",
+        kind: "user_message",
+        source: "user",
+        sourceId: messageId,
+        relatedSession: sessionId,
+        payload: {
+          id: messageId,
+          role: "user",
+          parts: [{ type: "text", text }],
+        },
+      });
+      srv.manager.dispatcher.kick("catalog_notice_test");
+    };
+
+    try {
+      deliver("cache dispatcher catalog");
+      await sse.waitFor(isState("idle"), 12_000);
+
+      toolRegistry.register({
+        name: toolName,
+        toolset: "test",
+        description: "Dispatcher catalog notice probe.",
+        parameters: z.object({}),
+        handler: async () => JSON.stringify({ ok: true }),
+      });
+
+      deliver("notice dispatcher catalog");
+      const notice = await sse.waitFor(
+        (event) => event.event === "tool_catalog_notice",
+        15_000,
+      );
+      expect(notice.data).toMatchObject({
+        kind: "tool_catalog_notice",
+        agentId: "dispatch-notice-worker",
+        addedToolNames: [toolName],
+        removedToolNames: [],
+      });
+    } finally {
+      toolRegistry.deregister(toolName);
+      sse.close();
+    }
   });
 
   it("surfaces autonomous model errors into the session", async () => {

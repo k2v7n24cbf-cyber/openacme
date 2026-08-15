@@ -22,7 +22,7 @@ afterEach(async () => {
 describe("hosted integration promotion source lifecycle", () => {
   it("updates canonical source and records the resulting source revision on the generation", async () => {
     await writeSourceFamily(
-      "def call_tool(name, args, ctx):\n    return {'count': 1}\n",
+      "def tool_qualys_count_assets(args, context):\n    return {'count': 1}\n",
     );
     const lockStore = createFileHostedIntegrationLockStore({
       dataDir,
@@ -48,7 +48,8 @@ describe("hosted integration promotion source lifecycle", () => {
       draftId: "draft_1",
       lockId: "lock_1",
       path: "qualys.py",
-      content: "def call_tool(name, args, ctx):\n    return {'count': 2}\n",
+      content:
+        "def tool_qualys_count_assets(args, context):\n    return {'count': 2}\n",
     });
 
     const files = await collectDraftFiles(draftStore);
@@ -81,7 +82,8 @@ describe("hosted integration promotion source lifecycle", () => {
       }).readSourceFile({ familyId: "qualys", path: "qualys.py" }),
     ).resolves.toMatchObject({
       ok: true,
-      content: "def call_tool(name, args, ctx):\n    return {'count': 2}\n",
+      content:
+        "def tool_qualys_count_assets(args, context):\n    return {'count': 2}\n",
     });
     await expect(
       createFileHostedIntegrationSourceFileStore({

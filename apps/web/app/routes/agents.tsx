@@ -80,6 +80,7 @@ import {
   groupAgentSettingsTools,
   hostedIntegrationNativeToolName,
   hostedIntegrationEnvironmentConfigsForTool,
+  hostedIntegrationToolRequiresEnvironmentConfig,
   isHostedIntegrationTool,
   removeHostedIntegrationBinding,
   sameHostedIntegrationBindings,
@@ -563,7 +564,9 @@ function AgentsPage() {
           environmentConfigs?: HostedIntegrationEnvironmentConfig[];
         };
         setHostedEnvironmentConfigs(
-          dedupeHostedIntegrationEnvironmentConfigs(data.environmentConfigs ?? []),
+          dedupeHostedIntegrationEnvironmentConfigs(
+            data.environmentConfigs ?? [],
+          ),
         );
       }
     } catch (e) {
@@ -1649,8 +1652,11 @@ function ToolPicker({
           const selectableTools = list.filter(
             (tool) =>
               !isHostedIntegrationTool(tool) ||
-              hostedIntegrationEnvironmentConfigsForTool(tool, hostedEnvironmentConfigs).length >
-                0,
+              !hostedIntegrationToolRequiresEnvironmentConfig(tool) ||
+              hostedIntegrationEnvironmentConfigsForTool(
+                tool,
+                hostedEnvironmentConfigs,
+              ).length > 0,
           );
           return (
             <div key={toolset}>
@@ -1680,8 +1686,11 @@ function ToolPicker({
                     checked={selected.includes(tool.name)}
                     disabled={
                       isHostedIntegrationTool(tool) &&
-                      hostedIntegrationEnvironmentConfigsForTool(tool, hostedEnvironmentConfigs)
-                        .length === 0
+                      hostedIntegrationToolRequiresEnvironmentConfig(tool) &&
+                      hostedIntegrationEnvironmentConfigsForTool(
+                        tool,
+                        hostedEnvironmentConfigs,
+                      ).length === 0
                     }
                     onClick={() => onToggle(tool)}
                   />

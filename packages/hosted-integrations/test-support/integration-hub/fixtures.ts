@@ -1,7 +1,7 @@
 import {
-  buildHostedIntegrationManagedToolName,
-  HostedIntegrationManagedToolNameSchema,
-  parseHostedIntegrationManagedToolName,
+  buildHostedToolName,
+  HostedToolNameSchema,
+  parseHostedToolName,
 } from "../../src/naming.js";
 import {
   LEGACY_INTEGRATION_HUB_QUALYS_SOURCE_PATH,
@@ -17,7 +17,7 @@ export interface LegacyIntegrationHubToolInventoryEntry {
   legacyToolName: string;
   legacyMcpToolName: string;
   hostedToolName: string;
-  managedHostedToolName: string;
+  hostedRegistryToolName: string;
   operation: "read" | "write" | "destructive";
   freshness: "live" | "cached" | "sync";
   resultBehavior: "inline" | "result_file" | "cache_workspace";
@@ -53,14 +53,14 @@ export interface LegacyIntegrationHubReplacementMapping {
   familyId: string;
   hostedToolName: string;
   legacyMcpToolName: string;
-  managedHostedToolName: string;
+  hostedRegistryToolName: string;
 }
 
 export interface LegacyIntegrationHubReplacementFamilyFixture {
   familyId: string;
   familyName: string;
   replacementToolNames: string[];
-  managedToolNames: string[];
+  hostedToolNames: string[];
   legacyMcpToolNames: string[];
   replacementMappings: LegacyIntegrationHubReplacementMapping[];
   configKeys: string[];
@@ -267,8 +267,8 @@ export const FIRST_LEGACY_INTEGRATION_HUB_REPLACEMENT_FAMILY: LegacyIntegrationH
     familyId: "splunk",
     familyName: "Splunk",
     replacementToolNames: ["splunk_search"],
-    managedToolNames: [
-      buildHostedIntegrationManagedToolName({
+    hostedToolNames: [
+      buildHostedToolName({
         familyId: "splunk",
         toolName: "splunk_search",
       }),
@@ -308,8 +308,8 @@ export const LEGACY_INTEGRATION_HUB_MSGRAPH_SOURCE_BACKED_FAMILY: LegacyIntegrat
     familyId: "msgraph",
     familyName: "Microsoft Graph",
     replacementToolNames: ["msgraph_get"],
-    managedToolNames: [
-      buildHostedIntegrationManagedToolName({
+    hostedToolNames: [
+      buildHostedToolName({
         familyId: "msgraph",
         toolName: "msgraph_get",
       }),
@@ -352,8 +352,8 @@ export const LEGACY_INTEGRATION_HUB_MDE_SOURCE_BACKED_FAMILY: LegacyIntegrationH
     familyId: "mde",
     familyName: "Microsoft Defender for Endpoint",
     replacementToolNames: ["mde_get"],
-    managedToolNames: [
-      buildHostedIntegrationManagedToolName({
+    hostedToolNames: [
+      buildHostedToolName({
         familyId: "mde",
         toolName: "mde_get",
       }),
@@ -391,8 +391,8 @@ export const LEGACY_INTEGRATION_HUB_DEFENDER_ALERT_SOURCE_BACKED_FAMILY: LegacyI
     familyId: "defender-alert",
     familyName: "Defender Alert",
     replacementToolNames: ["defender_alert_get"],
-    managedToolNames: [
-      buildHostedIntegrationManagedToolName({
+    hostedToolNames: [
+      buildHostedToolName({
         familyId: "defender-alert",
         toolName: "defender_alert_get",
       }),
@@ -565,24 +565,20 @@ export function validateLegacyIntegrationHubReplacementInventory(
     ) {
       diagnostics.push(`invalid hosted tool name: ${entry.hostedToolName}`);
     }
-    const parsedManaged = parseHostedIntegrationManagedToolName(
-      entry.managedHostedToolName,
-    );
+    const parsedHosted = parseHostedToolName(entry.hostedRegistryToolName);
     if (
-      !HostedIntegrationManagedToolNameSchema.safeParse(
-        entry.managedHostedToolName,
-      ).success ||
-      !parsedManaged
+      !HostedToolNameSchema.safeParse(entry.hostedRegistryToolName).success ||
+      !parsedHosted
     ) {
       diagnostics.push(
-        `invalid managed hosted tool name: ${entry.managedHostedToolName}`,
+        `invalid hosted registry tool name: ${entry.hostedRegistryToolName}`,
       );
     } else if (
-      parsedManaged.familyId !== entry.familyId ||
-      parsedManaged.toolName !== entry.hostedToolName
+      parsedHosted.familyId !== entry.familyId ||
+      parsedHosted.toolName !== entry.hostedToolName
     ) {
       diagnostics.push(
-        `managed hosted tool name mismatch: ${entry.managedHostedToolName}`,
+        `hosted registry tool name mismatch: ${entry.hostedRegistryToolName}`,
       );
     }
     if (
@@ -601,9 +597,9 @@ export function validateLegacyIntegrationHubReplacementInventory(
     diagnostics.push(`duplicate hosted tool: ${duplicate}`);
   }
   for (const duplicate of duplicates(
-    inventory.tools.map((entry) => entry.managedHostedToolName),
+    inventory.tools.map((entry) => entry.hostedRegistryToolName),
   )) {
-    diagnostics.push(`duplicate managed hosted tool: ${duplicate}`);
+    diagnostics.push(`duplicate hosted registry tool: ${duplicate}`);
   }
   return { ok: diagnostics.length === 0, diagnostics };
 }
@@ -645,7 +641,7 @@ function tool(
     legacyToolName,
     legacyMcpToolName: `mcp_${LEGACY_SERVER_NAME}__${legacyToolName}`,
     hostedToolName: legacyToolName,
-    managedHostedToolName: buildHostedIntegrationManagedToolName({
+    hostedRegistryToolName: buildHostedToolName({
       familyId,
       toolName: legacyToolName,
     }),
@@ -676,7 +672,7 @@ function replacementMapping(
     familyId,
     hostedToolName,
     legacyMcpToolName,
-    managedHostedToolName: buildHostedIntegrationManagedToolName({
+    hostedRegistryToolName: buildHostedToolName({
       familyId,
       toolName: hostedToolName,
     }),
@@ -731,7 +727,7 @@ function buildReplacementFamilyFixture(
     familyId,
     familyName,
     replacementToolNames: tools.map((entry) => entry.hostedToolName),
-    managedToolNames: tools.map((entry) => entry.managedHostedToolName),
+    hostedToolNames: tools.map((entry) => entry.hostedRegistryToolName),
     legacyMcpToolNames: tools.map((entry) => entry.legacyMcpToolName),
     replacementMappings: tools.map((entry) =>
       replacementMapping(
@@ -783,7 +779,6 @@ version: 1
 runtime:
   language: python
   entrypoint: ${entrypoint}
-  handlerDispatch: legacy_call_tool
   defaultTimeoutMs: 30000
   inlineResultTokenLimit: 8000
   maxConcurrency: 2
@@ -854,7 +849,16 @@ CACHE_TOOLS = ${JSON.stringify(
 def list_tools():
     return []
 
-def call_tool(name, args, context):
+def authenticate(ctx):
+    return {}
+
+def before_tool_call(tool_name, args, ctx, auth):
+    return args
+
+def after_tool_call(tool_name, args, ctx, result, auth):
+    return result
+
+def _run_tool(name, args, context):
     if name not in TOOL_NAMES:
         raise ValueError(f"unknown tool: {name}")
     return {
@@ -866,6 +870,14 @@ def call_tool(name, args, context):
         "uses_explicit_cache": name in CACHE_TOOLS,
         "auth_configured": bool(context.get("secrets")),
     }
+
+${tools
+  .map(
+    (entry) => `def tool_${entry.hostedToolName}(args, context):
+    return _run_tool(${JSON.stringify(entry.hostedToolName)}, args, context)
+`,
+  )
+  .join("\n")}
 `;
 }
 
@@ -884,7 +896,6 @@ version: 1
 runtime:
   language: python
   entrypoint: splunk.py
-  handlerDispatch: legacy_call_tool
   defaultTimeoutMs: 30000
   inlineResultTokenLimit: 200
   maxConcurrency: 2
@@ -954,9 +965,16 @@ def list_tools():
         }
     ]
 
-def call_tool(name, args, context):
-    if name != "splunk_search":
-        raise ValueError(f"unknown tool: {name}")
+def authenticate(ctx):
+    return {}
+
+def before_tool_call(tool_name, args, ctx, auth):
+    return args
+
+def after_tool_call(tool_name, args, ctx, result, auth):
+    return result
+
+def tool_splunk_search(args, context):
     query = args["query"]
     limit = int(args.get("limit", 2))
     base_url = context["config"].get("SPLUNK_BASE_URL", "https://splunk.example.test")

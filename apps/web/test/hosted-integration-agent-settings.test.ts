@@ -5,6 +5,7 @@ import {
   buildAgentSettingsHostedIntegrationBinding,
   groupAgentSettingsTools,
   hostedIntegrationEnvironmentConfigsForTool,
+  hostedIntegrationToolRequiresEnvironmentConfig,
   isHostedIntegrationTool,
   selectedHostedIntegrationBindings,
   type AgentHostedIntegrationBinding,
@@ -13,7 +14,7 @@ import {
 import type { ToolInfo } from "@/app/lib/types";
 
 const hostedTool: ToolInfo = {
-  name: "managed_qualys__qualys_count_assets",
+  name: "hosted_qualys__qualys_count_assets",
   description: "Count assets.",
   toolset: "hosted-integrations",
   source: {
@@ -37,16 +38,33 @@ const mcpTool: ToolInfo = {
   toolset: "mcp-github",
 };
 
-const managedHelpTool: ToolInfo = {
-  name: "managed_tool_help",
-  description: "Get managed hosted integration tool help.",
+const hostedHelpTool: ToolInfo = {
+  name: "hosted_tool_help",
+  description: "Get hosted tool help.",
   toolset: "hosted-integration-support",
 };
 
 const hostedManagementTool: ToolInfo = {
-  name: "hosted_integration_promote",
+  name: "hosted_tool_promote",
   description: "Promote a validated hosted integration draft.",
   toolset: "hosted-integration-management",
+};
+
+const configlessHostedTool: ToolInfo = {
+  name: "hosted_math-magic__get_random_number",
+  description: "Return a random number.",
+  toolset: "hosted-integrations",
+  source: {
+    kind: "hosted_integration",
+    familyId: "math-magic",
+    familyName: "math_magic",
+    toolName: "get_random_number",
+    generationId: "gen_math",
+    runtimeConfig: {
+      requiredConfigKeys: [],
+      requiredSecretKeys: [],
+    },
+  },
 };
 
 const environmentConfigs: HostedIntegrationEnvironmentConfig[] = [
@@ -76,11 +94,11 @@ describe("hosted integration agent settings helpers", () => {
   it("classifies and groups hosted tools separately from built-in and MCP tools", () => {
     expect(isHostedIntegrationTool(hostedTool)).toBe(true);
     expect(isHostedIntegrationTool(builtinTool)).toBe(false);
-    expect(isHostedIntegrationTool(managedHelpTool)).toBe(false);
+    expect(isHostedIntegrationTool(hostedHelpTool)).toBe(false);
     expect(agentSettingsToolGroupLabel(hostedTool)).toBe(
       "Hosted Tools / Qualys",
     );
-    expect(agentSettingsToolGroupLabel(managedHelpTool)).toBe(
+    expect(agentSettingsToolGroupLabel(hostedHelpTool)).toBe(
       "hosted-integration-support",
     );
     expect(agentSettingsToolGroupLabel(mcpTool)).toBe("mcp-github");
@@ -90,12 +108,12 @@ describe("hosted integration agent settings helpers", () => {
         hostedTool,
         builtinTool,
         mcpTool,
-        managedHelpTool,
+        hostedHelpTool,
       ]),
     ).toEqual([
       ["filesystem", [builtinTool]],
       ["Hosted Tools / Qualys", [hostedTool]],
-      ["hosted-integration-support", [managedHelpTool]],
+      ["hosted-integration-support", [hostedHelpTool]],
       ["mcp-github", [mcpTool]],
     ]);
   });
@@ -104,31 +122,39 @@ describe("hosted integration agent settings helpers", () => {
     expect(
       agentSettingsCatalogTools([
         hostedTool,
-        managedHelpTool,
+        hostedHelpTool,
         hostedManagementTool,
         builtinTool,
       ]),
-    ).toEqual([hostedTool, managedHelpTool, builtinTool]);
+    ).toEqual([hostedTool, hostedHelpTool, builtinTool]);
 
     expect(
       groupAgentSettingsTools(
         agentSettingsCatalogTools([
           hostedTool,
-          managedHelpTool,
+          hostedHelpTool,
           hostedManagementTool,
         ]),
       ),
     ).toEqual([
       ["Hosted Tools / Qualys", [hostedTool]],
-      ["hosted-integration-support", [managedHelpTool]],
+      ["hosted-integration-support", [hostedHelpTool]],
     ]);
   });
 
   it("returns only sanitized family scopes for a hosted tool", () => {
-    expect(hostedIntegrationEnvironmentConfigsForTool(hostedTool, environmentConfigs)).toEqual(
-      environmentConfigs,
-    );
-    expect(hostedIntegrationEnvironmentConfigsForTool(builtinTool, environmentConfigs)).toEqual([]);
+    expect(
+      hostedIntegrationEnvironmentConfigsForTool(
+        hostedTool,
+        environmentConfigs,
+      ),
+    ).toEqual(environmentConfigs);
+    expect(
+      hostedIntegrationEnvironmentConfigsForTool(
+        builtinTool,
+        environmentConfigs,
+      ),
+    ).toEqual([]);
     expect(JSON.stringify(environmentConfigs)).not.toContain("secret-value");
   });
 
@@ -144,6 +170,34 @@ describe("hosted integration agent settings helpers", () => {
     expect(binding).toEqual({
       familyId: "qualys",
       toolName: "qualys_count_assets",
+      allowedEnvironments: ["prod", "test_debug"],
+      defaultEnvironment: "test_debug",
+      generationPin: { type: "current" },
+      bindingKind: "agent",
+      updatedAt: "2026-08-14T10:00:00.000Z",
+      updatedBy: "human:alen",
+    });
+  });
+
+  it("builds agent bindings for configless hosted tools without environment configs", () => {
+    expect(
+      hostedIntegrationToolRequiresEnvironmentConfig(configlessHostedTool),
+    ).toBe(false);
+    expect(
+      hostedIntegrationEnvironmentConfigsForTool(configlessHostedTool, []),
+    ).toEqual([]);
+
+    const binding = buildAgentSettingsHostedIntegrationBinding({
+      tool: configlessHostedTool,
+      environmentConfigs: [],
+      defaultEnvironment: "test_debug",
+      now: "2026-08-14T10:00:00.000Z",
+      updatedBy: "human:alen",
+    });
+
+    expect(binding).toEqual({
+      familyId: "math-magic",
+      toolName: "get_random_number",
       allowedEnvironments: ["prod", "test_debug"],
       defaultEnvironment: "test_debug",
       generationPin: { type: "current" },
@@ -180,7 +234,7 @@ describe("hosted integration agent settings helpers", () => {
     expect(
       selectedHostedIntegrationBindings(
         bindings,
-        ["read_file", "managed_qualys__qualys_count_assets"],
+        ["read_file", "hosted_qualys__qualys_count_assets"],
         [builtinTool, hostedTool],
       ),
     ).toEqual([bindings[0]]);

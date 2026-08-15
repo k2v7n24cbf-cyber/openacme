@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildHostedIntegrationManagedToolName } from "@openacme/hosted-integrations";
+import { buildHostedToolName } from "@openacme/hosted-integrations";
 import { startE2EServer, type E2EServer } from "./support/harness.js";
 import { makeClient, waitUntil } from "./support/client.js";
 
@@ -15,10 +15,10 @@ const echoTool = `dogfood_echo_${suffix}`;
 const sumTool = `dogfood_sum_${suffix}`;
 const largeTool = `dogfood_large_${suffix}`;
 const flakyTool = `dogfood_flaky_${suffix}`;
-const managedEchoTool = managedToolName(echoTool);
-const managedSumTool = managedToolName(sumTool);
-const managedLargeTool = managedToolName(largeTool);
-const managedFlakyTool = managedToolName(flakyTool);
+const hostedEchoTool = hostedToolName(echoTool);
+const hostedSumTool = hostedToolName(sumTool);
+const hostedLargeTool = hostedToolName(largeTool);
+const hostedFlakyTool = hostedToolName(flakyTool);
 
 let lockId = "";
 let draftId = "";
@@ -74,7 +74,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     const created = await chatTool(
       "tool-developer",
       "create a new safe dogfood hosted integration family",
-      "hosted_integration_family_create",
+      "hosted_tool_family_create",
       {
         family_id: familyId,
         name: "Dogfood Tools",
@@ -94,7 +94,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       chatTool(
         "tool-developer",
         "patch the dogfood family manifest",
-        "hosted_integration_draft_patch",
+        "hosted_tool_draft_patch",
         {
           draft_id: draftId,
           lock_id: lockId,
@@ -108,7 +108,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       chatTool(
         "tool-developer",
         "patch the dogfood python runtime",
-        "hosted_integration_draft_patch",
+        "hosted_tool_draft_patch",
         {
           draft_id: draftId,
           lock_id: lockId,
@@ -128,7 +128,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
         chatTool(
           "tool-developer",
           `register ${example.id}`,
-          "hosted_integration_example_upsert",
+          "hosted_tool_example_upsert",
           {
             draft_id: draftId,
             lock_id: lockId,
@@ -149,7 +149,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       chatTool(
         "tool-developer",
         "inspect dogfood draft source",
-        "hosted_integration_source_read",
+        "hosted_tool_source_read",
         { draft_id: draftId, path: "family.yaml" },
       ),
     ).resolves.toMatchObject({
@@ -162,7 +162,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       chatTool(
         "tool-developer",
         "inspect dogfood draft metadata",
-        "hosted_integration_draft_get",
+        "hosted_tool_draft_get",
         { draft_id: draftId },
       ),
     ).resolves.toMatchObject({
@@ -174,7 +174,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       chatTool(
         "tool-developer",
         "list dogfood draft examples",
-        "hosted_integration_example_list",
+        "hosted_tool_example_list",
         { draft_id: draftId },
       ),
     ).resolves.toMatchObject({
@@ -189,7 +189,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       chatTool(
         "tool-developer",
         "validate the dogfood draft",
-        "hosted_integration_validate",
+        "hosted_tool_validate",
         { draft_id: draftId },
       ),
     ).resolves.toMatchObject({ ok: true });
@@ -197,7 +197,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     const echoRun = await chatTool(
       "tool-developer",
       "run the dogfood echo smoke example",
-      "hosted_integration_example_run",
+      "hosted_tool_example_run",
       { draft_id: draftId, example_id: "echo_smoke" },
     );
     expect(echoRun).toMatchObject({
@@ -208,7 +208,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     const promoted = await chatTool(
       "tool-developer",
       "promote the safe dogfood generation",
-      "hosted_integration_promote",
+      "hosted_tool_promote",
       { draft_id: draftId, lock_id: lockId },
     );
     expect(promoted).toMatchObject({
@@ -221,7 +221,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       chatTool(
         "tool-developer",
         "release the dogfood edit lock",
-        "hosted_integration_lock_release",
+        "hosted_tool_lock_release",
         { lock_id: lockId },
       ),
     ).resolves.toMatchObject({ ok: true });
@@ -233,7 +233,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       chatTool(
         "tool-developer",
         "list dogfood environment configs",
-        "hosted_integration_environment_config_list",
+        "hosted_tool_environment_config_list",
         {},
       ),
     ).resolves.toMatchObject({
@@ -250,7 +250,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       chatTool(
         "tool-developer",
         "inspect dogfood environment config",
-        "hosted_integration_environment_config_get",
+        "hosted_tool_environment_config_get",
         { family_id: familyId, environment: testEnvironment },
       ),
     ).resolves.toMatchObject({
@@ -264,10 +264,10 @@ describe("hosted integrations agent dogfood (e2e)", () => {
 
     const toolsBody = await c.json("/api/tools");
     for (const [nativeToolName, canonicalToolName] of [
-      [echoTool, managedEchoTool],
-      [sumTool, managedSumTool],
-      [largeTool, managedLargeTool],
-      [flakyTool, managedFlakyTool],
+      [echoTool, hostedEchoTool],
+      [sumTool, hostedSumTool],
+      [largeTool, hostedLargeTool],
+      [flakyTool, hostedFlakyTool],
     ] as const) {
       expect(
         toolsBody.tools.find(
@@ -296,7 +296,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     const echo = await chatTool(
       "dogfood-consumer",
       "use dogfood echo",
-      managedEchoTool,
+      hostedEchoTool,
       {
         text: "consumer path",
       },
@@ -311,7 +311,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     const large = await chatTool(
       "dogfood-consumer",
       "use dogfood large response",
-      managedLargeTool,
+      hostedLargeTool,
       { repeat: 150 },
     );
     expect(large).toMatchObject({
@@ -333,7 +333,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       chatTool(
         "tool-developer",
         "inspect dogfood large run",
-        "hosted_integration_run_get",
+        "hosted_tool_run_get",
         { run_id: largeRunId },
       ),
     ).resolves.toMatchObject({
@@ -350,7 +350,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     const artifact = await chatTool(
       "tool-developer",
       "read dogfood large artifact",
-      "hosted_integration_artifact_get",
+      "hosted_tool_artifact_get",
       { run_id: largeRunId, name: "output.json" },
     );
     expect(artifact).toMatchObject({
@@ -365,14 +365,14 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     await c.createAgent("dogfood-denied", "Dogfood Denied", {
       role: "Attempts hosted integration use without a binding.",
       persona: "Try to use the hosted integration.",
-      tools: [managedEchoTool],
+      tools: [hostedEchoTool],
       hostedIntegrationBindings: [],
     });
 
     const denied = await chatTool(
       "dogfood-denied",
       "attempt dogfood echo without binding",
-      managedEchoTool,
+      hostedEchoTool,
       { text: "should not run" },
     );
     expect(denied).toMatchObject({
@@ -385,7 +385,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     const failed = await chatTool(
       "dogfood-consumer",
       "trigger the dogfood flaky failure",
-      managedFlakyTool,
+      hostedFlakyTool,
       { mode: "fail" },
     );
     expect(failed).toMatchObject({
@@ -397,7 +397,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     const buckets = await chatTool(
       "tool-developer",
       "list dogfood failure buckets",
-      "hosted_integration_failure_bucket_list",
+      "hosted_tool_failure_bucket_list",
       { family_id: familyId },
     );
     expect(buckets).toMatchObject({
@@ -425,7 +425,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       chatTool(
         "tool-developer",
         "assign dogfood failure bucket",
-        "hosted_integration_failure_bucket_assign",
+        "hosted_tool_failure_bucket_assign",
         { bucket_id: failureBucketId, assigned_to: "tool-developer" },
       ),
     ).resolves.toMatchObject({
@@ -436,7 +436,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     const repairLock = await chatTool(
       "tool-developer",
       "lock dogfood family for repair",
-      "hosted_integration_lock_acquire",
+      "hosted_tool_lock_acquire",
       { family_id: familyId, ttl_ms: 180_000 },
     );
     expect(repairLock).toMatchObject({ ok: true, lock: { familyId } });
@@ -446,7 +446,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       chatTool(
         "tool-developer",
         "renew dogfood repair lock",
-        "hosted_integration_lock_renew",
+        "hosted_tool_lock_renew",
         { lock_id: repairLockId, ttl_ms: 180_000 },
       ),
     ).resolves.toMatchObject({
@@ -457,7 +457,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     const repairDraft = await chatTool(
       "tool-developer",
       "create dogfood repair draft",
-      "hosted_integration_draft_create",
+      "hosted_tool_draft_create",
       { family_id: familyId, lock_id: repairLockId },
     );
     expect(repairDraft).toMatchObject({ ok: true, draft: { familyId } });
@@ -467,7 +467,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       chatTool(
         "tool-developer",
         "patch temporary dogfood repair note",
-        "hosted_integration_draft_patch",
+        "hosted_tool_draft_patch",
         {
           draft_id: repairDraftId,
           lock_id: repairLockId,
@@ -481,7 +481,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       chatTool(
         "tool-developer",
         "delete temporary dogfood repair note",
-        "hosted_integration_draft_delete",
+        "hosted_tool_draft_delete",
         { draft_id: repairDraftId, lock_id: repairLockId, path: "scratch.txt" },
       ),
     ).resolves.toMatchObject({ ok: true });
@@ -490,7 +490,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       chatTool(
         "tool-developer",
         "inspect the flaky dogfood repair source view",
-        "hosted_integration_source_view",
+        "hosted_tool_source_view",
         {
           family_id: familyId,
           draft_id: repairDraftId,
@@ -516,7 +516,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       chatTool(
         "tool-developer",
         "patch flaky dogfood repair with a targeted source replacement",
-        "hosted_integration_draft_patch",
+        "hosted_tool_draft_patch",
         {
           draft_id: repairDraftId,
           lock_id: repairLockId,
@@ -533,7 +533,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       chatTool(
         "tool-developer",
         "register flaky regression example",
-        "hosted_integration_example_upsert",
+        "hosted_tool_example_upsert",
         {
           draft_id: repairDraftId,
           lock_id: repairLockId,
@@ -553,7 +553,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       chatTool(
         "tool-developer",
         "run flaky regression example",
-        "hosted_integration_example_run",
+        "hosted_tool_example_run",
         { draft_id: repairDraftId, example_id: "flaky_regression" },
       ),
     ).resolves.toMatchObject({
@@ -564,7 +564,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     const repairPromotion = await chatTool(
       "tool-developer",
       "promote dogfood repair",
-      "hosted_integration_promote",
+      "hosted_tool_promote",
       { draft_id: repairDraftId, lock_id: repairLockId },
     );
     expect(repairPromotion).toMatchObject({
@@ -576,7 +576,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     const debugRun = await chatTool(
       "tool-developer",
       "debug run repaired dogfood flaky tool",
-      "hosted_integration_debug_run",
+      "hosted_tool_debug_run",
       {
         family_id: familyId,
         tool_name: flakyTool,
@@ -596,7 +596,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       chatTool(
         "tool-developer",
         "close dogfood failure bucket",
-        "hosted_integration_failure_bucket_close",
+        "hosted_tool_failure_bucket_close",
         {
           bucket_id: failureBucketId,
           draft_id: repairDraftId,
@@ -613,7 +613,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       chatTool(
         "tool-developer",
         "list dogfood generations",
-        "hosted_integration_generation_list",
+        "hosted_tool_generation_list",
         { family_id: familyId },
       ),
     ).resolves.toMatchObject({
@@ -628,7 +628,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       chatTool(
         "tool-developer",
         "inspect repaired dogfood generation",
-        "hosted_integration_generation_get",
+        "hosted_tool_generation_get",
         { generation_id: repairGenerationId },
       ),
     ).resolves.toMatchObject({
@@ -640,7 +640,7 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       chatTool(
         "tool-developer",
         "rollback dogfood family to original generation",
-        "hosted_integration_generation_rollback",
+        "hosted_tool_generation_rollback",
         { generation_id: generationId },
       ),
     ).resolves.toMatchObject({
@@ -704,7 +704,7 @@ async function createConsumerAgent(id: string, tools: string[]): Promise<void> {
   await c.createAgent(id, id, {
     role: "Consumes dogfood hosted integrations.",
     persona: "Use hosted integrations when asked.",
-    tools: tools.map(managedToolName),
+    tools: tools.map(hostedToolName),
     hostedIntegrationBindings: tools.map((toolName) => ({
       familyId,
       toolName,
@@ -718,8 +718,8 @@ async function createConsumerAgent(id: string, tools: string[]): Promise<void> {
   });
 }
 
-function managedToolName(toolName: string): string {
-  return buildHostedIntegrationManagedToolName({ familyId, toolName });
+function hostedToolName(toolName: string): string {
+  return buildHostedToolName({ familyId, toolName });
 }
 
 async function configureEnvironmentConfig(): Promise<void> {

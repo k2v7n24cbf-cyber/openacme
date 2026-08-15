@@ -17,6 +17,7 @@ mcp.json
 
 # Testing
 coverage
+output/
 
 # Turbo
 .turbo

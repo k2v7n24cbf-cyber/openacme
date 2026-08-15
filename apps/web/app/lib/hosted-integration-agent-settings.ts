@@ -92,10 +92,18 @@ export function buildAgentSettingsHostedIntegrationBinding(input: {
   const familyId = input.tool.source?.familyId;
   const toolName = hostedIntegrationNativeToolName(input.tool);
   if (!familyId || !toolName) return null;
-  const scopes = hostedIntegrationEnvironmentConfigsForTool(input.tool, input.environmentConfigs);
-  const allowedEnvironments = [
-    ...new Set(scopes.map((scope) => scope.environment)),
-  ].sort();
+  const scopes = hostedIntegrationEnvironmentConfigsForTool(
+    input.tool,
+    input.environmentConfigs,
+  );
+  const configRequired = hostedIntegrationToolRequiresEnvironmentConfig(
+    input.tool,
+  );
+  const allowedEnvironments: Array<"prod" | "test_debug"> = (
+    configRequired
+      ? [...new Set(scopes.map((scope) => scope.environment))]
+      : (["prod", "test_debug"] as Array<"prod" | "test_debug">)
+  ).sort();
   const defaultEnvironment =
     input.defaultEnvironment &&
     allowedEnvironments.includes(input.defaultEnvironment)
@@ -112,6 +120,18 @@ export function buildAgentSettingsHostedIntegrationBinding(input: {
     updatedAt: input.now ?? new Date().toISOString(),
     updatedBy: input.updatedBy ?? "human:web",
   };
+}
+
+export function hostedIntegrationToolRequiresEnvironmentConfig(
+  tool: ToolInfo,
+): boolean {
+  if (!isHostedIntegrationTool(tool)) return false;
+  const runtimeConfig = tool.source?.runtimeConfig;
+  if (!runtimeConfig) return true;
+  return (
+    (runtimeConfig.requiredConfigKeys?.length ?? 0) > 0 ||
+    (runtimeConfig.requiredSecretKeys?.length ?? 0) > 0
+  );
 }
 
 export function upsertHostedIntegrationBinding(

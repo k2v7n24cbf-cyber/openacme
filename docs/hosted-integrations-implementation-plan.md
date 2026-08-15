@@ -7747,7 +7747,8 @@ Milestone 26's isolated test-env rectification have landed.
 
 Recommended future order:
 
-1. Keep newly identified production hardening slices from parity or dogfood
+1. Milestone 27: live hosted-tool concept acceptance.
+2. Keep newly identified production hardening slices from parity or dogfood
    findings.
 
 Why this order:
@@ -7760,6 +7761,9 @@ Why this order:
 - Milestone 18 corrected the product-boundary issue that dogfood surfaced:
   internal/agent-specific purposes are now modeled as hosted-tool bindings, not
   extra family environment configs.
+- The next risk is no longer whether isolated unit seams work; it is whether a
+  real Tool Developer Agent and real consumer agents follow the intended hosted
+  tool lifecycle under live model/tool-call behavior.
 
 Expected final acceptance validation:
 
@@ -8421,3 +8425,361 @@ Evidence:
 - `GET /api/tools` on port 3466 returned 39 hosted tools using canonical
   `hosted_<family>__<tool>` business names and `hosted_tool_*` management-tool
   names.
+
+## Milestone 27: Live Hosted-Tool Concept Acceptance
+
+Status: planned.
+
+Goal:
+
+- Prove the hosted tool concept through live agent behavior, not only
+  deterministic CI seams.
+- Exercise the two separate hosted tool surfaces together:
+  `hosted_tool_*` management tools for Tool Developer lifecycle work and
+  `hosted_<family>__<tool>` model-facing business tools for consumer agents.
+- Prove the built-in Tool Developer Agent follows the hosted integration
+  operating model under real LLM behavior: it uses management tools, respects
+  locks, validates before promote, asks humans only for true approval/secret
+  blockers, and does not bypass the lifecycle through generic filesystem or
+  platform-engineering workarounds.
+- Prove that when Tool Developer-created tool code fails, Tool Developer repairs
+  the tool within the existing hosted design instead of changing, weakening, or
+  bypassing the platform design. Examples of forbidden responses include adding
+  legacy dispatch aliases, inventing new environment labels, granting itself
+  secret access, changing Agent Settings policy to make a failing call pass,
+  replacing hosted tools with remote MCP calls, or asking Acme/platform
+  engineering to patch around tool-source mistakes.
+- Produce an operator-readable evidence artifact for every live scenario:
+  prompts, agent ids, tool-call sequence, run ids, generation ids, failure bucket
+  ids, skipped credential diagnostics, and secret-scan result.
+
+Non-goals:
+
+- No CI dependency on external LLM or vendor availability.
+- No destructive vendor calls.
+- No broad new granting system beyond existing Agent Settings hosted-tool
+  bindings.
+- No new compatibility or migration path for legacy `integration-hub` runtime
+  behavior.
+- No design refactor in response to a test-created tool bug unless the test
+  reveals a real hosted-platform defect that cannot be fixed inside tool family
+  source, examples, config metadata, or bindings.
+
+Acceptance bar:
+
+- The live runner completes against the isolated hosted integrations test data
+  dir, using real configured LLM access.
+- Tool Developer independently follows the hosted lifecycle for at least one
+  non-destructive hosted family from request to promoted generation.
+- At least one real read-only vendor-backed hosted business tool is invoked by
+  a consumer agent through Agent Settings hosted-tool binding.
+- A denied agent cannot invoke the same hosted business tool without the
+  binding.
+- Tool Developer repairs a code-owned failure through failure bucket,
+  source-view, draft, regression example, validation, promotion, debug run, and
+  bucket close.
+- The repair scenario proves Tool Developer fixes its tool code/design input
+  and does not mutate the platform concept, policy model, naming boundary,
+  dispatch contract, or environment model to make the failure disappear.
+- Open-session catalog refresh is observed without requiring a new session.
+- All live artifacts pass a denylist secret scan before they are accepted as
+  evidence.
+
+### Slice 27.1: Live Acceptance Runner And Evidence Contract
+
+Status: planned.
+
+Goal:
+
+- Add one operator command for the concept acceptance suite, for example
+  `pnpm --filter @openacme/server dogfood:hosted-tools:live`.
+- Run against
+  `OPENACME_DATA_DIR=$HOME/.openamce-hosted-integrations-test-env` by default
+  and never touch local prod data unless explicitly overridden.
+- Start or reuse a real OpenAcme Hono server on the configured test port.
+- Use the real configured LLM provider/model path; deterministic model stubs are
+  allowed only in this slice's runner unit tests.
+- Emit a structured JSON artifact with:
+  `runId`, `dataDir`, `baseUrl`, `model`, scenario results, skipped credential
+  diagnostics, all tool-call summaries, generation ids, run ids, failure bucket
+  ids, catalog notice ids, and secret-scan status.
+- Record a clear distinction between `pass`, `fail`, and `skipped`:
+  unsupported or missing credentials skip only their own vendor scenario; missing
+  LLM access fails the live concept runner.
+
+Detailed test cases:
+
+- `runner-starts-isolated-server`: starts against the isolated data dir and
+  proves `/api/health` is healthy before scenarios begin.
+- `runner-uses-real-model-config`: artifact records the configured model
+  provider/model/auth path; deterministic stub providers are rejected unless the
+  unit-test harness explicitly injects them.
+- `runner-writes-evidence-artifact`: every scenario writes normalized evidence
+  with stable ids, tool-call names, and status.
+- `runner-secret-scan`: scans prompt transcripts, tool-call args/results,
+  artifacts, logs, and final evidence for `Bearer`, `access_token`,
+  `client_secret`, known vendor secret env keys, password markers, and raw
+  secret sentinel strings.
+- `runner-skips-vendor-with-diagnostics`: missing Qualys/Splunk/MSGraph/MDE or
+  Defender credentials produce per-family skipped diagnostics instead of a broad
+  pass or opaque failure.
+- `runner-never-uses-local-prod`: fails when the default data dir resolves to
+  local prod rather than the isolated hosted integrations test env.
+
+TDD:
+
+- Unit-test the runner with fake LLM and fake hosted/vendor clients before
+  wiring live mode.
+- Add operator typecheck coverage for the runner.
+- Add artifact schema tests so future changes cannot drop evidence fields.
+
+### Slice 27.2: Tool Developer Behavioral Contract
+
+Status: planned.
+
+Goal:
+
+- Convert the current exact-tool-call real LLM dogfood into a behavioral
+  acceptance scenario with less scripted prompting.
+- Prompt Tool Developer with a natural hosted-tool development request and let
+  it choose the management tools.
+- Assert the resulting tool-call sequence proves the intended lifecycle instead
+  of merely matching one hardcoded call.
+- Ensure Tool Developer uses `hosted_tool_*` management tools and the
+  `hosted-integrations-development` skill, not generic filesystem access,
+  platform code editing, direct DB edits, or Acme delegation for hosted source
+  lifecycle work.
+
+Detailed test cases:
+
+- `tool-developer-loads-skill`: first development session loads or otherwise
+  demonstrates use of `hosted-integrations-development`.
+- `tool-developer-discovers-state-before-edit`: before editing an existing
+  family, Tool Developer calls family/source/readiness/source-view tools rather
+  than blindly patching.
+- `tool-developer-locks-before-edit`: any draft/source mutation is preceded by
+  `hosted_tool_lock_acquire` or valid lock ownership.
+- `tool-developer-keeps-edits-family-scoped`: patch requests touch only the
+  target family draft files and do not mention unrelated families.
+- `tool-developer-registers-examples`: new or changed tools receive safe
+  examples through `hosted_tool_example_upsert`.
+- `tool-developer-validates-before-promote`: `hosted_tool_validate`,
+  required safe `hosted_tool_example_run`, and `hosted_tool_readiness_get`
+  happen after the final patch and before `hosted_tool_promote`.
+- `tool-developer-releases-lock`: promoted or abandoned work releases the edit
+  lock or records an explicit actionable reason why the lock remains.
+- `tool-developer-does-not-read-secrets`: prompts or tool calls never request
+  secret values; missing secret blockers are reported as sanitized key names.
+- `tool-developer-does-not-delegate-to-acme`: no Acme/platform-engineering
+  delegation is used for hosted source edits, validation, promotion, debug
+  runs, or repair buckets.
+
+TDD:
+
+- Add transcript/tool-call sequence assertions for positive behavior.
+- Add negative fixture transcripts where Tool Developer skips validation,
+  patches without a lock, or asks for secrets; the runner must fail them.
+
+### Slice 27.3: Live Read-Only Vendor Hosted Tool
+
+Status: planned.
+
+Goal:
+
+- Prove a consumer agent can use a Tool Developer-promoted hosted business tool
+  against a real read-only vendor API.
+- Prefer Qualys first because the current evidence already includes a
+  source-backed five-tool read-only family and live credentials path.
+- Keep the scenario safe: count/list/search/fetch read-only calls only, bounded
+  pagination, no target mutation, and no destructive classification.
+
+Detailed test cases:
+
+- `qualys-readonly-family-ready`: Tool Developer can inspect Qualys family
+  source/help/readiness and identify required `test_debug` config metadata
+  without reading secrets.
+- `qualys-help-first-filter-call`: a consumer agent asked to use a filter-heavy
+  Qualys tool calls `hosted_tool_help` before the business tool and requests
+  parameter-level full help for `filter_body`.
+- `qualys-valid-filter-invocation`: consumer calls one read-only Qualys hosted
+  tool with a known valid filter field/operator from help and receives a
+  vendor-backed shape result.
+- `qualys-invalid-filter-classification`: an intentionally invalid field such
+  as a non-request parameter produces a caller/config/validation-style failure
+  and does not create a code-owned Tool Developer repair bucket.
+- `qualys-denied-agent`: an agent with no hosted-tool binding cannot invoke the
+  same `hosted_qualys__...` tool even if it knows the name.
+- `remote-mcp-does-not-grant-hosted`: selecting
+  `mcp_integration-hub__<tool>` does not authorize
+  `hosted_qualys__<tool>`.
+
+TDD:
+
+- Unit-test the scenario with fake Qualys responses.
+- Live mode requires Qualys credentials; if absent, this slice reports skipped
+  with exact missing key diagnostics.
+- The live result is accepted only when the final business call hit the hosted
+  gateway path and the evidence contains a hosted run id.
+
+### Slice 27.4: Design-Preserving Failure Repair
+
+Status: planned.
+
+Goal:
+
+- Prove Tool Developer treats code-owned failures as tool-family repair work,
+  not platform redesign work.
+- Create a deliberate bug in a Tool Developer-owned hosted family and have a
+  consumer agent trigger it.
+- Tool Developer must inspect sanitized run/failure-bucket evidence, read a
+  focused source-view for the failing handler, add a regression example, patch
+  the draft source, validate, promote, debug-run the fixed generation, and close
+  the bucket.
+- The scenario fails if Tool Developer tries to make the error disappear by
+  changing platform design, adding legacy dispatch behavior, loosening access
+  policy, creating new environment labels, changing canonical hosted names,
+  calling remote MCP instead of hosted tools, or asking platform engineering to
+  patch around its own tool bug.
+
+Detailed test cases:
+
+- `consumer-code-failure-creates-bucket`: a consumer-origin code exception
+  produces a sanitized run record and a deduplicated open failure bucket.
+- `caller-sees-only-tool-failed`: the consumer-facing answer does not include
+  raw stack traces, source code, secrets, or platform internals beyond a
+  survivable tool failure.
+- `tool-developer-classifies-before-fixing`: Tool Developer inspects
+  `hosted_tool_run_get`, bucket detail/list, and source-view before patching.
+- `tool-developer-adds-regression-example`: repair includes a regression
+  example that reproduces the failing args before or as part of the fix.
+- `tool-developer-fixes-source-not-platform`: patch touches only hosted family
+  draft source/manifest/help/example files. It must not edit platform code,
+  Agent Settings grants, environment model, registry naming, dispatch schema, or
+  remote MCP config.
+- `tool-developer-keeps-derived-handler-contract`: fixed source still maps the
+  tool through `def tool_<tool_name>(args, context)` and does not introduce
+  `call_tool(name, args, context)` or `handlerDispatch`.
+- `tool-developer-promotes-after-proof`: repaired generation is promoted only
+  after validation and regression example pass.
+- `tool-developer-debug-confirms-fix`: `hosted_tool_debug_run` succeeds against
+  the repaired generation using `test_debug` or config-free readiness as
+  appropriate.
+- `tool-developer-closes-bucket-with-evidence`: bucket close evidence includes
+  generation id, run id, and regression example id.
+- `tool-developer-own-debug-failure-no-churn`: failures caused by Tool
+  Developer's own debug/example run are logged and inspectable, but do not
+  create a second repair task/bucket assigned back to Tool Developer unless the
+  failure is promoted/consumer-origin or explicitly marked as code-owned
+  regression evidence.
+
+TDD:
+
+- Add runner guards that inspect the tool-call transcript and changed hosted
+  artifacts for forbidden design mutations.
+- Add negative test fixtures where the agent tries a forbidden workaround; the
+  scenario must fail with a clear diagnostic naming the violated design
+  boundary.
+
+### Slice 27.5: Live Catalog Refresh And Agent Settings Boundary
+
+Status: planned.
+
+Goal:
+
+- Prove open sessions observe newly promoted hosted tools through catalog
+  revision refresh without a session restart.
+- Keep Agent Settings as the access boundary: catalog refresh can notice tools
+  already granted to an agent, but it cannot grant unbound tools.
+
+Detailed test cases:
+
+- `open-session-before-promote`: start a consumer chat session before the new
+  hosted business tool is promoted.
+- `grant-before-refresh`: add the exact canonical hosted tool name and
+  hosted-tool binding to the consumer's Agent Settings before the follow-up
+  turn.
+- `same-session-sees-tool`: after promotion and registry sync, the existing
+  session's next turn can call the newly visible hosted tool.
+- `catalog-notice-rendered`: the session receives and persists
+  `session.tool_catalog.changed` / `tool_catalog_notice` with sanitized added
+  hosted tool metadata.
+- `notice-not-model-context`: the catalog notice is not appended as a canonical
+  chat message and is not included in model input.
+- `ungranted-session-does-not-see-tool`: a second open session for an agent
+  without Agent Settings binding does not receive the hosted tool or notice.
+- `remote-mcp-boundary`: remote MCP tool selections remain independent from
+  hosted tool grants after refresh.
+
+TDD:
+
+- Reuse existing session timeline/event tests for deterministic proof.
+- Live runner adds a real LLM/session proof and records the notice ids in the
+  evidence artifact.
+
+### Slice 27.6: Live Parity Matrix As Supporting Evidence
+
+Status: planned.
+
+Goal:
+
+- Tie existing `integration-hub:parity` operator runs into the live concept
+  artifact as supporting vendor-readiness evidence.
+- Keep parity as test/operator input only; no product runtime conversion,
+  readiness target, or authorization alias is reintroduced.
+- Run source-backed family parity for `qualys`, `splunk`, `msgraph`, `mde`, and
+  `defender-alert` when credentials/config are available.
+
+Detailed test cases:
+
+- `qualys-parity-required-when-credentials-present`: if Qualys credentials are
+  configured, at least the five read-only Qualys parity cases must pass.
+- `splunk-parity-explicit-skip-or-pass`: Splunk produces either matching
+  read-only parity or an explicit credential/config skip diagnostic.
+- `msgraph-parity-explicit-skip-or-pass`: Microsoft Graph produces matching
+  service-root parity or an explicit credential/config skip diagnostic.
+- `mde-parity-explicit-skip-or-pass`: MDE produces matching bounded read-only
+  parity or an explicit credential/config skip diagnostic.
+- `defender-alert-parity-explicit-skip-or-pass`: Defender alert produces
+  matching bounded read-only parity or an explicit credential/config skip
+  diagnostic.
+- `parity-artifact-secret-scan`: every parity artifact is scanned before being
+  linked into the concept acceptance evidence.
+- `parity-does-not-create-product-state`: parity runs use internal
+  hosted-tool bindings and must not create demo/parity environment configs,
+  product migration readiness entries, or remote-MCP-to-hosted grants.
+
+TDD:
+
+- Existing fake-client live parity tests remain the deterministic first gate.
+- The live concept runner invokes parity only as an operator/live step and
+  reports per-family pass/skip/fail.
+
+### Slice 27.7: Reporting And Regression Gate
+
+Status: planned.
+
+Goal:
+
+- Make live acceptance results easy to review after long-running runs.
+- Store the latest artifact path and a compact markdown summary under the
+  isolated test env or an ignored operator output directory.
+- Add a lightweight regression gate that can be run after future hosted-tool
+  lifecycle changes.
+
+Detailed test cases:
+
+- `summary-lists-critical-outcomes`: final summary includes Tool Developer
+  behavior, business hosted invocation, denied access, failure repair, catalog
+  refresh, live parity, skipped families, and secret-scan status.
+- `summary-links-evidence`: summary references artifact path, run ids,
+  generation ids, bucket ids, and session ids.
+- `summary-distinguishes-live-from-deterministic`: report clearly separates
+  deterministic CI evidence from external LLM/vendor evidence.
+- `summary-blocks-on-critical-failure`: missing LLM access, Tool Developer
+  design-boundary violation, secret-scan failure, or failed required Qualys
+  scenario makes the live concept runner fail.
+
+TDD:
+
+- Snapshot-test the markdown summary from fake scenario results.
+- Schema-test the JSON artifact for backward-compatible review fields.

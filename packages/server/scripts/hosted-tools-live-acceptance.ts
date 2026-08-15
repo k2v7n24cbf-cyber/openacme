@@ -148,6 +148,7 @@ async function healthScenario(
   const body = await res.text();
   return {
     id: "runner-starts-isolated-server",
+    guidance: "operator_instrumented",
     status: res.ok ? "pass" : "fail",
     diagnostics: res.ok
       ? []
@@ -171,8 +172,9 @@ async function qualysReadOnlyVendorScenario(
 ): Promise<LiveHostedToolScenarioEvidence> {
   const familyId = "qualys";
   const preferredToolName = "qualys_gav_asset_count";
-  const scenarioBase = {
+  const scenarioBase: ScenarioEvidenceBase = {
     id: "qualys-readonly-consumer-live-hosted-tool",
+    guidance: "prompt_guided",
     prompts: [] as string[],
     agentIds: [liveQualysConsumerAgentId, liveQualysDeniedAgentId],
     sessionIds: [] as string[],
@@ -403,8 +405,9 @@ async function designPreservingRepairScenario(
   const toolName = "repair_echo";
   const hostedToolName = buildHostedToolName({ familyId, toolName });
   const regressionExampleId = "regression_boom_request";
-  const scenarioBase = {
+  const scenarioBase: ScenarioEvidenceBase = {
     id: "tool-developer-design-preserving-repair-live",
+    guidance: "prompt_guided",
     prompts: [] as string[],
     agentIds: [liveRepairConsumerAgentId, "tool-developer"],
     sessionIds: [] as string[],
@@ -588,8 +591,9 @@ async function catalogRefreshBoundaryScenario(
   const familyId = `catalog-live-${suffix}`;
   const toolName = "catalog_echo";
   const hostedToolName = buildHostedToolName({ familyId, toolName });
-  const scenarioBase = {
+  const scenarioBase: ScenarioEvidenceBase = {
     id: "live-catalog-refresh-agent-settings-boundary",
+    guidance: "prompt_guided",
     prompts: [] as string[],
     agentIds: [liveCatalogGrantedAgentId, liveCatalogUngrantedAgentId],
     sessionIds: [] as string[],
@@ -765,8 +769,9 @@ async function catalogRefreshBoundaryScenario(
 async function liveParityMatrixScenario(
   service: HostedIntegrationService,
 ): Promise<LiveHostedToolScenarioEvidence> {
-  const scenarioBase = {
+  const scenarioBase: ScenarioEvidenceBase = {
     id: "live-parity-matrix-supporting-evidence",
+    guidance: "operator_instrumented",
     prompts: [] as string[],
     agentIds: ["agent:live-parity-runner"],
     sessionIds: [] as string[],
@@ -895,8 +900,9 @@ async function toolDeveloperLoadsSkillScenario(
     "Do not create, edit, promote, or delete any hosted tool in this turn.",
     "After the instruction body is loaded, answer with one concise sentence.",
   ].join("\n");
-  const scenarioBase = {
+  const scenarioBase: ScenarioEvidenceBase = {
     id: "tool-developer-loads-skill-from-live-message-history",
+    guidance: "prompt_guided",
     prompts: [prompt],
     agentIds: ["tool-developer"],
     sessionIds: [sessionId],

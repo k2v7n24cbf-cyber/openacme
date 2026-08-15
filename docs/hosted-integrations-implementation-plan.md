@@ -8451,7 +8451,8 @@ Goal:
   engineering to patch around tool-source mistakes.
 - Produce an operator-readable evidence artifact for every live scenario:
   prompts, agent ids, tool-call sequence, run ids, generation ids, failure bucket
-  ids, skipped credential diagnostics, and secret-scan result.
+  ids, skipped credential diagnostics, guidance classification, and secret-scan
+  result.
 - When direct runner instrumentation is not enough to explain Tool Developer or
   consumer behavior, reconstruct tool-call sequence and outcomes from chat
   message history plus session timeline events. Message-history evidence should
@@ -8472,6 +8473,9 @@ Non-goals:
 - No design refactor in response to a test-created tool bug unless the test
   reveals a real hosted-platform defect that cannot be fixed inside tool family
   source, examples, config metadata, or bindings.
+- No claim that current live LLM scenarios prove unguided agent discovery. The
+  current acceptance suite is `prompt_guided`: it proves agents can follow the
+  hosted-tool lifecycle and use help/details when prompted to do so.
 
 Acceptance bar:
 
@@ -8510,7 +8514,7 @@ Goal:
 - Emit a structured JSON artifact with:
   `runId`, `dataDir`, `baseUrl`, `model`, scenario results, skipped credential
   diagnostics, all tool-call summaries, generation ids, run ids, failure bucket
-  ids, catalog notice ids, and secret-scan status.
+  ids, catalog notice ids, `guidance`, and secret-scan status.
 - Record a clear distinction between `pass`, `fail`, and `skipped`:
   unsupported or missing credentials skip only their own vendor scenario; missing
   LLM access fails the live concept runner.
@@ -9146,6 +9150,10 @@ Acceptance notes:
   business hosted invocation, denied access boundary, failure repair loop,
   catalog refresh, live parity matrix, skipped live parity families, and secret
   scan status.
+- The summary and scenario artifact classify guidance explicitly. Current live
+  LLM scenarios are `prompt_guided`; health/parity operator checks are
+  `operator_instrumented`. A future unguided-discovery suite must use
+  `guidance: unguided` instead of reusing these results.
 - The summary separates deterministic regression evidence from live external
   evidence so operator results are not confused with CI/unit proof.
 - Added `dogfood:hosted-tools:live:gate` as the explicit lightweight regression

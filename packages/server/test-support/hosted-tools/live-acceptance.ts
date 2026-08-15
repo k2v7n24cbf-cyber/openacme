@@ -57,9 +57,19 @@ export type LiveHostedToolParityResult = z.infer<
   typeof LiveHostedToolParityResultSchema
 >;
 
+export const LiveHostedToolGuidanceSchema = z.enum([
+  "prompt_guided",
+  "operator_instrumented",
+  "unguided",
+]);
+export type LiveHostedToolGuidance = z.infer<
+  typeof LiveHostedToolGuidanceSchema
+>;
+
 export const LiveHostedToolScenarioEvidenceSchema = z
   .object({
     id: z.string().min(1),
+    guidance: LiveHostedToolGuidanceSchema.default("prompt_guided"),
     status: LiveHostedToolAcceptanceStatusSchema,
     diagnostics: z.array(z.string()).default([]),
     prompts: z.array(z.string()).default([]),
@@ -77,8 +87,9 @@ export const LiveHostedToolScenarioEvidenceSchema = z
   .strict();
 export type LiveHostedToolScenarioEvidence = Omit<
   z.infer<typeof LiveHostedToolScenarioEvidenceSchema>,
-  "parityResults"
+  "guidance" | "parityResults"
 > & {
+  guidance?: LiveHostedToolGuidance;
   parityResults?: LiveHostedToolParityResult[];
 };
 
@@ -355,6 +366,7 @@ export function renderLiveHostedToolAcceptanceSummary(
     "## Evidence Boundary",
     "- Deterministic regression evidence: typecheck, schema tests, analyzer tests, route tests, and hosted-integrations unit tests are run separately in CI/local validation.",
     "- Live external evidence: this artifact captures real LLM/chat behavior and available live vendor parity. It is operator evidence and must not be imported by runtime product code.",
+    "- Guidance classification: `prompt_guided` scenarios use explicit operator prompts and are not proof of unguided agent discovery.",
   ];
 
   const skippedFamilies = liveParitySkippedFamilies(artifact);
@@ -917,6 +929,9 @@ function outcomeLine(
 ): string {
   if (!scenario) return `- ${label}: missing`;
   const evidence: string[] = [];
+  if (scenario.guidance) {
+    evidence.push(`guidance ${scenario.guidance}`);
+  }
   if (scenario.sessionIds.length > 0) {
     evidence.push(`sessions ${scenario.sessionIds.join(", ")}`);
   }

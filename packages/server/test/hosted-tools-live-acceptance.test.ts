@@ -245,21 +245,24 @@ describe("live hosted-tool acceptance artifact contract", () => {
     const latest = JSON.parse(readFileSync(report.latestPath, "utf8"));
 
     expect(summary).toContain("Status: pass");
-    expect(summary).toContain("- Tool Developer behavior: pass");
+    expect(summary).toContain("- Tool Developer behavior: pass (guidance prompt_guided");
     expect(summary).toContain(
-      "- Business hosted invocation: pass (sessions session-qualys; runs call-qualys; generations gen-qualys)",
+      "- Business hosted invocation: pass (guidance prompt_guided; sessions session-qualys; runs call-qualys; generations gen-qualys)",
     );
-    expect(summary).toContain("- Denied access boundary: pass");
+    expect(summary).toContain("- Denied access boundary: pass (guidance prompt_guided");
     expect(summary).toContain(
-      "- Failure repair loop: pass (sessions session-repair; runs call-failed, call-debug; generations gen-fixed; buckets bucket-repair)",
-    );
-    expect(summary).toContain(
-      "- Catalog refresh: pass (sessions session-catalog; runs call-catalog; generations gen-catalog; notices notice-catalog)",
+      "- Failure repair loop: pass (guidance prompt_guided; sessions session-repair; runs call-failed, call-debug; generations gen-fixed; buckets bucket-repair)",
     );
     expect(summary).toContain(
-      "- Live parity matrix: pass (families qualys:pass, splunk:skipped)",
+      "- Catalog refresh: pass (guidance prompt_guided; sessions session-catalog; runs call-catalog; generations gen-catalog; notices notice-catalog)",
+    );
+    expect(summary).toContain(
+      "- Live parity matrix: pass (guidance prompt_guided; families qualys:pass, splunk:skipped)",
     );
     expect(summary).toContain("- Secret scan: pass");
+    expect(summary).toContain(
+      "prompt_guided` scenarios use explicit operator prompts",
+    );
     expect(summary).toContain("## Skipped Live Parity Families");
     expect(summary).toContain("splunk: SPLUNK_TOKEN expired");
     expect(summary).toContain("Deterministic regression evidence");

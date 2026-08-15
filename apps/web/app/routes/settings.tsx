@@ -25,6 +25,7 @@ import {
   Plug,
   ChevronDown,
   ChevronRight,
+  type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Sidebar } from "../components/Sidebar";
@@ -121,6 +122,7 @@ import { Textarea } from "@/app/components/ui/textarea";
 import { LoadingHairline } from "@/app/components/ui/loading-hairline";
 import { SectionEyebrow } from "@/app/components/ui/section-eyebrow";
 import { Badge } from "@/app/components/ui/badge";
+import { EmptyState } from "@/app/components/ui/empty-state";
 import { cn } from "@/app/lib/utils";
 import {
   GoogleIcon,
@@ -4903,11 +4905,11 @@ function HostedIntegrationDraftEditor({
           {editorSection === "config" && (
             <section className="grid gap-4 pt-3">
               {row.environmentConfigs.length === 0 ? (
-                <p className="border-y border-paper-rule px-3 py-6 text-[13px] text-ink-soft">
+                <EmptyState icon={Server} className="py-10">
                   {hostedIntegrationConfigEmptyStateText({
                     familyName: row.name,
                   })}
-                </p>
+                </EmptyState>
               ) : (
                 row.environmentConfigs.map((scope) => {
                   const missingSecretCount = Math.max(
@@ -5089,9 +5091,9 @@ function HostedIntegrationDraftEditor({
                   {agentBindingMatrixError}
                 </p>
               ) : !agentBindingMatrix || agentBindingMatrix.totalCount === 0 ? (
-                <p className="border-y border-paper-rule px-3 py-6 text-[13px] text-ink-soft">
+                <EmptyState icon={Users} className="py-10">
                   No agents currently allow this hosted tool.
-                </p>
+                </EmptyState>
               ) : (
                 <>
                   <div className="flex flex-wrap items-center justify-between gap-3 border-b border-paper-rule pb-3">
@@ -5523,9 +5525,12 @@ function HostedIntegrationDraftEditor({
           {editorSection === "debug" && (
             <section className="grid gap-3">
               {debugUnavailableReasonText ? (
-                <p className="border-y border-paper-rule px-3 py-6 text-[13px] text-ink-soft">
+                <HostedRequirementNotice
+                  icon={Cpu}
+                  title="Debug setup required"
+                >
                   {debugUnavailableReasonText}
-                </p>
+                </HostedRequirementNotice>
               ) : (
                 <>
                   <div className="grid gap-3 sm:grid-cols-[minmax(0,16rem)_auto] sm:items-end">
@@ -5731,12 +5736,12 @@ function HostedIntegrationDraftEditor({
                 />
               ) : null}
               {versionRows.length === 0 ? (
-                <p className="border-y border-paper-rule px-3 py-6 text-[13px] text-ink-soft">
+                <EmptyState icon={FileText} className="py-10">
                   {hostedIntegrationVersionEmptyStateText({
                     state: "no_versions",
                     familyName: row.name,
                   })}
-                </p>
+                </EmptyState>
               ) : (
                 <div className="border-y border-paper-rule">
                   <div className="hidden grid-cols-[minmax(0,1fr)_150px_180px] gap-3 border-b border-paper-rule/60 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint md:grid">
@@ -5880,11 +5885,11 @@ function HostedIntegrationDraftEditor({
                 </div>
               </div>
               {scopedRunLogRows.length === 0 ? (
-                <p className="border-y border-paper-rule px-3 py-6 text-[13px] text-ink-soft">
+                <EmptyState icon={FileText} className="py-10">
                   {logsLoaded
                     ? `No execution logs recorded for ${logScopeLabel} yet.`
                     : `Refresh to inspect recent sanitized tool calls for ${logScopeLabel}.`}
-                </p>
+                </EmptyState>
               ) : (
                 <div className="border-y border-paper-rule">
                   <div className="hidden grid-cols-[minmax(0,1.4fr)_120px_140px_120px] gap-3 border-b border-paper-rule/60 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint md:grid">
@@ -6316,6 +6321,30 @@ function HostedIntegrationDraftEditor({
           )}
         </div>
         {busy && <LoadingHairline inline />}
+      </div>
+    </div>
+  );
+}
+
+function HostedRequirementNotice({
+  icon: Icon,
+  title,
+  children,
+}: {
+  icon: LucideIcon;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex max-w-2xl items-start gap-3 border-l-2 border-warn-ochre bg-warn-ochre/[0.06] px-3 py-4">
+      <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center bg-warn-ochre/[0.14] text-warn-ochre">
+        <Icon className="size-4" aria-hidden />
+      </div>
+      <div className="min-w-0">
+        <div className="font-mono text-[11px] uppercase tracking-[0.08em] text-warn-ochre">
+          {title}
+        </div>
+        <p className="mt-1 text-[13px] leading-6 text-ink">{children}</p>
       </div>
     </div>
   );

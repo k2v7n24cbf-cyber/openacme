@@ -509,6 +509,18 @@ The surface follows these principles:
   `Registry`, family title, or status band should be removed, collapsed, or
   converted into a small action/status row. Page-level utility actions can live
   in the page header only when their scope is truly page-wide.
+- **Empty states stay quiet**: "nothing here yet" surfaces such as no agents,
+  no files, no examples, or no logs should use whitespace, muted text, and a
+  small familiar icon instead of table borders, top/bottom rules, nested boxes,
+  or heavy section chrome. Empty states should explain the absence and, only
+  when there is a direct next action, show that action nearby.
+- **Prerequisites are not empty states**: when a tab cannot be used until the
+  human selects a tool, grants permission, adds environment config, or satisfies
+  a policy constraint, the UI should show a requirement notice instead of a
+  quiet empty state. Requirement notices use a compact left icon, a small status
+  label, restrained warning accent, and direct setup language so they read as
+  "do this to use the screen", not "there is nothing to show". They should feel
+  actionable and cautionary without using destructive error styling.
 - **Compact visible labels need target-aware action names**: visible button text
   can stay short when the surrounding layout already gives context, but the
   action identity must still name the concrete target for assistive review,

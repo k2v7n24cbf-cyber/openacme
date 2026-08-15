@@ -130,13 +130,14 @@ components:
 
 **Creative North Star: "The Operator's Console"**
 
-The interface is a control surface for an agent workforce, not a chat app. It looks like an instrument: warmed-paper light mode, graphite dark mode, hairline rules instead of cards, a single accent (plot red) used only when something is *active* or *destined for the user's attention*. The page reads like a lab notebook left open next to a terminal — quiet, dense with real metadata, and unambiguous about what's running. Density is the trust signal. Whitespace is reserved for separating *real* sections, not for "breathing room" around single sentences.
+The interface is a control surface for an agent workforce, not a chat app. It looks like an instrument: warmed-paper light mode, graphite dark mode, hairline rules instead of cards, a single accent (plot red) used only when something is _active_ or _destined for the user's attention_. The page reads like a lab notebook left open next to a terminal — quiet, dense with real metadata, and unambiguous about what's running. Density is the trust signal. Whitespace is reserved for separating _real_ sections, not for "breathing room" around single sentences.
 
 The system rejects four currently-saturated AI-product looks: SaaS-dashboard KPI tiles with sky-blue gradients; ChatGPT-style centered chat with pastel illustrations; AI-startup neon and glassmorphism; and cute consumer-app rounding-and-mascots. None of those are wrong; none are this. The user is operating; we render an instrument.
 
-The visual chassis is brutalist (sharp 0px corners, no shadows, hairline 1px rules) but the temperature is warm — paper-bone in light, slightly-blue-graphite in dark — and the type pairing is single-family Geist Sans + Geist Mono with differentiation done through *case*, *weight*, and *tracking*. Lab instruments don't pair fonts; they use one face at multiple sizes on the same panel, and that's the discipline here.
+The visual chassis is brutalist (sharp 0px corners, no shadows, hairline 1px rules) but the temperature is warm — paper-bone in light, slightly-blue-graphite in dark — and the type pairing is single-family Geist Sans + Geist Mono with differentiation done through _case_, _weight_, and _tracking_. Lab instruments don't pair fonts; they use one face at multiple sizes on the same panel, and that's the discipline here.
 
 **Key Characteristics:**
+
 - Sharp corners everywhere (0px). One radius across chrome and controls. No exceptions.
 - Flat, never elevated. Depth via tonal layering (3-4% lightness step between page → section → input) and 1px hairline rules.
 - Plot-red accent (≤10% of pixels) reserved for live state, focus, and the operator's selection. It is never decorative.
@@ -149,10 +150,12 @@ The visual chassis is brutalist (sharp 0px corners, no shadows, hairline 1px rul
 The palette is two surface families (warmed paper for light, cool graphite for dark) plus four signal colors, each pinned to one orthogonal semantic role. Plot Red carries the system; the other three are narrow but allowed at rest in their assigned role.
 
 ### Primary (Accent)
-- **Plot Red** (`oklch(58% 0.18 28)`): the only chromatic color used at any meaningful coverage. It marks the *active* — the agent currently streaming, the focused control, the selected session, the live indicator. Borrowed visually from plotter pens and mechanical-instrument signal lights, not from "brand red." Reserved for state and focus, never for decoration or category.
+
+- **Plot Red** (`oklch(58% 0.18 28)`): the only chromatic color used at any meaningful coverage. It marks the _active_ — the agent currently streaming, the focused control, the selected session, the live indicator. Borrowed visually from plotter pens and mechanical-instrument signal lights, not from "brand red." Reserved for state and focus, never for decoration or category.
 - **Plot Red Deep** (`oklch(48% 0.18 28)`): hover/active depression of Plot Red. Same hue, lower lightness. Used on accent buttons only.
 
 ### Neutral (Light Mode — "Paper")
+
 - **Paper** (`oklch(99.4% 0.0015 75)`): page background. Near-white with trace warmth — reads as white on screen, but still not pure `#fff`, so it never goes Material-flat.
 - **Paper Sunk** (`oklch(96% 0.005 75)`): inset surfaces — sidebar, command palette, code blocks, chips. One tonal step below page.
 - **Paper Rule** (`oklch(88% 0.005 75)`): hairline borders and dividers. Single 1px stroke; never doubled, never thickened.
@@ -161,6 +164,7 @@ The palette is two surface families (warmed paper for light, cool graphite for d
 - **Ink Faint** (`oklch(62% 0.005 280)`): tertiary text, placeholder, disabled.
 
 ### Neutral (Dark Mode — "Graphite")
+
 - **Graphite** (`oklch(16% 0.006 280)`): page background. Slight cool tint, never pure black.
 - **Graphite Raised** (`oklch(20% 0.006 280)`): inset surfaces.
 - **Graphite Rule** (`oklch(28% 0.006 280)`): hairline borders.
@@ -199,9 +203,10 @@ Each signal color is pinned to a semantic role. The roles split system activity 
 **Body Font:** Geist (same family — single-typeface discipline)
 **Label/Mono Font:** Geist Mono (with `ui-monospace`, `SFMono-Regular` fallback)
 
-**Character:** Geist is a clean, slightly mechanical neo-grotesque with strong tabular numerals; Geist Mono is its monospaced sibling with the same skeletal proportions. The pair feels engineered without feeling cold, and reads as one type system rather than two voices. Differentiation across the hierarchy is done with size, weight, case, and tracking — *not* by introducing a serif or a display face. Real instruments have one typeface on the panel; this system inherits that discipline.
+**Character:** Geist is a clean, slightly mechanical neo-grotesque with strong tabular numerals; Geist Mono is its monospaced sibling with the same skeletal proportions. The pair feels engineered without feeling cold, and reads as one type system rather than two voices. Differentiation across the hierarchy is done with size, weight, case, and tracking — _not_ by introducing a serif or a display face. Real instruments have one typeface on the panel; this system inherits that discipline.
 
 ### Hierarchy
+
 - **Display** (Geist 600, `clamp(1.75rem, 3vw, 2.5rem)`, line-height 1.05, tracking `-0.02em`): page titles only. One per screen. Used on `/agents`, `/skills`, `/tasks`, `/settings` index views.
 - **Headline** (Geist 600, `1.25rem` / 20px, line-height 1.2, tracking `-0.01em`): section headers within a page (e.g. "Active sessions", "Tools", "Memory").
 - **Title** (Geist 500, `0.9375rem` / 15px, line-height 1.35): row titles, agent names in lists, message author labels.
@@ -221,7 +226,7 @@ Each signal color is pinned to a semantic role. The roles split system activity 
 
 The system is **flat**. No box-shadows. Depth is communicated by tonal layering and hairline rules.
 
-A surface is "raised" by being one tonal step *darker* in light mode and one tonal step *lighter* in dark mode (e.g. paper → paper-sunk; graphite → graphite-raised). The step is small (~3-4% in OKLCH lightness) — felt rather than seen — and is always paired with a 1px hairline at the boundary. Three layers maximum on a screen: page → section → control.
+A surface is "raised" by being one tonal step _darker_ in light mode and one tonal step _lighter_ in dark mode (e.g. paper → paper-sunk; graphite → graphite-raised). The step is small (~3-4% in OKLCH lightness) — felt rather than seen — and is always paired with a 1px hairline at the boundary. Three layers maximum on a screen: page → section → control.
 
 The mental model is a notebook page with sections marked off by ruled lines, not floating cards on a desk.
 
@@ -240,10 +245,11 @@ There is none. `box-shadow` is forbidden in this system. Focus rings are the onl
 ## 5. Components
 
 ### Buttons
+
 - **Shape:** Sharp rectangles. 0px radius. No exceptions including avatars when used as buttons (use a separate Avatar component for circular).
 - **Primary** (Ink button): `ink` background, `paper` text, `8px 14px` padding, Geist 500 14px. Hover: `graphite` background. Used for the dominant action on a panel ("Send", "Save", "Run").
-- **Ghost** (default): transparent background, `ink` text, 1px `paper-rule` border, same padding. Hover: `paper-sunk` background. Used for secondary actions; this is the *most common* button on the system.
-- **Signal** (Plot Red): `plot-red` background, `paper` text. Hover: `plot-red-deep`. Reserved for *single*-action moments where the user must commit to live execution (e.g. "Stop streaming", "Activate agent"). Never used as a generic primary.
+- **Ghost** (default): transparent background, `ink` text, 1px `paper-rule` border, same padding. Hover: `paper-sunk` background. Used for secondary actions; this is the _most common_ button on the system.
+- **Signal** (Plot Red): `plot-red` background, `paper` text. Hover: `plot-red-deep`. Reserved for _single_-action moments where the user must commit to live execution (e.g. "Stop streaming", "Activate agent"). Never used as a generic primary.
 - **Destructive**: `destructive` background, `paper` text, paired with the literal word "Delete" or "Drop". Confirmation always required.
 - **Focus:** 2px `plot-red` solid offset outline, 0 inset. Visible on every interactive control without exception.
 
@@ -252,6 +258,7 @@ There is none. `box-shadow` is forbidden in this system. Focus rings are the onl
 Two tiers. Pick by surface, not by habit.
 
 **Form fields** — settings panes, creation dialogs, anything that reads as "configure then submit":
+
 - **Style:** `paper` background in light / `graphite-raised` in dark. 1px `paper-rule` / `graphite-rule` border. 0px radius. Geist Sans 14px text. Padding `8px 12px`.
 - **Label:** Geist Mono UPPERCASE 11px, tracked, sitting above the input with a 4px gap. Always present; placeholders are not labels.
 - **Focus:** Border becomes `plot-red`. No glow, no shadow. The border-color shift is the affordance.
@@ -259,6 +266,7 @@ Two tiers. Pick by surface, not by habit.
 - **Disabled:** `ink-faint` text, `paper-sunk` background, no border color change.
 
 **In-place fields** — detail panes for a single entity (task, agent, skill, team). The view IS the editor; don't render a settings form around an object the user is reading:
+
 - **No edit mode.** No pencil toggle, no separate read vs. edit layout. Every editable field is live; a single header **Save** enables when any field diverges from the saved entity (per-field comparison, not a blanket flag).
 - **Titles** are chromeless inputs at heading scale — no border, no background, placeholder in `ink-faint`.
 - **Property rows** (status, assignee, dates) use ghost triggers: transparent border/background at rest, `paper-sunk` on hover, `plot-red` border on focus. Negative-margin the hover surface so values stay column-aligned with their labels.
@@ -268,23 +276,28 @@ Two tiers. Pick by surface, not by habit.
 - **Hard rule:** never show the same field twice (once as text, once as input), and never make the user click "Edit" to discover what's editable.
 
 ### Chips
+
 - **ID Chip:** Mono surface for identifiers (session IDs, agent IDs, request IDs, hashes). `paper-sunk` background, `ink-soft` text, Geist Mono 12px, `2px 6px` padding, 0 radius. Always copy-on-click. Never decorated.
 - **Live Chip:** `plot-red` background, `paper` text, Geist Mono 11px UPPERCASE, the literal word `LIVE` or `STREAMING`. Shows only when an agent is mid-response. Removed the instant the stream resolves.
 - **Status Chip:** A thin row — 1px hairline border, no fill, Geist Mono 11px UPPERCASE. The state name is the chip text (`READY`, `IDLE`, `BUILDING`, `STOPPED`). State is encoded by chip text, not by chip color, so reduced-motion / colorblind users get the same signal.
 
 ### Cards / Containers
-- **Don't use cards.** Sections are ruled regions, not floating objects. The only exceptions are deliberate floating *chrome* — the Acme panel and the Inline Notice — which earn elevation via the `ink/15` hairline + restrained shadow idiom over `paper-sunk`, never a glossy rounded card.
+
+- **Don't use cards.** Sections are ruled regions, not floating objects. The only exceptions are deliberate floating _chrome_ — the Acme panel and the Inline Notice — which earn elevation via the `ink/15` hairline + restrained shadow idiom over `paper-sunk`, never a glossy rounded card.
 - A "section" is: an UPPERCASE Geist Mono label across the top, a 1px hairline below the label, content following. Padding inside the section is consistent (`16px`). Sections butt up against one another with their hairlines coinciding (one hairline shared, never doubled).
 - Inset surfaces (sidebar, palette, code block) use `paper-sunk` / `graphite-raised`, hairline border on the side(s) facing the page surface.
 
 ### Navigation (Sidebar)
+
 - Fixed-width left sidebar. `paper-sunk` background. Mono UPPERCASE label rows at `0.6875rem` with `12px 16px` padding.
 - Active nav item: 2px `plot-red` left edge marker (this is allowed because the entire item is the affordance, not a card with a side-stripe; the 2px stripe IS the indicator and replaces the row's bottom-hairline). Geist Sans 500 text turns from `ink-soft` to `ink`.
 - Inactive item: `ink-soft` text, no edge marker, hover applies a 1-step tonal shift on the row background.
 - Section headers within the sidebar (e.g. "WORKSPACES", "AGENTS"): Geist Mono UPPERCASE 11px, `ink-faint`, `8px 16px` padding, hairline below.
 
 ### Status Indicator (signature component)
+
 A 6px circular dot followed by a Geist Mono UPPERCASE label, separated by 6px. The dot color encodes state:
+
 - `plot-red` (filled) — LIVE / STREAMING (animated 1.2s ease pulse)
 - `ink` (filled) — READY / IDLE
 - `signal-amber` (filled) — BUILDING / PENDING
@@ -297,7 +310,9 @@ Pulse is reserved for the chat streaming cursor (above) and the equivalent in-fl
 This dot+label primitive is **standalone**. It is not nested inside Badge / chip components — those encode state via the badge chassis itself (variant fill or recessed mono), with the label as the encoding. The two primitives stay separate.
 
 ### Inline Notice
+
 A low-frequency ambient signal — update available, degraded provider, quota near limit. **Floating chrome** anchored to a viewport corner (clear of the Acme panel and the mobile tab bar). This is the bounded exception to "no floating objects" (§Cards): like the Acme panel, it earns elevation with an `ink/15` hairline + a restrained shadow over `paper-sunk` — never a glossy rounded card. The trap it exists to prevent is the text-heavy notice: a sentence like "OpenAcme v0.13.0 is available (you have v0.12.0)" reads as marketing copy and fails the Read-Aloud Rule. Structure:
+
 - A status line: the dot-or-icon + Geist Mono UPPERCASE label primitive (a `plot-red` mark = needs attention); the label may link out (changelog).
 - **One** short helper line is allowed — it tells the user what the resolution does ("Update to v0.13.0:"), with any machine-truthful value (version, count) in mono. One line, never a paragraph.
 - The resolution as a code-surface command, copy-on-click, when it's a single shell line (`openacme update`).
@@ -306,24 +321,27 @@ A low-frequency ambient signal — update available, degraded provider, quota ne
 Dismissal is keyed to the specific signal (e.g. the version), so resolving one instance doesn't suppress the next. Read-Aloud test: the notice should scan as an instrument readout with one guiding line, not a marketing sentence.
 
 ### Command Palette (signature component)
+
 - Centered, fixed-width modal. `paper-sunk` background, hairline border, 0 radius. No backdrop blur (forbidden by no-shadow / no-glass rules); the overlay dim is a flat 60% `ink` overlay.
 - Geist Mono UPPERCASE 11px labels for section groups (e.g. `AGENTS`, `SESSIONS`, `ACTIONS`). Geist Sans 14px for action labels. Mono 12px for keyboard shortcuts on the right edge.
 - Selected row: `paper` background (one step lighter than the palette body), 2px `plot-red` left edge marker.
 
 ### Chat Message (signature component)
+
 - No bubbles. No avatar circles. No alternating sides.
 - Each message is a flat region with: a Geist Mono UPPERCASE 11px row across the top reading `<role> · <timestamp> · <model>` (e.g. `ASSISTANT · 14:32:01 · claude-sonnet-4`), 1px hairline below the metadata row, then the message body in Geist Sans 14px, then a hairline below the body to mark the bottom of the message.
 - Tool blocks: an indented region inside the assistant message, with its own Mono label (`TOOL · shell · 47ms`) and a `paper-sunk` / `graphite-raised` body. Collapsed by default; expand toggles via a 1-character mono caret (`▸` / `▾`).
-- The streaming cursor is a 2px-wide `plot-red` vertical bar at the end of the live text, blinking at 1.2s ease-in-out. It's the *only* live-pulsing element in a typical screen.
+- The streaming cursor is a 2px-wide `plot-red` vertical bar at the end of the live text, blinking at 1.2s ease-in-out. It's the _only_ live-pulsing element in a typical screen.
 
 ## 6. Do's and Don'ts
 
 ### Do:
+
 - **Do** show real metadata always-visible. Session IDs, agent IDs, timestamps, durations, model names, token counts. Geist Mono, never hidden behind hover.
 - **Do** keep Plot Red ≤10% of any screen. It is the live-state color, not a brand color.
 - **Do** use ruled sections (label + hairline) instead of cards. Stack sections; share hairlines.
 - **Do** use Geist Mono UPPERCASE labels with `letter-spacing: 0.08em` for every faceplate-style label.
-- **Do** encode state in *both* color and text/glyph. A status dot must always be paired with its label.
+- **Do** encode state in _both_ color and text/glyph. A status dot must always be paired with its label.
 - **Do** use 0px radius on every surface — chrome, panels, inputs, buttons, chips. The discipline is the consistency.
 - **Do** use 1px hairlines, single weight, never doubled. Two surfaces meeting share one hairline.
 - **Do** layer with tonality (3-4% OKLCH lightness step). Maximum three layers per screen.
@@ -331,10 +349,11 @@ Dismissal is keyed to the specific signal (e.g. the version), so resolving one i
 - **Do** restrict motion to state transitions (180ms ease-out-quart) and the live-stream pulse (1.2s ease-in-out on Plot Red). Disable both under `prefers-reduced-motion`.
 
 ### Don't:
+
 - **Don't** use `box-shadow` anywhere. Depth is tonal, never shadowed.
 - **Don't** use `border-radius` greater than 0 anywhere. No "rounded-md", no "rounded-lg", no "rounded-full" (avatars are a separate primitive).
 - **Don't** introduce a third typeface. Geist Sans + Geist Mono is the system. No serifs for "editorial moments", no display fonts for headers.
-- **Don't** use Plot Red as a brand color, a background fill, a category tag, a hyperlink color, or anything decorative. Plot Red is reserved for *active* state and focus.
+- **Don't** use Plot Red as a brand color, a background fill, a category tag, a hyperlink color, or anything decorative. Plot Red is reserved for _active_ state and focus.
 - **Don't** mono-everything as a reflex. The four-color signal system (§2) names each chroma for one role — Plot Red for the operator's eye-anchor, Signal Blue for system work (current and scheduled), Signal Amber for WAIT, Signal Green for OK. Stripping them from BLOCKED badges, IN_PROGRESS badges, daemon-up indicators, future-start_at meta, or any other surface that maps to one of those roles flattens the visual and forces the operator to read every cell. Mono-by-default applies to non-state surfaces; state surfaces get their assigned signal color.
 - **Don't** use pure greys. Every neutral has chroma > 0. `#000` and `#fff` are forbidden.
 - **Don't** use cards with floating shadows or rounded corners. Don't nest cards. The "card grid" SaaS pattern is forbidden.
@@ -349,11 +368,11 @@ Dismissal is keyed to the specific signal (e.g. the version), so resolving one i
 
 ## 7. Where Character Lives
 
-§1–§6 above are the fence — what *not* to do. This section is the garden inside it.
+§1–§6 above are the fence — what _not_ to do. This section is the garden inside it.
 
-The discipline of "no shadow, no radius, single accent, no gradient" prevents the four anti-references PRODUCT.md rejects. It does *not*, on its own, produce instrument-grade craft. Restraint without character lands in the second-order trap: editorial-minimal SaaS — "Linear with red." To stay out of that trap, the system commits to specific positive moves — material warmth, weighted motion, considered detail — each of which lives within §2–§6's rules.
+The discipline of "no shadow, no radius, single accent, no gradient" prevents the four anti-references PRODUCT.md rejects. It does _not_, on its own, produce instrument-grade craft. Restraint without character lands in the second-order trap: editorial-minimal SaaS — "Linear with red." To stay out of that trap, the system commits to specific positive moves — material warmth, weighted motion, considered detail — each of which lives within §2–§6's rules.
 
-What follows is the *positive* design vocabulary: where character is added on purpose, the references that inform it, and the failure modes to watch for.
+What follows is the _positive_ design vocabulary: where character is added on purpose, the references that inform it, and the failure modes to watch for.
 
 ### 7.1 Positive References
 
@@ -362,23 +381,23 @@ The four anti-references in PRODUCT.md tell you what we're not. These tell you w
 - **Linear** — single-typeface discipline at scale, tabular numerals everywhere they matter, weighted hover/focus motion, density as trust signal. The reference for "instrument-grade SaaS that respects the operator's intelligence."
 - **Teenage Engineering OP-1** — restraint plus character. Every detail is considered: the knurling on the knobs, the alignment of the silkscreen, the curve of the buttons. Nothing decorative, everything precise. The reference for "tactile and exact."
 - **Vintage Tektronix oscilloscope faceplates** — engraved UPPERCASE labels in monospace, hairline-ruled regions, signal lights that mean something, no display ornament. The reference for the faceplate-mono label system and the status-indicator vocabulary.
-- **iA Writer** — paper as a surface, single typeface, restraint that *feels* warm rather than sterile. The reference for "materiality through paper warmth, not through ornament."
+- **iA Writer** — paper as a surface, single typeface, restraint that _feels_ warm rather than sterile. The reference for "materiality through paper warmth, not through ornament."
 
-When in doubt, ask: *what would Linear / OP-1 / Tektronix / iA Writer do here?* Three of those four answer the question instantly.
+When in doubt, ask: _what would Linear / OP-1 / Tektronix / iA Writer do here?_ Three of those four answer the question instantly.
 
 ### 7.2 The Register
 
 The product's register has three pillars. Every character move belongs to one of them.
 
-**Materiality.** The page reads as a *surface* — warmed paper or cool graphite — not a flat color field. Paper has tooth (faint grain). Surfaces age (ruled lines on a notebook page). Code is distinct from prose (its surface is cooler, edged with a hairline). Selection has a color of its own. Cumulative effect: every screen feels like it could be touched.
+**Materiality.** The page reads as a _surface_ — warmed paper or cool graphite — not a flat color field. Paper has tooth (faint grain). Surfaces age (ruled lines on a notebook page). Code is distinct from prose (its surface is cooler, edged with a hairline). Selection has a color of its own. Cumulative effect: every screen feels like it could be touched.
 
 **Precision.** Alignment is exact. Hairlines are 1px, never "around 1px." Spacing is on a 4px grid; ad-hoc values are forbidden. Numbers are tabular. Mono-for-truth: anything you might paste into a query is in mono, anything you might read is in sans. Visual rhythm rewards close inspection. A reader who looks twice notices that everything was placed on purpose.
 
-**Weighted motion.** Every interaction has *mass* — never bounce, never spring, never elastic. Motion uses a 3-step duration scale (80ms micro-shifts, 180ms state changes, 320ms panel reveals) and ease-out curves only. The page responds the way well-machined controls respond: with deliberate inertia. Choreographed sequences are forbidden; weight is the texture.
+**Weighted motion.** Every interaction has _mass_ — never bounce, never spring, never elastic. Motion uses a 3-step duration scale (80ms micro-shifts, 180ms state changes, 320ms panel reveals) and ease-out curves only. The page responds the way well-machined controls respond: with deliberate inertia. Choreographed sequences are forbidden; weight is the texture.
 
 ### 7.3 The Character Moves
 
-Each of the following is a *primitive* — a named, reusable move. Use the existing one before inventing a new one.
+Each of the following is a _primitive_ — a named, reusable move. Use the existing one before inventing a new one.
 
 #### Materiality
 
@@ -405,15 +424,17 @@ Each of the following is a *primitive* — a named, reusable move. Use the exist
 
 #### Experiential
 
-- **`<JargonChip term="...">`** — inline `[?]` chip next to a domain term; click expands an in-voice paragraph. Use at the *first* occurrence of any of: Agent, Session, MCP, Skill, Task, Persona, Tool, Daemon. Each term explained once per page.
+- **`<JargonChip term="...">`** — inline `[?]` chip next to a domain term; click expands an in-voice paragraph. Use at the _first_ occurrence of any of: Agent, Session, MCP, Skill, Task, Persona, Tool, Daemon. Each term explained once per page.
 - **`Cmd-/` help overlay** — a reference card (not a tour) listing shortcuts and concepts for the current page. Open with `?` or `Cmd-/`, dismiss with `Esc`.
 - **Designed empty states** — every empty list is a teaching moment, not a placeholder. A faux instance scribes in to demonstrate the format. A caption explains where files live. A primary action follows. No mascots, no exclamation points, no "let's get started."
+- **Quiet empty states** — every empty tab, panel, table body, or secondary detail region should avoid table borders, top/bottom rules, nested boxes, and heavy section chrome. Use whitespace, muted text, and a small familiar icon to explain the absence. Add an action only when there is a direct next step; otherwise the empty state should stay visually calm.
+- **Requirement notices** — do not use an empty-state composition when the surface is blocked by a prerequisite. A setup-required state should read as guidance with warning weight: compact left icon, restrained amber accent, mono status label, plain-language requirement, and a direct action only if the user can satisfy it in place. It should not look like a table row, a destructive error, or a "nothing here yet" placeholder.
 
 ### 7.4 Anti-Failure Modes
 
 Three traps that defeat the character vocabulary even when each individual move is correctly applied.
 
-**Editorial-minimal drift.** When the product reduces to *single typeface + hairlines + one accent + max-w-prose body text*, the result looks like a Linear clone or a generic Notion-template settings page. The corrective: ensure paper-surface materiality, weighted motion, and per-state functional color are propagating — not just the typography and the hairlines. After each major surface ships, ask: *would someone read this as "Linear with red"?* If yes, materiality and motion aren't pulling hard enough.
+**Editorial-minimal drift.** When the product reduces to _single typeface + hairlines + one accent + max-w-prose body text_, the result looks like a Linear clone or a generic Notion-template settings page. The corrective: ensure paper-surface materiality, weighted motion, and per-state functional color are propagating — not just the typography and the hairlines. After each major surface ships, ask: _would someone read this as "Linear with red"?_ If yes, materiality and motion aren't pulling hard enough.
 
 **Choreographed motion.** When animations stagger, sequence, dance, or play multiple curves at once, motion stops being weight and becomes personality — closer to a marketing-site preloader than to a piece of lab equipment. The corrective: one curve, one duration, per primitive. No `delay` chains except in the explicit experiential moments (the `<SectionEyebrow>` content scribe-in is a deliberate 4-step sequence; nothing else in the product gets one).
 

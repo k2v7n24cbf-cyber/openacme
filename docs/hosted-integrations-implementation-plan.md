@@ -8428,7 +8428,7 @@ Evidence:
 
 ## Milestone 27: Live Hosted-Tool Concept Acceptance
 
-Status: planned.
+Status: accepted.
 
 Goal:
 
@@ -8452,10 +8452,18 @@ Goal:
 - Produce an operator-readable evidence artifact for every live scenario:
   prompts, agent ids, tool-call sequence, run ids, generation ids, failure bucket
   ids, skipped credential diagnostics, and secret-scan result.
+- When direct runner instrumentation is not enough to explain Tool Developer or
+  consumer behavior, reconstruct tool-call sequence and outcomes from chat
+  message history plus session timeline events. Message-history evidence should
+  stay outside model context and be written only to the operator evidence
+  artifact.
 
 Non-goals:
 
 - No CI dependency on external LLM or vendor availability.
+- No live acceptance prompts, fixtures, analyzers, or dogfood-only assertions in
+  runtime hosted-tool dispatch, registry, API, or agent behavior. They belong
+  only in operator scripts, test-support modules, tests, and this plan.
 - No destructive vendor calls.
 - No broad new granting system beyond existing Agent Settings hosted-tool
   bindings.
@@ -8487,7 +8495,7 @@ Acceptance bar:
 
 ### Slice 27.1: Live Acceptance Runner And Evidence Contract
 
-Status: planned.
+Status: accepted.
 
 Goal:
 
@@ -8533,9 +8541,40 @@ TDD:
 - Add operator typecheck coverage for the runner.
 - Add artifact schema tests so future changes cannot drop evidence fields.
 
+Evidence:
+
+- Added `packages/server/test-support/hosted-tools/live-acceptance.ts` with the
+  live acceptance artifact schema, scenario/tool-call/message-history evidence
+  fields, aggregate status logic, isolated data-dir guard, artifact writer, and
+  denylist secret scanner.
+- Added `packages/server/scripts/hosted-tools-live-acceptance.ts` and package
+  script `pnpm --filter @openacme/server dogfood:hosted-tools:live`.
+- Added `packages/server/test/hosted-tools-live-acceptance.test.ts`.
+- Focused deterministic validation passed:
+  `pnpm --filter @openacme/server exec vitest run test/hosted-tools-live-acceptance.test.ts --reporter=dot`
+  passed: 5 tests.
+- Operator typecheck passed:
+  `pnpm --filter @openacme/server check-types:operator`.
+- Live runner smoke against the isolated test env passed on port 3467 because
+  port 3466 was already occupied by an existing test server:
+  `OPENACME_DATA_DIR="$HOME/.openamce-hosted-integrations-test-env" OPENACME_E2E_PORT=3467 OPENACME_LIVE_HOSTED_TOOLS_RUN_ID=live_hosted_tools_slice_27_1 pnpm --filter @openacme/server dogfood:hosted-tools:live`.
+- Smoke artifact:
+  `$HOME/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/live_hosted_tools_slice_27_1.json`.
+- The smoke artifact recorded model config `openai/gpt-5.5` with `oauth`,
+  server health pass, and secret scan pass.
+
+Historical gaps closed by later slices:
+
+- Slice 27.1 originally proved only the runner/evidence core. Later slices added
+  real LLM turns, message-history harvesting, timeline catalog-notice evidence,
+  vendor-backed hosted invocation, failure repair, live parity matrix evidence,
+  compact reporting, and bounded CLI shutdown.
+- The runner still starts its own isolated server on the requested port; that is
+  acceptable for this operator gate and keeps it away from local prod state.
+
 ### Slice 27.2: Tool Developer Behavioral Contract
 
-Status: planned.
+Status: accepted.
 
 Goal:
 
@@ -8580,9 +8619,55 @@ TDD:
 - Add negative fixture transcripts where Tool Developer skips validation,
   patches without a lock, or asks for secrets; the runner must fail them.
 
+Evidence:
+
+- Added `analyzeToolDeveloperBehaviorEvidence()` in
+  `packages/server/test-support/hosted-tools/live-acceptance.ts`.
+- Added `extractLiveHostedToolCallsFromMessageHistory()` so live scenarios can
+  normalize `tool-*` assistant message parts into artifact/analyzer evidence.
+- Analyzer accepts message-history/tool-call evidence and checks the critical
+  behavior invariants without overfitting to one exact LLM call order:
+  `skill_view` for hosted integration guidance, no non-hosted lifecycle tools,
+  no legacy/remote-MCP/config-scope design mutations, lock before source/example
+  mutation, and validation/example/readiness after the final source/example
+  change before promote.
+- Added positive and negative deterministic transcript fixtures in
+  `packages/server/test/hosted-tools-live-acceptance.test.ts`.
+- Updated the live acceptance runner so it opens a real `/api/chat` turn with
+  `tool-developer`, fetches `/api/sessions/:id/messages`, extracts
+  `tool-*` assistant parts into evidence, and analyzes the resulting transcript.
+  This is intentionally confined to the operator script; no runtime
+  hosted-tool route, dispatch, registry, or agent code imports the live
+  acceptance analyzer.
+- Focused validation passed:
+  `pnpm --filter @openacme/server exec vitest run test/hosted-tools-live-acceptance.test.ts --reporter=dot`
+  passed: 9 tests.
+- Operator typecheck passed:
+  `pnpm --filter @openacme/server check-types:operator`.
+- Live real-LLM smoke passed on port 3467 because 3466 was occupied:
+  `OPENACME_DATA_DIR="$HOME/.openamce-hosted-integrations-test-env" OPENACME_E2E_PORT=3467 OPENACME_LIVE_HOSTED_TOOLS_RUN_ID=live_hosted_tools_slice_27_2_message_history_settled OPENACME_LIVE_HOSTED_TOOLS_SETTLE_MS=5000 pnpm --filter @openacme/server dogfood:hosted-tools:live`.
+- Live smoke artifact:
+  `$HOME/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/live_hosted_tools_slice_27_2_message_history_settled.json`.
+- The artifact recorded `tool-developer` loading
+  `hosted-integrations-development` through `skill_view`, with message ids,
+  session id, parsed args/result summaries, model `openai/gpt-5.5` with
+  `oauth`, and secret scan pass.
+- The runner waits briefly before shutdown so background title-generation writes
+  can settle before the app/database closes.
+
+Residual evidence polish:
+
+- The live gate now harvests message history and timeline catalog notices, and
+  later slices prove vendor-backed consumer use, repair loop, catalog refresh,
+  parity matrix, summary reporting, and bounded shutdown.
+- The analyzer checks critical order and forbidden-design constraints. Future
+  evidence polish can add more negative fixtures for explicit secret requests or
+  Acme-delegation attempts, but the accepted gate already fails design escape,
+  missing proof, remote-MCP/`managed_*` use, and lifecycle bypasses.
+
 ### Slice 27.3: Live Read-Only Vendor Hosted Tool
 
-Status: planned.
+Status: accepted.
 
 Goal:
 
@@ -8621,9 +8706,115 @@ TDD:
 - The live result is accepted only when the final business call hit the hosted
   gateway path and the evidence contains a hosted run id.
 
+Evidence:
+
+- Added consumer hosted-tool transcript analysis to
+  `packages/server/test-support/hosted-tools/live-acceptance.ts`.
+- Added deterministic fixtures in
+  `packages/server/test/hosted-tools-live-acceptance.test.ts` proving the
+  analyzer accepts `hosted_tool_help` before
+  `hosted_qualys__qualys_gav_asset_count` with run evidence, and rejects
+  old `managed_*`/remote namespace escape or missing run evidence.
+- Updated `packages/server/scripts/hosted-tools-live-acceptance.ts` so live mode
+  creates/updates `live-qualys-analyst` with Agent Settings hosted-tool binding
+  and `live-qualys-denied` without binding, then asks the analyst through a real
+  `/api/chat` turn to call `hosted_tool_help` before the canonical
+  `hosted_qualys__qualys_gav_asset_count` business tool.
+- The live runner keeps run-id evidence outside the model context. When the
+  hosted business tool output does not expose a run id to the agent, the runner
+  attempts to reconstruct run ids from `/api/hosted-integrations/runs` using
+  Tool Developer/operator visibility.
+- Focused validation passed:
+  `pnpm --filter @openacme/server exec vitest run test/hosted-tools-live-acceptance.test.ts --reporter=dot`
+  passed: 12 tests.
+- Operator typecheck passed:
+  `pnpm --filter @openacme/server check-types:operator`.
+- Live real-LLM Qualys consumer smoke was executed on port 3467 because 3466
+  was occupied:
+  `OPENACME_DATA_DIR="$HOME/.openamce-hosted-integrations-test-env" OPENACME_E2E_PORT=3467 OPENACME_LIVE_HOSTED_TOOLS_RUN_ID=live_hosted_tools_slice_27_3_qualys_consumer_after_dist_build OPENACME_LIVE_HOSTED_TOOLS_SETTLE_MS=5000 pnpm --filter @openacme/server dogfood:hosted-tools:live`.
+- Live smoke artifact:
+  `$HOME/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/live_hosted_tools_slice_27_3_qualys_consumer_after_dist_build.json`.
+- A follow-up live real-LLM Qualys consumer smoke was executed after adding
+  direct diagnostic evidence and confirming that live acceptance logic remains
+  outside runtime code:
+  `OPENACME_DATA_DIR="$HOME/.openamce-hosted-integrations-test-env" OPENACME_E2E_PORT=3467 OPENACME_LIVE_HOSTED_TOOLS_RUN_ID=live_hosted_tools_slice_27_3_no_runtime_test_embedding OPENACME_LIVE_HOSTED_TOOLS_SETTLE_MS=5000 pnpm --filter @openacme/server dogfood:hosted-tools:live`.
+- Follow-up artifact:
+  `$HOME/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/live_hosted_tools_slice_27_3_no_runtime_test_embedding.json`.
+- The isolated test environment was then prepared through operator setup, not
+  runtime code: `qualys-prod` environment config and secret values were cloned
+  from the existing isolated `qualys-test_debug` state without printing secret
+  values. This allowed the real publish gate to remain intact while promoting a
+  fresh Qualys generation that carries `runtimeConfig` in generation metadata.
+- After operator setup, live Qualys acceptance promoted
+  `gen_d4ab4d0e-70be-41f2-aaed-f8a2064716be` and observed a successful
+  vendor-backed hosted call:
+  `OPENACME_DATA_DIR="$HOME/.openamce-hosted-integrations-test-env" OPENACME_E2E_PORT=3467 OPENACME_LIVE_HOSTED_TOOLS_RUN_ID=live_hosted_tools_slice_27_3_prod_config_setup OPENACME_LIVE_HOSTED_TOOLS_SETTLE_MS=5000 pnpm --filter @openacme/server dogfood:hosted-tools:live`.
+- That run initially exposed an acceptance-runner bug: non-blocking operator
+  diagnostics about runtimeConfig rectification caused the scenario to be marked
+  failed even though the hosted call returned `ok=true`, run id
+  `call_b4d5f9b6-1512-40ff-9ac3-b3dd184a2058`, and generation id
+  `gen_d4ab4d0e-70be-41f2-aaed-f8a2064716be`. The runner now separates
+  blocking diagnostics from evidence diagnostics.
+- Added a product readiness contract fix in
+  `packages/server/src/routes/hosted-integrations.ts` and
+  `packages/server/src/runtime.ts`: debug and invocation readiness now evaluate
+  the active generation metadata that invocation will actually use. They no
+  longer fall back to the current family source manifest when the active
+  generation lacks `runtimeConfig`.
+- Added route regression coverage in
+  `packages/server/test/hosted-integrations-routes.test.ts`: if current source
+  contains `runtimeConfig` but the active generation metadata does not,
+  invocation readiness is blocked with a `runtime_config_contract_missing`
+  blocker.
+- Final live acceptance after the readiness contract fix passed:
+  `OPENACME_DATA_DIR="$HOME/.openamce-hosted-integrations-test-env" OPENACME_E2E_PORT=3467 OPENACME_LIVE_HOSTED_TOOLS_RUN_ID=live_hosted_tools_slice_27_3_after_readiness_contract_fix OPENACME_LIVE_HOSTED_TOOLS_SETTLE_MS=5000 pnpm --filter @openacme/server dogfood:hosted-tools:live`.
+- Final live artifact:
+  `$HOME/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/live_hosted_tools_slice_27_3_after_readiness_contract_fix.json`.
+- Final live evidence: Tool Developer loaded
+  `hosted-integrations-development`; `live-qualys-analyst` called
+  `hosted_tool_help` with full `filter_body` detail before
+  `hosted_qualys__qualys_gav_asset_count`; the hosted call returned `ok=true`,
+  `runId=call_d8831901-6c57-46bb-9aa3-53a883de73b0`, and
+  `generationId=gen_d4ab4d0e-70be-41f2-aaed-f8a2064716be`; the denied-agent
+  check produced no diagnostics; secret scan passed.
+- The artifact proves the consumer agent called `hosted_tool_help` with full
+  `filter_body` detail before calling
+  `hosted_qualys__qualys_gav_asset_count`; it did not call remote MCP or
+  `managed_*` tools. Secret scan passed.
+- Added a platform observability regression fix in
+  `packages/hosted-integrations/src/gateway.ts`: file-backed execution-log
+  listing now skips invalid historical/partially-written log files instead of
+  taking down `/api/hosted-integrations/runs`; `getRunLog(runId)` remains
+  strict for exact log reads.
+- Added regression coverage in
+  `packages/hosted-integrations/test/execution-log.test.ts`; focused validation
+  passed:
+  `pnpm --filter @openacme/hosted-integrations exec vitest run test/execution-log.test.ts --reporter=dot`
+  passed: 3 tests.
+- Final focused validation after the readiness contract fix passed:
+  `pnpm --filter @openacme/server exec vitest run test/hosted-integrations-routes.test.ts --reporter=dot`
+  passed: 47 tests;
+  `pnpm --filter @openacme/server exec vitest run test/hosted-tools-live-acceptance.test.ts --reporter=dot`
+  passed: 12 tests;
+  `pnpm --filter @openacme/server check-types`;
+  `pnpm --filter @openacme/server check-types:operator`;
+  `pnpm --filter @openacme/hosted-integrations exec vitest run test/execution-log.test.ts --reporter=dot`;
+  `git diff --check`.
+
+Residual evidence polish:
+
+- The live runner verifies denied-agent policy through a direct
+  `binding_missing` invocation check and fails the scenario if it does not hold.
+  Later evidence polish can record that denied HTTP status and policy code as a
+  first-class scenario field instead of only relying on no blocking diagnostic.
+- The isolated environment preparation remains an operator action. That is
+  correct for human-owned secrets, but the live runner should keep producing
+  precise skipped/blocking diagnostics when `prod` config is absent rather than
+  trying to synthesize secrets or bypass publish gates.
+
 ### Slice 27.4: Design-Preserving Failure Repair
 
-Status: planned.
+Status: accepted.
 
 Goal:
 
@@ -8680,9 +8871,73 @@ TDD:
   scenario must fail with a clear diagnostic naming the violated design
   boundary.
 
+Evidence:
+
+- Added `analyzeToolDeveloperRepairBehaviorEvidence()` in
+  `packages/server/test-support/hosted-tools/live-acceptance.ts`. It checks that
+  Tool Developer loads the hosted integration lifecycle skill, inspects the
+  failure bucket, failing run, and focused source before patching, acquires a
+  lock before source mutation, avoids forbidden design mutations/remote MCP or
+  `managed_*` escape hatches, adds regression evidence, validates before
+  promote, debug-runs the repaired generation, and closes the bucket with
+  bucket/draft/generation/regression evidence.
+- Added deterministic repair transcript fixtures in
+  `packages/server/test/hosted-tools-live-acceptance.test.ts`: one positive
+  repair lifecycle and one negative forbidden-workaround/no-proof transcript.
+- Extended `packages/server/scripts/hosted-tools-live-acceptance.ts` with a
+  config-free, safe, deliberately buggy repair family. The setup uses existing
+  hosted-tool control-plane APIs only; it does not embed test behavior in
+  runtime dispatch, registry, Agent Settings, or gateway code.
+- First live repair run failed during setup validation because the test family
+  fixture used an invalid `after_tool_call` hook signature. Artifact:
+  `$HOME/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/live_hosted_tools_slice_27_4_repair_first_pass.json`.
+  The fixture was corrected to the deterministic runtime contract.
+- Second live repair run proved the Tool Developer did the full repair, but the
+  acceptance analyzer was too strict for message-history summaries because
+  `hosted_tool_example_upsert` collapses nested example objects to `[object]`.
+  Artifact:
+  `$HOME/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/live_hosted_tools_slice_27_4_repair_second_pass.json`.
+  The analyzer now treats successful repair-scope `hosted_tool_example_upsert`
+  plus `hosted_tool_example_run`/bucket-close regression id as valid regression
+  proof.
+- Final live repair acceptance passed:
+  `OPENACME_DATA_DIR="$HOME/.openamce-hosted-integrations-test-env" OPENACME_E2E_PORT=3467 OPENACME_LIVE_HOSTED_TOOLS_RUN_ID=live_hosted_tools_slice_27_4_repair_accepted OPENACME_LIVE_HOSTED_TOOLS_SETTLE_MS=5000 pnpm --filter @openacme/server dogfood:hosted-tools:live`.
+- Final artifact:
+  `$HOME/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/live_hosted_tools_slice_27_4_repair_accepted.json`.
+- Final live evidence: consumer agent `live-repair-consumer` triggered
+  `hosted_repair-live-msutdszt__repair_echo` with `{"text":"boom"}` and
+  produced failing run `call_294fe6b1-eaaf-4c52-8111-5f215a57d2ae` plus
+  failure bucket `bucket_db115c00-de79-4578-8fa3-2d0ab79dcb4d`. Tool Developer
+  loaded `hosted-integrations-development`, inspected
+  `hosted_tool_failure_bucket_get`, `hosted_tool_run_get`, and
+  `hosted_tool_source_view`, acquired lock
+  `lock_43f24e90-43da-473e-98e1-671b6c3d2e92`, created draft
+  `draft_0e8ec6fe-7e29-439e-8141-dac60ecab186`, patched only
+  `repair_live.py`, upserted and ran regression example
+  `regression_boom_request`, validated, promoted repaired generation
+  `gen_9cf84215-cca1-4241-8532-e26023e9f460`, debug-ran it successfully with
+  run `call_30532829-d340-4f34-9c52-2ea675b17504`, closed the bucket, and
+  released the lock.
+- Focused validation passed:
+  `pnpm --filter @openacme/server exec vitest run test/hosted-tools-live-acceptance.test.ts --reporter=dot`
+  passed: 14 tests;
+  `pnpm --filter @openacme/server check-types:operator`.
+
+Residual evidence polish:
+
+- The final artifact proves the intended lifecycle through message-history tool
+  calls, but it does not yet diff the repaired generation source to prove that
+  only hosted family files changed. The current guard detects forbidden design
+  mutations in the transcript; later evidence polish should link a generation
+  diff artifact for the repair scenario.
+- The regression example payload is summarized as `[object]` in message-history
+  evidence. That is acceptable for the current analyzer because close/debug
+  proof is stronger, but richer operator evidence should preserve sanitized
+  example id/category/toolName without dumping arbitrary nested args.
+
 ### Slice 27.5: Live Catalog Refresh And Agent Settings Boundary
 
-Status: planned.
+Status: accepted.
 
 Goal:
 
@@ -8716,9 +8971,58 @@ TDD:
 - Live runner adds a real LLM/session proof and records the notice ids in the
   evidence artifact.
 
+Implementation notes:
+
+- The live runner now includes `live-catalog-refresh-agent-settings-boundary`.
+  It creates two open chat sessions before a config-free hosted tool is
+  promoted:
+  - `live-catalog-granted` already has the canonical hosted tool name and
+    hosted-tool binding in Agent Settings.
+  - `live-catalog-ungranted` has only a remote-MCP-shaped tool selection and no
+    hosted binding.
+- Hosted registry refresh must not eagerly evict cached agent entries. The
+  global tool registry generation already forces a lazy rebuild on the next
+  turn; preserving the previous emitted-tool snapshot is required to produce
+  `session.tool_catalog.changed` / `tool_catalog_notice` for open sessions.
+- This is product behavior, not a test hook. Acceptance fixtures remain in
+  `packages/server/scripts`, `packages/server/test-support`, and
+  `packages/server/test`.
+
+Accepted evidence:
+
+- First live run before the cache-retention fix failed exactly on the intended
+  gap:
+  `$HOME/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/live_hosted_tools_slice_27_5_catalog_refresh.json`.
+  The granted open session successfully called
+  `hosted_catalog-live-msuttfrq__catalog_echo`, proving same-session tool
+  visibility, but no catalog notice was persisted.
+- Product fix: hosted registry refresh now relies on `toolRegistry.generation`
+  for lazy agent rebuilds and does not call `evictAgentsUsingTools()` for
+  hosted promote/delete refreshes.
+- Final live run passed:
+  `$HOME/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/live_hosted_tools_slice_27_5_catalog_refresh_after_lazy_fix.json`.
+  `live-catalog-granted` kept an open session
+  `9a1276f9-460d-41ff-9d0b-004fdd9b8f6a`, observed newly promoted
+  `hosted_catalog-live-msutxpph__catalog_echo`, called it successfully with run
+  `call_2f78afed-895c-4168-8545-7a0d4af21fd6`, and persisted catalog notice
+  `fa2398b6-441f-496b-a4a1-2ff9ab88270e`.
+  `live-catalog-ungranted` kept session
+  `ac995cb3-667e-4cdb-a8b2-a4183c1ea122`, did not call the hosted tool, and did
+  not receive a hosted-tool catalog notice. Direct hosted invoke with only the
+  remote-MCP-shaped selection was denied with `binding_missing`.
+- Focused validation passed:
+  `pnpm --filter @openacme/server exec vitest run test/hosted-tools-live-acceptance.test.ts --reporter=dot`
+  passed: 16 tests;
+  `pnpm --filter @openacme/server check-types`;
+  `pnpm --filter @openacme/server check-types:operator`;
+  `pnpm --filter @openacme/server exec vitest run test/hosted-integrations-routes.test.ts --reporter=dot`
+  passed: 47 tests;
+  `pnpm --filter @openacme/hosted-integrations exec vitest run test/execution-log.test.ts --reporter=dot`
+  passed: 3 tests.
+
 ### Slice 27.6: Live Parity Matrix As Supporting Evidence
 
-Status: planned.
+Status: accepted.
 
 Goal:
 
@@ -8753,10 +9057,54 @@ TDD:
 - Existing fake-client live parity tests remain the deterministic first gate.
 - The live concept runner invokes parity only as an operator/live step and
   reports per-family pass/skip/fail.
+- Live acceptance analyzer tests fail closed on missing family results,
+  required-family skips, failed parity, empty pass artifacts, unlinked artifacts,
+  or artifact secret findings.
+
+Acceptance notes:
+
+- Added `parityResults` to the live hosted-tool acceptance artifact; this is
+  operator/test-support evidence only and is not imported by product runtime
+  code.
+- The live runner now executes the parity matrix through the same in-memory
+  `HostedIntegrationService` used by the isolated server. This keeps generated
+  hosted tool generations visible to the later consumer/chat scenarios without
+  reintroducing integration-hub migration or runtime conversion code.
+- Final live run passed:
+  `$HOME/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/live_hosted_tools_slice_27_6_parity_matrix_shared_service.json`.
+  Results: Qualys passed 5/5 read-only parity cases, Microsoft Graph passed
+  1/1 service-root parity case, Splunk skipped with expired-token diagnostics,
+  MDE skipped with missing `MDE_*` diagnostics, Defender alert skipped with
+  missing `DEFENDER_*` diagnostics, and artifact `secretScan.status` was
+  `pass`.
+- The same run proved the downstream hosted consumer used the refreshed Qualys
+  generation `gen_430ae778-139e-40a9-a868-89a0c368c035` and successfully
+  called `hosted_qualys__qualys_gav_asset_count` with run
+  `call_b4dd4469-2b85-4cc0-bbd0-c4251dcef154`.
+- Defect found and fixed during the live run: token-shaped runtime errors were
+  sanitized at gateway failure return, execution-log, and artifact choke
+  points. The sanitizer and secret scanner now detect JWT-shaped values.
+- Defect found and fixed in the Qualys source fixture: auth response rejection
+  now checks HTML prefixes instead of rejecting any valid JWT text that happens
+  to contain the substring `html`.
+- Historical gap closed in Slice 27.7: after printing a complete passing JSON
+  artifact, the live runner process could remain open until interrupted. The
+  regression gate now owns bounded process shutdown and exits explicitly with
+  the artifact status code.
+- Final deterministic validation passed:
+  `pnpm --filter @openacme/server check-types`;
+  `pnpm --filter @openacme/server check-types:operator`;
+  `pnpm --filter @openacme/server exec vitest run test/hosted-tools-live-acceptance.test.ts test/hosted-integration-live-parity.test.ts test/hosted-integrations-routes.test.ts --reporter=dot`
+  passed: 82 tests;
+  `pnpm --filter @openacme/hosted-integrations exec vitest run test/artifacts.test.ts test/gateway.test.ts test/integration-hub-replacement.test.ts test/execution-log.test.ts --reporter=dot`
+  passed: 43 tests, 1 skipped.
+- Runtime import scan passed: no live acceptance, integration-hub parity, or
+  test-support parity runner imports exist under product `src` or web app
+  runtime paths.
 
 ### Slice 27.7: Reporting And Regression Gate
 
-Status: planned.
+Status: accepted.
 
 Goal:
 
@@ -8783,3 +9131,44 @@ TDD:
 
 - Snapshot-test the markdown summary from fake scenario results.
 - Schema-test the JSON artifact for backward-compatible review fields.
+
+Acceptance notes:
+
+- Added compact markdown reporting through
+  `renderLiveHostedToolAcceptanceSummary()` and
+  `writeLiveHostedToolAcceptanceReport()` in
+  `packages/server/test-support/hosted-tools/live-acceptance.ts`.
+- The report writes beside the live artifact under the isolated data dir:
+  `<runId>.summary.md` and `latest.json`. `latest.json` records the current
+  run id, status, artifact path, summary path, and completion timestamp for
+  quick operator review after long runs.
+- The summary names the critical outcomes explicitly: Tool Developer behavior,
+  business hosted invocation, denied access boundary, failure repair loop,
+  catalog refresh, live parity matrix, skipped live parity families, and secret
+  scan status.
+- The summary separates deterministic regression evidence from live external
+  evidence so operator results are not confused with CI/unit proof.
+- Added `dogfood:hosted-tools:live:gate` as the explicit lightweight regression
+  gate command. It runs the same operator acceptance runner and exits non-zero
+  when the artifact status is `fail`.
+- The operator CLI now writes the JSON artifact, markdown summary, and latest
+  pointer before bounded shutdown. After bounded cleanup it exits explicitly
+  with the artifact status code, so open external handles no longer require a
+  manual interrupt.
+- Final live gate passed and exited with code 0:
+  `OPENACME_E2E_PORT=3467 OPENACME_LIVE_HOSTED_TOOLS_RUN_ID=live_hosted_tools_slice_27_7_reporting_gate pnpm --filter @openacme/server dogfood:hosted-tools:live:gate`.
+- Final live gate evidence:
+  `$HOME/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/live_hosted_tools_slice_27_7_reporting_gate.json`;
+  summary:
+  `$HOME/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/live_hosted_tools_slice_27_7_reporting_gate.summary.md`;
+  latest pointer:
+  `$HOME/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/latest.json`.
+  The run status was `pass`, secret scan was `pass`, Qualys live parity passed
+  5/5, Microsoft Graph live parity passed 1/1, Splunk skipped with expired token
+  diagnostics, and MDE/Defender alert skipped with missing credential
+  diagnostics.
+- Final deterministic validation passed:
+  `pnpm --filter @openacme/server check-types`;
+  `pnpm --filter @openacme/server check-types:operator`;
+  `pnpm --filter @openacme/server exec vitest run test/hosted-tools-live-acceptance.test.ts test/hosted-integration-live-parity.test.ts test/hosted-integrations-routes.test.ts --reporter=dot`
+  passed: 84 tests.

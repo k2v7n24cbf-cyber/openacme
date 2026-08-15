@@ -159,8 +159,7 @@ export function registerHostedIntegrationRoutes(
         familyId,
         environment: environment === "prod" ? "prod" : "test_debug",
         generation: {
-          runtimeConfig:
-            activeGeneration?.runtimeConfig ?? family?.manifest.runtimeConfig,
+          runtimeConfig: activeGeneration?.runtimeConfig,
         },
         policyDecision: {
           ok: true,
@@ -235,8 +234,7 @@ export function registerHostedIntegrationRoutes(
         familyId,
         environment,
         generation: {
-          runtimeConfig:
-            activeGeneration?.runtimeConfig ?? family?.manifest.runtimeConfig,
+          runtimeConfig: activeGeneration?.runtimeConfig,
         },
         policyDecision,
         environmentConfig,

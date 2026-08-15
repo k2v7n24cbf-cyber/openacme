@@ -131,6 +131,49 @@ describe("hosted integration execution logs", () => {
     expect(rawLog).not.toContain("token_123");
     expect(rawLog).not.toContain("raw-token");
   });
+
+  it("skips invalid historical log files when listing execution logs", async () => {
+    const runtime = fakeRuntime({ result: { count: 1 }, elapsedMs: 25 });
+    await seedPromotedGeneration();
+    await seedConfig();
+    const instance = createFileHostedIntegrationGateway({
+      dataDir,
+      runtime,
+      now: () => new Date(nowMs),
+    });
+
+    const result = await instance.invoke(allowedInvocation());
+    if (!result.ok || result.replayed) {
+      throw new Error(`invoke failed: ${JSON.stringify(result)}`);
+    }
+    const logsDir = path.join(
+      dataDir,
+      "hosted-integrations",
+      "execution-logs",
+    );
+    await mkdir(logsDir, { recursive: true });
+    await writeFile(
+      path.join(logsDir, "legacy-invalid.json"),
+      JSON.stringify({
+        runId: "legacy-invalid",
+        familyId: "qualys",
+        toolName: "qualys_count_assets",
+        generationId: "gen_legacy",
+        actorId: "agent:analyst",
+        configScopeId: "legacy-scope",
+        sanitizedArgs: {},
+        status: "succeeded",
+        startedAt: "2026-08-12T09:00:00.000Z",
+      }),
+    );
+
+    await expect(
+      instance.executionLogs.getRunLog("legacy-invalid"),
+    ).rejects.toThrow();
+    await expect(
+      instance.executionLogs.listRunLogs({ familyId: "qualys" }),
+    ).resolves.toMatchObject([{ runId: result.runId }]);
+  });
 });
 
 function allowedInvocation(

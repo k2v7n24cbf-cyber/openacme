@@ -1071,6 +1071,59 @@ describe("hosted integrations readiness routes", () => {
     );
     expect(res.status).toBe(404);
   });
+
+  it("reports invocation blocked when active generation lacks runtime config even if current source has it", async () => {
+    writeFamily(
+      "qualys",
+      familyYamlWithRuntimeConfigContract({
+        requiredConfigKeys: ["endpoint"],
+        requiredSecretKeys: ["apiToken"],
+      }),
+    );
+    const generationId = await promoteFamily("qualys");
+    removeGenerationRuntimeConfig(generationId);
+    await seedEnvironmentConfig("qualys", "test_debug");
+    await manager.createAgent(
+      AgentDefinitionSchema.parse({
+        id: "analyst",
+        name: "Analyst",
+        role: "",
+        model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+        persona: "Use hosted integrations.",
+        tools: ["hosted_qualys__qualys_count_assets"],
+        hostedIntegrationBindings: [
+          {
+            familyId: "qualys",
+            toolName: "qualys_count_assets",
+            allowedEnvironments: ["test_debug"],
+            defaultEnvironment: "test_debug",
+            generationPin: { type: "current" },
+            bindingKind: "agent",
+            updatedAt: "2026-08-14T10:00:00.000Z",
+            updatedBy: "human:test",
+          },
+        ],
+      }),
+    );
+
+    const res = await req(
+      "/api/hosted-integrations/readiness/invocation?agentId=analyst&familyId=qualys&toolName=qualys_count_assets",
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      ok: true,
+      readiness: {
+        kind: "invocation",
+        status: "blocked",
+        code: "environment_incomplete",
+        blockers: [
+          {
+            code: "runtime_config_contract_missing",
+          },
+        ],
+      },
+    });
+  });
 });
 
 describe("hosted integrations approval routes", () => {
@@ -3260,6 +3313,22 @@ async function promoteFamily(
   });
   if (!generation.ok) throw new Error(generation.reason);
   return generation.generation.id;
+}
+
+function removeGenerationRuntimeConfig(generationId: string): void {
+  const metadataPath = path.join(
+    dataDir,
+    "hosted-integrations",
+    "generations",
+    generationId,
+    "metadata.json",
+  );
+  const metadata = JSON.parse(readFileSync(metadataPath, "utf-8")) as Record<
+    string,
+    unknown
+  >;
+  delete metadata.runtimeConfig;
+  writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
 }
 
 async function promoteFamilyWithService(familyId: string): Promise<string> {

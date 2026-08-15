@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -158,6 +158,43 @@ describe("hosted integration gateway", () => {
         message: expect.stringContaining("ValueError"),
       },
     });
+  });
+
+  it("redacts token-shaped runtime errors from return, execution log, and artifact", async () => {
+    const jwtPrefix =
+      "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhYmR1YUFhYTIiLCJsb2dpblJlc3BvbnNlIjoiU1VDQ0VTU0ZVTCJ9";
+    const runtime = fakeRuntime({
+      error: {
+        code: "tool_bug",
+        message: `Qualys Gateway /auth did not return a raw JWT token: ${jwtPrefix}`,
+      },
+    });
+    await seedPromotedGeneration();
+    await seedConfig();
+    const instance = gateway(runtime);
+
+    const result = await instance.invoke(allowedInvocation());
+    expect(JSON.stringify(result)).not.toContain("eyJhbGci");
+    expect(JSON.stringify(result)).toContain("[REDACTED]");
+    if (result.ok || !result.runId) throw new Error("invoke did not fail");
+
+    const log = await instance.executionLogs.getRunLog(result.runId);
+    expect(JSON.stringify(log)).not.toContain("eyJhbGci");
+    expect(JSON.stringify(log)).toContain("[REDACTED]");
+    const errorArtifact = await readFile(
+      path.join(
+        dataDir,
+        "hosted-integrations",
+        "workspaces",
+        "qualys",
+        "runs",
+        result.runId,
+        "error.json",
+      ),
+      "utf-8",
+    );
+    expect(errorArtifact).not.toContain("eyJhbGci");
+    expect(errorArtifact).toContain("[REDACTED]");
   });
 
   it("records owner-actionable failure buckets for consumer invocations", async () => {

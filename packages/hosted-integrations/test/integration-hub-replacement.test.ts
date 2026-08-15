@@ -363,6 +363,12 @@ describe("legacy integration-hub replacement security families", () => {
     expect(fixture.sourceFiles["qualys.py"]).toContain(
       "def after_tool_call(tool_name, args, ctx, result, auth):",
     );
+    expect(fixture.sourceFiles["qualys.py"]).toContain(
+      'token_lower.startswith("<html")',
+    );
+    expect(fixture.sourceFiles["qualys.py"]).not.toContain(
+      '"html" in token.lower()',
+    );
     expect(fixture.sourceFiles["qualys.py"]).not.toContain("def call_tool(");
 
     await seedReplacementSourceFamily(fixture);

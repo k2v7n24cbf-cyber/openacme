@@ -742,23 +742,24 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
     error: HostedIntegrationGatewayError;
     suppressFailureBucket?: boolean;
   }): Promise<InvokeHostedIntegrationResult> {
+    const sanitizedError = sanitizeGatewayError(args.error);
     await this.artifacts.completeRunError({
       familyId: args.familyId,
       runId: args.runId,
-      error: gatewayErrorToJson(args.error),
+      error: gatewayErrorToJson(sanitizedError),
     });
     const endedAt = this.now().toISOString();
     await this.executionLogs.finishLog(args.runId, {
       status: "failed",
       endedAt,
       durationMs: durationMs(args.startedAt, endedAt),
-      error: sanitizeGatewayError(args.error),
+      error: sanitizedError,
     });
     if (!args.suppressFailureBucket) {
       await this.recordFailureBucket(args.runId);
     }
     await this.generations.completeInvocation({ leaseId: args.leaseId });
-    return { ok: false, runId: args.runId, error: args.error };
+    return { ok: false, runId: args.runId, error: sanitizedError };
   }
 
   private async recordFailureBucket(runId: string): Promise<void> {
@@ -827,19 +828,24 @@ class FileHostedIntegrationExecutionLogStore implements HostedIntegrationExecuti
   async listRunLogs(
     request: ListHostedIntegrationExecutionLogsRequest = {},
   ): Promise<HostedIntegrationExecutionLogEntry[]> {
-    let entries: HostedIntegrationExecutionLogEntry[];
+    const entries: HostedIntegrationExecutionLogEntry[] = [];
     try {
-      entries = await Promise.all(
-        (await readdir(this.logsDir))
-          .filter((fileName) => fileName.endsWith(".json"))
-          .map(async (fileName) =>
+      const fileNames = (await readdir(this.logsDir)).filter((fileName) =>
+        fileName.endsWith(".json"),
+      );
+      for (const fileName of fileNames) {
+        try {
+          entries.push(
             ExecutionLogEntrySchema.parse(
               JSON.parse(
                 await readFile(path.join(this.logsDir, fileName), "utf-8"),
               ),
             ),
-          ),
-      );
+          );
+        } catch {
+          // Historical or partially-written logs must not take down list views.
+        }
+      }
     } catch (error) {
       if (isNodeError(error) && error.code === "ENOENT") return [];
       throw error;

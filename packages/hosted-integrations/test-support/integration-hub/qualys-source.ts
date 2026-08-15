@@ -917,7 +917,8 @@ class QualysClient:
         )
         if not token:
             raise QualysToolError("auth_failed", "Qualys Gateway /auth returned an empty token")
-        if token.startswith("<") or "html" in token.lower():
+        token_lower = token.lower()
+        if token.startswith("<") or token_lower.startswith("<!doctype") or token_lower.startswith("<html"):
             raise QualysToolError("auth_failed", f"Qualys Gateway /auth did not return a raw JWT token: {token[:300]}")
         self._jwt_token = token
         return token

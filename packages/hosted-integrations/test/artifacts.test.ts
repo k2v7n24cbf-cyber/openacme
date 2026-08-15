@@ -162,7 +162,8 @@ describe("hosted integration run directories and response artifacts", () => {
       familyId: run.familyId,
       error: {
         code: "upstream_failed",
-        message: "token raw-token failed",
+        message:
+          "token raw-token failed with jwt eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhYmR1YUFhYTIiLCJsb2dpblJlc3BvbnNlIjoiU1VDQ0VTU0ZVTCJ9",
         apiToken: "raw-token",
       },
     });
@@ -185,6 +186,7 @@ describe("hosted integration run directories and response artifacts", () => {
     expect(combined).not.toContain("super-secret-password");
     expect(combined).not.toContain("raw-token");
     expect(combined).not.toContain("nested-secret");
+    expect(combined).not.toContain("eyJhbGci");
     expect(combined).toContain("[REDACTED]");
   });
 });

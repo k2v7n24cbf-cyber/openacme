@@ -21,8 +21,15 @@ const DEFAULT_INLINE_RESULT_TOKEN_LIMIT = 8_000;
 const REDACTED = "[REDACTED]";
 const SENSITIVE_KEY_PATTERN =
   /(?:secret|token|password|passwd|pwd|credential|api[_-]?key|authorization)/i;
-const SENSITIVE_VALUE_PATTERN =
-  /(?:bearer\s+[a-z0-9._~+/-]+|raw-token|super-secret[^\s",}]*)/gi;
+const SENSITIVE_VALUE_PATTERN = new RegExp(
+  [
+    String.raw`bearer\s+[a-z0-9._~+/-]+`,
+    String.raw`eyJ[a-z0-9_-]{20,}(?:\.[a-z0-9_-]{20,}){0,2}`,
+    String.raw`raw-token`,
+    String.raw`super-secret[^\s",}]*`,
+  ].join("|"),
+  "gi",
+);
 
 export interface FileHostedIntegrationArtifactStoreOptions {
   dataDir: string;

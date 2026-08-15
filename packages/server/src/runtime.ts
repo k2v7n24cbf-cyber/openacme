@@ -1143,8 +1143,7 @@ export class ServerRuntime {
           familyId,
           environment: environment === "prod" ? "prod" : "test_debug",
           generation: {
-            runtimeConfig:
-              activeGeneration?.runtimeConfig ?? family?.manifest.runtimeConfig,
+            runtimeConfig: activeGeneration?.runtimeConfig,
           },
           policyDecision: {
             ok: true,
@@ -1210,8 +1209,7 @@ export class ServerRuntime {
           familyId,
           environment,
           generation: {
-            runtimeConfig:
-              activeGeneration?.runtimeConfig ?? family?.manifest.runtimeConfig,
+            runtimeConfig: activeGeneration?.runtimeConfig,
           },
           policyDecision,
           environmentConfig,
@@ -1597,11 +1595,11 @@ export class ServerRuntime {
   private async refreshHostedIntegrationRegistry(
     event?: HostedIntegrationRegistryRefreshEvent,
   ): Promise<void> {
+    // Keep cached agent entries until the next turn. The global tool registry
+    // generation lazily rebuilds them, and the old emitted-tool snapshot is how
+    // open sessions produce session.tool_catalog.changed notices.
     if (event?.reason === "delete") {
-      const removedToolNames = this.hostedIntegrationToolRegistry.removeFamily(
-        event.familyId,
-      );
-      this.agentManager.evictAgentsUsingTools(new Set(removedToolNames));
+      this.hostedIntegrationToolRegistry.removeFamily(event.familyId);
       return;
     }
     const generations = event
@@ -1611,7 +1609,6 @@ export class ServerRuntime {
           ),
         ]
       : await this.hostedIntegrationService.generations.listGenerations();
-    const changedToolNames = new Set<string>();
     for (const generation of generations) {
       if (!generation || generation.status !== "active") continue;
       const snapshot = await this.hostedIntegrationRegistrySnapshot(generation);
@@ -1629,14 +1626,7 @@ export class ServerRuntime {
         );
         continue;
       }
-      for (const toolName of result.registeredToolNames) {
-        changedToolNames.add(toolName);
-      }
-      for (const toolName of result.removedToolNames) {
-        changedToolNames.add(toolName);
-      }
     }
-    this.agentManager.evictAgentsUsingTools(changedToolNames);
   }
 
   scheduleHostedIntegrationDeleteFinalization(familyId: string): void {

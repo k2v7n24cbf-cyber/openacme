@@ -41,6 +41,7 @@
     "test:e2e:langfuse": "vitest run --config vitest.langfuse-e2e.config.ts",
     "dogfood:hosted-tools:live": "tsx scripts/hosted-tools-live-acceptance.ts",
     "dogfood:hosted-tools:live:gate": "tsx scripts/hosted-tools-live-acceptance.ts",
+    "dogfood:hosted-tools:live:unguided-management": "tsx scripts/hosted-tools-unguided-management.ts",
     "dogfood:hosted-integrations:real-llm": "tsx scripts/hosted-integrations-real-llm-dogfood.ts",
     "integration-hub:parity": "tsx scripts/integration-hub-parity.ts",
     "prepack": "rm -rf web && cp -r ../../apps/web/out web"

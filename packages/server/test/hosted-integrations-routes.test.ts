@@ -559,7 +559,7 @@ describe("hosted integrations proposed family routes", () => {
           code: "package_file_path_operational",
         }),
       ]),
-      files: ["family.yaml", "github.py", "tools.yaml"],
+      files: [],
     });
 
     res = await req("/api/hosted-integrations/packages/import", {
@@ -587,6 +587,39 @@ describe("hosted integrations proposed family routes", () => {
     res = await req("/api/hosted-integrations/families?includeProposed=true");
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({ families: [] });
+  });
+
+  it("rejects package export when source files contain raw secret-shaped content", async () => {
+    writeFamily("qualys", familyYaml("qualys", "Qualys", "qualys_count_assets"), {
+      "qualys.py":
+        hostedPackagePythonSource("qualys_count_assets") +
+        "\nAPI_TOKEN = 'raw-token-export-leak'\n",
+    });
+
+    const res = await req("/api/hosted-integrations/packages/export", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actor: toolDeveloperActor(),
+        source: { type: "current_source", familyId: "qualys" },
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body).toMatchObject({
+      ok: false,
+      error: { code: "invalid_package" },
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({
+          code: "package_file_secret",
+          message:
+            "file qualys.py contains secret-shaped content; remove raw credentials before package import/export",
+        }),
+      ]),
+    });
+    expect(JSON.stringify(body)).not.toContain("raw-token-export-leak");
+    expect(JSON.stringify(body)).not.toContain("packageDocument");
   });
 
   it("imports a hosted family package through the product API without promoting it", async () => {

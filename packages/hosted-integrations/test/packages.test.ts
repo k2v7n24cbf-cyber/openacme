@@ -162,6 +162,36 @@ describe("hosted family package validation", () => {
     );
   });
 
+  it("fails package files that contain raw secret-shaped content", async () => {
+    const result = await validateHostedFamilyPackage({
+      ...validPackage(),
+      files: validPackage().files.map((file) =>
+        file.path === "qualys.py"
+          ? {
+              ...file,
+              content:
+                pythonSource() +
+                "\n# leaked token should block package export/import\n" +
+                "API_TOKEN = 'raw-token-export-leak'\n" +
+                "AUTH_HEADER = 'Bearer sk-live-secret-token'\n",
+            }
+          : file,
+      ),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "package_file_secret",
+          path: "$.files.2.content",
+        }),
+      ]),
+    );
+    expect(JSON.stringify(result)).not.toContain("raw-token-export-leak");
+    expect(JSON.stringify(result)).not.toContain("sk-live-secret-token");
+  });
+
   it("fails malformed YAML", async () => {
     const toolResult = await validateHostedFamilyPackage({
       ...validPackage(),

@@ -48,6 +48,15 @@ export const HOSTED_FAMILY_PACKAGE_VERSION = 1;
 export const HOSTED_FAMILY_PACKAGE_DEFAULT_MAX_FILE_BYTES = 256 * 1024;
 export const HOSTED_FAMILY_PACKAGE_DEFAULT_MAX_TOTAL_BYTES = 2 * 1024 * 1024;
 const EXAMPLES_FILE = "examples.yaml";
+const SECRET_SHAPED_PACKAGE_CONTENT_PATTERN = new RegExp(
+  [
+    String.raw`bearer\s+[a-z0-9._~+/-]+`,
+    String.raw`eyJ[a-z0-9_-]{20,}(?:\.[a-z0-9_-]{20,}){0,2}`,
+    String.raw`raw-token[^\s'",}]*`,
+    String.raw`super-secret[^\s'",}]*`,
+  ].join("|"),
+  "i",
+);
 
 const ExamplesDocumentSchema = z
   .object({
@@ -304,10 +313,11 @@ export async function validateHostedFamilyPackage(
   const draftValidation = await validator.validateDraft(PACKAGE_DRAFT_ID);
   diagnostics.push(...draftValidation.diagnostics);
 
+  const ok = !diagnostics.some((diagnostic) => diagnostic.severity === "error");
   return {
-    ok: !diagnostics.some((diagnostic) => diagnostic.severity === "error"),
+    ok,
     diagnostics,
-    package: packageDocument,
+    ...(ok ? { package: packageDocument } : {}),
   };
 }
 
@@ -358,6 +368,15 @@ export function normalizeHostedFamilyPackage(
           "package_file_binary",
           `$.files.${index}.content`,
           `file ${normalizedPath.path} contains unsupported binary content`,
+        ),
+      );
+    }
+    if (containsSecretShapedContent(file.content)) {
+      diagnostics.push(
+        errorDiagnostic(
+          "package_file_secret",
+          `$.files.${index}.content`,
+          `file ${normalizedPath.path} contains secret-shaped content; remove raw credentials before package import/export`,
         ),
       );
     }
@@ -445,10 +464,11 @@ export function normalizeHostedFamilyPackage(
     digest: buildHostedFamilyPackageDigest(normalizedFiles),
   };
 
+  const ok = !diagnostics.some((diagnostic) => diagnostic.severity === "error");
   return {
-    ok: !diagnostics.some((diagnostic) => diagnostic.severity === "error"),
+    ok,
     diagnostics,
-    package: normalizedPackage,
+    ...(ok ? { package: normalizedPackage } : {}),
   };
 }
 
@@ -954,6 +974,10 @@ function operationalPackagePathRoot(segments: string[]): string | null {
 
 function containsUnsupportedText(content: string): boolean {
   return /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/u.test(content);
+}
+
+function containsSecretShapedContent(content: string): boolean {
+  return SECRET_SHAPED_PACKAGE_CONTENT_PATTERN.test(content);
 }
 
 function parseOptionalYamlFile<T>(

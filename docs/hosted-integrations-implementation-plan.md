@@ -9962,6 +9962,8 @@ TDD:
 - Export draft returns unpromoted platform edits when authorized.
 - Export never includes secret values, run artifacts, raw logs, or failure
   bucket internals by default.
+- Export rejects source files that contain raw secret-shaped values instead of
+  returning a sanitized-but-mutated package document.
 - Large management-tool export uses the existing ToolRegistry spill behavior;
   large HTTP export returns a downloadable JSON package response.
 - Importing an exported package round-trips source files, examples, provider
@@ -9984,6 +9986,9 @@ Implementation:
 - Export produces the v1 `openacme.hostedFamilyPackage` document with
   provenance metadata, deterministic digest, canonical file entries, and no
   secret values or run/failure artifacts.
+- Package normalization now treats raw secret-shaped values inside package file
+  content as `package_file_secret`, so import, validate, and export fail before
+  a package document with embedded credentials can be returned.
 - Added `hosted_tool_family_export` management tool and
   `POST /api/hosted-integrations/packages/export` product API route.
 
@@ -10000,6 +10005,11 @@ Evidence:
   with a large `help/` reference file, exports the draft through
   `hosted_tool_family_export`, asserts the overflow response, reads the spill
   file, and verifies the exported package still contains the large source file.
+- Current package/export secret-boundary coverage proves package validation
+  rejects raw secret-shaped content with `package_file_secret`, omits package
+  content from invalid validation results, and the product API export route
+  returns only sanitized diagnostics without `packageDocument` when current
+  source files contain leaked raw token values.
 - `pnpm --dir packages/hosted-integrations build`,
   `pnpm --dir packages/tools build`, `pnpm --dir packages/tools check-types`,
   and `pnpm --dir packages/server check-types` passed.

@@ -177,6 +177,17 @@ describe("hosted integrations legacy surface cleanup", () => {
     }
   });
 
+  it("keeps live dogfood hosted tool variables out of legacy managed naming", () => {
+    const dogfoodScript = readActiveSurface(
+      "packages/server/scripts/hosted-integrations-real-llm-dogfood.ts",
+    );
+
+    expect(dogfoodScript).not.toMatch(/\bmanaged[A-Z][A-Za-z0-9]*Tool\b/);
+    expect(dogfoodScript).toContain("hostedEchoTool");
+    expect(dogfoodScript).toContain("hostedLargeTool");
+    expect(dogfoodScript).toContain("hostedFlakyTool");
+  });
+
   it("keeps integration-hub replacement and parity runner code out of server runtime source", () => {
     const runtimeSources = [
       "packages/server/src/app.ts",

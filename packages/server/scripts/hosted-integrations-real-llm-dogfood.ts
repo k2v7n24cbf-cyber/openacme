@@ -17,9 +17,9 @@ const deniedId = `real-dogfood-denied-${suffix}`;
 const echoTool = `real_echo_${suffix}`;
 const largeTool = `real_large_${suffix}`;
 const flakyTool = `real_flaky_${suffix}`;
-const managedEchoTool = hostedToolName(echoTool);
-const managedLargeTool = hostedToolName(largeTool);
-const managedFlakyTool = hostedToolName(flakyTool);
+const hostedEchoTool = hostedToolName(echoTool);
+const hostedLargeTool = hostedToolName(largeTool);
+const hostedFlakyTool = hostedToolName(flakyTool);
 const modelToolDeadlineMs =
   positiveInteger(process.env["OPENACME_E2E_TOOL_TIMEOUT_MS"]) ?? 480_000;
 const modelToolAttemptDeadlineMs =
@@ -291,10 +291,10 @@ async function runDogfood(): Promise<void> {
     const help = await askForTool(
       consumerId,
       [
-        `Get usage help for \`${managedEchoTool}\` before calling it.`,
+        `Get usage help for \`${hostedEchoTool}\` before calling it.`,
         "Call `hosted_tool_help` exactly once with this JSON argument:",
         jsonBlock({
-          tool_name: managedEchoTool,
+          tool_name: hostedEchoTool,
           tool_detail: "summary",
           include_examples: true,
           parameters: [
@@ -311,7 +311,7 @@ async function runDogfood(): Promise<void> {
     expectObject(help, {
       ok: true,
       help: {
-        tool_name: managedEchoTool,
+        tool_name: hostedEchoTool,
         tool_help: { summary: "Echoes text for real LLM dogfood." },
       },
     });
@@ -320,10 +320,10 @@ async function runDogfood(): Promise<void> {
     const echo = await askForTool(
       consumerId,
       [
-        `Use the hosted integration tool \`${managedEchoTool}\` to echo "real consumer".`,
+        `Use the hosted integration tool \`${hostedEchoTool}\` to echo "real consumer".`,
         "Call the tool exactly once with the required JSON argument.",
       ].join("\n"),
-      managedEchoTool,
+      hostedEchoTool,
     );
     expectObject(echo, {
       ok: true,
@@ -334,10 +334,10 @@ async function runDogfood(): Promise<void> {
     const large = await askForTool(
       largeConsumerId,
       [
-        `Use the hosted integration tool \`${managedLargeTool}\` with repeat 150.`,
+        `Use the hosted integration tool \`${hostedLargeTool}\` with repeat 150.`,
         "Call the tool exactly once with the required JSON argument.",
       ].join("\n"),
-      managedLargeTool,
+      hostedLargeTool,
     );
     expectObject(large, {
       ok: true,
@@ -389,16 +389,16 @@ async function runDogfood(): Promise<void> {
       await createAgent(deniedId, "Real Dogfood Denied", {
         role: "Attempts hosted integration use without a binding.",
         persona: "Use the requested hosted integration tool.",
-        tools: [managedEchoTool],
+        tools: [hostedEchoTool],
         hostedIntegrationBindings: [],
       });
       const denied = await askForTool(
         deniedId,
         [
-          `Try to call hosted integration tool \`${managedEchoTool}\` with text "blocked".`,
+          `Try to call hosted integration tool \`${hostedEchoTool}\` with text "blocked".`,
           "Call the tool exactly once.",
         ].join("\n"),
-        managedEchoTool,
+        hostedEchoTool,
       );
       expectObject(denied, { ok: false, error: { code: "policy_denied" } });
     },
@@ -408,10 +408,10 @@ async function runDogfood(): Promise<void> {
     const failed = await askForTool(
       consumerId,
       [
-        `Call hosted integration tool \`${managedFlakyTool}\` with mode "fail".`,
+        `Call hosted integration tool \`${hostedFlakyTool}\` with mode "fail".`,
         "This should fail; do not retry.",
       ].join("\n"),
-      managedFlakyTool,
+      hostedFlakyTool,
     );
     expectObject(failed, { ok: false });
     if (JSON.stringify(failed).includes("Traceback")) {

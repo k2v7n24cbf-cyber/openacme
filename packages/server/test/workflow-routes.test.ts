@@ -425,6 +425,184 @@ describe("workflow routes", () => {
     });
   });
 
+  it("rejects detached executable workflow nodes on create, update, publish, and test run", async () => {
+    let res = await jsonReq("/api/workflows", {
+      id: "wf_detached_create",
+      name: "Detached create",
+      nodes: [
+        {
+          id: "start_log",
+          type: "builtin.log.info",
+          message: "start",
+          next: ["finish_log"],
+        },
+        {
+          id: "finish_log",
+          type: "builtin.log.info",
+          message: "finish",
+        },
+        {
+          id: "detached_log",
+          type: "builtin.log.info",
+          message: "detached",
+        },
+      ],
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error:
+        "Workflow flow is incomplete. Connect or remove unreachable card(s): detached_log",
+    });
+
+    res = await jsonReq("/api/workflows", {
+      id: "wf_detached_patch",
+      name: "Detached patch",
+      nodes: [
+        {
+          id: "start_log",
+          type: "builtin.log.info",
+          message: "start",
+        },
+      ],
+    });
+    expect(res.status).toBe(201);
+
+    res = await jsonReq(
+      "/api/workflows/wf_detached_patch",
+      {
+        nodes: [
+          {
+            id: "start_log",
+            type: "builtin.log.info",
+            message: "start",
+          },
+          {
+            id: "detached_log",
+            type: "builtin.log.info",
+            message: "detached",
+          },
+        ],
+      },
+      "PATCH",
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error:
+        "Workflow flow is incomplete. Connect or remove unreachable card(s): detached_log",
+    });
+
+    runtime.workflowStore.createDraft({
+      id: "wf_detached_existing",
+      name: "Detached existing",
+      nodes: [
+        {
+          id: "start_log",
+          type: "builtin.log.info",
+          message: "start",
+        },
+        {
+          id: "detached_log",
+          type: "builtin.log.info",
+          message: "detached",
+        },
+      ],
+    });
+
+    res = await req("/api/workflows/wf_detached_existing");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      workflow: {
+        id: "wf_detached_existing",
+        nodes: [{ id: "start_log" }, { id: "detached_log" }],
+      },
+    });
+
+    res = await jsonReq("/api/workflows/wf_detached_existing/publish", {});
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error:
+        "Workflow flow is incomplete. Connect or remove unreachable card(s): detached_log",
+    });
+
+    res = await jsonReq("/api/workflows/wf_detached_existing/runs/test", {
+      input: {},
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error:
+        "Workflow flow is incomplete. Connect or remove unreachable card(s): detached_log",
+    });
+
+    res = await req("/api/workflows/wf_detached_existing/runs");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      runs: [],
+      hasMore: false,
+      nextOffset: null,
+    });
+  });
+
+  it("rejects UI-equivalent whitespace-only workflow and trigger fields", async () => {
+    let res = await jsonReq("/api/workflows", {
+      id: "wf_blank_name",
+      name: "   ",
+      nodes: runnableNodes(),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "Workflow needs a name" });
+
+    res = await jsonReq("/api/workflows", {
+      id: "wf_name_patch_guard",
+      name: "Name patch guard",
+      nodes: runnableNodes(),
+    });
+    expect(res.status).toBe(201);
+
+    res = await jsonReq(
+      "/api/workflows/wf_name_patch_guard",
+      { name: "   " },
+      "PATCH",
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "Workflow needs a name" });
+
+    res = await jsonReq("/api/workflows", {
+      id: "wf_blank_trigger_fields",
+      name: "Blank trigger fields",
+      triggers: [
+        {
+          id: "nightly",
+          kind: "scheduled",
+          enabled: true,
+          schedule: { kind: "cron", expr: "   " },
+        },
+      ],
+      nodes: runnableNodes(),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "Scheduled trigger nightly needs a cron schedule",
+    });
+
+    res = await jsonReq("/api/workflows", {
+      id: "wf_blank_webhook_path",
+      name: "Blank webhook path",
+      triggers: [
+        {
+          id: "incoming",
+          kind: "webhook",
+          enabled: true,
+          path: "   ",
+        },
+      ],
+      nodes: runnableNodes(),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "Webhook trigger incoming path must be a string",
+    });
+  });
+
   it("rejects duplicate trigger ids and duplicate webhook paths before publish or run creation", async () => {
     let res = await jsonReq("/api/workflows", {
       id: "wf_invalid_triggers_create",

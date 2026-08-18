@@ -230,6 +230,9 @@ importers:
       '@lobehub/icons':
         specifier: ^5.10.0
         version: 5.10.0(@lobehub/ui@5.15.16)(@types/react@19.2.2)(antd@6.4.4(date-fns@4.1.0)(react-dom@19.2.0(react@19.2.0))(react@19.2.0))(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
+      '@openacme/workflows':
+        specifier: workspace:*
+        version: link:../../packages/workflows
       '@pierre/trees':
         specifier: 1.0.0-beta.4
         version: 1.0.0-beta.4(react-dom@19.2.0(react@19.2.0))(react@19.2.0)

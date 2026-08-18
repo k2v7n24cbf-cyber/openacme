@@ -1,4 +1,9 @@
-import type { JsonValue, WorkflowNode, WorkflowTrigger } from "./schemas.js";
+import type {
+  JsonValue,
+  WorkflowDefinition,
+  WorkflowNode,
+  WorkflowTrigger,
+} from "./schemas.js";
 
 const WORKFLOW_SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 
@@ -23,7 +28,7 @@ export type WorkflowNodeReferenceValidation =
 
 export interface WorkflowTriggerIssue {
   triggerId: string;
-  field: "id" | "path";
+  field: "id" | "path" | "schedule";
   message: string;
 }
 
@@ -43,6 +48,36 @@ export type WorkflowJsonSchemaValidation =
 export type WorkflowInputSchemaValidation =
   | { ok: true }
   | { ok: false; error: string };
+
+export interface WorkflowDefinitionIssue {
+  field: "name";
+  message: string;
+}
+
+export interface WorkflowGraphCompletenessIssue {
+  nodeId: string;
+  field: "entry";
+  message: string;
+}
+
+export type WorkflowGraphCompletenessValidation =
+  | { ok: true; issues: [] }
+  | {
+      ok: false;
+      issues: WorkflowGraphCompletenessIssue[];
+      message: string;
+    };
+
+export type WorkflowAuthoringIssue =
+  | WorkflowDefinitionIssue
+  | WorkflowNodeReferenceIssue
+  | WorkflowTriggerIssue
+  | WorkflowJsonSchemaIssue
+  | WorkflowGraphCompletenessIssue;
+
+export type WorkflowAuthoringValidation =
+  | { ok: true; issues: [] }
+  | { ok: false; issues: WorkflowAuthoringIssue[]; message: string };
 
 export function validateWorkflowNodeReferences(
   nodes: WorkflowNode[],
@@ -102,6 +137,47 @@ export function validateWorkflowNodeReferences(
   };
 }
 
+export function validateWorkflowGraphCompleteness(
+  nodes: WorkflowNode[],
+): WorkflowGraphCompletenessValidation {
+  const executableNodes = nodes.filter(isExecutableWorkflowNode);
+  const entry = executableNodes[0];
+  if (!entry) return { ok: true, issues: [] };
+
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
+  const reachable = new Set<string>();
+  const stack = [entry.id];
+
+  while (stack.length > 0) {
+    const nodeId = stack.pop()!;
+    if (reachable.has(nodeId)) continue;
+    const node = nodesById.get(nodeId);
+    if (!node) continue;
+    reachable.add(nodeId);
+
+    for (const targetId of workflowNodeTargets(node)) {
+      if (!reachable.has(targetId)) stack.push(targetId);
+    }
+  }
+
+  const unreachableNodeIds = executableNodes
+    .map((node) => node.id)
+    .filter((nodeId) => !reachable.has(nodeId));
+  if (unreachableNodeIds.length === 0) return { ok: true, issues: [] };
+
+  return {
+    ok: false,
+    issues: unreachableNodeIds.map((nodeId) => ({
+      nodeId,
+      field: "entry",
+      message: `Workflow node is unreachable from the workflow entry: ${nodeId}`,
+    })),
+    message: `Workflow flow is incomplete. Connect or remove unreachable card(s): ${unreachableNodeIds.join(
+      ", ",
+    )}`,
+  };
+}
+
 export function validateWorkflowTriggers(
   triggers: WorkflowTrigger[],
 ): WorkflowTriggerValidation {
@@ -110,6 +186,13 @@ export function validateWorkflowTriggers(
   const seenWebhookPaths = new Map<string, string>();
 
   for (const trigger of triggers) {
+    if (!trigger.id.trim()) {
+      issues.push({
+        triggerId: trigger.id,
+        field: "id",
+        message: "Workflow trigger id is required",
+      });
+    }
     if (!WORKFLOW_SAFE_ID.test(trigger.id)) {
       issues.push({
         triggerId: trigger.id,
@@ -127,7 +210,23 @@ export function validateWorkflowTriggers(
     }
     seenIds.add(trigger.id);
 
+    if (trigger.kind === "scheduled" && !trigger.schedule.expr.trim()) {
+      issues.push({
+        triggerId: trigger.id,
+        field: "schedule",
+        message: `Scheduled trigger ${trigger.id} needs a cron schedule`,
+      });
+      continue;
+    }
     if (trigger.kind !== "webhook") continue;
+    if (trigger.path !== undefined && !trigger.path.trim()) {
+      issues.push({
+        triggerId: trigger.id,
+        field: "path",
+        message: `Webhook trigger ${trigger.id} path must be a string`,
+      });
+      continue;
+    }
     const path = normalizeWebhookPath(trigger.path);
     if (!path) continue;
     const existing = seenWebhookPaths.get(path);
@@ -148,6 +247,40 @@ export function validateWorkflowTriggers(
     issues,
     message: issues.map((issue) => issue.message).join("; "),
   };
+}
+
+export function validateWorkflowDefinitionAuthoring(
+  definition: WorkflowDefinition,
+): WorkflowAuthoringValidation {
+  if (!definition.name.trim()) {
+    return {
+      ok: false,
+      issues: [{ field: "name", message: "Workflow needs a name" }],
+      message: "Workflow needs a name",
+    };
+  }
+
+  const nodeReferences = validateWorkflowNodeReferences(definition.nodes);
+  if (!nodeReferences.ok) return nodeReferences;
+
+  const graphCompleteness = validateWorkflowGraphCompleteness(definition.nodes);
+  if (!graphCompleteness.ok) return graphCompleteness;
+
+  const triggers = validateWorkflowTriggers(definition.triggers);
+  if (!triggers.ok) return triggers;
+
+  const workflowSchema = validateWorkflowJsonSchema(definition.inputSchema);
+  if (!workflowSchema.ok) return workflowSchema;
+
+  for (const trigger of definition.triggers) {
+    const triggerSchema = validateWorkflowJsonSchema(
+      workflowTriggerInputSchema(trigger),
+      `Trigger ${trigger.id} input schema`,
+    );
+    if (!triggerSchema.ok) return triggerSchema;
+  }
+
+  return { ok: true, issues: [] };
 }
 
 export function validateWorkflowJsonSchema(
@@ -192,6 +325,44 @@ export function validateWorkflowInputSchema(
   return issue
     ? { ok: false, error: `${label} does not match schema: ${issue}` }
     : { ok: true };
+}
+
+function isExecutableWorkflowNode(node: WorkflowNode): boolean {
+  return node.type !== "builtin.exit";
+}
+
+function workflowNodeTargets(node: WorkflowNode): string[] {
+  const targets = [...node.next];
+  switch (node.type) {
+    case "builtin.if":
+    case "builtin.if_else":
+      targets.push(...node.then, ...node.else);
+      break;
+    case "builtin.switch":
+      for (const item of node.cases) targets.push(...item.nodes);
+      targets.push(...node.default);
+      break;
+    case "builtin.foreach":
+      targets.push(...node.body);
+      break;
+    case "builtin.parallel":
+      for (const branch of node.branches) targets.push(...branch.nodes);
+      break;
+  }
+  return targets;
+}
+
+function workflowTriggerInputSchema(
+  trigger: WorkflowTrigger,
+): JsonValue | undefined {
+  switch (trigger.kind) {
+    case "manual":
+    case "webhook":
+      return trigger.inputSchema;
+    case "scheduled":
+    case "task":
+      return undefined;
+  }
 }
 
 function collectMissingTargets(

@@ -82,9 +82,16 @@ export {
 } from "./graph-contract.js";
 export {
   validateWorkflowInputSchema,
+  validateWorkflowDefinitionAuthoring,
+  validateWorkflowGraphCompleteness,
   validateWorkflowJsonSchema,
   validateWorkflowNodeReferences,
   validateWorkflowTriggers,
+  type WorkflowAuthoringIssue,
+  type WorkflowAuthoringValidation,
+  type WorkflowDefinitionIssue,
+  type WorkflowGraphCompletenessIssue,
+  type WorkflowGraphCompletenessValidation,
   type WorkflowInputSchemaValidation,
   type WorkflowJsonSchemaIssue,
   type WorkflowJsonSchemaValidation,

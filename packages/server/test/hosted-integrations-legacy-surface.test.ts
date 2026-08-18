@@ -125,6 +125,9 @@ describe("hosted integrations legacy surface cleanup", () => {
     expect(skill).toContain("Do not run `discovery_required` examples");
     expect(skill).toContain("not a ready-to-send invocation payload");
     expect(skill).toContain("must not include placeholder");
+    expect(skill).toContain("external source repositories or");
+    expect(skill).toContain("packages/hosted-integrations/families/");
+    expect(skill).toContain("test-support fixtures as canonical deployable");
     expect(template).toContain("tools.yaml");
     expect(template).toContain("hosted MCP surface source of truth");
     expect(template).toContain("EVIDENCE_REQUIRED");
@@ -137,6 +140,9 @@ describe("hosted integrations legacy surface cleanup", () => {
     expect(template).toContain("Use `discovery_required` examples only");
     expect(template).toContain("must not contain placeholder");
     expect(template).toContain("must not be run directly");
+    expect(template).toContain("external repositories or package artifacts");
+    expect(template).toContain("packages/hosted-integrations/families/");
+    expect(template).toContain("test-support fixtures as canonical deployable");
   });
 
   it("keeps hosted lifecycle ownership on Tool Developer instead of generic engineering personas", () => {

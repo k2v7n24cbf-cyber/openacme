@@ -1,4 +1,11 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -19,6 +26,7 @@ import {
   createFileHostedIntegrationGenerationStore,
   createFileHostedIntegrationLockStore,
   HostedToolContractDocumentSchema,
+  validateHostedFamilyPackage,
   resolveHostedIntegrationToolHelp,
 } from "../src/index.js";
 
@@ -149,6 +157,9 @@ const vocabularyAcceptanceMatrixPath = path.resolve(
 );
 const acceptedLiveArtifactPathPrefix =
   "~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/";
+const externalQualysPackageRoot =
+  process.env.OPENACME_QUALYS_HOSTED_PACKAGE_ROOT ??
+  "/Users/alenbohcelyan/Documents/AIProjects/openacme-hosted-tools-qualys";
 const currentPilotNamingGuardPaths = [
   path.resolve(
     process.cwd(),
@@ -195,6 +206,35 @@ function readStrictYaml<T>(filePath: string): T {
     `${path.basename(filePath)} YAML parse errors`,
   ).toEqual([]);
   return document.toJSON() as T;
+}
+
+function readExternalHostedPackageSource(
+  root: string,
+): Record<string, string> | null {
+  if (!existsSync(root) || !statSync(root).isDirectory()) return null;
+  const files: Record<string, string> = {};
+  const ignoredDirs = new Set([".git", "dist", "node_modules"]);
+  const allowedExtensions = new Set([".yaml", ".yml", ".py", ".json", ".md"]);
+  const visit = (directory: string): void => {
+    for (const name of readdirSync(directory).sort()) {
+      if (name.startsWith(".") || ignoredDirs.has(name)) continue;
+      const fullPath = path.join(directory, name);
+      const stat = statSync(fullPath);
+      const relativePath = path
+        .relative(root, fullPath)
+        .split(path.sep)
+        .join("/");
+      if (stat.isDirectory()) {
+        visit(fullPath);
+        continue;
+      }
+      if (relativePath.startsWith("scripts/")) continue;
+      if (!allowedExtensions.has(path.extname(name))) continue;
+      files[relativePath] = readFileSync(fullPath, "utf-8");
+    }
+  };
+  visit(root);
+  return files;
 }
 
 function sorted(values: Iterable<string>): string[] {
@@ -664,6 +704,87 @@ describe("Qualys live hosted migration inventory", () => {
         expect(tool.openacme.pagination, toolName).toBeDefined();
       }
     }
+  });
+
+  it("accepts the external Qualys hosted package as the deployable source of truth when available", async () => {
+    const externalFiles = readExternalHostedPackageSource(
+      externalQualysPackageRoot,
+    );
+    if (!externalFiles) {
+      expect(
+        process.env.OPENACME_QUALYS_HOSTED_PACKAGE_ROOT,
+        "set OPENACME_QUALYS_HOSTED_PACKAGE_ROOT to validate an external deployable Qualys package",
+      ).toBeUndefined();
+      return;
+    }
+
+    expect(Object.keys(externalFiles).sort()).toEqual(
+      expect.arrayContaining([
+        "README.md",
+        "examples.yaml",
+        "family.yaml",
+        "qualys.py",
+        "references/current-scope.md",
+        "references/gav-filter-fields.json",
+        "references/source-boundary.md",
+        "tools.yaml",
+      ]),
+    );
+    expect(externalFiles["README.md"]).toContain(
+      "separate from the OpenAcme platform runtime",
+    );
+    expect(externalFiles["references/source-boundary.md"]).toContain(
+      "Do not import integration-hub code at runtime",
+    );
+
+    const externalPackage = {
+      kind: "openacme.hostedFamilyPackage",
+      version: 1,
+      metadata: {
+        familyId: "qualys",
+        sourceRevisionId: "external_qualys_package_test",
+      },
+      files: Object.entries(externalFiles).map(([filePath, content]) => ({
+        path: filePath,
+        content,
+      })),
+    };
+    const validation = await validateHostedFamilyPackage(externalPackage, {
+      targetFamilyId: "qualys",
+      helpQualityMode: "error",
+    });
+    expect(validation).toEqual({ ok: true, diagnostics: [], package: validation.package });
+
+    const externalContract = HostedToolContractDocumentSchema.parse(
+      parseYaml(externalFiles["tools.yaml"]),
+    );
+    const fixtureContract = HostedToolContractDocumentSchema.parse(
+      parseYaml(
+        LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_SOURCE_BACKED_FAMILY
+          .sourceFiles["tools.yaml"],
+      ),
+    );
+    const inventory = readInventory();
+
+    expect(
+      sorted(externalContract.tools.map((tool) => tool.openacme.toolName)),
+    ).toEqual(sorted(inventory.currentPromotedBatch.tools));
+    expect(
+      sorted(externalContract.tools.map((tool) => tool.mcp.name)),
+    ).toEqual(
+      sorted(
+        inventory.currentPromotedBatch.tools.map(
+          (toolName) => `hosted_qualys__${toolName}`,
+        ),
+      ),
+    );
+    expect(
+      sorted(externalContract.tools.map((tool) => tool.openacme.toolName)),
+    ).toEqual(
+      sorted(fixtureContract.tools.map((tool) => tool.openacme.toolName)),
+    );
+    expect(externalFiles["qualys.py"]).not.toContain("integration_hub");
+    expect(externalFiles["qualys.py"]).not.toContain("legacy_call_tool");
   });
 
   it("keeps the current Qualys source-backed package passing draft validation before promotion", async () => {
@@ -1776,7 +1897,7 @@ describe("Qualys live hosted migration inventory", () => {
       "## Milestone 37: Hosted Tools Production Hardening",
     );
     expect(sectionText(planText, "Milestone 37")).toContain(
-      "Status: in progress.",
+      "Status: accepted for the currently identified bounded production-hardening",
     );
     expect(planText).toContain("broader Qualys");
     expect(planText).toContain("Status: accepted for the current 18-tool read-only pilot");
@@ -1995,6 +2116,12 @@ describe("Qualys live hosted migration inventory", () => {
     );
     expect(areas.get("tool_developer_guidance")?.must_prove.join("\n")).toContain(
       "Hosted Tools product wording",
+    );
+    expect(areas.get("tool_developer_guidance")?.must_prove.join("\n")).toContain(
+      "external package",
+    );
+    expect(areas.get("tool_developer_guidance")?.must_prove.join("\n")).toContain(
+      "test-support fixtures",
     );
     expect(completeCommands).toEqual(
       expect.arrayContaining([

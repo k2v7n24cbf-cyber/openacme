@@ -206,6 +206,11 @@ scenarios:
         status: pass
         secretScan: pass
         evidence: QPS count/download argument rules with no limit argument, server OS filter construction, hosted help use, and redacted upstream diagnostics.
+      - runId: live_hosted_tools_3de1b959-3475-4f93-8323-9b3454e067c4
+        path: ~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/live_hosted_tools_3de1b959-3475-4f93-8323-9b3454e067c4.json
+        status: pass
+        secretScan: pass
+        evidence: External Qualys package generation used hosted_tool_help for filter_body, then made a real bounded Cloud Agent count call with operatingSystem.category2 EQUALS Server and integration-hub disabled.
     guidance: unguided
     agent:
       id: live-qualys-unguided-analyst

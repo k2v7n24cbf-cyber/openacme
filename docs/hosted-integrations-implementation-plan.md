@@ -26,6 +26,9 @@ acceptance hardening gate, and Milestone 37 production hardening. Earlier
 milestones remain
 historical evidence only where they use superseded terms such as migration
 fixtures, config scopes, or view-level cutover.
+Milestones 27-36
+have since accepted the current Hosted Tools concept gate. Do not reopen those milestones as the next implementation
+order; continue with explicitly new milestones for new corrections.
 
 - Hosted integration product lifecycle states are source, draft, validation,
   example, generation, environment config, binding, invocation, debug run,
@@ -13536,3 +13539,361 @@ Milestone 37 Acceptance:
   (`21` e2e files, `97` tests).
 - Accepted commit:
   `e451f4941ef9aebd30623d04bb54b1d3dc18aaf9`.
+
+## Milestone 38: External Hosted Family Package Contract
+
+Status: planned.
+
+Goal:
+
+- Keep deployable hosted family source out of the OpenAcme platform codebase.
+  A hosted family such as Qualys should live as an external, independently
+  versioned package repository/artifact that OpenAcme validates, imports, and
+  promotes through the product package API/service.
+
+Current problem:
+
+- The current Qualys pilot source is generated from
+  `packages/hosted-integrations/test-support/integration-hub/qualys-source.ts`
+  and then wrapped into a package by tests. That proves import/export mechanics,
+  but it is not a clean operator/deployment artifact. It is also not acceptable
+  to move provider-family source into application runtime code as
+  `packages/hosted-integrations/families/<familyId>/`; that would turn
+  integration packages into bundled platform code instead of independently
+  managed hosted tool packages.
+
+Canonical package shape:
+
+- Each deployable family owns its source in an external git repository or
+  package artifact, not in this OpenAcme platform repository.
+- The package source root must contain the same source files imported into
+  OpenAcme: `family.yaml`, `tools.yaml`, runtime source such as `qualys.py`,
+  optional `examples.yaml`, and package-local `references/**` artifacts.
+- The product import format remains the existing
+  `openacme.hostedFamilyPackage` document accepted by
+  `/api/hosted-integrations/packages/validate` and
+  `/api/hosted-integrations/packages/import`.
+- A deterministic external-package loader/helper may turn an external checkout
+  or unpacked artifact directory into the package document, but the editable
+  source of truth is the external package repository/artifact, not generated
+  JSON and not OpenAcme test-support code.
+- OpenAcme tests may keep small fixtures and sample packages to validate the
+  package contract, but those fixtures are not canonical deployable provider
+  family source.
+
+Non-goals:
+
+- Do not extend the Qualys tool count in this milestone.
+- Do not import integration-hub code at runtime.
+- Do not create compatibility aliases or old `family.yaml.tools[]` fallback.
+- Do not require provider-specific field-level output schemas beyond the
+  current hosted package validation gate unless a later quality-hardening slice
+  explicitly raises that bar.
+- Do not add canonical provider-family source directories under
+  `packages/hosted-integrations/families/`.
+
+### Slice 38.1: External Package Contract Documentation
+
+Status: planned.
+
+Goal:
+
+- Document the exact external package repository/artifact layout and the
+  `openacme.hostedFamilyPackage` import document shape that OpenAcme accepts.
+
+TDD:
+
+- Architecture docs define the external package source root files:
+  `family.yaml`, `tools.yaml`, runtime source, optional `examples.yaml`, and
+  package-local `references/**`.
+- Docs include an exact package import payload using
+  `kind: openacme.hostedFamilyPackage`, `version: 1`, `metadata.familyId`, and
+  `files[]` entries.
+- Docs explicitly say provider-family source is not committed under
+  `packages/hosted-integrations/families/` and not generated from test-support
+  TypeScript.
+- Existing package validation tests continue to prove the import document shape
+  and required files.
+
+### Slice 38.2: Package Loader And Deployment Path
+
+Status: planned.
+
+Goal:
+
+- Provide or document a small deterministic loader/helper that reads an
+  external package checkout/artifact directory and emits or submits the
+  existing hosted family package document for validation/import.
+
+TDD:
+
+- The loader rejects missing required files, hidden files, operational folders,
+  path traversal, duplicate package paths, over-large files, and raw
+  secret-shaped content using the same validation semantics as product package
+  import/export.
+- A focused test validates a sample external package fixture through the same
+  loader used by deployment/operator scripts.
+- A documented command can validate the package without starting a live server.
+- A documented command or API payload shape can import the package into the
+  isolated hosted tools test environment.
+
+### Slice 38.3: Test Fixture Demotion
+
+Status: planned.
+
+Goal:
+
+- Keep test helpers lightweight while removing the misleading impression that
+  test-support generated strings are the canonical Qualys hosted family source.
+
+TDD:
+
+- Qualys inventory/package tests either consume a small sample package fixture
+  or a checked-out external package only when explicitly configured; they must
+  not present test-support generated strings as deployable source of truth.
+- Test-support code may still define assertions and helper functions, but not
+  canonical deployable provider package ownership.
+- Plan, inventory, and Tool Developer guidance point to external package
+  repositories/artifacts as the source of truth for deployable provider-family
+  source.
+
+## Milestone 39: Qualys Help And Capability Parity Rectification
+
+Status: planned.
+
+Depends on:
+
+- Milestone 38 external hosted family package contract, so help parity changes
+  update the external deployable package artifact instead of TypeScript
+  test-support strings or OpenAcme platform code.
+
+Boundary:
+
+- Do not reopen or relabel Milestone 31. M31 remains the accepted runtime pilot
+  baseline. This milestone owns the newly identified rectification work:
+  closing self-contained help/capability parity gaps for the already-promoted
+  current 18-tool Qualys surface.
+
+Goal:
+
+- Finish the self-contained agent-facing part of M31 for the current 18-tool
+  Qualys read-only pilot. The hosted Qualys `tools.yaml`, examples,
+  vocabulary/reference files, and `hosted_tool_help` projection must carry the
+  parameter, enum, operator, caveat, and usage guidance that the current
+  Qualys skill and integration-hub evidence already know and that is relevant
+  to the migrated hosted tools.
+
+Non-goals:
+
+- Do not add new Qualys tools in this milestone.
+- Do not require exhaustive provider response field schemas for every returned
+  XML/JSON field; keep that as a separate output-contract hardening effort.
+- Do not copy the entire Qualys skill into `tools.yaml`. Migrate only guidance
+  needed for the current hosted tools to be usable without external skill
+  context.
+- Do not invent provider behavior. Unverified parameters remain omitted or
+  explicitly marked `EVIDENCE_REQUIRED`.
+
+### Slice 39.1: Parity Audit Matrix
+
+Status: planned.
+
+Goal:
+
+- Produce a deterministic, reviewable matrix comparing each current promoted
+  Qualys tool against the Qualys skill, filter catalog, module authority, and
+  integration-hub source evidence.
+
+TDD:
+
+- The matrix lists all `currentPromotedBatch.tools`.
+- For every exposed hosted input, the matrix records whether the source
+  guidance is fully migrated, partially migrated, intentionally omitted, or
+  evidence-required.
+- The matrix specifically covers GAV `updated_within_days`,
+  `asset_last_updated`, include/exclude fields, filter tokens, operator
+  mapping, `filter_xml` caveats, Cloud Agent QAGENT rules, VMDR native `params`
+  lists/enums, Host Detection QDS/status semantics, KB/QVS bounded-param
+  rules, scan list/fetch params, tag QPS criteria, pagination, and examples.
+- A test fails if a current promoted Qualys tool lacks a parity matrix row.
+
+### Slice 39.2: Hosted Help Parity Update
+
+Status: planned.
+
+Goal:
+
+- Update the external Qualys hosted package `tools.yaml`, examples, and
+  references so the hosted surface teaches the relevant migrated guidance
+  directly through MCP metadata and `hosted_tool_help`.
+
+TDD:
+
+- `hosted_tool_help` full tool help for every current promoted Qualys tool
+  includes the required parity guidance from the matrix.
+- Parameter-level help exposes detailed entries for exact paths such as
+  `filter_body`, `filter_body.filters.field`,
+  `filter_body.filters.operator`, `include_fields`, `exclude_fields`,
+  `updated_within_days`, `params`, and key native `params.*` entries where
+  applicable.
+- Shared vocabulary/reference artifacts are used for catalog-like lists instead
+  of duplicating large enum lists per tool.
+- GAV `updated_within_days` is either implemented and documented as a hosted
+  request parameter or explicitly removed from parity expectations if the
+  hosted runtime intentionally does not support it.
+- Existing runtime validation rejects parameters the help says are unsupported.
+
+### Slice 39.3: Agent Usability Recheck
+
+Status: planned.
+
+Goal:
+
+- Prove agents can discover and apply the migrated help without relying on the
+  Qualys skill or integration-hub context.
+
+TDD:
+
+- Unguided or minimally guided scenarios require the agent to call
+  `hosted_tool_help` when building non-trivial Qualys filters or native
+  `params`.
+- Scenario transcripts and analyzer output prove the later hosted business
+  call uses evidence learned from help, not tool-name hints or external skill
+  context.
+- Regression scenarios cover at least: GAV stale QAGENT filtering, GAV
+  include_fields vs filter tokens, Host Detection QDS/status params, KB CVE/QID
+  lookup, scan list/fetch discovery, and Asset Management tag search criteria.
+
+## Milestone 40: External Qualys Package Bootstrap
+
+Status: implemented for the initial external Qualys package bootstrap.
+
+Goal:
+
+- Create the initial deployable Qualys hosted family package as an external
+  git repository, not as OpenAcme platform runtime code.
+
+Implementation:
+
+- The external package repository is
+  `/Users/alenbohcelyan/Documents/AIProjects/openacme-hosted-tools-qualys`.
+- External package commits:
+  `b908fb0 Bootstrap Qualys hosted tools package` and
+  `63c4808 Add current Qualys help parity reference`.
+- The package source root contains `family.yaml`, `tools.yaml`, `qualys.py`,
+  `examples.yaml`, `references/gav-filter-fields.json`,
+  `references/current-18-help-parity.yaml`, `references/current-scope.md`,
+  `references/source-boundary.md`, and local build/validate scripts.
+- The package includes exactly the current promoted 18 read-only live Qualys
+  hosted tools from
+  `docs/hosted-integrations-qualys-live-migration-inventory.yaml#currentPromotedBatch`.
+- The package explicitly excludes `qualys_cache_*`, `qualys_quickref_*`,
+  blocked broader live tools, and mutating operations.
+- The external package can build
+  `dist/qualys.hosted-family-package.json`, a v1
+  `openacme.hostedFamilyPackage` document accepted by OpenAcme package
+  validation/import APIs.
+
+TDD:
+
+- `npm test` in the external package validates required files, package paths,
+  and secret-shaped content without hitting Qualys APIs.
+- `validateHostedFamilyPackage(..., { targetFamilyId: "qualys" })` accepts the
+  generated external package with no diagnostics.
+- Platform guard tests validate the external package when
+  `OPENACME_QUALYS_HOSTED_PACKAGE_ROOT` is set, or when the default local
+  sibling repo exists.
+- Platform tests assert that the external package exposes the same 18 current
+  hosted tool names and does not contain integration-hub runtime dispatch.
+- Isolated test environment import/promote accepted the external package as
+  generation `gen_184d9e80-4cc1-4192-aae4-114e946fe332` with source revision
+  `external:63c4808c05ff`.
+
+## Milestone 41: Qualys Help And Capability Parity Per Tool
+
+Status: implemented for the existing current-18 parity matrix baseline; further
+tool-specific deepening should open new slices only when a concrete parity gap
+is found.
+
+Goal:
+
+- Finish self-contained hosted help/capability parity for the current 18-tool
+  Qualys package by comparing each tool against the Qualys operational skill,
+  Qualys development skill, package-local references, current migration
+  inventory, help coverage matrix, and historical integration-hub evidence.
+
+Boundary:
+
+- Do not reopen Milestone 31.
+- Do not add blocked tools in this milestone.
+- Do not copy the whole Qualys skill into `tools.yaml`.
+- Do not introduce quickref/cache tools into the initial external package.
+- Do not invent provider behavior; unresolved facts remain
+  `EVIDENCE_REQUIRED`.
+
+Per-tool slices:
+
+1. `qualys_gav_asset_count`
+2. `qualys_gav_asset_get`
+3. `qualys_gav_asset_search`
+4. `qualys_cloud_agent_hostasset_count`
+5. `qualys_cloud_agent_hostasset_search`
+6. `qualys_vmdr_host_list`
+7. `qualys_vmdr_host_detection_list`
+8. `qualys_vmdr_asset_group_list`
+9. `qualys_vmdr_ip_list`
+10. `qualys_vmdr_excluded_ip_list`
+11. `qualys_vmdr_restricted_ip_list`
+12. `qualys_vmdr_virtual_host_list`
+13. `qualys_vmdr_scan_list`
+14. `qualys_vmdr_scan_fetch`
+15. `qualys_vmdr_kb_vuln_list`
+16. `qualys_vmdr_kb_qvs_list`
+17. `qualys_asset_management_tag_list`
+18. `qualys_asset_management_tag_search`
+
+TDD:
+
+- Each slice updates or verifies the matching row in
+  `docs/hosted-integrations-qualys-help-coverage.yaml`.
+- Every exposed input has summary/full help or an explicit omission rationale.
+- Shared vocab/reference artifacts are used for repeated catalog-like values.
+- `hosted_tool_help` full and parameter-level responses expose the migrated
+  guidance without requiring the Qualys skill.
+- Runtime validation rejects unsupported parameters that help says are
+  unsupported.
+- The external package now carries the current 18-tool parity matrix as
+  `references/current-18-help-parity.yaml`, and platform tests verify each
+  current promoted tool has matrix coverage and matching package metadata.
+
+## Milestone 42: External Qualys Package Agent Usability And Live Confidence
+
+Status: partially implemented for one bounded external-package live smoke.
+
+Goal:
+
+- Prove the external package is usable by agents and safe for bounded live
+  Qualys verification.
+
+TDD:
+
+- Unguided or minimally guided scenarios verify that an agent discovers
+  non-trivial GAV, VMDR, KB/QVS, scan, and tag parameter details through
+  hosted tool metadata and `hosted_tool_help`.
+- Bounded read-only live smoke calls hit real Qualys APIs with small limits
+  and no mock provider.
+- Import/export round trip preserves package semantics and does not leak
+  secrets, generated junk, or platform-only test-support strings.
+
+Evidence:
+
+- Live no-mock unguided consumer smoke passed for
+  `qualys-unguided-qps-count-download-rules` against the external package
+  generation. The agent used `hosted_tool_help` for `filter_body`, then called
+  `hosted_qualys__qualys_cloud_agent_hostasset_count` with
+  `operatingSystem.category2 EQUALS Server`, integration-hub disabled, and
+  secret scan passed.
+- Accepted artifact:
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/live_hosted_tools_3de1b959-3475-4f93-8323-9b3454e067c4.json`.
+- Artifact audit passed for
+  `qualys-unguided-qps-count-download-rules`.

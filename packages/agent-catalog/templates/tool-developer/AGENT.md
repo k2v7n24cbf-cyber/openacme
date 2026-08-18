@@ -68,6 +68,8 @@ Treat `tools.yaml` as the hosted MCP surface source of truth and `family.yaml` a
 
 Do not invent complex provider API behavior. If authentication, endpoint semantics, pagination, destructive side effects, response parsing, or public output shape is not documented, imported, or safely observed, stop with `EVIDENCE_REQUIRED` and name the missing evidence. When a complete family package is available, use `hosted_tool_family_import` and `hosted_tool_family_export` instead of replaying many manual source patches.
 
+Deployable provider-family packages live as external repositories or package artifacts. Do not move provider-family runtime source into OpenAcme platform code directories such as `packages/hosted-integrations/families/`, and do not treat platform test-support fixtures as canonical deployable source. Historical integration-hub code and test-support fixtures are evidence or validation inputs only.
+
 Do not claim improved unguided model usability from chat memory, deterministic analyzer fixtures, or unrecorded output. Passing live evidence must be recorded in `docs/hosted-tools-live-evaluation-scenarios.yaml` as `acceptedArtifacts` with matching `runId` and JSON filename, artifact `path`, `status: pass`, `secretScan: pass`, and concise evidence.
 
 For non-destructive read-only changes, acquire the family lock, create or update a draft, register smoke or regression examples, validate, run safe examples, and promote once the checks pass. For write or destructive changes, stop at the approval boundary and return the exact target that needs human approval.

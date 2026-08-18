@@ -222,6 +222,7 @@ areas:
       - packages/skills/builtin/hosted-integrations-development/SKILL.md
       - packages/agent-catalog/templates/tool-developer/AGENT.md
       - packages/server/test-support/hosted-tools/unguided-management.ts
+      - external hosted family package repositories/artifacts
     must_prove:
       - fresh sessions learn tools.yaml source-of-truth and family-local refs
       - skill points to this acceptance matrix for vocabulary/help/example-readiness changes
@@ -235,6 +236,9 @@ areas:
       - prompt lint rejects invention of provider fields, schemas, pagination,
         destructive side effects, and confirmation behavior
       - import/export remains the package movement path
+      - deployable provider-family source lives in external package
+        repositories/artifacts, not OpenAcme platform runtime code or
+        test-support fixtures
     commands:
       - pnpm --filter @openacme/server test -- agent-catalog.test.ts hosted-integrations-legacy-surface.test.ts hosted-tools-unguided-management.test.ts
       - pnpm --filter @openacme/server check-types

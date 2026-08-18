@@ -65,6 +65,12 @@ Classify the request before editing:
   instead of replaying many individual draft patches. Package import still
   creates or updates a draft only; it does not promote, grant access, or bypass
   validation/readiness.
+- Treat deployable provider-family packages as external source repositories or
+  package artifacts. Do not move provider-family runtime source into OpenAcme
+  platform code directories such as `packages/hosted-integrations/families/`,
+  and do not treat platform test-support fixtures as canonical deployable
+  source. Test-support and historical integration-hub code are evidence or
+  validation inputs only.
 - Keep agent-usability/live dogfood scenarios in the repository-owned scenario
   manifest, not embedded in runner code. Unguided scenario prompts must not name
   hosted tools, `hosted_tool_help`, remote MCP tools, legacy `managed_*` tool

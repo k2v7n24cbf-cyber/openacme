@@ -1604,6 +1604,14 @@ principle: when a human edits a family directly in the platform UI, that edited
 state must be exportable for review, reconciliation, archive, or reuse outside
 the platform.
 
+For deployable provider families, the canonical editable package source should
+live in an external repository or package artifact. OpenAcme validates, imports,
+promotes, runs, and exports that package, but provider-family runtime source is
+not bundled under platform runtime directories such as
+`packages/hosted-integrations/families/`. Platform test-support fixtures and
+historical integration-hub code may provide evidence, sample fixtures, or
+regression inputs; they are not deployable provider package ownership.
+
 A hosted family package is a versioned text-only file bundle containing
 canonical family source files such as `family.yaml`, `tools.yaml`, Python
 runtime files, `help/**`, `provider/**`, and optional `examples.yaml`. The

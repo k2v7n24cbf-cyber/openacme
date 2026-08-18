@@ -20,9 +20,9 @@ This plan implements the architecture in
 ## Current Canonical Contract
 
 The current implementation contract is Milestone 18 and later, especially
-Milestones 20, 21, 22, 29, 30, the Qualys-specific Milestone 31 migration gate,
-the shared-vocabulary Milestones 32-35, and the Milestone 36 acceptance
-hardening gate. Earlier milestones remain
+Milestones 20, 21, 22, 29, 30, the Qualys-specific Milestone 31 current-pilot
+migration gate, the shared-vocabulary Milestones 32-35, and the Milestone 36
+acceptance hardening gate. Earlier milestones remain
 historical evidence only where they use superseded terms such as migration
 fixtures, config scopes, or view-level cutover.
 
@@ -10172,7 +10172,10 @@ Evidence:
 
 ## Milestone 31: Qualys Live Hosted Surface Migration
 
-Status: in progress.
+Status: accepted for the current 18-tool read-only pilot. Broader Qualys
+migration remains deferred and `blocked_evidence_required` until a later
+explicit batch supplies endpoint, request, response, pagination, auth, safety,
+help, and live-proof evidence.
 
 Current boundary:
 

@@ -1766,7 +1766,10 @@ describe("Qualys live hosted migration inventory", () => {
     expect(planText).toContain(
       "Status: implemented for the original Qualys vocabulary-discovery dogfood",
     );
-    expect(planText).toContain("Status: in progress.");
+    expect(planText).not.toContain("Status: in progress.");
+    expect(planText).toContain(
+      "Status: accepted for the current 18-tool read-only pilot. Broader Qualys",
+    );
     expect(planText).toContain("broader Qualys");
     expect(planText).toContain("Status: accepted for the current 18-tool read-only pilot");
     expect(planText).toContain("Broader Qualys\nbatches are deferred");

@@ -13237,6 +13237,14 @@ Evidence:
   check-types, root `pnpm check-types` (`21` successful package tasks),
   accepted-artifacts closeout audit across `9` active scenarios with empty
   diagnostics, and `git diff --check`.
+- Qualys live migration inventory evidence strings were normalized to quoted
+  YAML scalars so the inventory remains parseable as a repository-owned source
+  of truth. Parsed status distribution is `67` total rows: `18`
+  `included_live`, `8` `included_reference`, `11` `excluded_cache_local`, and
+  `30` `blocked_evidence_required`; `included_live` exactly matches the `18`
+  rows in `currentPromotedBatch.tools`. Verified with
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`32` passed), direct YAML parse/count, and `git diff --check`.
 
 Slice 36.7 Acceptance:
 

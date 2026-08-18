@@ -63,7 +63,7 @@ tools:
     handlerName: tool_qualys_gav_asset_count
     operationCategory: gav_asset_inventory
     sourceReferences: [qualys-tool-map, qualys-filter-catalog]
-    endpointEvidence: [POST /rest/2.0/count/am/asset]
+    endpointEvidence: ["POST /rest/2.0/count/am/asset"]
     resultMode: inline
     paginationModel: count
     idDiscoveryRequired: false
@@ -74,7 +74,7 @@ tools:
     handlerName: tool_qualys_gav_asset_search
     operationCategory: gav_asset_inventory
     sourceReferences: [qualys-tool-map, qualys-filter-catalog]
-    endpointEvidence: [POST /rest/2.0/search/am/asset]
+    endpointEvidence: ["POST /rest/2.0/search/am/asset"]
     resultMode: inline_or_artifact
     paginationModel: lastSeenAssetId
     idDiscoveryRequired: false
@@ -85,7 +85,7 @@ tools:
     handlerName: tool_qualys_gav_asset_get
     operationCategory: gav_asset_inventory
     sourceReferences: [qualys-tool-map, qualys-filter-catalog]
-    endpointEvidence: [GET /rest/2.0/get/am/asset]
+    endpointEvidence: ["GET /rest/2.0/get/am/asset"]
     resultMode: inline_or_artifact
     paginationModel: none
     idDiscoveryRequired: true
@@ -96,7 +96,7 @@ tools:
     handlerName: tool_qualys_cloud_agent_hostasset_count
     operationCategory: cloud_agent_hostasset
     sourceReferences: [qualys-tool-map, qualys-filter-catalog]
-    endpointEvidence: [POST /rest/2.0/count/am/asset with asset.trackingMethod EQUALS QAGENT]
+    endpointEvidence: ["POST /rest/2.0/count/am/asset with asset.trackingMethod EQUALS QAGENT"]
     resultMode: inline
     paginationModel: count
     idDiscoveryRequired: false
@@ -107,7 +107,7 @@ tools:
     handlerName: tool_qualys_cloud_agent_hostasset_search
     operationCategory: cloud_agent_hostasset
     sourceReferences: [qualys-tool-map, qualys-filter-catalog]
-    endpointEvidence: [POST /rest/2.0/search/am/asset with asset.trackingMethod EQUALS QAGENT]
+    endpointEvidence: ["POST /rest/2.0/search/am/asset with asset.trackingMethod EQUALS QAGENT"]
     resultMode: inline_or_artifact
     paginationModel: lastSeenAssetId
     idDiscoveryRequired: false
@@ -131,7 +131,7 @@ tools:
     handlerName: tool_qualys_vmdr_host_list
     operationCategory: vmdr_host_inventory
     sourceReferences: [qualys-tool-map, qualys-filter-catalog]
-    endpointEvidence: [GET /api/5.0/fo/asset/host/]
+    endpointEvidence: ["GET /api/5.0/fo/asset/host/"]
     resultMode: inline_or_artifact
     paginationModel: FO warning URL with max_pages cap
     idDiscoveryRequired: false
@@ -142,7 +142,7 @@ tools:
     handlerName: tool_qualys_vmdr_host_detection_list
     operationCategory: vmdr_vulnerability_evidence
     sourceReferences: [qualys-tool-map, qualys-filter-catalog, qualys-module-authority]
-    endpointEvidence: [GET /api/2.0/fo/asset/host/vm/detection/]
+    endpointEvidence: ["GET /api/2.0/fo/asset/host/vm/detection/"]
     resultMode: inline_or_artifact
     paginationModel: FO warning URL with max_pages cap
     idDiscoveryRequired: false
@@ -153,7 +153,7 @@ tools:
     handlerName: tool_qualys_vmdr_kb_vuln_list
     operationCategory: vmdr_knowledgebase
     sourceReferences: [qualys-tool-map, qualys-filter-catalog]
-    endpointEvidence: [POST /api/2.0/fo/knowledge_base/vuln/]
+    endpointEvidence: ["POST /api/2.0/fo/knowledge_base/vuln/"]
     resultMode: inline_or_artifact
     paginationModel: bounded params and max_pages
     idDiscoveryRequired: false
@@ -164,7 +164,7 @@ tools:
     handlerName: tool_qualys_vmdr_kb_qvs_list
     operationCategory: vmdr_knowledgebase
     sourceReferences: [qualys-tool-map, qualys-filter-catalog]
-    endpointEvidence: [GET/POST /api/3.0/fo/knowledge_base/qvs/?action=list]
+    endpointEvidence: ["GET/POST /api/3.0/fo/knowledge_base/qvs/?action=list"]
     resultMode: inline_or_artifact
     paginationModel: bounded params
     idDiscoveryRequired: false
@@ -201,7 +201,7 @@ tools:
     handlerName: tool_qualys_vmdr_asset_group_list
     operationCategory: vmdr_admin_read_view
     sourceReferences: [qualys-tool-map, qualys-filter-catalog]
-    endpointEvidence: [GET /api/2.0/fo/asset/group/?action=list]
+    endpointEvidence: ["GET /api/2.0/fo/asset/group/?action=list"]
     resultMode: inline_or_artifact
     paginationModel: FO warning URL with max_pages cap
     idDiscoveryRequired: false
@@ -212,7 +212,7 @@ tools:
     handlerName: tool_qualys_vmdr_ip_list
     operationCategory: vmdr_admin_read_view
     sourceReferences: [qualys-tool-map, qualys-filter-catalog]
-    endpointEvidence: [GET /api/2.0/fo/asset/ip/?action=list]
+    endpointEvidence: ["GET /api/2.0/fo/asset/ip/?action=list"]
     resultMode: inline_or_artifact
     paginationModel: FO warning URL with max_pages cap
     idDiscoveryRequired: false
@@ -223,7 +223,7 @@ tools:
     handlerName: tool_qualys_vmdr_excluded_ip_list
     operationCategory: vmdr_admin_read_view
     sourceReferences: [qualys-tool-map, qualys-filter-catalog]
-    endpointEvidence: [GET /api/2.0/fo/asset/excluded_ip/?action=list]
+    endpointEvidence: ["GET /api/2.0/fo/asset/excluded_ip/?action=list"]
     resultMode: inline_or_artifact
     paginationModel: FO warning URL with max_pages cap
     idDiscoveryRequired: false
@@ -234,7 +234,7 @@ tools:
     handlerName: tool_qualys_vmdr_restricted_ip_list
     operationCategory: vmdr_admin_read_view
     sourceReferences: [qualys-tool-map, qualys-filter-catalog]
-    endpointEvidence: [GET /api/2.0/fo/setup/restricted_ips/?action=list&output_format=xml]
+    endpointEvidence: ["GET /api/2.0/fo/setup/restricted_ips/?action=list&output_format=xml"]
     resultMode: inline_or_artifact
     paginationModel: FO warning URL with max_pages cap
     idDiscoveryRequired: false
@@ -245,7 +245,7 @@ tools:
     handlerName: tool_qualys_vmdr_virtual_host_list
     operationCategory: vmdr_admin_read_view
     sourceReferences: [qualys-tool-map, qualys-filter-catalog]
-    endpointEvidence: [GET /api/2.0/fo/asset/vhost/?action=list]
+    endpointEvidence: ["GET /api/2.0/fo/asset/vhost/?action=list"]
     resultMode: inline_or_artifact
     paginationModel: FO warning URL with max_pages cap
     idDiscoveryRequired: false
@@ -256,7 +256,7 @@ tools:
     handlerName: tool_qualys_vmdr_scan_list
     operationCategory: vmdr_scan_read_view
     sourceReferences: [qualys-tool-map, qualys-filter-catalog]
-    endpointEvidence: [GET /api/2.0/fo/scan/?action=list]
+    endpointEvidence: ["GET /api/2.0/fo/scan/?action=list"]
     resultMode: inline_or_artifact
     paginationModel: native params and max_pages where supported
     idDiscoveryRequired: false
@@ -267,7 +267,7 @@ tools:
     handlerName: tool_qualys_vmdr_scan_fetch
     operationCategory: vmdr_scan_read_view
     sourceReferences: [qualys-tool-map, qualys-filter-catalog]
-    endpointEvidence: [GET /api/2.0/fo/scan/?action=fetch&scan_ref=<discovered-scan-ref>]
+    endpointEvidence: ["GET /api/2.0/fo/scan/?action=fetch&scan_ref=<discovered-scan-ref>"]
     resultMode: artifact
     paginationModel: none
     idDiscoveryRequired: true
@@ -603,7 +603,7 @@ tools:
     handlerName: tool_qualys_asset_management_tag_list
     operationCategory: asset_management_tags
     sourceReferences: [qualys-tool-map, qualys-filter-catalog]
-    endpointEvidence: [POST /qps/rest/2.0/search/am/tag]
+    endpointEvidence: ["POST /qps/rest/2.0/search/am/tag"]
     resultMode: inline_or_artifact
     paginationModel: QPS search limit
     idDiscoveryRequired: false
@@ -614,7 +614,7 @@ tools:
     handlerName: tool_qualys_asset_management_tag_search
     operationCategory: asset_management_tags
     sourceReferences: [qualys-tool-map, qualys-filter-catalog]
-    endpointEvidence: [POST /qps/rest/2.0/search/am/tag with Criteria]
+    endpointEvidence: ["POST /qps/rest/2.0/search/am/tag with Criteria"]
     resultMode: inline_or_artifact
     paginationModel: QPS search limit and criteria
     idDiscoveryRequired: false
@@ -651,7 +651,7 @@ tools:
     handlerName: tool_qualys_quickref_search
     operationCategory: quickref_reference
     sourceReferences: [qualys-tool-map]
-    endpointEvidence: [local reference catalog only]
+    endpointEvidence: ["local reference catalog only"]
     resultMode: inline
     paginationModel: local limit
     idDiscoveryRequired: false
@@ -662,7 +662,7 @@ tools:
     handlerName: tool_qualys_quickref_get_endpoint
     operationCategory: quickref_reference
     sourceReferences: [qualys-tool-map]
-    endpointEvidence: [local reference catalog only]
+    endpointEvidence: ["local reference catalog only"]
     resultMode: inline
     paginationModel: none
     idDiscoveryRequired: false
@@ -673,7 +673,7 @@ tools:
     handlerName: tool_qualys_quickref_list_parameters
     operationCategory: quickref_reference
     sourceReferences: [qualys-tool-map]
-    endpointEvidence: [local reference catalog only]
+    endpointEvidence: ["local reference catalog only"]
     resultMode: inline
     paginationModel: local limit
     idDiscoveryRequired: false
@@ -684,7 +684,7 @@ tools:
     handlerName: tool_qualys_quickref_list_response_fields
     operationCategory: quickref_reference
     sourceReferences: [qualys-tool-map]
-    endpointEvidence: [local reference catalog only]
+    endpointEvidence: ["local reference catalog only"]
     resultMode: inline
     paginationModel: local limit
     idDiscoveryRequired: false
@@ -695,7 +695,7 @@ tools:
     handlerName: tool_qualys_quickref_gav_reference
     operationCategory: quickref_reference
     sourceReferences: [qualys-tool-map, qualys-filter-catalog]
-    endpointEvidence: [local GAV reference catalog only]
+    endpointEvidence: ["local GAV reference catalog only"]
     resultMode: inline
     paginationModel: local limit
     idDiscoveryRequired: false
@@ -706,7 +706,7 @@ tools:
     handlerName: tool_qualys_quickref_build_request
     operationCategory: quickref_reference
     sourceReferences: [qualys-tool-map]
-    endpointEvidence: [local request drafting only]
+    endpointEvidence: ["local request drafting only"]
     resultMode: inline
     paginationModel: none
     idDiscoveryRequired: false
@@ -717,7 +717,7 @@ tools:
     handlerName: tool_qualys_quickref_validate_request
     operationCategory: quickref_reference
     sourceReferences: [qualys-tool-map]
-    endpointEvidence: [local request-shape validation only]
+    endpointEvidence: ["local request-shape validation only"]
     resultMode: inline
     paginationModel: none
     idDiscoveryRequired: false
@@ -728,7 +728,7 @@ tools:
     handlerName: tool_qualys_quickref_explain
     operationCategory: quickref_reference
     sourceReferences: [qualys-tool-map]
-    endpointEvidence: [local reference explanation only]
+    endpointEvidence: ["local reference explanation only"]
     resultMode: inline
     paginationModel: local limit
     idDiscoveryRequired: false
@@ -739,7 +739,7 @@ tools:
     handlerName: tool_qualys_cache_status
     operationCategory: cache_local
     sourceReferences: [qualys-tool-map]
-    endpointEvidence: [local snapshot cache only]
+    endpointEvidence: ["local snapshot cache only"]
     resultMode: inline
     paginationModel: local cache
     idDiscoveryRequired: false
@@ -750,7 +750,7 @@ tools:
     handlerName: tool_qualys_cache_export_plan
     operationCategory: cache_local
     sourceReferences: [qualys-tool-map]
-    endpointEvidence: [local export plan only]
+    endpointEvidence: ["local export plan only"]
     resultMode: inline
     paginationModel: local cache
     idDiscoveryRequired: false
@@ -761,7 +761,7 @@ tools:
     handlerName: tool_qualys_cache_export_start
     operationCategory: cache_local
     sourceReferences: [qualys-tool-map]
-    endpointEvidence: [explicit-cache export workflow, not live endpoint surface]
+    endpointEvidence: ["explicit-cache export workflow, not live endpoint surface"]
     resultMode: cache_workspace
     paginationModel: explicit cache export bounds
     idDiscoveryRequired: false
@@ -772,7 +772,7 @@ tools:
     handlerName: tool_qualys_cache_gav_filter_tokens
     operationCategory: cache_local
     sourceReferences: [qualys-tool-map]
-    endpointEvidence: [local snapshot cache only]
+    endpointEvidence: ["local snapshot cache only"]
     resultMode: inline
     paginationModel: local limit
     idDiscoveryRequired: false
@@ -783,7 +783,7 @@ tools:
     handlerName: tool_qualys_cache_qql_fields
     operationCategory: cache_local
     sourceReferences: [qualys-tool-map]
-    endpointEvidence: [local snapshot cache only]
+    endpointEvidence: ["local snapshot cache only"]
     resultMode: inline
     paginationModel: local limit
     idDiscoveryRequired: false
@@ -794,7 +794,7 @@ tools:
     handlerName: tool_qualys_cache_gav_asset_count
     operationCategory: cache_local
     sourceReferences: [qualys-tool-map]
-    endpointEvidence: [local snapshot cache only]
+    endpointEvidence: ["local snapshot cache only"]
     resultMode: inline
     paginationModel: local cache
     idDiscoveryRequired: false
@@ -805,7 +805,7 @@ tools:
     handlerName: tool_qualys_cache_gav_asset_search
     operationCategory: cache_local
     sourceReferences: [qualys-tool-map]
-    endpointEvidence: [local snapshot cache only]
+    endpointEvidence: ["local snapshot cache only"]
     resultMode: inline
     paginationModel: local offset and limit
     idDiscoveryRequired: false
@@ -816,7 +816,7 @@ tools:
     handlerName: tool_qualys_cache_vmdr_vulnerability_search
     operationCategory: cache_local
     sourceReferences: [qualys-tool-map]
-    endpointEvidence: [local snapshot cache only]
+    endpointEvidence: ["local snapshot cache only"]
     resultMode: inline
     paginationModel: local offset and limit
     idDiscoveryRequired: false
@@ -827,7 +827,7 @@ tools:
     handlerName: tool_qualys_cache_vmdr_library_search
     operationCategory: cache_local
     sourceReferences: [qualys-tool-map]
-    endpointEvidence: [local snapshot cache only]
+    endpointEvidence: ["local snapshot cache only"]
     resultMode: inline
     paginationModel: local offset and limit
     idDiscoveryRequired: false
@@ -838,7 +838,7 @@ tools:
     handlerName: tool_qualys_cache_metric
     operationCategory: cache_local
     sourceReferences: [qualys-tool-map]
-    endpointEvidence: [local snapshot cache only]
+    endpointEvidence: ["local snapshot cache only"]
     resultMode: inline
     paginationModel: local cache
     idDiscoveryRequired: false
@@ -849,7 +849,7 @@ tools:
     handlerName: tool_qualys_cache_get_raw_record
     operationCategory: cache_local
     sourceReferences: [qualys-tool-map]
-    endpointEvidence: [local snapshot cache only]
+    endpointEvidence: ["local snapshot cache only"]
     resultMode: inline
     paginationModel: none
     idDiscoveryRequired: true

@@ -7833,6 +7833,17 @@ Current final acceptance validation on 2026-08-15:
   or `def call_tool(` in active hosted source, generation, and draft surfaces.
 - `curl -sS -m 5 http://127.0.0.1:3466/api/health` returned
   `{"status":"ok","version":"0.14.0","agents":3,"skills":3}`.
+
+Full server e2e note:
+
+- `pnpm --filter @openacme/server test:e2e` includes hosted integration e2e
+  coverage because `packages/server/vitest.e2e.config.ts` runs
+  `test/e2e/**/*.e2e.ts`. Hosted failures can therefore appear in the broad
+  e2e gate even when the operator expected only generic chat/workflow tests.
+- The hosted files covered by the broad suite include
+  `test/e2e/hosted-integrations-safe-tools.e2e.ts` and
+  `test/e2e/hosted-integrations-dogfood.e2e.ts`; generic chat/catalog notice
+  tests also assert hosted-related empty fields such as `addedHostedTools`.
 - `GET /api/tools` on port 3466 returned 39 hosted tools using canonical
   `hosted_<family>__<tool>` business names and `hosted_tool_*` management-tool
   names.

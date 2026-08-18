@@ -7755,29 +7755,36 @@ artifact hygiene have already landed in the isolated worktree.
 Milestone 22 has since become the active environment-config boundary contract.
 Milestone 23's tool catalog revision/session notice work, Milestone 24's
 derived-only runtime rectification, Milestone 25's hosted family delete, and
-Milestone 26's isolated test-env rectification have landed.
+Milestone 26's isolated test-env rectification have landed. Milestones 27-36
+have since accepted the current Hosted Tools concept gate, unguided management
+evaluation, contract/source-of-truth split, import/export lifecycle, current
+Qualys read-only pilot, shared vocabulary, help usability, and deterministic
+acceptance matrix. Do not reopen those milestones as the next implementation
+order.
 
 Recommended future order:
 
-1. Milestone 27: live hosted-tool concept acceptance.
-2. Milestone 28: unguided hosted-tool management-surface evaluation.
-3. Keep newly identified production hardening slices from parity or dogfood
+1. Keep newly identified production hardening slices from parity or dogfood
    findings.
+2. Add later Qualys batches only when the corresponding inventory rows move
+   from `blocked_evidence_required` to a documented, evidence-backed promotion
+   packet with endpoint/request/response/pagination/auth/safety/help/live proof.
+3. Add explicit-cache hosted tools only through a separate cache-local milestone
+   that keeps cache behavior visible and separate from live API-backed tools.
 
 Why this order:
 
 - The accepted Milestone 23-26 correction packet is validation-backed and ready
   to remain the current baseline.
 - The deterministic source model, rich editor, generation diff, DB persistence,
-  and hosted/hosted tool boundary are now implemented enough for broader
-  parity validation.
+  import/export lifecycle, and hosted/remote MCP boundary are now implemented
+  and guarded by current deterministic acceptance.
 - Milestone 18 corrected the product-boundary issue that dogfood surfaced:
   internal/agent-specific purposes are now modeled as hosted-tool bindings, not
   extra family environment configs.
-- The next risk is no longer whether isolated unit seams work; it is whether a
-  real Tool Developer Agent can discover and use the hosted-tool management
-  surface without operator hints across create, edit, repair, and blocked-work
-  lifecycle paths.
+- The next risk is no longer the baseline Hosted Tools lifecycle. It is
+  evidence quality for any broader provider surface and production hardening
+  discovered by real dogfood or parity runs.
 
 Expected final acceptance validation:
 

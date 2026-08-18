@@ -1748,6 +1748,18 @@ describe("Qualys live hosted migration inventory", () => {
     expect(planText).toContain("`19` passed");
     expect(planText).toContain("analyzer/guidance bundle includes");
     expect(planText).toContain("`85` passed");
+    expect(planText).toContain(
+      "Milestones 27-36\nhave since accepted the current Hosted Tools concept gate",
+    );
+    expect(planText).toContain(
+      "Do not reopen those milestones as the next implementation\norder",
+    );
+    expect(planText).not.toContain(
+      "1. Milestone 27: live hosted-tool concept acceptance.",
+    );
+    expect(planText).not.toContain(
+      "2. Milestone 28: unguided hosted-tool management-surface evaluation.",
+    );
     expect(closeoutText).toContain("positive outcome text evidence");
     expect(closeoutText).toContain("EVIDENCE_REQUIRED");
     expect(planText).not.toMatch(/^Status:\s*$/m);

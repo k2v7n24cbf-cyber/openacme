@@ -13330,7 +13330,10 @@ Milestone 36 Acceptance:
 
 ## Milestone 37: Hosted Tools Production Hardening
 
-Status: in progress.
+Status: accepted for the currently identified bounded production-hardening
+issues. Reopen this milestone only for a newly evidenced production-hardening
+slice; do not use it to broaden Qualys provider coverage or reopen accepted
+baseline milestones.
 
 Goal:
 
@@ -13406,8 +13409,11 @@ TDD:
 
 Implementation:
 
-- `packages/tools/src/builtins/hosted-integration-redaction.ts` now owns the
-  shared hosted control-plane redaction helper for management and help built-ins.
+- `packages/tools/src/builtins/hosted-integration-redaction.ts` initially owned
+  the shared hosted control-plane redaction helper for management and help
+  built-ins. Slice 37.4 later moved that helper to
+  `packages/hosted-integrations/src/redaction.ts` so server routes and tool
+  wrappers share one package-level choke point.
 - `packages/tools/src/builtins/hosted-integration-help.ts` sanitizes thrown
   error messages before serializing `runtime_error`.
 - `packages/tools/src/builtins/hosted-integration-management.ts` uses the shared
@@ -13513,3 +13519,17 @@ Evidence:
 - Green focused validation after shared helper build:
   `pnpm --filter @openacme/hosted-integrations build && pnpm --filter @openacme/server test -- hosted-integrations-routes.test.ts -t "returns hosted tool help only" && pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts -t "thrown help errors" && pnpm --filter @openacme/tools test -- hosted-integration-management.test.ts -t "secret-shaped"`
   passed.
+
+Milestone 37 Acceptance:
+
+- Current bounded hardening slices 37.1 through 37.4 are implemented,
+  documented, committed, and pushed.
+- The management-tool, help-tool, route invalid-request, and shared sanitizer
+  regressions all have red/green evidence recorded above.
+- Full root pre-commit validation passed for the final M37.4 implementation:
+  root `pnpm check-types` and root `pnpm test`.
+- Full pre-push validation passed for the final M37.4 implementation:
+  root build and `pnpm --filter @openacme/server test:e2e`
+  (`21` e2e files, `97` tests).
+- Accepted commit:
+  `e451f4941ef9aebd30623d04bb54b1d3dc18aaf9`.

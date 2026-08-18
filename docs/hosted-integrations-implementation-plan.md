@@ -7753,16 +7753,19 @@ dogfood, deterministic source model, human-native editor, DB-backed
 persistence, first live Qualys parity validation, Milestone 18 rectification,
 Milestone 20 offline parity/test-input boundary, and Milestone 21 historical
 artifact hygiene have already landed in the isolated worktree.
-Milestone 22 has since become the active environment-config boundary contract.
+Milestone 22 has since become the accepted environment-config boundary contract.
 Milestone 23's tool catalog revision/session notice work, Milestone 24's
 derived-only runtime rectification, Milestone 25's hosted family delete, and
 Milestone 26's isolated test-env rectification have landed. Milestones 27-36
 have since accepted the current Hosted Tools concept gate, unguided management
 evaluation, contract/source-of-truth split, import/export lifecycle, current
 Qualys read-only pilot, shared vocabulary, help usability, and deterministic
-acceptance matrix. Do not reopen those milestones as the next implementation
-order. Milestone 37 is the current production-hardening packet for bounded
-issues found by parity, dogfood, and code audit.
+acceptance matrix. Milestone 37 has also accepted the currently identified
+bounded production-hardening issues found by parity, dogfood, and code audit.
+Do not reopen accepted milestones as the next implementation order. There is
+no active implementation slice in this plan unless a new evidenced production
+hardening finding, evidenced Qualys migration batch, or explicit cache-local
+milestone is opened.
 
 Recommended future order:
 

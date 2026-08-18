@@ -239,9 +239,15 @@ export const HostedParameterVocabularyEntrySchema = z
     summary: z.string().min(1),
     description: z.string().min(1).optional(),
     valueType: z.string().min(1).optional(),
+    valueTypes: z.array(z.string().min(1)).default([]),
+    enumValues: z.array(z.string().min(1)).default([]),
     operators: z.array(z.string().min(1)).default([]),
     aliases: z.array(z.string().min(1)).default([]),
+    canonicalTokens: z.array(z.string().min(1)).default([]),
     examples: z.array(JsonValueSchema).default([]),
+    section: z.string().min(1).optional(),
+    sourceMode: z.string().min(1).optional(),
+    apiFilterBodyUse: z.string().min(1).optional(),
     source: z.string().min(1).optional(),
   })
   .strict();
@@ -268,6 +274,9 @@ export const HostedParameterVocabularySchema = z
     id: z.string().min(1),
     familyId: HostedIntegrationFamilyIdSchema,
     parameterPath: z.string().min(1),
+    scope: z.string().min(1).optional(),
+    purpose: z.string().min(1).optional(),
+    source: z.union([z.string().min(1), JsonObjectSchema]).optional(),
     entries: z.array(HostedParameterVocabularyEntrySchema).default([]),
     invalidAliases: z
       .array(HostedParameterVocabularyInvalidAliasSchema)

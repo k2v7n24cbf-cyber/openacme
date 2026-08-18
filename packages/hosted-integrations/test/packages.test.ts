@@ -834,6 +834,7 @@ describe("hosted family package validation", () => {
           "family.yaml",
           "qualys.py",
           "references/gav-filter-fields.json",
+          "references/gav-ui-qql-token-catalog.json",
           "tools.yaml",
         ],
       });
@@ -909,8 +910,14 @@ describe("hosted family package validation", () => {
       expect(exportedFiles["references/gav-filter-fields.json"]).toContain(
         "qualys.agent.lastCheckedInDate",
       );
+      expect(
+        exportedFiles["references/gav-ui-qql-token-catalog.json"],
+      ).toContain("asset.truRisk");
       expect(exportedFiles["tools.yaml"]).toContain(
         "vocabularyRef: references/gav-filter-fields.json",
+      );
+      expect(exportedFiles["tools.yaml"]).not.toContain(
+        "gav-ui-qql-token-catalog",
       );
       expect(exportedFiles["tools.yaml"]).toContain("errors:");
       expect(exportedFiles["tools.yaml"]).toContain("bad_arguments means");

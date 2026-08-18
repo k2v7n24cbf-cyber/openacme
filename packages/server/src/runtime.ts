@@ -188,10 +188,11 @@ export class ServerRuntime {
       generationId: request.generationId,
     });
     if (!result.ok) {
-      return this.hostedIntegrationToolFailure(request, {
-        code: "tool_failed",
-        message: "tool failed",
-      });
+      return this.hostedIntegrationToolFailure(
+        request,
+        hostedIntegrationCallerVisibleError(result.error),
+        result.runId,
+      );
     }
     return JSON.stringify(result);
   }
@@ -264,10 +265,12 @@ export class ServerRuntime {
   private hostedIntegrationToolFailure(
     request: HostedIntegrationToolInvokeRequest,
     error: { code: string; message: string },
+    runId?: string,
   ): string {
     return JSON.stringify({
       ok: false,
       error,
+      ...(runId ? { runId, errorArtifactRef: `${runId}/error.json` } : {}),
       familyId: request.familyId,
       toolName: request.toolName,
       canonicalToolName: request.canonicalToolName,
@@ -1727,6 +1730,20 @@ export class ServerRuntime {
   private async hostedIntegrationRegistrySnapshot(
     generation: HostedIntegrationGeneration,
   ): Promise<HostedIntegrationRegistrySnapshot | null> {
+    const family = await this.hostedIntegrationService.getFamily(
+      generation.familyId,
+    );
+    if (!family) {
+      this.hostedIntegrationToolRegistry.removeFamily(generation.familyId);
+      log.warn(
+        {
+          familyId: generation.familyId,
+          generationId: generation.id,
+        },
+        "skipping hosted integration registry sync for active generation without current source family",
+      );
+      return null;
+    }
     const tools = generation.tools.filter(
       isHostedIntegrationToolVisibleForSelection,
     );
@@ -1734,12 +1751,9 @@ export class ServerRuntime {
       this.hostedIntegrationToolRegistry.removeFamily(generation.familyId);
       return null;
     }
-    const family = await this.hostedIntegrationService.getFamily(
-      generation.familyId,
-    );
     return {
       familyId: generation.familyId,
-      familyName: family?.summary.name ?? generation.familyId,
+      familyName: family.summary.name,
       generationId: generation.id,
       runtimeConfig: generation.runtimeConfig,
       tools: tools.map((tool) => ({
@@ -1867,6 +1881,18 @@ function hostedIntegrationRuntimeError(error: {
     code: error.code,
     message: error.message,
     ...(error.details === undefined ? {} : { details: error.details }),
+  };
+}
+
+function hostedIntegrationCallerVisibleError(
+  error: HostedIntegrationGatewayError,
+): { code: string; message: string } {
+  if (error.code === "tool_bug" || error.code === "runtime_error") {
+    return { code: "tool_failed", message: "tool failed" };
+  }
+  return {
+    code: error.code,
+    message: error.message,
   };
 }
 

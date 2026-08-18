@@ -13811,9 +13811,9 @@ TDD:
 
 ## Milestone 41: Qualys Help And Capability Parity Per Tool
 
-Status: implemented for the existing current-18 parity matrix baseline; further
-tool-specific deepening should open new slices only when a concrete parity gap
-is found.
+Status: implemented for the existing current-18 parity matrix baseline.
+Fresh source-by-source per-tool audit and package hardening is owned by
+Milestone 43.
 
 Goal:
 
@@ -13897,3 +13897,58 @@ Evidence:
   `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/live_hosted_tools_3de1b959-3475-4f93-8323-9b3454e067c4.json`.
 - Artifact audit passed for
   `qualys-unguided-qps-count-download-rules`.
+
+## Milestone 43: Qualys External Package Per-Tool Evidence Audit
+
+Status: implemented for the current 18-tool external package audit gate.
+
+Boundary:
+
+- Do not reopen Milestone 31 or Milestone 41.
+- Do not add blocked broader Qualys tools, quickref tools, cache tools, or
+  mutating operations in this milestone.
+- Do not import `integration-hub` source at runtime. Historical
+  `integration-hub` material is evidence only.
+- Unknown provider behavior remains `EVIDENCE_REQUIRED` and blocks inclusion
+  in the active external package.
+
+Goal:
+
+- Make the external Qualys package import-ready as the deployable source of
+  truth by proving every current active tool has been compared against the
+  relevant Qualys operational skill, development skill, references, migration
+  inventory, help coverage matrix, and historical integration-hub evidence.
+
+Implementation:
+
+- Added package-local `references/per-tool-audit.yaml`.
+- Added package-local `references/coverage-tracker.yaml` as the per-round
+  working status file for the 18-tool audit objective.
+- Each of the 18 current hosted Qualys tools has an audit row with compared
+  sources, verified inputs, verified help coverage, verified runtime validation
+  themes, verified example ids, known omissions, and evidence-required status.
+- First fresh audit round found and fixed the `updated_within_days` parity gap
+  for GAV and Cloud Agent asset tools. The hosted contract, help, examples,
+  runtime handling, and audit rows now cover the relative lookback argument and
+  reject combining it with `asset_last_updated`.
+- The external package validator now requires `references/per-tool-audit.yaml`
+  and `references/coverage-tracker.yaml`, and fails packaging if any active
+  tool is missing an audit row, misses a required evidence source, omits an
+  exposed input from `inputsVerified`, lacks help/runtime/example evidence, has
+  missing tracker status, or still has `evidenceRequired` entries.
+- The platform external-package guard test now validates the same audit
+  completeness before accepting the external package as deployable source of
+  truth.
+
+TDD:
+
+- External package `npm test` proves package build, required files, secret scan,
+  per-tool example coverage, per-tool audit completeness, and coverage-tracker
+  completeness.
+- `packages/hosted-integrations/test/qualys-live-inventory.test.ts` proves the
+  external package carries the same 18 current tool names as the promoted
+  inventory and includes a complete accepted audit row for each tool.
+- Existing help coverage and promotion-readiness tests remain the deterministic
+  contract that `tools.yaml` exposes self-contained help, parameter guidance,
+  runtime validation boundaries, examples, and no integration-hub runtime
+  imports.

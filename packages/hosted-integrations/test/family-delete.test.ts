@@ -8,6 +8,7 @@ import {
   createFileHostedIntegrationFamilyDeleter,
   createFileHostedIntegrationGenerationStore,
   createFileHostedIntegrationLockStore,
+  createFileHostedIntegrationService,
 } from "../src/index.js";
 import { withSplitToolContractFiles } from "./test-support/split-contract-fixtures.js";
 
@@ -101,6 +102,89 @@ describe("hosted integration family deletion", () => {
         "utf-8",
       ),
     ).resolves.toContain("tool_qualys_count_assets");
+  });
+
+  it("disables active generations whose source family is not catalog-valid before startup", async () => {
+    const service = createFileHostedIntegrationService({ dataDir });
+    const files = withSplitToolContractFiles({
+      "family.yaml": familyYaml(),
+      "qualys.py": "def tool_qualys_count_assets(args, context):\n    return {'count': 1}\n",
+    });
+    await service.sourceFiles.replaceSourceFiles({
+      familyId: "qualys",
+      files,
+      updatedBy: "agent:tool-developer",
+      sourceRevisionId: "source_rev_1",
+    });
+    const lock = await service.locks.acquireLock({
+      familyId: "qualys",
+      lockedBy: "agent:tool-developer",
+      ttlMs: 60_000,
+    });
+    if (!lock.ok) throw new Error(`lock failed: ${lock.reason}`);
+    const draft = await service.drafts.createDraft({
+      familyId: "qualys",
+      lockId: lock.lock.id,
+      sourceRevisionId: "source_rev_1",
+    });
+    if (!draft.ok) throw new Error(`draft creation failed: ${draft.reason}`);
+    const promoted = await service.generations.promoteDraft({
+      draftId: draft.draft.id,
+      promotedBy: "agent:tool-developer",
+      validation: { ok: true, diagnostics: [] },
+      sourceRevisionId: "source_rev_1",
+    });
+    if (!promoted.ok) throw new Error(`promotion failed: ${promoted.reason}`);
+    await rm(
+      path.join(
+        dataDir,
+        "hosted-integrations",
+        "source",
+        "families",
+        "qualys",
+        "tools.yaml",
+      ),
+      { force: true },
+    );
+
+    await service.start();
+
+    await expect(
+      service.generations.getActiveGeneration("qualys"),
+    ).resolves.toBeNull();
+    await expect(
+      service.generations.getGeneration(promoted.generation.id),
+    ).resolves.toMatchObject({
+      id: promoted.generation.id,
+      familyId: "qualys",
+      status: "disabled",
+    });
+    await expect(
+      readFile(
+        path.join(
+          dataDir,
+          "hosted-integrations",
+          "generations",
+          promoted.generation.id,
+          "files",
+          "qualys.py",
+        ),
+        "utf-8",
+      ),
+    ).resolves.toContain("tool_qualys_count_assets");
+    await expect(
+      readFile(
+        path.join(
+          dataDir,
+          "hosted-integrations",
+          "source",
+          "families",
+          "qualys",
+          "family.yaml",
+        ),
+        "utf-8",
+      ),
+    ).resolves.toContain("id: qualys");
   });
 });
 

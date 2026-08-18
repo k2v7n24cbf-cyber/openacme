@@ -398,7 +398,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
   }
 
   async start(): Promise<void> {
-    // Reserved lifecycle hook for future workers, sweeps, and warm caches.
+    await this.reconcileActiveGenerationsWithSourceCatalog();
   }
 
   async close(): Promise<void> {
@@ -428,5 +428,22 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     request: DeleteHostedIntegrationFamilyRequest,
   ): Promise<DeleteHostedIntegrationFamilyResult> {
     return this.deleteFamilyImpl(request);
+  }
+
+  private async reconcileActiveGenerationsWithSourceCatalog(): Promise<void> {
+    const orphanedFamilyIds = new Set<HostedIntegrationFamilyId>();
+    for (const generation of await this.generations.listGenerations()) {
+      if (generation.status !== "active") continue;
+      if (!(await this.catalog.getFamily(generation.familyId))) {
+        orphanedFamilyIds.add(generation.familyId);
+      }
+    }
+
+    for (const familyId of orphanedFamilyIds) {
+      await this.generations.disableActiveGeneration(
+        familyId,
+        "system:startup-source-reconcile",
+      );
+    }
   }
 }

@@ -8,6 +8,7 @@ import {
   qualysCurrentPromotedReadOnlySourceBackedFamilyYaml,
   qualysCurrentPromotedReadOnlySourceBackedPythonSource,
   qualysGavFilterFieldsVocabularyJson,
+  qualysGavUiQqlTokenCatalogJson,
 } from "./qualys-source.js";
 import { HostedIntegrationToolNameSchema } from "../../src/schemas.js";
 import type { HostedIntegrationExample } from "../../src/schemas.js";
@@ -473,6 +474,8 @@ export const LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_SOURCE_BACKED_FAMI
       "qualys.py": qualysCurrentPromotedReadOnlySourceBackedPythonSource(),
       "references/gav-filter-fields.json":
         qualysGavFilterFieldsVocabularyJson(),
+      "references/gav-ui-qql-token-catalog.json":
+        qualysGavUiQqlTokenCatalogJson(),
     }),
     examples: [
       {

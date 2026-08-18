@@ -1316,6 +1316,32 @@ class DbHostedIntegrationGenerationStore implements HostedIntegrationGenerationS
     return row ? this.getGeneration(row.generation_id) : null;
   }
 
+  async disableActiveGeneration(
+    familyId: HostedIntegrationFamilyId | string,
+    updatedBy: string,
+  ): Promise<HostedIntegrationGeneration | null> {
+    void updatedBy;
+    const parsed = HostedIntegrationFamilyIdSchema.parse(familyId);
+    const generation = await this.getActiveGeneration(parsed);
+    if (!generation) return null;
+    this.db.transaction(() => {
+      this.db
+        .prepare(
+          "UPDATE hosted_integration_generations SET status = 'disabled' WHERE id = ?",
+        )
+        .run(generation.id);
+      this.db
+        .prepare(
+          "DELETE FROM hosted_integration_active_generations WHERE family_id = ?",
+        )
+        .run(parsed);
+    })();
+    return (await this.getGeneration(generation.id)) ?? {
+      ...generation,
+      status: "disabled",
+    };
+  }
+
   async beginInvocation(
     request: BeginHostedIntegrationInvocationRequest,
   ): Promise<BeginHostedIntegrationInvocationResult> {

@@ -116,6 +116,61 @@ export type HostedIntegrationToolHelpRequest = z.infer<
   typeof HostedIntegrationToolHelpRequestSchema
 >;
 
+const HostedIntegrationResolvedVocabularyHelpSchema = z
+  .object({
+    id: z.string().optional(),
+    parameter_path: z.string().optional(),
+    entry_count: z.number().int().nonnegative().optional(),
+    invalid_alias_count: z.number().int().nonnegative().optional(),
+    query: z.string().optional(),
+    value: z.string().optional(),
+    ignored_value: z.string().optional(),
+    status: z
+      .enum([
+        "ok",
+        "not_found",
+        "no_vocabulary",
+        "invalid_alias",
+        "ambiguous_vocabulary",
+      ])
+      .optional(),
+    truncated: z.boolean().optional(),
+    warnings: z.array(z.string()).default([]),
+    candidate_parameter_paths: z.array(z.string()).optional(),
+    matches: z
+      .array(
+        z
+          .object({
+            value: z.string(),
+            summary: z.string(),
+            description: z.string().optional(),
+            valueType: z.string().optional(),
+            valueTypes: z.array(z.string()).default([]),
+            enumValues: z.array(z.string()).default([]),
+            operators: z.array(z.string()).default([]),
+            aliases: z.array(z.string()).default([]),
+            canonicalTokens: z.array(z.string()).default([]),
+            examples: z.array(JsonValueSchema).default([]),
+            section: z.string().optional(),
+            sourceMode: z.string().optional(),
+            apiFilterBodyUse: z.string().optional(),
+            source: z.string().optional(),
+          })
+          .strict(),
+      )
+      .default([]),
+    invalid_alias: z
+      .object({
+        value: z.string(),
+        reason: z.string(),
+        use: z.string().optional(),
+        source: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
 export const HostedIntegrationResolvedParameterHelpSchema = z
   .object({
     summary: z.string().optional(),
@@ -123,55 +178,7 @@ export const HostedIntegrationResolvedParameterHelpSchema = z
     shape: JsonObjectSchema.optional(),
     rules: z.array(z.string()).default([]),
     examples: z.array(JsonValueSchema).default([]),
-    vocabulary: z
-      .object({
-        id: z.string().optional(),
-        parameter_path: z.string().optional(),
-        entry_count: z.number().int().nonnegative().optional(),
-        invalid_alias_count: z.number().int().nonnegative().optional(),
-        query: z.string().optional(),
-        value: z.string().optional(),
-        ignored_value: z.string().optional(),
-        status: z
-          .enum([
-            "ok",
-            "not_found",
-            "no_vocabulary",
-            "invalid_alias",
-            "ambiguous_vocabulary",
-          ])
-          .optional(),
-        truncated: z.boolean().optional(),
-        warnings: z.array(z.string()).default([]),
-        candidate_parameter_paths: z.array(z.string()).optional(),
-        matches: z
-          .array(
-            z
-              .object({
-                value: z.string(),
-                summary: z.string(),
-                description: z.string().optional(),
-                valueType: z.string().optional(),
-                operators: z.array(z.string()).default([]),
-                aliases: z.array(z.string()).default([]),
-                examples: z.array(JsonValueSchema).default([]),
-                source: z.string().optional(),
-              })
-              .strict(),
-          )
-          .default([]),
-        invalid_alias: z
-          .object({
-            value: z.string(),
-            reason: z.string(),
-            use: z.string().optional(),
-            source: z.string().optional(),
-          })
-          .strict()
-          .optional(),
-      })
-      .strict()
-      .optional(),
+    vocabulary: HostedIntegrationResolvedVocabularyHelpSchema.optional(),
   })
   .strict();
 export type HostedIntegrationResolvedParameterHelp = z.infer<
@@ -649,9 +656,17 @@ function vocabularyEntryPayload(entry: HostedParameterVocabularyEntry) {
     summary: entry.summary,
     ...(entry.description ? { description: entry.description } : {}),
     ...(entry.valueType ? { valueType: entry.valueType } : {}),
+    valueTypes: entry.valueTypes,
+    enumValues: entry.enumValues,
     operators: entry.operators,
     aliases: entry.aliases,
+    canonicalTokens: entry.canonicalTokens,
     examples: entry.examples,
+    ...(entry.section ? { section: entry.section } : {}),
+    ...(entry.sourceMode ? { sourceMode: entry.sourceMode } : {}),
+    ...(entry.apiFilterBodyUse
+      ? { apiFilterBodyUse: entry.apiFilterBodyUse }
+      : {}),
     ...(entry.source ? { source: entry.source } : {}),
   };
 }

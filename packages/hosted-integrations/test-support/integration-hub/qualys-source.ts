@@ -694,7 +694,7 @@ function qualysGavAssetCountHelpYaml(): string {
                     value: definitely-missing-host
         filter_body.filters.field:
           summary: Native Qualys GAV filter token.
-          full: Use asset.name, operatingSystem.category1, qualys.agent.lastCheckedInDate, or another documented GAV token. Do not use assetName or hosted request parameters such as asset_last_updated.
+          full: Use references/gav-filter-fields.json for the small live-verified API filter_body subset. Do not use QQL/UI search tokens here unless they are explicitly present in that API-safe vocabulary. Do not use assetName or hosted request parameters such as asset_last_updated.
           vocabularyRef: references/gav-filter-fields.json
         filter_body.filters.operator:
           summary: Native Qualys operator such as EQUALS, CONTAINS, GREATER, or LESSER.
@@ -751,7 +751,7 @@ function qualysGavAssetSearchHelpYaml(): string {
             - Use qualys.agent.lastCheckedInDate for Cloud Agent check-in filtering.
         filter_body.filters.field:
           summary: Native Qualys GAV filter token.
-          full: Use asset.name, operatingSystem.category1, operatingSystem.category2, software.name, qualys.agent.lastCheckedInDate, asset.trackingMethod, or another documented GAV token. Do not use response projection fields such as assetName.
+          full: Use references/gav-filter-fields.json for the small live-verified API filter_body subset. Do not use QQL/UI search tokens here unless they are explicitly present in that API-safe vocabulary. Do not use response projection fields such as assetName.
           vocabularyRef: references/gav-filter-fields.json
         include_fields:
           summary: Optional response field projection list for returned asset records.
@@ -845,7 +845,7 @@ function qualysCloudAgentCountHelpYaml(): string {
             - Use qualys.agent.lastCheckedInDate for Cloud Agent check-in filters.
         filter_body.filters.field:
           summary: Native GAV filter token; use asset.name, not assetName.
-          full: Native Qualys GAV token. For Cloud Agent last check-in, use qualys.agent.lastCheckedInDate. Do not use hosted request parameters such as asset_last_updated as filter fields.
+          full: Use references/gav-filter-fields.json for the small live-verified API filter_body subset. Do not use QQL/UI search tokens here unless they are explicitly present in that API-safe vocabulary. For Cloud Agent last check-in, use qualys.agent.lastCheckedInDate. Do not use hosted request parameters such as asset_last_updated as filter fields.
           vocabularyRef: references/gav-filter-fields.json
         filter_body.filters.operator:
           summary: Native Qualys operator such as EQUALS, CONTAINS, GREATER, or LESSER.
@@ -903,7 +903,7 @@ function qualysCloudAgentSearchHelpYaml(): string {
             - Use qualys.agent.lastCheckedInDate for Cloud Agent last check-in.
         filter_body.filters.field:
           summary: Native Qualys GAV filter token.
-          full: Use asset.name, operatingSystem.category1, operatingSystem.category2, software.name, qualys.agent.lastCheckedInDate, asset.trackingMethod, or another documented GAV token. Do not use response projection fields such as assetName.
+          full: Use references/gav-filter-fields.json for the small live-verified API filter_body subset. Do not use QQL/UI search tokens here unless they are explicitly present in that API-safe vocabulary. Do not use response projection fields such as assetName.
           vocabularyRef: references/gav-filter-fields.json
         include_fields:
           summary: Optional response field projection list.
@@ -1685,6 +1685,71 @@ export function qualysGavFilterFieldsVocabularyJson(): string {
           use: "qualys.agent.lastCheckedInDate",
         },
       ],
+    },
+    null,
+    2,
+  );
+}
+
+export function qualysGavUiQqlTokenCatalogJson(): string {
+  return JSON.stringify(
+    {
+      kind: "openacme.hostedParameterVocabulary",
+      version: 1,
+      id: "qualys-gav-ui-qql-token-catalog",
+      familyId: "qualys",
+      parameterPath: "qql.tokens",
+      scope: "source_backed_discovery_catalog",
+      purpose:
+        "Small test-support sample of the broad Qualys GAV UI/QQL token catalog. The deployable external package carries the full catalog.",
+      source: {
+        sourceTitle: "Search Tokens for IT Assets",
+        scopeNote:
+          "UI/QQL tokens are discovery vocabulary and must be source-checked or live-validated before direct API filter_body use.",
+      },
+      entries: [
+        {
+          value: "asset.truRisk",
+          summary: "Asset TruRisk score token.",
+          section: "Asset Inventory",
+          sourceMode: "gav_ui_qql_reference_backed",
+          apiFilterBodyUse: "source_check_or_live_validate_before_filter_body",
+          valueTypes: ["number"],
+          examples: ["asset.truRisk: 500"],
+          canonicalTokens: ["asset.truRisk"],
+        },
+        {
+          value: "asset.interface:(hostname",
+          summary: "Nested asset interface hostname token.",
+          section: "Asset Interface",
+          sourceMode: "gav_ui_qql_reference_backed",
+          apiFilterBodyUse: "source_check_or_live_validate_before_filter_body",
+          valueTypes: ["string"],
+          examples: ["asset.interface:(hostname: web-prod-01)"],
+          canonicalTokens: ["asset.interface:(hostname"],
+        },
+        {
+          value: "software:(product",
+          summary: "Nested software product token.",
+          section: "Software",
+          sourceMode: "gav_ui_qql_reference_backed",
+          apiFilterBodyUse: "source_check_or_live_validate_before_filter_body",
+          valueTypes: ["string"],
+          examples: ["software:(product: nginx)"],
+          canonicalTokens: ["software:(product"],
+        },
+        {
+          value: "aws.ec2.instanceId",
+          summary: "AWS EC2 instance id token.",
+          section: "AWS",
+          sourceMode: "gav_ui_qql_reference_backed",
+          apiFilterBodyUse: "source_check_or_live_validate_before_filter_body",
+          valueTypes: ["string"],
+          examples: ["aws.ec2.instanceId: i-1234567890abcdef0"],
+          canonicalTokens: ["aws.ec2.instanceId"],
+        },
+      ],
+      invalidAliases: [],
     },
     null,
     2,

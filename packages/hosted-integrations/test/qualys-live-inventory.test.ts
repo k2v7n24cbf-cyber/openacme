@@ -79,6 +79,49 @@ type QualysHelpCoverageMatrix = {
   tools: QualysHelpCoverageTool[];
 };
 
+type QualysPerToolAuditRow = {
+  toolName: string;
+  status: "audited" | "fixed" | "evidence_required";
+  sourcesCompared: string[];
+  inputsVerified: string[];
+  helpVerified: string[];
+  runtimeValidationVerified: string[];
+  examplesVerified: string[];
+  knownOmissions: string[];
+  evidenceRequired: string[];
+};
+
+type QualysPerToolAudit = {
+  version: number;
+  familyId: string;
+  scope: string;
+  contractSource: string;
+  requiredSources: string[];
+  sourceCatalog: Record<string, { path: string; role: string }>;
+  tools: QualysPerToolAuditRow[];
+};
+
+type QualysCoverageTrackerRow = {
+  toolName: string;
+  auditStatus: string;
+  comparedWithIntegrationHub: string;
+  comparedWithUserSkill: string;
+  comparedWithDevSkill: string;
+  packageHelpStatus: string;
+  runtimeValidationStatus: string;
+  examplesStatus: string;
+  liveSmokeStatus: string;
+};
+
+type QualysCoverageTracker = {
+  version: number;
+  familyId: string;
+  status: "in_progress" | "complete";
+  currentRound: string;
+  rounds: Array<{ id: string; status: string; summary: string }>;
+  toolStatuses: QualysCoverageTrackerRow[];
+};
+
 type LiveEvaluationScenario = {
   id: string;
   execution: "active" | "planned";
@@ -184,6 +227,38 @@ function readInventory(): QualysLiveInventory {
 
 function readHelpCoverage(): QualysHelpCoverageMatrix {
   return readStrictYaml<QualysHelpCoverageMatrix>(helpCoveragePath);
+}
+
+function readPerToolAuditFromFiles(
+  files: Record<string, string>,
+): QualysPerToolAudit {
+  const content = files["references/per-tool-audit.yaml"];
+  expect(
+    content,
+    "external package must include references/per-tool-audit.yaml",
+  ).toBeDefined();
+  const document = parseDocument(content!, { uniqueKeys: true });
+  expect(
+    document.errors.map((error) => error.message),
+    "per-tool-audit.yaml YAML parse errors",
+  ).toEqual([]);
+  return document.toJSON() as QualysPerToolAudit;
+}
+
+function readCoverageTrackerFromFiles(
+  files: Record<string, string>,
+): QualysCoverageTracker {
+  const content = files["references/coverage-tracker.yaml"];
+  expect(
+    content,
+    "external package must include references/coverage-tracker.yaml",
+  ).toBeDefined();
+  const document = parseDocument(content!, { uniqueKeys: true });
+  expect(
+    document.errors.map((error) => error.message),
+    "coverage-tracker.yaml YAML parse errors",
+  ).toEqual([]);
+  return document.toJSON() as QualysCoverageTracker;
 }
 
 function readLiveEvaluationScenarios(): LiveEvaluationScenarioManifest {
@@ -724,8 +799,10 @@ describe("Qualys live hosted migration inventory", () => {
         "examples.yaml",
         "family.yaml",
         "qualys.py",
+        "references/coverage-tracker.yaml",
         "references/current-scope.md",
         "references/gav-filter-fields.json",
+        "references/per-tool-audit.yaml",
         "references/source-boundary.md",
         "tools.yaml",
       ]),
@@ -758,6 +835,8 @@ describe("Qualys live hosted migration inventory", () => {
     const externalContract = HostedToolContractDocumentSchema.parse(
       parseYaml(externalFiles["tools.yaml"]),
     );
+    const externalAudit = readPerToolAuditFromFiles(externalFiles);
+    const coverageTracker = readCoverageTrackerFromFiles(externalFiles);
     const fixtureContract = HostedToolContractDocumentSchema.parse(
       parseYaml(
         LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_SOURCE_BACKED_FAMILY
@@ -783,6 +862,103 @@ describe("Qualys live hosted migration inventory", () => {
     ).toEqual(
       sorted(fixtureContract.tools.map((tool) => tool.openacme.toolName)),
     );
+    expect(externalAudit).toMatchObject({
+      version: 1,
+      familyId: "qualys",
+      scope: "current_readonly_surface",
+      contractSource: "tools.yaml",
+    });
+    expect(sorted(externalAudit.tools.map((row) => row.toolName))).toEqual(
+      sorted(inventory.currentPromotedBatch.tools),
+    );
+    expect(coverageTracker).toMatchObject({
+      version: 1,
+      familyId: "qualys",
+    });
+    expect(["in_progress", "complete"]).toContain(coverageTracker.status);
+    expect(coverageTracker.currentRound.length).toBeGreaterThan(0);
+    expect(coverageTracker.rounds.length).toBeGreaterThan(0);
+    expect(
+      sorted(coverageTracker.toolStatuses.map((row) => row.toolName)),
+    ).toEqual(sorted(inventory.currentPromotedBatch.tools));
+    for (const requiredSource of [
+      "operational-skill",
+      "development-skill",
+      "tool-map",
+      "migration-inventory",
+      "historical-integration-hub",
+    ]) {
+      expect(externalAudit.requiredSources, requiredSource).toContain(
+        requiredSource,
+      );
+      expect(
+        externalAudit.sourceCatalog[requiredSource],
+        requiredSource,
+      ).toBeDefined();
+    }
+    const auditRows = new Map(
+      externalAudit.tools.map((row) => [row.toolName, row]),
+    );
+    for (const tool of externalContract.tools) {
+      const row = auditRows.get(tool.openacme.toolName);
+      expect(row, tool.openacme.toolName).toBeDefined();
+      expect(["audited", "fixed"], tool.openacme.toolName).toContain(
+        row?.status,
+      );
+      expect(row?.evidenceRequired ?? [], tool.openacme.toolName).toEqual([]);
+      for (const requiredSource of externalAudit.requiredSources) {
+        expect(
+          row?.sourcesCompared,
+          `${tool.openacme.toolName} ${requiredSource}`,
+        ).toContain(requiredSource);
+      }
+      for (const inputName of Object.keys(tool.mcp.inputSchema.properties ?? {})) {
+        expect(
+          row?.inputsVerified,
+          `${tool.openacme.toolName} ${inputName}`,
+        ).toContain(inputName);
+      }
+      expect(row?.helpVerified.length, tool.openacme.toolName).toBeGreaterThan(
+        0,
+      );
+      expect(
+        row?.runtimeValidationVerified.length,
+        tool.openacme.toolName,
+      ).toBeGreaterThan(0);
+      expect(
+        row?.examplesVerified.length,
+        tool.openacme.toolName,
+      ).toBeGreaterThan(0);
+      const trackerRow = coverageTracker.toolStatuses.find(
+        (candidate) => candidate.toolName === tool.openacme.toolName,
+      );
+      expect(trackerRow, tool.openacme.toolName).toBeDefined();
+      expect(trackerRow?.comparedWithIntegrationHub, tool.openacme.toolName).toBe(
+        "yes",
+      );
+      expect(trackerRow?.comparedWithUserSkill, tool.openacme.toolName).toBe(
+        "yes",
+      );
+      expect(trackerRow?.comparedWithDevSkill, tool.openacme.toolName).toBe(
+        "yes",
+      );
+      expect(
+        trackerRow?.packageHelpStatus.length,
+        tool.openacme.toolName,
+      ).toBeGreaterThan(0);
+      expect(
+        trackerRow?.runtimeValidationStatus.length,
+        tool.openacme.toolName,
+      ).toBeGreaterThan(0);
+      expect(
+        trackerRow?.examplesStatus.length,
+        tool.openacme.toolName,
+      ).toBeGreaterThan(0);
+      expect(
+        trackerRow?.liveSmokeStatus.length,
+        tool.openacme.toolName,
+      ).toBeGreaterThan(0);
+    }
     expect(externalFiles["qualys.py"]).not.toContain("integration_hub");
     expect(externalFiles["qualys.py"]).not.toContain("legacy_call_tool");
   });
@@ -1796,8 +1972,14 @@ describe("Qualys live hosted migration inventory", () => {
             ?.invalid_alias_count,
           toolName,
         ).toBeGreaterThanOrEqual(3);
+        expect(JSON.stringify(result.help), toolName).toContain(
+          "small live-verified API filter_body subset",
+        );
+        expect(JSON.stringify(result.help), toolName).toContain(
+          "Do not use QQL/UI search tokens here",
+        );
         expect(JSON.stringify(result.help), toolName).not.toContain(
-          "references/gav-filter-fields.json",
+          "gav-ui-qql-token-catalog",
         );
       }
     } finally {

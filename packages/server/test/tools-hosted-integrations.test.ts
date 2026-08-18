@@ -126,6 +126,72 @@ describe("/api/tools hosted integration surfacing", () => {
     ).toBe(true);
   });
 
+  it("does not surface active hosted integration generations without a current source family", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "openacme-tools-hosted-"));
+    writeFamily(dataDir);
+    const locks = createFileHostedIntegrationLockStore({
+      dataDir,
+      createId: () => "lock_1",
+    });
+    await locks.acquireLock({
+      familyId: "qualys",
+      lockedBy: "agent:tool-developer",
+      ttlMs: 60_000,
+    });
+    const drafts = createFileHostedIntegrationDraftStore({
+      dataDir,
+      lockStore: locks,
+      createId: () => "draft_1",
+    });
+    const draft = await drafts.createDraft({
+      familyId: "qualys",
+      lockId: "lock_1",
+      sourceRevisionId: "source_rev_1",
+    });
+    expect(draft.ok).toBe(true);
+    const promoted = await createFileHostedIntegrationGenerationStore({
+      dataDir,
+      draftStore: drafts,
+      createId: () => "gen_orphan",
+    }).promoteDraft({
+      draftId: "draft_1",
+      promotedBy: "agent:tool-developer",
+      validation: { ok: true, diagnostics: [] },
+    });
+    expect(promoted.ok).toBe(true);
+    rmSync(
+      path.join(dataDir, "hosted-integrations", "source", "families", "qualys"),
+      { recursive: true, force: true },
+    );
+
+    const config = ConfigSchema.parse({
+      dataDir,
+      model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+    });
+    const { app, manager, close } = await createApp(config);
+    closeApp = close;
+    const member = manager.authStore.createMember({
+      email: "orphan@example.com",
+      password: "test-password-123",
+    });
+    const authToken = manager.authStore.createSession(member.id).token;
+
+    const res = await app.request("http://127.0.0.1/api/tools", {
+      headers: { host: "127.0.0.1", authorization: `Bearer ${authToken}` },
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      tools: Array<{ name: string; source?: { familyId?: string } }>;
+    };
+    expect(
+      body.tools.some((tool) => tool.name === HOSTED_QUALYS_COUNT_ASSETS),
+    ).toBe(false);
+    expect(
+      body.tools.some((tool) => tool.source?.familyId === "qualys"),
+    ).toBe(false);
+  });
+
   it("syncs the current promoted integration-hub read-only pilot without hiding remote MCP tools", async () => {
     dataDir = mkdtempSync(path.join(tmpdir(), "openacme-tools-hosted-"));
     const fixture = LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_TOOL_SYNC_FAMILY;
@@ -556,9 +622,11 @@ describe("/api/tools hosted integration surfacing", () => {
       () => tools[HOSTED_QUALYS_COUNT_ASSETS]!.execute({}),
     );
 
-    expect(JSON.parse(output)).toEqual({
+    expect(JSON.parse(output)).toMatchObject({
       ok: false,
       error: { code: "tool_failed", message: "tool failed" },
+      runId: expect.stringMatching(/^call_/),
+      errorArtifactRef: expect.stringMatching(/^call_.*\/error\.json$/),
       familyId: "qualys",
       toolName: "qualys_count_assets",
       canonicalToolName: HOSTED_QUALYS_COUNT_ASSETS,
@@ -567,6 +635,106 @@ describe("/api/tools hosted integration surfacing", () => {
     expect(output).not.toContain("bucket");
     expect(output).not.toContain("repair");
     expect(output).not.toContain("task");
+  });
+
+  it("surfaces sanitized provider errors to the caller-facing hosted tool result", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "openacme-tools-hosted-"));
+    writeFamily(
+      dataDir,
+      [
+        "class ToolError(Exception):",
+        "    def __init__(self, code, message):",
+        "        self.code = code",
+        "        super().__init__(message)",
+        "",
+        "def tool_qualys_count_assets(args, context):",
+        "    raise ToolError('bad_arguments', 'Qualys Gateway FAILED: Valid subscription - Request Validation Exception[expected one of asset.name, asset.biosSerialNumber]')",
+        "",
+      ].join("\n"),
+    );
+    const locks = createFileHostedIntegrationLockStore({
+      dataDir,
+      createId: () => "lock_1",
+    });
+    await locks.acquireLock({
+      familyId: "qualys",
+      lockedBy: "agent:tool-developer",
+      ttlMs: 60_000,
+    });
+    const drafts = createFileHostedIntegrationDraftStore({
+      dataDir,
+      lockStore: locks,
+      createId: () => "draft_1",
+    });
+    const draft = await drafts.createDraft({
+      familyId: "qualys",
+      lockId: "lock_1",
+      sourceRevisionId: "source_rev_1",
+    });
+    expect(draft.ok).toBe(true);
+    const promoted = await createFileHostedIntegrationGenerationStore({
+      dataDir,
+      draftStore: drafts,
+      createId: () => "gen_1",
+    }).promoteDraft({
+      draftId: "draft_1",
+      promotedBy: "agent:tool-developer",
+      validation: { ok: true, diagnostics: [] },
+    });
+    expect(promoted.ok).toBe(true);
+    await seedEnvironmentConfig(dataDir);
+
+    const config = ConfigSchema.parse({
+      dataDir,
+      model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+    });
+    const { manager, runtime, close } = await createApp(config);
+    closeApp = close;
+    await manager.createAgent(
+      AgentDefinitionSchema.parse({
+        id: "analyst",
+        name: "Analyst",
+        role: "",
+        model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+        persona: "Use hosted integrations.",
+        tools: [HOSTED_QUALYS_COUNT_ASSETS],
+        hostedIntegrationBindings: [
+          hostedToolBinding("qualys_count_assets"),
+        ],
+      }),
+    );
+
+    const tools = toolRegistry.getVercelTools(
+      new Set([HOSTED_QUALYS_COUNT_ASSETS]),
+    ) as Record<
+      string,
+      { execute: (args: Record<string, unknown>) => Promise<string> }
+    >;
+    const output = await toolCallContext.run(
+      {
+        agentId: "analyst",
+        sessionId: "session_1",
+        workspaceDir: path.join(dataDir, "agents", "analyst", "workspace"),
+      },
+      () => tools[HOSTED_QUALYS_COUNT_ASSETS]!.execute({}),
+    );
+
+    expect(JSON.parse(output)).toMatchObject({
+      ok: false,
+      error: {
+        code: "bad_arguments",
+        message:
+          "Qualys Gateway FAILED: Valid subscription - Request Validation Exception[expected one of asset.name, asset.biosSerialNumber]",
+      },
+      runId: expect.stringMatching(/^call_/),
+      errorArtifactRef: expect.stringMatching(/^call_.*\/error\.json$/),
+      familyId: "qualys",
+      toolName: "qualys_count_assets",
+      canonicalToolName: HOSTED_QUALYS_COUNT_ASSETS,
+      generationId: "gen_1",
+    });
+    expect(output).not.toContain("traceback");
+    expect(output).not.toContain("ToolError");
   });
 
   it("binds hosted integration management tools to the server control-plane port", async () => {

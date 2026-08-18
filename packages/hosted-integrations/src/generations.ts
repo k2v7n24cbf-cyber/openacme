@@ -152,6 +152,10 @@ export interface HostedIntegrationGenerationStore {
   getActiveGeneration(
     familyId: HostedIntegrationFamilyId | string,
   ): Promise<HostedIntegrationGeneration | null>;
+  disableActiveGeneration(
+    familyId: HostedIntegrationFamilyId | string,
+    updatedBy: string,
+  ): Promise<HostedIntegrationGeneration | null>;
   beginInvocation(
     request: BeginHostedIntegrationInvocationRequest,
   ): Promise<BeginHostedIntegrationInvocationResult>;
@@ -429,6 +433,26 @@ class FileHostedIntegrationGenerationStore implements HostedIntegrationGeneratio
       if (isNodeError(error) && error.code === "ENOENT") return null;
       throw error;
     }
+  }
+
+  async disableActiveGeneration(
+    familyId: HostedIntegrationFamilyId | string,
+    updatedBy: string,
+  ): Promise<HostedIntegrationGeneration | null> {
+    const parsedFamilyId = HostedIntegrationFamilyIdSchema.parse(familyId);
+    const generation = await this.getActiveGeneration(parsedFamilyId);
+    if (!generation) return null;
+    await this.writeGenerationStatus({
+      generationId: generation.id,
+      status: "disabled",
+      updatedAt: this.now().toISOString(),
+      updatedBy,
+    });
+    await rm(this.activePointerPath(parsedFamilyId), { force: true });
+    return (await this.getGeneration(generation.id)) ?? {
+      ...generation,
+      status: "disabled",
+    };
   }
 
   async beginInvocation(

@@ -450,6 +450,21 @@ describe("Qualys live hosted migration inventory", () => {
     }
   });
 
+  it("keeps inline endpoint evidence YAML as quoted string scalars", () => {
+    const inventoryText = readFileSync(inventoryPath, "utf-8");
+    const unquotedInlineEvidenceLines = inventoryText
+      .split(/\r?\n/)
+      .filter((line) => /^\s+endpointEvidence:\s+\[[^"]/.test(line));
+
+    expect(unquotedInlineEvidenceLines).toEqual([]);
+    for (const tool of readInventory().tools) {
+      expect(
+        tool.endpointEvidence.every((evidence) => typeof evidence === "string"),
+        tool.toolName,
+      ).toBe(true);
+    }
+  });
+
   it("keeps cache-local and reference-only tools out of the live API-backed set", () => {
     const inventory = readInventory();
 

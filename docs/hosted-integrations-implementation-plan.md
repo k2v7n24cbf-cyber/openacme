@@ -13245,6 +13245,13 @@ Evidence:
   rows in `currentPromotedBatch.tools`. Verified with
   `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
   (`32` passed), direct YAML parse/count, and `git diff --check`.
+- The Qualys inventory test now includes a deterministic YAML-shape guard that
+  rejects unquoted inline `endpointEvidence` flow scalars and asserts every
+  parsed evidence item is a string. Verified with
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`33` passed),
+  `pnpm --filter @openacme/hosted-integrations check-types`, and
+  `git diff --check`.
 
 Slice 36.7 Acceptance:
 

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -9,8 +9,13 @@ import {
   createFileHostedIntegrationDraftValidator,
   createFileHostedIntegrationGenerationStore,
   createFileHostedIntegrationLockStore,
+  HostedIntegrationToolHelpRequestSchema,
   resolveHostedIntegrationToolHelp,
 } from "../src/index.js";
+import {
+  withSplitToolContractFiles,
+  writeSplitFamilyFixture,
+} from "./test-support/split-contract-fixtures.js";
 
 let dataDir: string;
 
@@ -82,6 +87,13 @@ examples:
         tool_help: {
           summary: "Count Qualys assets.",
           full: "Full count-assets help.\n",
+          errors: [
+            "bad_arguments means the request shape or filter token is unsupported; fix the input before retrying.",
+          ],
+          pagination: {
+            model: "count",
+            truncation: "No pagination; count result only.",
+          },
         },
         parameters: {
           filter_body: {
@@ -119,6 +131,629 @@ examples:
             category: "smoke",
           }),
         ],
+      },
+    });
+  });
+
+  it("searches and checks shared parameter vocabularies", async () => {
+    const generations = await promoteHelpFamily({
+      files: {
+        "family.yaml": familyYaml({
+          help: `
+    help:
+      summary: Count Qualys assets.
+      parameters:
+        filter_body:
+          summary: Native Qualys FilterRequest JSON body.
+          full: Full inline filter_body help.
+        filter_body.filters.field:
+          summary: Native Qualys GAV filter token.
+          vocabularyRef: references/gav-filter-fields.yaml
+      examples:
+        - filter_body:
+            filters:
+              - field: asset.name
+                operator: EQUALS
+                value: missing
+`,
+        }),
+        "qualys.py": "def run(): pass\n",
+        "references/gav-filter-fields.yaml": `
+kind: openacme.hostedParameterVocabulary
+version: 1
+id: qualys-gav-filter-fields
+familyId: qualys
+parameterPath: filter_body.filters.field
+entries:
+  - value: asset.name
+    summary: Asset name.
+    description: Host asset display name.
+    operators: [EQUALS, CONTAINS]
+    aliases: [hostname]
+  - value: software.name
+    summary: Installed software name.
+    operators: [EQUALS, CONTAINS]
+    source: Qualys GAV field catalog
+invalidAliases:
+  - value: asset_last_updated
+    reason: Not a supported GAV filter field.
+    use: updateDate
+`,
+      },
+    });
+    const hostedToolName = buildHostedToolName({
+      familyId: "qualys",
+      toolName: "qualys_count_assets",
+    });
+
+    const metadataResult = await resolveHostedIntegrationToolHelp({
+      dataDir,
+      generations,
+      hostedToolName,
+      familyId: "qualys",
+      toolName: "qualys_count_assets",
+      request: {
+        tool_detail: "summary",
+        include_examples: false,
+        parameters: [
+          {
+            name: "filter_body.filters.field",
+            detail: "summary",
+            include_examples: false,
+          },
+        ],
+      },
+    });
+
+    expect(metadataResult).toMatchObject({
+      ok: true,
+      help: {
+        parameters: {
+          "filter_body.filters.field": {
+            vocabulary: {
+              id: "qualys-gav-filter-fields",
+              parameter_path: "filter_body.filters.field",
+              entry_count: 2,
+              invalid_alias_count: 1,
+              status: "ok",
+              matches: [],
+            },
+          },
+        },
+      },
+    });
+
+    const queryResult = await resolveHostedIntegrationToolHelp({
+      dataDir,
+      generations,
+      hostedToolName,
+      familyId: "qualys",
+      toolName: "qualys_count_assets",
+      request: {
+        tool_detail: "summary",
+        include_examples: false,
+        parameters: [
+          {
+            name: "filter_body.filters.field",
+            detail: "summary",
+            include_examples: false,
+            query: "software",
+            limit: 10,
+          },
+        ],
+      },
+    });
+
+    expect(queryResult).toMatchObject({
+      ok: true,
+      help: {
+        parameters: {
+          "filter_body.filters.field": {
+            vocabulary: {
+              id: "qualys-gav-filter-fields",
+              status: "ok",
+              query: "software",
+              matches: [
+                {
+                  value: "software.name",
+                  summary: "Installed software name.",
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    const aliasResult = await resolveHostedIntegrationToolHelp({
+      dataDir,
+      generations,
+      hostedToolName,
+      familyId: "qualys",
+      toolName: "qualys_count_assets",
+      request: {
+        tool_detail: "summary",
+        include_examples: false,
+        parameters: [
+          {
+            name: "filter_body.filters.field",
+            detail: "summary",
+            include_examples: false,
+            query: "hostname",
+            limit: 10,
+          },
+        ],
+      },
+    });
+
+    expect(aliasResult).toMatchObject({
+      ok: true,
+      help: {
+        parameters: {
+          "filter_body.filters.field": {
+            vocabulary: {
+              status: "ok",
+              query: "hostname",
+              matches: [
+                {
+                  value: "asset.name",
+                  aliases: ["hostname"],
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    const sourceResult = await resolveHostedIntegrationToolHelp({
+      dataDir,
+      generations,
+      hostedToolName,
+      familyId: "qualys",
+      toolName: "qualys_count_assets",
+      request: {
+        tool_detail: "summary",
+        include_examples: false,
+        parameters: [
+          {
+            name: "filter_body.filters.field",
+            detail: "summary",
+            include_examples: false,
+            query: "field catalog",
+            limit: 10,
+          },
+        ],
+      },
+    });
+
+    expect(sourceResult).toMatchObject({
+      ok: true,
+      help: {
+        parameters: {
+          "filter_body.filters.field": {
+            vocabulary: {
+              status: "ok",
+              query: "field catalog",
+              matches: [
+                {
+                  value: "software.name",
+                  source: "Qualys GAV field catalog",
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    const mixedResult = await resolveHostedIntegrationToolHelp({
+      dataDir,
+      generations,
+      hostedToolName,
+      familyId: "qualys",
+      toolName: "qualys_count_assets",
+      request: {
+        tool_detail: "summary",
+        include_examples: false,
+        parameters: [
+          {
+            name: "filter_body.filters.field",
+            detail: "summary",
+            include_examples: false,
+            query: "asset",
+            value: "asset_last_updated",
+            limit: 10,
+          },
+        ],
+      },
+    });
+
+    expect(mixedResult).toMatchObject({
+      ok: true,
+      help: {
+        parameters: {
+          "filter_body.filters.field": {
+            vocabulary: {
+              status: "ok",
+              query: "asset",
+              ignored_value: "asset_last_updated",
+              warnings: [
+                "query and value were both supplied; query was used and value was ignored.",
+              ],
+              matches: [
+                {
+                  value: "asset.name",
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    const inferredNestedResult = await resolveHostedIntegrationToolHelp({
+      dataDir,
+      generations,
+      hostedToolName,
+      familyId: "qualys",
+      toolName: "qualys_count_assets",
+      request: {
+        tool_detail: "summary",
+        include_examples: false,
+        parameters: [
+          {
+            name: "filter_body",
+            detail: "summary",
+            include_examples: false,
+            query: "software",
+            value: "asset_last_updated",
+            limit: 10,
+          },
+        ],
+      },
+    });
+
+    expect(inferredNestedResult).toMatchObject({
+      ok: true,
+      help: {
+        parameters: {
+          filter_body: {
+            vocabulary: {
+              status: "ok",
+              query: "software",
+              ignored_value: "asset_last_updated",
+              warnings: [
+                "query and value were both supplied; query was used and value was ignored.",
+                "vocabulary lookup was inferred from filter_body.filters.field; request that parameter path directly for precise help.",
+              ],
+              matches: [
+                {
+                  value: "software.name",
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    const exactResult = await resolveHostedIntegrationToolHelp({
+      dataDir,
+      generations,
+      hostedToolName,
+      familyId: "qualys",
+      toolName: "qualys_count_assets",
+      request: {
+        tool_detail: "summary",
+        include_examples: false,
+        parameters: [
+          {
+            name: "filter_body.filters.field",
+            detail: "summary",
+            include_examples: false,
+            value: "asset_last_updated",
+            limit: 10,
+          },
+        ],
+      },
+    });
+
+    expect(exactResult).toMatchObject({
+      ok: true,
+      help: {
+        parameters: {
+          "filter_body.filters.field": {
+            vocabulary: {
+              status: "invalid_alias",
+              value: "asset_last_updated",
+              invalid_alias: {
+                reason: "Not a supported GAV filter field.",
+                use: "updateDate",
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("accepts mixed query and value requests by using query and warning about the ignored value", async () => {
+    const parsed = HostedIntegrationToolHelpRequestSchema.parse({
+      tool_name: "hosted_qualys__qualys_count_assets",
+      tool_detail: "summary",
+      include_examples: false,
+      parameters: [
+        {
+          name: "filter_body.filters.field",
+          detail: "summary",
+          include_examples: false,
+          query: "asset",
+          value: "asset.name",
+          limit: 10,
+        },
+      ],
+    });
+
+    expect(parsed.parameters?.[0]).toMatchObject({
+      query: "asset",
+      value: "asset.name",
+    });
+  });
+
+  it("returns not_found, truncation, and no unsafe vocabulary file paths", async () => {
+    const generations = await promoteHelpFamily({
+      files: {
+        "family.yaml": familyYaml({
+          help: `
+    help:
+      summary: Count Qualys assets.
+      parameters:
+        filter_body:
+          summary: Native Qualys FilterRequest JSON body.
+          full: Full inline filter_body help.
+        filter_body.filters.field:
+          summary: Native Qualys GAV filter token.
+          vocabularyRef: references/gav-filter-fields.yaml
+      examples:
+        - filter_body:
+            filters:
+              - field: asset.name
+                operator: EQUALS
+                value: missing
+`,
+        }),
+        "qualys.py": "def run(): pass\n",
+        "references/gav-filter-fields.yaml": `
+kind: openacme.hostedParameterVocabulary
+version: 1
+id: qualys-gav-filter-fields
+familyId: qualys
+parameterPath: filter_body.filters.field
+entries:
+  - value: asset.name
+    summary: Asset name.
+  - value: asset.trackingMethod
+    summary: Asset tracking method.
+  - value: asset.id
+    summary: Asset id.
+`,
+      },
+    });
+    const hostedToolName = buildHostedToolName({
+      familyId: "qualys",
+      toolName: "qualys_count_assets",
+    });
+
+    const queryResult = await resolveHostedIntegrationToolHelp({
+      dataDir,
+      generations,
+      hostedToolName,
+      familyId: "qualys",
+      toolName: "qualys_count_assets",
+      request: {
+        tool_detail: "summary",
+        include_examples: false,
+        parameters: [
+          {
+            name: "filter_body.filters.field",
+            detail: "summary",
+            include_examples: false,
+            query: "asset",
+            limit: 2,
+          },
+        ],
+      },
+    });
+    expect(queryResult).toMatchObject({
+      ok: true,
+      help: {
+        parameters: {
+          "filter_body.filters.field": {
+            vocabulary: {
+              status: "ok",
+              truncated: true,
+              matches: [
+                { value: "asset.name" },
+                { value: "asset.trackingMethod" },
+              ],
+            },
+          },
+        },
+      },
+    });
+    if (!queryResult.ok) throw new Error("expected query help result");
+    const serialized = JSON.stringify(queryResult.help);
+    expect(serialized).not.toContain("references/gav-filter-fields.yaml");
+    expect(serialized).not.toContain(dataDir);
+
+    const exactResult = await resolveHostedIntegrationToolHelp({
+      dataDir,
+      generations,
+      hostedToolName,
+      familyId: "qualys",
+      toolName: "qualys_count_assets",
+      request: {
+        tool_detail: "summary",
+        include_examples: false,
+        parameters: [
+          {
+            name: "filter_body.filters.field",
+            detail: "summary",
+            include_examples: false,
+            value: "missing.field",
+            limit: 10,
+          },
+        ],
+      },
+    });
+
+    expect(exactResult).toMatchObject({
+      ok: true,
+      help: {
+        parameters: {
+          "filter_body.filters.field": {
+            vocabulary: {
+              status: "not_found",
+              value: "missing.field",
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("reports no_vocabulary when lookup is requested without a vocabulary ref", async () => {
+    const generations = await promoteHelpFamily({
+      files: {
+        "family.yaml": familyYaml({}),
+        "qualys.py": "def run(): pass\n",
+      },
+    });
+    const hostedToolName = buildHostedToolName({
+      familyId: "qualys",
+      toolName: "qualys_count_assets",
+    });
+
+    const result = await resolveHostedIntegrationToolHelp({
+      dataDir,
+      generations,
+      hostedToolName,
+      familyId: "qualys",
+      toolName: "qualys_count_assets",
+      request: {
+        tool_detail: "summary",
+        include_examples: false,
+        parameters: [
+          {
+            name: "filter_body",
+            detail: "summary",
+            include_examples: false,
+            query: "asset",
+            limit: 10,
+          },
+        ],
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      help: {
+        parameters: {
+          filter_body: {
+            vocabulary: {
+              status: "no_vocabulary",
+              query: "asset",
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("does not guess when object-level vocabulary lookup is ambiguous", async () => {
+    const generations = await promoteHelpFamily({
+      files: {
+        "family.yaml": familyYaml({
+          help: `
+    help:
+      summary: Count Qualys assets.
+      parameters:
+        filter_body:
+          summary: Native Qualys FilterRequest JSON body.
+          full: Full inline filter_body help.
+        filter_body.filters.field:
+          summary: Native Qualys GAV filter token.
+          vocabularyRef: references/gav-filter-fields.yaml
+        filter_body.filters.operator:
+          summary: Native Qualys GAV filter operator.
+          vocabularyRef: references/gav-filter-operators.yaml
+`,
+        }),
+        "qualys.py": "def run(): pass\n",
+        "references/gav-filter-fields.yaml": `
+kind: openacme.hostedParameterVocabulary
+version: 1
+id: qualys-gav-filter-fields
+familyId: qualys
+parameterPath: filter_body.filters.field
+entries:
+  - value: asset.name
+    summary: Asset name.
+`,
+        "references/gav-filter-operators.yaml": `
+kind: openacme.hostedParameterVocabulary
+version: 1
+id: qualys-gav-filter-operators
+familyId: qualys
+parameterPath: filter_body.filters.operator
+entries:
+  - value: EQUALS
+    summary: Exact match.
+`,
+      },
+    });
+
+    const result = await resolveHostedIntegrationToolHelp({
+      dataDir,
+      generations,
+      hostedToolName: "hosted_qualys__qualys_count_assets",
+      familyId: "qualys",
+      toolName: "qualys_count_assets",
+      request: {
+        tool_detail: "summary",
+        include_examples: false,
+        parameters: [
+          {
+            name: "filter_body",
+            detail: "summary",
+            include_examples: false,
+            query: "asset",
+            limit: 10,
+          },
+        ],
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      help: {
+        parameters: {
+          filter_body: {
+            vocabulary: {
+              status: "ambiguous_vocabulary",
+              query: "asset",
+              matches: [],
+              candidate_parameter_paths: [
+                "filter_body.filters.field",
+                "filter_body.filters.operator",
+              ],
+              warnings: [
+                "vocabulary lookup for filter_body is ambiguous; request one precise parameter path.",
+              ],
+            },
+          },
+        },
       },
     });
   });
@@ -310,7 +945,7 @@ async function promoteHelpFamily(input: { files: Record<string, string> }) {
     familyId: "qualys",
     lockId: "lock_1",
     sourceRevisionId: "source_rev_1",
-    files: input.files,
+    files: withSplitToolContractFiles(input.files),
   });
   expect(draft.ok).toBe(true);
   const generations = createFileHostedIntegrationGenerationStore({
@@ -335,12 +970,7 @@ async function setupValidator(files: Record<string, string>) {
     "families",
     "qualys",
   );
-  await mkdir(sourceDir, { recursive: true });
-  await writeFile(
-    path.join(sourceDir, "family.yaml"),
-    familyYaml({ help: "" }),
-    "utf-8",
-  );
+  await writeSplitFamilyFixture(sourceDir, familyYaml({ help: "" }));
   await writeFile(
     path.join(sourceDir, "qualys.py"),
     "def run(): pass\n",
@@ -364,7 +994,7 @@ async function setupValidator(files: Record<string, string>) {
     familyId: "qualys",
     lockId: "lock_1",
     sourceRevisionId: "source_rev_1",
-    files,
+    files: withSplitToolContractFiles(files),
   });
   expect(draft.ok).toBe(true);
   return createFileHostedIntegrationDraftValidator({
@@ -443,6 +1073,11 @@ tools:
       idempotency: idempotent
       execution: sync
       approval: none
+    errors:
+      - bad_arguments means the request shape or filter token is unsupported; fix the input before retrying.
+    pagination:
+      model: count
+      truncation: No pagination; count result only.
 ${help}
 `;
 }

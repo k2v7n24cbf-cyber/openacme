@@ -17,6 +17,7 @@ import {
   createFileHostedIntegrationLockStore,
   createFileHostedIntegrationSecretStore,
 } from "@openacme/hosted-integrations";
+import { withSplitToolContractFiles } from "../../hosted-integrations/test/test-support/split-contract-fixtures.js";
 import { createDatabase } from "@openacme/db";
 import { createApp } from "../src/app.js";
 import type { AgentManager } from "../src/agent-manager.js";
@@ -72,8 +73,11 @@ function writeFamily(
     familyId,
   );
   mkdirSync(dir, { recursive: true });
-  writeFileSync(path.join(dir, "family.yaml"), yaml);
-  for (const [relPath, content] of Object.entries(files)) {
+  const splitFiles = withSplitToolContractFiles({
+    "family.yaml": yaml,
+    ...files,
+  });
+  for (const [relPath, content] of Object.entries(splitFiles)) {
     const filePath = path.join(dir, relPath);
     mkdirSync(path.dirname(filePath), { recursive: true });
     writeFileSync(filePath, content);
@@ -117,6 +121,43 @@ tools:
       execution: sync
       approval: none
 `;
+}
+
+function hostedFamilyPackageDocument(
+  id: string,
+  name: string,
+  toolName: string,
+): Record<string, unknown> {
+  const files = withSplitToolContractFiles({
+    "family.yaml": familyYaml(id, name, toolName),
+    [`${id}.py`]: hostedPackagePythonSource(toolName),
+  });
+  return {
+    kind: "openacme.hostedFamilyPackage",
+    version: 1,
+    metadata: { familyId: id },
+    files: Object.entries(files).map(([filePath, content]) => ({
+      path: filePath,
+      content,
+    })),
+  };
+}
+
+function hostedPackagePythonSource(toolName: string): string {
+  return [
+    "def authenticate(ctx):",
+    "    return {}",
+    "",
+    "def before_tool_call(tool_name, args, ctx, auth):",
+    "    return args",
+    "",
+    "def after_tool_call(tool_name, args, ctx, result, auth):",
+    "    return result",
+    "",
+    `def tool_${toolName}(args, context):`,
+    "    return {'ok': True}",
+    "",
+  ].join("\n");
 }
 
 function asyncFamilyYaml(id: string, name: string, toolName: string): string {
@@ -437,6 +478,194 @@ describe("hosted integrations proposed family routes", () => {
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({ error: "duplicate_family" });
   });
+
+  it("validates a hosted family package through the product API without creating a draft", async () => {
+    const packageDocument = hostedFamilyPackageDocument(
+      "github",
+      "GitHub",
+      "github_search",
+    );
+    let res = await req("/api/hosted-integrations/packages/validate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actor: toolDeveloperActor(),
+        packageDocument,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({ code: "help_example_missing" }),
+      ]),
+      files: ["family.yaml", "github.py", "tools.yaml"],
+    });
+
+    res = await req("/api/hosted-integrations/families");
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ families: [] });
+
+    res = await req("/api/hosted-integrations/packages/validate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actor: toolDeveloperActor(),
+        packageDocument,
+        targetFamilyId: "splunk",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: false,
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({
+          code: "package_target_family_mismatch",
+        }),
+      ]),
+    });
+  });
+
+  it("rejects operational artifact paths through package validate and import APIs", async () => {
+    const packageDocument = hostedFamilyPackageDocument(
+      "github",
+      "GitHub",
+      "github_search",
+    );
+    const unsafePackageDocument = {
+      ...packageDocument,
+      files: [
+        ...((packageDocument.files as Array<Record<string, unknown>>) ?? []),
+        { path: "logs/invocation.json", content: "{}" },
+      ],
+    };
+
+    let res = await req("/api/hosted-integrations/packages/validate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actor: toolDeveloperActor(),
+        packageDocument: unsafePackageDocument,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: false,
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({
+          code: "package_file_path_operational",
+        }),
+      ]),
+      files: ["family.yaml", "github.py", "tools.yaml"],
+    });
+
+    res = await req("/api/hosted-integrations/packages/import", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actor: toolDeveloperActor(),
+        mode: "create",
+        packageDocument: unsafePackageDocument,
+        ttlMs: 60_000,
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: false,
+      error: { code: "invalid_package" },
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({
+          code: "package_file_path_operational",
+        }),
+      ]),
+    });
+
+    res = await req("/api/hosted-integrations/families?includeProposed=true");
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ families: [] });
+  });
+
+  it("imports a hosted family package through the product API without promoting it", async () => {
+    const res = await req("/api/hosted-integrations/packages/import", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actor: toolDeveloperActor(),
+        mode: "create",
+        packageDocument: hostedFamilyPackageDocument(
+          "github",
+          "GitHub",
+          "github_search",
+        ),
+        ttlMs: 60_000,
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body).toMatchObject({
+      ok: true,
+      mode: "create",
+      family: {
+        id: "github",
+        name: "GitHub",
+        status: "proposed",
+        toolNames: ["github_search"],
+      },
+      validation: { ok: true },
+      nextAction: "run_examples",
+    });
+    expect(body.importedFiles).toEqual([
+      "family.yaml",
+      "github.py",
+      "tools.yaml",
+    ]);
+
+    const exportRes = await req("/api/hosted-integrations/packages/export", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actor: toolDeveloperActor(),
+        source: { type: "draft", draftId: body.draft.id },
+        includeExamples: false,
+      }),
+    });
+    expect(exportRes.status).toBe(200);
+    const exportBody = await exportRes.json();
+    expect(exportBody).toMatchObject({
+      ok: true,
+      packageDocument: {
+        kind: "openacme.hostedFamilyPackage",
+        metadata: {
+          familyId: "github",
+          exportedBy: "agent:tool-developer",
+          sourceDraftId: body.draft.id,
+        },
+      },
+      exportedFiles: ["family.yaml", "github.py", "tools.yaml"],
+    });
+    expect(JSON.stringify(exportBody)).not.toContain("secret");
+
+    const familiesRes = await req(
+      "/api/hosted-integrations/families?includeProposed=true",
+    );
+    expect(familiesRes.status).toBe(200);
+    expect(await familiesRes.json()).toMatchObject({
+      families: [
+        {
+          id: "github",
+          status: "proposed",
+          toolNames: ["github_search"],
+        },
+      ],
+    });
+    await expect(runtime.hostedIntegrationService.generations.listGenerations())
+      .resolves.toEqual([]);
+  });
 });
 
 describe("hosted integrations draft control plane routes", () => {
@@ -481,6 +710,7 @@ describe("hosted integrations draft control plane routes", () => {
         { path: "docs/readme.md" },
         { path: "family.yaml" },
         { path: "qualys.py" },
+        { path: "tools.yaml" },
       ],
     });
 
@@ -565,7 +795,7 @@ describe("hosted integrations draft control plane routes", () => {
     res = await req(`/api/hosted-integrations/drafts/${draftId}/files`);
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({
-      files: [{ path: "family.yaml" }, { path: "qualys.py" }],
+      files: [{ path: "family.yaml" }, { path: "qualys.py" }, { path: "tools.yaml" }],
     });
 
     res = await req(
@@ -686,12 +916,12 @@ describe("hosted integrations draft control plane routes", () => {
     expect(await res.json()).toEqual({ ok: true });
 
     res = await req(
-      `/api/hosted-integrations/drafts/${draftId}/files/family.yaml`,
+      `/api/hosted-integrations/drafts/${draftId}/files/tools.yaml`,
     );
     expect(res.status).toBe(200);
     expect((await res.json()) as { content: string }).toMatchObject({
       content: expect.stringContaining(
-        "summary: Count assets with documented filters.",
+        "description: Count assets with documented filters.",
       ),
     });
 
@@ -2295,14 +2525,14 @@ describe("hosted integrations generation routes", () => {
         compareGenerationId: secondGenerationId,
         summary: {
           changedFiles: [
-            { path: "family.yaml", changeType: "modified" },
             { path: "qualys.py", changeType: "modified" },
+            { path: "tools.yaml", changeType: "modified" },
           ],
           changedTools: [
             {
               name: "qualys_count_assets",
               changeType: "modified",
-              changedFields: ["description"],
+              changedFields: ["description", "help"],
             },
           ],
         },
@@ -2533,6 +2763,39 @@ describe("hosted integrations example execution and promotion routes", () => {
     expect(await artifact.json()).toMatchObject({
       name: "output.json",
       content: expect.stringContaining('"count": 2'),
+    });
+  });
+
+  it("does not run discovery-required draft examples", async () => {
+    const { draftId, lockId } = await createDraftViaRoutes(
+      pythonTool("return {'count': 2}"),
+    );
+    await upsertSmokeExample(
+      draftId,
+      lockId,
+      "discovery_required",
+      "qualys_count_assets",
+    );
+
+    const res = await req(
+      `/api/hosted-integrations/drafts/${draftId}/run-example`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          actor: toolDeveloperActor(),
+          exampleId: "smoke_count",
+        }),
+      },
+    );
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: {
+        code: "example_not_runnable",
+        message: expect.stringContaining("not ready-to-send"),
+      },
     });
   });
 
@@ -3165,7 +3428,14 @@ async function upsertSmokeExample(
         toolName,
         category,
         args: {},
-        expected: {},
+        expected:
+          category === "discovery_required"
+            ? {
+                discovery_tool: "qualys_search_assets",
+                requires_discovered_asset_id: true,
+                not_ready_to_send: true,
+              }
+            : {},
       },
     }),
   });
@@ -3353,6 +3623,17 @@ async function promoteFamilyWithService(familyId: string): Promise<string> {
             "families",
             familyId,
             "family.yaml",
+          ),
+          "utf-8",
+        ),
+        "tools.yaml": readFileSync(
+          path.join(
+            dataDir,
+            "hosted-integrations",
+            "source",
+            "families",
+            familyId,
+            "tools.yaml",
           ),
           "utf-8",
         ),

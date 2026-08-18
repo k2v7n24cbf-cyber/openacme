@@ -5,11 +5,13 @@ import {
 } from "../../src/naming.js";
 import {
   LEGACY_INTEGRATION_HUB_QUALYS_SOURCE_PATH,
-  qualysFiveReadOnlySourceBackedFamilyYaml,
-  qualysFiveReadOnlySourceBackedPythonSource,
+  qualysCurrentPromotedReadOnlySourceBackedFamilyYaml,
+  qualysCurrentPromotedReadOnlySourceBackedPythonSource,
+  qualysGavFilterFieldsVocabularyJson,
 } from "./qualys-source.js";
 import { HostedIntegrationToolNameSchema } from "../../src/schemas.js";
 import type { HostedIntegrationExample } from "../../src/schemas.js";
+import { withSplitToolContractFiles } from "../split-contract.js";
 
 export interface LegacyIntegrationHubToolInventoryEntry {
   familyId: string;
@@ -78,7 +80,7 @@ export interface LegacyIntegrationHubIncidentSourceInventory {
 
 const LEGACY_SERVER_NAME = "integration-hub";
 
-const QUALYS_TOOL_NAMES = [
+export const QUALYS_TOOL_NAMES = [
   "qualys_activity_audit_log_list",
   "qualys_asset_management_tag_count",
   "qualys_asset_management_tag_get",
@@ -148,12 +150,25 @@ const QUALYS_TOOL_NAMES = [
   "qualys_vmdr_virtual_host_list",
 ] as const;
 
-export const LEGACY_INTEGRATION_HUB_FIVE_READONLY_SYNC_TOOL_NAMES = [
+export const LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_TOOL_NAMES = [
   "qualys_gav_asset_count",
+  "qualys_gav_asset_get",
   "qualys_gav_asset_search",
   "qualys_cloud_agent_hostasset_count",
   "qualys_cloud_agent_hostasset_search",
   "qualys_vmdr_host_list",
+  "qualys_vmdr_host_detection_list",
+  "qualys_vmdr_asset_group_list",
+  "qualys_vmdr_ip_list",
+  "qualys_vmdr_excluded_ip_list",
+  "qualys_vmdr_restricted_ip_list",
+  "qualys_vmdr_virtual_host_list",
+  "qualys_vmdr_scan_list",
+  "qualys_vmdr_scan_fetch",
+  "qualys_vmdr_kb_vuln_list",
+  "qualys_vmdr_kb_qvs_list",
+  "qualys_asset_management_tag_list",
+  "qualys_asset_management_tag_search",
 ] as const;
 
 export const EXPECTED_LEGACY_INTEGRATION_HUB_TOOL_NAMES = [
@@ -205,11 +220,7 @@ export const LEGACY_INTEGRATION_HUB_INVENTORY: LegacyIntegrationHubInventory = {
     ),
     family(
       "defender-alert",
-      [
-        "DEFENDER_TENANT_ID",
-        "DEFENDER_CLIENT_ID",
-        "DEFENDER_TIMEOUT_SECONDS",
-      ],
+      ["DEFENDER_TENANT_ID", "DEFENDER_CLIENT_ID", "DEFENDER_TIMEOUT_SECONDS"],
       ["DEFENDER_CLIENT_SECRET"],
     ),
   ],
@@ -283,10 +294,10 @@ export const FIRST_LEGACY_INTEGRATION_HUB_REPLACEMENT_FAMILY: LegacyIntegrationH
     ],
     configKeys: ["SPLUNK_BASE_URL"],
     secretRefs: ["SPLUNK_TOKEN"],
-    sourceFiles: {
+    sourceFiles: withSplitToolContractFiles({
       "family.yaml": splunkFamilyYaml(),
       "splunk.py": splunkPythonSource(),
-    },
+    }),
     examples: [
       {
         id: "splunk_search_smoke",
@@ -379,7 +390,7 @@ export const LEGACY_INTEGRATION_HUB_MDE_SOURCE_BACKED_FAMILY: LegacyIntegrationH
         familyId: "mde",
         toolName: "mde_get",
         category: "live_safe",
-        args: { path: "/machines", params: { "$top": "1" } },
+        args: { path: "/machines", params: { $top: "1" } },
         expected: { pages_fetched: 1 },
       },
     ],
@@ -445,22 +456,24 @@ export const LEGACY_INTEGRATION_HUB_REPLACEMENT_SECURITY_FAMILIES: LegacyIntegra
     LEGACY_INTEGRATION_HUB_DEFENDER_ALERT_SOURCE_BACKED_FAMILY,
   ];
 
-export const LEGACY_INTEGRATION_HUB_FIVE_READONLY_TOOL_SYNC_FAMILY: LegacyIntegrationHubReplacementFamilyFixture =
+export const LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_TOOL_SYNC_FAMILY: LegacyIntegrationHubReplacementFamilyFixture =
   buildReplacementFamilyFixture("qualys", "Qualys", "qualys.py", {
-    toolNames: LEGACY_INTEGRATION_HUB_FIVE_READONLY_SYNC_TOOL_NAMES,
+    toolNames: LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_TOOL_NAMES,
     examplesForEveryTool: true,
   });
 
-export const LEGACY_INTEGRATION_HUB_FIVE_READONLY_SOURCE_BACKED_FAMILY: LegacyIntegrationHubReplacementFamilyFixture =
+export const LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_SOURCE_BACKED_FAMILY: LegacyIntegrationHubReplacementFamilyFixture =
   {
     ...buildReplacementFamilyFixture("qualys", "Qualys", "qualys.py", {
-      toolNames: LEGACY_INTEGRATION_HUB_FIVE_READONLY_SYNC_TOOL_NAMES,
+      toolNames: LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_TOOL_NAMES,
       examplesForEveryTool: true,
     }),
-    sourceFiles: {
-      "family.yaml": qualysFiveReadOnlySourceBackedFamilyYaml(),
-      "qualys.py": qualysFiveReadOnlySourceBackedPythonSource(),
-    },
+    sourceFiles: withSplitToolContractFiles({
+      "family.yaml": qualysCurrentPromotedReadOnlySourceBackedFamilyYaml(),
+      "qualys.py": qualysCurrentPromotedReadOnlySourceBackedPythonSource(),
+      "references/gav-filter-fields.json":
+        qualysGavFilterFieldsVocabularyJson(),
+    }),
     examples: [
       {
         id: "qualys_gav_asset_count_source_backed",
@@ -480,6 +493,17 @@ export const LEGACY_INTEGRATION_HUB_FIVE_READONLY_SOURCE_BACKED_FAMILY: LegacyIn
           },
         },
         expected: { used_filter_body: true },
+      },
+      {
+        id: "qualys_gav_asset_get_source_backed",
+        familyId: "qualys",
+        toolName: "qualys_gav_asset_get",
+        category: "live_safe",
+        args: {
+          asset_id: 1,
+          include_fields: ["assetId", "assetName", "operatingSystem"],
+        },
+        expected: { direct_asset_get: true },
       },
       {
         id: "qualys_gav_asset_search_source_backed",
@@ -511,7 +535,7 @@ export const LEGACY_INTEGRATION_HUB_FIVE_READONLY_SOURCE_BACKED_FAMILY: LegacyIn
           filter_body: {
             filters: [
               {
-                field: "agent.lastCheckedIn",
+                field: "qualys.agent.lastCheckedInDate",
                 operator: "LESS_THAN_EQUAL",
                 value: "2026-07-01T00:00Z",
               },
@@ -543,6 +567,142 @@ export const LEGACY_INTEGRATION_HUB_FIVE_READONLY_SOURCE_BACKED_FAMILY: LegacyIn
           params: { host_metadata: "all" },
         },
         expected: { pages_fetched: 1 },
+      },
+      {
+        id: "qualys_vmdr_host_detection_list_source_backed",
+        familyId: "qualys",
+        toolName: "qualys_vmdr_host_detection_list",
+        category: "live_safe",
+        args: {
+          status: "New,Active,Re-Opened",
+          truncation_limit: 1,
+          max_pages: 1,
+          params: { show_asset_id: 1 },
+        },
+        expected: { pages_fetched: 1 },
+      },
+      {
+        id: "qualys_vmdr_scan_list_source_backed",
+        familyId: "qualys",
+        toolName: "qualys_vmdr_scan_list",
+        category: "live_safe",
+        args: {
+          params: {},
+          max_pages: 1,
+        },
+        expected: { pages_fetched: 1 },
+      },
+      {
+        id: "qualys_vmdr_scan_fetch_source_backed",
+        familyId: "qualys",
+        toolName: "qualys_vmdr_scan_fetch",
+        category: "discovery_required",
+        args: {},
+        expected: {
+          requires_discovered_scan_ref: true,
+          discovery_tool: "qualys_vmdr_scan_list",
+          not_live_safe_until_scan_ref_discovered: true,
+          fetch_args_after_discovery: {
+            params: { mode: "brief", output_format: "json" },
+          },
+        },
+      },
+      {
+        id: "qualys_vmdr_virtual_host_list_source_backed",
+        familyId: "qualys",
+        toolName: "qualys_vmdr_virtual_host_list",
+        category: "live_safe",
+        args: {
+          params: {},
+          max_pages: 1,
+        },
+        expected: { pages_fetched: 1 },
+      },
+      {
+        id: "qualys_vmdr_restricted_ip_list_source_backed",
+        familyId: "qualys",
+        toolName: "qualys_vmdr_restricted_ip_list",
+        category: "live_safe",
+        args: {
+          params: {},
+          max_pages: 1,
+        },
+        expected: { pages_fetched: 1 },
+      },
+      {
+        id: "qualys_vmdr_excluded_ip_list_source_backed",
+        familyId: "qualys",
+        toolName: "qualys_vmdr_excluded_ip_list",
+        category: "live_safe",
+        args: {
+          params: {},
+          max_pages: 1,
+        },
+        expected: { pages_fetched: 1 },
+      },
+      {
+        id: "qualys_vmdr_ip_list_source_backed",
+        familyId: "qualys",
+        toolName: "qualys_vmdr_ip_list",
+        category: "live_safe",
+        args: {
+          params: {},
+          max_pages: 1,
+        },
+        expected: { pages_fetched: 1 },
+      },
+      {
+        id: "qualys_vmdr_asset_group_list_source_backed",
+        familyId: "qualys",
+        toolName: "qualys_vmdr_asset_group_list",
+        category: "live_safe",
+        args: {
+          params: {},
+          max_pages: 1,
+        },
+        expected: { pages_fetched: 1 },
+      },
+      {
+        id: "qualys_vmdr_kb_vuln_list_source_backed",
+        familyId: "qualys",
+        toolName: "qualys_vmdr_kb_vuln_list",
+        category: "live_safe",
+        args: {
+          params: { ids: "90043", details: "All" },
+          max_pages: 1,
+        },
+        expected: { pages_fetched: 1 },
+      },
+      {
+        id: "qualys_vmdr_kb_qvs_list_source_backed",
+        familyId: "qualys",
+        toolName: "qualys_vmdr_kb_qvs_list",
+        category: "live_safe",
+        args: {
+          params: { qvs_min: 80, details: "Basic" },
+        },
+        expected: { qvs_metadata: true },
+      },
+      {
+        id: "qualys_asset_management_tag_list_source_backed",
+        familyId: "qualys",
+        toolName: "qualys_asset_management_tag_list",
+        category: "live_safe",
+        args: {
+          limit: 1,
+        },
+        expected: { qps_tag_list: true },
+      },
+      {
+        id: "qualys_asset_management_tag_search_source_backed",
+        familyId: "qualys",
+        toolName: "qualys_asset_management_tag_search",
+        category: "live_safe",
+        args: {
+          criteria: [{ field: "name", operator: "CONTAINS", value: "Cloud" }],
+          limit: 1,
+        },
+        expected: { qps_tag_search: true },
       },
     ],
   };
@@ -1063,6 +1223,10 @@ tools:
       idempotency: idempotent
       execution: sync
       approval: none
+    errors:
+      - bad_arguments means the path, params, or api_version are unsupported; fix the request before retrying.
+      - auth_failed or permission_denied means the Microsoft Graph app credentials, tenant, or Graph application permissions need correction.
+      - upstream_error or rate_limited means Microsoft Graph rejected or throttled the request; retry only when the error indicates it is transient.
     help:
       summary: Read a Microsoft Graph resource with a safe GET request.
       full: |
@@ -1403,6 +1567,10 @@ tools:
       idempotency: idempotent
       execution: sync
       approval: none
+    errors:
+      - bad_arguments means the path or params are unsupported; fix the request before retrying.
+      - auth_failed or permission_denied means the Defender for Endpoint app credentials, tenant, or WindowsDefenderATP permissions need correction.
+      - upstream_error or rate_limited means the MDE API rejected or throttled the request; retry only when the error indicates it is transient.
     help:
       summary: Read a Microsoft Defender for Endpoint API resource with a safe GET request.
       full: |
@@ -1714,6 +1882,10 @@ tools:
       idempotency: idempotent
       execution: sync
       approval: none
+    errors:
+      - bad_arguments means graph_alert_id is missing or is not the Graph /security/alerts_v2 id; correct the identifier before retrying.
+      - auth_failed or permission_denied means Graph or MDE credentials, tenant, or application permissions need correction.
+      - upstream_error or rate_limited means Graph or MDE rejected or throttled the request; retry only when the error indicates it is transient.
     help:
       summary: Fetch one alert from Graph alerts_v2 and best-effort MDE native alerts.
       full: |

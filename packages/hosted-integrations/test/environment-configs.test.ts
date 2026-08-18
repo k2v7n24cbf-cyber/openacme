@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -6,6 +6,7 @@ import {
   createFileHostedIntegrationCatalog,
   createFileHostedIntegrationEnvironmentConfigStore,
 } from "../src/index.js";
+import { writeSplitFamilyFixture } from "./test-support/split-contract-fixtures.js";
 
 let dataDir: string;
 let nowMs = Date.parse("2026-08-14T10:00:00.000Z");
@@ -27,9 +28,8 @@ async function writeSourceFamily(familyId: string): Promise<void> {
     "families",
     familyId,
   );
-  await mkdir(dir, { recursive: true });
-  await writeFile(
-    path.join(dir, "family.yaml"),
+  await writeSplitFamilyFixture(
+    dir,
     `
 id: ${familyId}
 name: ${familyId}
@@ -61,7 +61,6 @@ tools:
       execution: sync
       approval: none
 `,
-    "utf-8",
   );
 }
 

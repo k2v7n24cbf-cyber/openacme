@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -9,6 +9,10 @@ import {
   createFileHostedIntegrationLockStore,
   resolveHostedIntegrationCachePath,
 } from "../src/index.js";
+import {
+  splitLegacyFamilyFixture,
+  writeSplitFamilyFixture,
+} from "./test-support/split-contract-fixtures.js";
 
 let dataDir: string;
 
@@ -107,8 +111,7 @@ async function validateManifest(manifest: string) {
     "families",
     "qualys",
   );
-  await mkdir(sourceDir, { recursive: true });
-  await writeFile(path.join(sourceDir, "family.yaml"), familyYaml({}), "utf-8");
+  await writeSplitFamilyFixture(sourceDir, familyYaml({}));
   await writeFile(path.join(sourceDir, "qualys.py"), "def run(): pass\n");
 
   const lockStore = createFileHostedIntegrationLockStore({
@@ -134,7 +137,13 @@ async function validateManifest(manifest: string) {
     draftId: "draft_1",
     lockId: "lock_1",
     path: "family.yaml",
-    content: manifest,
+    content: splitLegacyFamilyFixture(manifest).familyYaml,
+  });
+  await draftStore.writeDraftFile({
+    draftId: "draft_1",
+    lockId: "lock_1",
+    path: "tools.yaml",
+    content: splitLegacyFamilyFixture(manifest).toolsYaml,
   });
 
   return createFileHostedIntegrationDraftValidator({

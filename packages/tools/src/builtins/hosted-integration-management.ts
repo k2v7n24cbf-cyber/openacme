@@ -1,11 +1,16 @@
 import { z } from "zod";
-import { parseHostedToolName } from "@openacme/hosted-integrations";
+import {
+  HostedFamilyPackageDocumentSchema,
+  parseHostedToolName,
+} from "@openacme/hosted-integrations";
 import { registry } from "../registry.js";
 import { getCurrentAgentId } from "../session-context.js";
 
 export const HOSTED_TOOL_MANAGEMENT_TOOL_NAMES = [
   "hosted_tool_family_list",
   "hosted_tool_family_create",
+  "hosted_tool_family_import",
+  "hosted_tool_family_export",
   "hosted_tool_source_read",
   "hosted_tool_source_view",
   "hosted_tool_lock_acquire",
@@ -128,6 +133,12 @@ const SourceReadMaxLines = z
   .max(1_000)
   .nullable()
   .optional();
+const PackageExportSourceParams = z.discriminatedUnion("source_type", [
+  z.object({ source_type: z.literal("active_generation"), family_id: FamilyId }).strict(),
+  z.object({ source_type: z.literal("generation"), generation_id: GenerationId }).strict(),
+  z.object({ source_type: z.literal("draft"), draft_id: DraftId }).strict(),
+  z.object({ source_type: z.literal("current_source"), family_id: FamilyId }).strict(),
+]);
 
 const ExampleParam = z
   .object({
@@ -139,6 +150,7 @@ const ExampleParam = z
       "live_safe",
       "regression",
       "mock_only",
+      "discovery_required",
       "destructive_requires_human",
     ]),
     args: JsonObjectParam,
@@ -166,6 +178,32 @@ const definitions: Array<{
         name: z.string().min(1),
         tool_name: NativeToolName,
         ttl_ms: OptionalPositiveInteger,
+      })
+      .strict(),
+  },
+  {
+    name: "hosted_tool_family_import",
+    description:
+      "Import a complete hosted family package into a proposed family or locked draft. Import validates but never promotes.",
+    parameters: z
+      .object({
+        mode: z.enum(["create", "update"]),
+        package_document: HostedFamilyPackageDocumentSchema,
+        target_family_id: FamilyId.nullable().optional(),
+        lock_id: LockId.nullable().optional(),
+        ttl_ms: OptionalPositiveInteger,
+        source_revision_id: OptionalStringParam,
+      })
+      .strict(),
+  },
+  {
+    name: "hosted_tool_family_export",
+    description:
+      "Export a sanitized hosted family package from source, draft, active generation, or a specific generation. Secret values are never included.",
+    parameters: z
+      .object({
+        source: PackageExportSourceParams,
+        include_examples: z.boolean().optional(),
       })
       .strict(),
   },

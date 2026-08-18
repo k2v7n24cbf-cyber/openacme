@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   FamilyManifestSchema,
+  HostedIntegrationToolSpecSchema,
   buildHostedIntegrationFocusedSourceView,
   type FamilyManifest,
+  type HostedIntegrationToolSpec,
 } from "../src/index.js";
 
 describe("hosted integration focused source view", () => {
@@ -11,6 +13,7 @@ describe("hosted integration focused source view", () => {
       familyId: "qualys",
       generationId: "gen_1",
       manifest: manifestFixture(),
+      tools: toolsFixture(),
       entrypointPath: "qualys.py",
       source: sourceFixture(),
       toolName: "qualys_cloud_agent_hostasset_count",
@@ -67,6 +70,7 @@ describe("hosted integration focused source view", () => {
       familyId: "qualys",
       generationId: "gen_1",
       manifest: manifestFixture(),
+      tools: toolsFixture(),
       entrypointPath: "qualys.py",
       source: sourceFixture(),
       toolName: "qualys_cloud_agent_hostasset_count",
@@ -119,6 +123,7 @@ describe("hosted integration focused source view", () => {
       familyId: "qualys",
       generationId: "gen_1",
       manifest: manifestFixture(),
+      tools: toolsFixture(),
       entrypointPath: "qualys.py",
       source: sourceFixture(),
       toolName: "qualys_cloud_agent_hostasset_count",
@@ -144,6 +149,7 @@ describe("hosted integration focused source view", () => {
       familyId: "qualys",
       generationId: "gen_1",
       manifest: manifestFixture(),
+      tools: toolsFixture(),
       entrypointPath: "qualys.py",
       source: sourceFixture(),
       toolName: "qualys_cloud_agent_hostasset_count",
@@ -181,7 +187,12 @@ function manifestFixture(): FamilyManifest {
         allowedPackages: [],
       },
     },
-    tools: [
+  });
+}
+
+function toolsFixture(): HostedIntegrationToolSpec[] {
+  return [
+    HostedIntegrationToolSpecSchema.parse(
       {
         name: "qualys_cloud_agent_hostasset_count",
         title: "Qualys Cloud Agent HostAsset Count",
@@ -213,7 +224,8 @@ function manifestFixture(): FamilyManifest {
           approval: "none",
         },
       },
-      {
+    ),
+    HostedIntegrationToolSpecSchema.parse({
         name: "qualys_cloud_agent_hostasset_search",
         title: "Qualys Cloud Agent HostAsset Search",
         description: "Search Cloud Agent HostAsset records.",
@@ -230,9 +242,8 @@ function manifestFixture(): FamilyManifest {
           execution: "sync",
           approval: "none",
         },
-      },
-    ],
-  });
+      }),
+  ];
 }
 
 function sourceFixture(): string {

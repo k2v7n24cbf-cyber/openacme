@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -7,6 +7,7 @@ import {
   createFileHostedIntegrationExampleRegistry,
   createFileHostedIntegrationLockStore,
 } from "../src/index.js";
+import { writeSplitFamilyFixture } from "./test-support/split-contract-fixtures.js";
 
 let dataDir: string;
 let nowMs = Date.parse("2026-08-12T10:00:00.000Z");
@@ -30,8 +31,7 @@ async function setupDraft(manifestYaml = familyYaml()): Promise<{
     "families",
     "qualys",
   );
-  await mkdir(sourceDir, { recursive: true });
-  await writeFile(path.join(sourceDir, "family.yaml"), manifestYaml, "utf-8");
+  await writeSplitFamilyFixture(sourceDir, manifestYaml);
   await writeFile(
     path.join(sourceDir, "examples.yaml"),
     `
@@ -190,6 +190,63 @@ describe("hosted integration examples registry", () => {
       reason: "invalid_args",
       message: "$.query is required",
     });
+  });
+
+  it("allows discovery-required examples to document a prerequisite lookup instead of a ready-to-send call", async () => {
+    const { registry } = await setupDraft();
+
+    await expect(
+      registry.upsertExample({
+        draftId: "draft_1",
+        lockId: "lock_1",
+        example: {
+          id: "discover_before_count",
+          familyId: "qualys",
+          toolName: "qualys_count_assets",
+          category: "discovery_required",
+          args: {},
+          expected: {
+            discovery_tool: "qualys_search_assets",
+            requires_discovered_asset_id: true,
+            not_ready_to_send: true,
+          },
+        },
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    await expect(registry.listExamples("draft_1")).resolves.toContainEqual(
+      expect.objectContaining({
+        id: "discover_before_count",
+        category: "discovery_required",
+        args: {},
+        expected: {
+          discovery_tool: "qualys_search_assets",
+          requires_discovered_asset_id: true,
+          not_ready_to_send: true,
+        },
+      }),
+    );
+  });
+
+  it("rejects discovery-required examples without discovery metadata", async () => {
+    const { registry } = await setupDraft();
+
+    await expect(
+      registry.upsertExample({
+        draftId: "draft_1",
+        lockId: "lock_1",
+        example: {
+          id: "ambiguous_discovery",
+          familyId: "qualys",
+          toolName: "qualys_count_assets",
+          category: "discovery_required",
+          args: {},
+          expected: {
+            not_ready_to_send: true,
+          },
+        },
+      }),
+    ).rejects.toThrow(/expected\.discovery_tool/);
   });
 
   it("requires destructive examples to be classified for human review", async () => {

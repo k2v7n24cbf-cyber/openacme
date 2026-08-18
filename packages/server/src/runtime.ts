@@ -14,12 +14,14 @@ import {
   HostedIntegrationPythonRuntime,
   HostedIntegrationHostedToolBindingSchema,
   HostedIntegrationToolHelpRequestSchema,
+  HostedToolContractDocumentSchema,
   buildHostedIntegrationFocusedSourceView,
   buildHostedIntegrationGenerationDiff,
   evaluateHostedIntegrationPolicy,
   evaluateHostedIntegrationPromotionApproval,
   generationFilesRoot,
   isHostedIntegrationToolVisibleForSelection,
+  hostedToolContractToToolSpecs,
   listFilesUnderRoot,
   parseHostedToolName,
   readTextFileUnderRoot,
@@ -40,6 +42,7 @@ import {
   type HostedIntegrationHostedToolBinding,
   type HostedIntegrationRegistryRefreshEvent,
   type HostedIntegrationService,
+  type HostedIntegrationToolSpec,
   JsonObjectSchema,
 } from "@openacme/hosted-integrations";
 import {
@@ -397,6 +400,26 @@ export class ServerRuntime {
             }
           : { ok: false, error: { code: result.reason } };
       }
+      case "hosted_tool_family_import":
+        return this.hostedIntegrationService.packages.importPackage({
+          mode: hostedFamilyPackageImportModeParam(p, "mode"),
+          packageDocument: p.package_document,
+          importedBy: request.actorId,
+          targetFamilyId: optionalStringParam(p, "target_family_id") ?? undefined,
+          lockId: optionalStringParam(p, "lock_id") ?? undefined,
+          ttlMs: positiveIntegerParam(p, "ttl_ms") ?? undefined,
+          sourceRevisionId:
+            optionalStringParam(p, "source_revision_id") ?? undefined,
+        });
+      case "hosted_tool_family_export":
+        return this.hostedIntegrationService.packages.exportPackage({
+          source: hostedFamilyPackageExportSourceParam(p.source),
+          exportedBy: request.actorId,
+          includeExamples:
+            typeof p.include_examples === "boolean"
+              ? p.include_examples
+              : undefined,
+        });
       case "hosted_tool_source_read":
         return this.readHostedIntegrationSource(p);
       case "hosted_tool_source_view":
@@ -749,6 +772,7 @@ export class ServerRuntime {
       familyId,
       generationId: sourceTarget.generationId,
       manifest: sourceTarget.manifest,
+      tools: sourceTarget.tools,
       entrypointPath: sourceTarget.manifest.runtime.entrypoint,
       source: sourceTarget.source,
       toolName,
@@ -775,6 +799,7 @@ export class ServerRuntime {
         ok: true;
         generationId: string;
         manifest: FamilyManifest;
+        tools: HostedIntegrationToolSpec[];
         source: string;
       }
     | { ok: false; reason: string }
@@ -783,6 +808,7 @@ export class ServerRuntime {
     if (!draft) return { ok: false, reason: "not_found" };
     if (draft.familyId !== familyId) return { ok: false, reason: "not_found" };
     const manifest = await this.readHostedIntegrationDraftManifest(draftId);
+    const tools = await this.readHostedIntegrationDraftTools(draftId);
     const source = await this.hostedIntegrationService.drafts.readDraftFile({
       draftId,
       path: manifest.runtime.entrypoint,
@@ -792,6 +818,7 @@ export class ServerRuntime {
       ok: true,
       generationId: `draft:${draft.id}`,
       manifest,
+      tools,
       source: source.content,
     };
   }
@@ -804,6 +831,7 @@ export class ServerRuntime {
         ok: true;
         generationId: string;
         manifest: FamilyManifest;
+        tools: HostedIntegrationToolSpec[];
         source: string;
       }
     | { ok: false; reason: string }
@@ -836,10 +864,22 @@ export class ServerRuntime {
           ),
         ),
       );
+      const tools = hostedToolContractToToolSpecs(
+        HostedToolContractDocumentSchema.parse(
+          parseYaml(
+            await readTextFileUnderRoot(
+              filesRoot,
+              "tools.yaml",
+              "generation files root",
+            ),
+          ),
+        ),
+      );
       return {
         ok: true,
         generationId: generation.id,
         manifest,
+        tools,
         source: await readTextFileUnderRoot(
           filesRoot,
           manifest.runtime.entrypoint,
@@ -1127,7 +1167,7 @@ export class ServerRuntime {
         const environment =
           optionalStringParam(p, "environment") ?? "test_debug";
         const family = await this.hostedIntegrationService.getFamily(familyId);
-        const tool = family?.manifest.tools.find(
+        const tool = family?.tools.find(
           (candidate) => candidate.name === toolName,
         );
         const activeGeneration =
@@ -1175,7 +1215,7 @@ export class ServerRuntime {
         const toolName = nativeHostedIntegrationToolNameParam(p, "tool_name");
         const def = this.agentManager.getAgentDef(agentId);
         const family = await this.hostedIntegrationService.getFamily(familyId);
-        const tool = family?.manifest.tools.find(
+        const tool = family?.tools.find(
           (candidate) => candidate.name === toolName,
         );
         const bindings = (def?.hostedIntegrationBindings ?? []).map(
@@ -1307,10 +1347,21 @@ export class ServerRuntime {
     const example = examples.find((candidate) => candidate.id === exampleId);
     if (!example) return { ok: false, error: { code: "not_found" } };
     const manifest = await this.readHostedIntegrationDraftManifest(draftId);
-    const tool = manifest.tools.find(
+    const tools = await this.readHostedIntegrationDraftTools(draftId);
+    const tool = tools.find(
       (candidate) => candidate.name === example.toolName,
     );
     if (!tool) return { ok: false, error: { code: "tool_not_found" } };
+    if (example.category === "discovery_required") {
+      return {
+        ok: false,
+        error: {
+          code: "example_not_runnable",
+          message:
+            "discovery_required examples document prerequisite lookup and are not ready-to-send invocation payloads",
+        },
+      };
+    }
 
     const draftGenerationId = `draft:${draft.id}`;
     const environmentConfig =
@@ -1431,10 +1482,11 @@ export class ServerRuntime {
       return { ok: false, error: { code: "validation_failed" }, validation };
     }
     const manifest = await this.readHostedIntegrationDraftManifest(draftId);
+    const tools = await this.readHostedIntegrationDraftTools(draftId);
     const examples =
       await this.hostedIntegrationService.examples.listExamples(draftId);
     const missingExamples = missingHostedIntegrationExampleToolNames(
-      manifest,
+      tools,
       examples,
     );
     if (missingExamples.length > 0) {
@@ -1455,7 +1507,7 @@ export class ServerRuntime {
     }
     const approvalDecision = evaluateHostedIntegrationPromotionApproval({
       actor: { id: request.actorId, kind: "agent" },
-      target: hostedIntegrationPromotionTargetForDraft(draft, manifest),
+      target: hostedIntegrationPromotionTargetForDraft(draft, tools),
       approval,
     });
     if (!approvalDecision.ok) {
@@ -1507,6 +1559,19 @@ export class ServerRuntime {
       });
     if (!manifestFile.ok) throw new Error("family.yaml is required");
     return FamilyManifestSchema.parse(parseYaml(manifestFile.content));
+  }
+
+  private async readHostedIntegrationDraftTools(
+    draftId: string,
+  ): Promise<HostedIntegrationToolSpec[]> {
+    const toolsFile = await this.hostedIntegrationService.drafts.readDraftFile({
+      draftId,
+      path: "tools.yaml",
+    });
+    if (!toolsFile.ok) throw new Error("tools.yaml is required");
+    return hostedToolContractToToolSpecs(
+      HostedToolContractDocumentSchema.parse(parseYaml(toolsFile.content)),
+    );
   }
 
   private async collectHostedIntegrationDraftFiles(
@@ -1662,7 +1727,7 @@ export class ServerRuntime {
   private async hostedIntegrationRegistrySnapshot(
     generation: HostedIntegrationGeneration,
   ): Promise<HostedIntegrationRegistrySnapshot | null> {
-    const tools = (generation.tools ?? []).filter(
+    const tools = generation.tools.filter(
       isHostedIntegrationToolVisibleForSelection,
     );
     if (tools.length === 0) {
@@ -1681,6 +1746,8 @@ export class ServerRuntime {
         name: tool.name,
         description: tool.description,
         parameters: jsonSchemaToZod(tool.inputSchema),
+        outputSchema: tool.outputSchema,
+        annotations: tool.mcpAnnotations,
       })),
     };
   }
@@ -1747,21 +1814,21 @@ function buildHostedIntegrationRepairTaskBody(input: {
 }
 
 function missingHostedIntegrationExampleToolNames(
-  manifest: FamilyManifest,
+  tools: HostedIntegrationToolSpec[],
   examples: HostedIntegrationExample[],
 ): string[] {
   const covered = new Set(examples.map((example) => example.toolName));
-  return manifest.tools
+  return tools
     .map((tool) => tool.name)
     .filter((toolName) => !covered.has(toolName));
 }
 
 function hostedIntegrationPromotionTargetForDraft(
   draft: HostedIntegrationDraft,
-  manifest: FamilyManifest,
+  tools: HostedIntegrationToolSpec[],
 ) {
-  const toolNames = manifest.tools.map((tool) => tool.name);
-  const destructiveToolNames = manifest.tools
+  const toolNames = tools.map((tool) => tool.name);
+  const destructiveToolNames = tools
     .filter((tool) => tool.classification.operation === "destructive")
     .map((tool) => tool.name);
   return {
@@ -1769,25 +1836,23 @@ function hostedIntegrationPromotionTargetForDraft(
     draftId: draft.id,
     draftRevisionId: draft.updatedAt,
     operation: "promote" as const,
-    operationClass: hostedIntegrationOperationClassForManifest(manifest),
+    operationClass: hostedIntegrationOperationClassForTools(tools),
     toolNames,
     destructiveToolNames,
   };
 }
 
-function hostedIntegrationOperationClassForManifest(
-  manifest: FamilyManifest,
+function hostedIntegrationOperationClassForTools(
+  tools: HostedIntegrationToolSpec[],
 ): "read" | "write" | "destructive" {
   if (
-    manifest.tools.some(
+    tools.some(
       (tool) => tool.classification.operation === "destructive",
     )
   ) {
     return "destructive";
   }
-  if (
-    manifest.tools.some((tool) => tool.classification.operation === "write")
-  ) {
+  if (tools.some((tool) => tool.classification.operation === "write")) {
     return "write";
   }
   return "read";
@@ -1878,6 +1943,42 @@ function optionalStringParam(
     throw new Error(`${name} must be a non-empty string`);
   }
   return value;
+}
+
+function hostedFamilyPackageImportModeParam(
+  params: Record<string, unknown>,
+  name: string,
+): "create" | "update" {
+  const value = stringParam(params, name);
+  if (value !== "create" && value !== "update") {
+    throw new Error(`${name} must be create or update`);
+  }
+  return value;
+}
+
+function hostedFamilyPackageExportSourceParam(value: unknown):
+  | { type: "active_generation"; familyId: string }
+  | { type: "generation"; generationId: string }
+  | { type: "draft"; draftId: string }
+  | { type: "current_source"; familyId: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("source is required");
+  }
+  const params = value as Record<string, unknown>;
+  const sourceType = stringParam(params, "source_type");
+  if (sourceType === "active_generation") {
+    return { type: sourceType, familyId: stringParam(params, "family_id") };
+  }
+  if (sourceType === "generation") {
+    return { type: sourceType, generationId: stringParam(params, "generation_id") };
+  }
+  if (sourceType === "draft") {
+    return { type: sourceType, draftId: stringParam(params, "draft_id") };
+  }
+  if (sourceType === "current_source") {
+    return { type: sourceType, familyId: stringParam(params, "family_id") };
+  }
+  throw new Error("source.source_type must be active_generation, generation, draft, or current_source");
 }
 
 function positiveIntegerParam(

@@ -21,6 +21,8 @@ describe("hosted integration management tools", () => {
     expect(HOSTED_TOOL_MANAGEMENT_TOOL_NAMES).toEqual([
       "hosted_tool_family_list",
       "hosted_tool_family_create",
+      "hosted_tool_family_import",
+      "hosted_tool_family_export",
       "hosted_tool_source_read",
       "hosted_tool_source_view",
       "hosted_tool_lock_acquire",
@@ -232,6 +234,63 @@ describe("hosted integration management tools", () => {
         mode: "replace_text",
         old_text: "return {'count': 1}",
         new_text: "return {'count': 2}",
+      },
+    ]);
+  });
+
+  it("delegates discovery-required examples without rejecting the category", async () => {
+    const calls: HostedToolManagementRequest[] = [];
+    bindHostedToolManagement({
+      invoke: async (request) => {
+        calls.push(request);
+        return { ok: true };
+      },
+    });
+
+    await expect(
+      runTool(
+        "hosted_tool_example_upsert",
+        {
+          draft_id: "draft_1",
+          lock_id: "lock_1",
+          example: {
+            id: "fetch_after_discovery",
+            familyId: "qualys",
+            toolName: "qualys_vmdr_scan_fetch",
+            category: "discovery_required",
+            args: {},
+            expected: {
+              discovery_tool: "qualys_vmdr_scan_list",
+              requires_discovered_scan_ref: true,
+              not_ready_to_send: true,
+            },
+          },
+        },
+        "tool-developer",
+      ),
+    ).resolves.toEqual({ ok: true });
+
+    expect(calls).toEqual([
+      {
+        actorId: "tool-developer",
+        toolName: "hosted_tool_example_upsert",
+        operation: "hosted_tool_example_upsert",
+        params: {
+          draft_id: "draft_1",
+          lock_id: "lock_1",
+          example: {
+            id: "fetch_after_discovery",
+            familyId: "qualys",
+            toolName: "qualys_vmdr_scan_fetch",
+            category: "discovery_required",
+            args: {},
+            expected: {
+              discovery_tool: "qualys_vmdr_scan_list",
+              requires_discovered_scan_ref: true,
+              not_ready_to_send: true,
+            },
+          },
+        },
       },
     ]);
   });

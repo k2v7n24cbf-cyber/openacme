@@ -8,6 +8,7 @@ import {
   createFileHostedIntegrationLockStore,
   type HostedIntegrationRegistryRefreshEvent,
 } from "../src/index.js";
+import { withSplitToolContractFiles } from "./test-support/split-contract-fixtures.js";
 
 let dataDir: string;
 let nowMs = Date.parse("2026-08-12T10:00:00.000Z");
@@ -54,10 +55,10 @@ async function createDraft(): Promise<string> {
     familyId: "qualys",
     lockId: "lock_1",
     sourceRevisionId: "source_rev_1",
-    files: {
+    files: withSplitToolContractFiles({
       "family.yaml": familyYaml(),
       "qualys.py": "def run():\n    return {'ok': True}\n",
-    },
+    }),
   });
   if (!result.ok) throw new Error(`draft creation failed: ${result.reason}`);
   return result.draft.id;

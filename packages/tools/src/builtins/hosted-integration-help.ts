@@ -51,7 +51,7 @@ const parameters = z
       .nullable()
       .optional()
       .describe(
-        "Optional parameter detail requests. Use [{name:'filter_body', detail:'full', include_examples:true}] for parameter-specific help. Omit or pass null to auto-return documented parameters; with tool_detail=full they return full details.",
+        "Optional parameter detail requests. Use [{name:'filter_body', detail:'full', include_examples:true}] for parameter-specific help, [{name:'filter_body.filters.field', query:'software'}] to search shared vocabularies, or [{name:'filter_body.filters.field', value:'asset.name'}] to check exact values. If query and value are both supplied, query is used and value is returned as ignored guidance. If help returns ambiguous_vocabulary, repeat the request with one candidate_parameter_paths value as name. Omit or pass null to auto-return documented parameters; with tool_detail=full they return full details.",
       ),
   })
   .strict();
@@ -60,7 +60,7 @@ registry.register({
   name: HOSTED_TOOL_HELP_TOOL_NAME,
   toolset: "hosted-integration-support",
   description:
-    "Get usage help for an allowed hosted tool. Use this before calling tools with filters, query DSLs, request bodies, pagination, or unfamiliar parameters; request parameter-specific full details through the parameters field.",
+    "Get usage help for an allowed hosted tool. Use this before calling tools with filters, query DSLs, request bodies, pagination, or unfamiliar parameters; request parameter-specific full details and shared vocabulary search/exact checks through the parameters field. If a vocabulary lookup is ambiguous, retry help with a precise candidate parameter path before calling the hosted tool.",
   parameters,
   parallelSafe: true,
   handler: async (args) => invokeHostedToolHelp(args),

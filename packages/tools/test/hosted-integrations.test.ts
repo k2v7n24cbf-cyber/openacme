@@ -24,6 +24,15 @@ describe("hosted integration tool registry adapter", () => {
         name: "hosted_qualys__qualys_count_assets",
         description: "Count Qualys assets.",
         toolset: "hosted-integrations",
+        outputSchema: {
+          type: "object",
+          properties: { count: { type: "number" } },
+          required: ["count"],
+        },
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+        },
         source: {
           kind: "hosted_integration",
           familyId: "qualys",
@@ -33,6 +42,32 @@ describe("hosted integration tool registry adapter", () => {
         },
       },
     ]);
+    expect(JSON.stringify(registry.getInfo())).not.toContain(
+      "bad_arguments means",
+    );
+    expect(JSON.stringify(registry.getInfo())).not.toContain("lastSeenAssetId");
+
+    const vercelTools = registry.getVercelTools(
+      new Set(["hosted_qualys__qualys_count_assets"]),
+    );
+    const vercelTool = vercelTools.hosted_qualys__qualys_count_assets as Record<
+      string,
+      unknown
+    >;
+    expect(vercelTool).toMatchObject({
+      description: "Count Qualys assets.",
+      outputSchema: {
+        type: "object",
+        properties: { count: { type: "number" } },
+        required: ["count"],
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+      },
+    });
+    expect(vercelTool).not.toHaveProperty("errors");
+    expect(vercelTool).not.toHaveProperty("pagination");
   });
 
   it("rejects collisions with non-hosted tools", () => {
@@ -186,6 +221,21 @@ function activeQualysSnapshot(generationId: string) {
         name: "qualys_count_assets",
         description: "Count Qualys assets.",
         parameters: z.object({}),
+        outputSchema: {
+          type: "object",
+          properties: { count: { type: "number" } },
+          required: ["count"],
+        },
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+        },
+        errors: [
+          "bad_arguments means the request shape or filter token is unsupported.",
+        ],
+        pagination: {
+          model: "lastSeenAssetId",
+        },
       },
     ],
   };

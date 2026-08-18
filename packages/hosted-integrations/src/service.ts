@@ -68,6 +68,10 @@ import {
   type HostedIntegrationProposedFamilySummary,
   type HostedIntegrationProposedFamilyManager,
 } from "./proposed-family.js";
+import {
+  createHostedFamilyPackageManager,
+  type HostedFamilyPackageManager,
+} from "./packages.js";
 import type { HostedIntegrationFamilyId } from "./schemas.js";
 import {
   createFileHostedIntegrationSecretStore,
@@ -110,6 +114,7 @@ export interface HostedIntegrationService {
   readonly examples: HostedIntegrationExampleRegistry;
   readonly validator: HostedIntegrationDraftValidator;
   readonly proposedFamilies: HostedIntegrationProposedFamilyManager;
+  readonly packages: HostedFamilyPackageManager;
   readonly environmentConfigs: HostedIntegrationEnvironmentConfigStore;
   readonly secrets: HostedIntegrationSecretStore;
   readonly approvals: HostedIntegrationApprovalStore;
@@ -183,6 +188,15 @@ export function createFileHostedIntegrationService(
     draftStore: drafts,
     onRegistryRefresh: options.onRegistryRefresh,
   });
+  const packages = createHostedFamilyPackageManager({
+    catalog,
+    locks,
+    drafts,
+    sourceFiles,
+    generations,
+    validator,
+    proposedFamilies,
+  });
   const jobs = createFileHostedIntegrationJobStore(options);
   const artifacts = createFileHostedIntegrationArtifactStore(options);
   const retention = createFileHostedIntegrationRetentionSweeper(options);
@@ -211,6 +225,7 @@ export function createFileHostedIntegrationService(
     examples,
     validator,
     proposedFamilies,
+    packages,
     environmentConfigs,
     secrets,
     approvals,
@@ -261,6 +276,16 @@ export function createDbHostedIntegrationService(
     draftStore: drafts,
     onRegistryRefresh: options.onRegistryRefresh,
   });
+  const packages = createHostedFamilyPackageManager({
+    catalog,
+    locks,
+    drafts,
+    sourceFiles,
+    generations,
+    validator,
+    proposedFamilies,
+    now: options.now,
+  });
   const jobs = createDbHostedIntegrationJobStore(options);
   const artifacts = createDbHostedIntegrationArtifactStore(options);
   const retention = createDbHostedIntegrationRetentionSweeper(options);
@@ -293,6 +318,7 @@ export function createDbHostedIntegrationService(
     examples,
     validator,
     proposedFamilies,
+    packages,
     environmentConfigs,
     secrets,
     approvals,
@@ -314,6 +340,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
   readonly examples: HostedIntegrationExampleRegistry;
   readonly validator: HostedIntegrationDraftValidator;
   readonly proposedFamilies: HostedIntegrationProposedFamilyManager;
+  readonly packages: HostedFamilyPackageManager;
   readonly environmentConfigs: HostedIntegrationEnvironmentConfigStore;
   readonly secrets: HostedIntegrationSecretStore;
   readonly approvals: HostedIntegrationApprovalStore;
@@ -336,6 +363,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     examples: HostedIntegrationExampleRegistry;
     validator: HostedIntegrationDraftValidator;
     proposedFamilies: HostedIntegrationProposedFamilyManager;
+    packages: HostedFamilyPackageManager;
     environmentConfigs: HostedIntegrationEnvironmentConfigStore;
     secrets: HostedIntegrationSecretStore;
     approvals: HostedIntegrationApprovalStore;
@@ -355,6 +383,7 @@ class FileHostedIntegrationService implements HostedIntegrationService {
     this.examples = parts.examples;
     this.validator = parts.validator;
     this.proposedFamilies = parts.proposedFamilies;
+    this.packages = parts.packages;
     this.environmentConfigs = parts.environmentConfigs;
     this.secrets = parts.secrets;
     this.approvals = parts.approvals;

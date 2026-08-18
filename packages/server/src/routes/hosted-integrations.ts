@@ -12,6 +12,7 @@ import {
   HostedIntegrationPromotionApprovalTargetSchema,
   HostedIntegrationToolHelpRequestSchema,
   HostedIntegrationToolHelpSchema,
+  HostedToolContractDocumentSchema,
   JsonObjectSchema,
   buildHostedIntegrationFocusedSourceView,
   buildHostedIntegrationGenerationDiff,
@@ -20,6 +21,7 @@ import {
   evaluateHostedIntegrationPromotionApproval,
   generationFilesRoot,
   isHostedIntegrationToolVisibleForSelection,
+  hostedToolContractToToolSpecs,
   listFilesUnderRoot,
   parseHostedToolName,
   readTextFileUnderRoot,
@@ -42,6 +44,7 @@ import {
   type HostedIntegrationPolicyActor,
   type HostedIntegrationReadiness,
   type HostedIntegrationService,
+  type HostedIntegrationToolSpec,
 } from "@openacme/hosted-integrations";
 import type { AuthStore } from "@openacme/db";
 import { resolveMember } from "../middleware/auth.js";
@@ -145,7 +148,7 @@ export function registerHostedIntegrationRoutes(
       const toolName = stringFieldFromQuery(c, "toolName");
       const environment = c.req.query("environment") ?? "test_debug";
       const family = await service.getFamily(familyId);
-      const tool = family?.manifest.tools.find(
+      const tool = family?.tools.find(
         (candidate) => candidate.name === toolName,
       );
       const environmentConfig =
@@ -193,7 +196,7 @@ export function registerHostedIntegrationRoutes(
       const familyId = stringFieldFromQuery(c, "familyId");
       const toolName = stringFieldFromQuery(c, "toolName");
       const family = await service.getFamily(familyId);
-      const tool = family?.manifest.tools.find(
+      const tool = family?.tools.find(
         (candidate) => candidate.name === toolName,
       );
       const bindings = (
@@ -314,7 +317,7 @@ export function registerHostedIntegrationRoutes(
         const familyId = c.req.param("familyId");
         const toolName = c.req.param("toolName");
         const family = await service.getFamily(familyId);
-        const tool = family?.manifest.tools.find(
+        const tool = family?.tools.find(
           (candidate) => candidate.name === toolName,
         );
         if (!family || !tool || tool.lifecycle === "removed") {
@@ -485,7 +488,7 @@ export function registerHostedIntegrationRoutes(
         optionalStringField(body, "requestedEnvironment") ?? undefined;
       const args = JsonObjectSchema.parse(objectField(body, "args"));
       const family = await service.getFamily(familyId);
-      const tool = family?.manifest.tools.find(
+      const tool = family?.tools.find(
         (candidate) => candidate.name === toolName,
       );
       if (!family || !tool || tool.lifecycle === "removed") {
@@ -983,6 +986,89 @@ export function registerHostedIntegrationRoutes(
     }
   });
 
+  app.post("/api/hosted-integrations/packages/validate", async (c) => {
+    try {
+      const body = await readJsonObject(c);
+      const actor = actorField(body);
+      if (!isToolDeveloperActor(actor)) {
+        return c.json({ ok: false, error: { code: "policy_denied" } }, 403);
+      }
+      const result = await service.packages.validatePackage({
+        packageDocument: body.packageDocument ?? body.package,
+        targetFamilyId: optionalStringField(body, "targetFamilyId") ?? undefined,
+      });
+      return c.json(
+        {
+          ok: result.ok,
+          diagnostics: result.diagnostics,
+          digest: result.package?.digest,
+          files: result.package?.fileEntries.map((file) => file.path) ?? [],
+        },
+        200,
+      );
+    } catch (error) {
+      return invalidRequest(c, error);
+    }
+  });
+
+  app.post("/api/hosted-integrations/packages/import", async (c) => {
+    try {
+      const body = await readJsonObject(c);
+      const actor = actorField(body);
+      if (!isToolDeveloperActor(actor)) {
+        return c.json({ ok: false, error: { code: "policy_denied" } }, 403);
+      }
+      const mode = stringField(body, "mode");
+      if (mode !== "create" && mode !== "update") {
+        return c.json(
+          { ok: false, error: { code: "invalid_mode" } },
+          400,
+        );
+      }
+      const result = await service.packages.importPackage({
+        mode,
+        packageDocument: body.packageDocument ?? body.package,
+        importedBy: actor.id,
+        targetFamilyId: optionalStringField(body, "targetFamilyId") ?? undefined,
+        lockId: optionalStringField(body, "lockId") ?? undefined,
+        ttlMs: optionalPositiveInteger(body, "ttlMs") ?? undefined,
+        sourceRevisionId:
+          optionalStringField(body, "sourceRevisionId") ?? undefined,
+      });
+      return c.json(
+        result,
+        result.ok
+          ? mode === "create"
+            ? 201
+            : 200
+          : statusForPackageImportError(result.error.code),
+      );
+    } catch (error) {
+      return invalidRequest(c, error);
+    }
+  });
+
+  app.post("/api/hosted-integrations/packages/export", async (c) => {
+    try {
+      const body = await readJsonObject(c);
+      const actor = actorField(body);
+      if (!isToolDeveloperActor(actor)) {
+        return c.json({ ok: false, error: { code: "policy_denied" } }, 403);
+      }
+      const result = await service.packages.exportPackage({
+        source: packageExportSourceField(body),
+        exportedBy: actor.id,
+        includeExamples: optionalBooleanField(body, "includeExamples"),
+      });
+      return c.json(
+        result,
+        result.ok ? 200 : statusForPackageExportError(result.error.code),
+      );
+    } catch (error) {
+      return invalidRequest(c, error);
+    }
+  });
+
   app.delete("/api/hosted-integrations/families/:family", async (c) => {
     try {
       const body = await readJsonObject(c);
@@ -1007,7 +1093,7 @@ export function registerHostedIntegrationRoutes(
     const family = await service.getFamily(c.req.param("family"));
     if (!family) return c.json({ error: "not_found" }, 404);
     return c.json({
-      tools: family.manifest.tools.filter(
+      tools: family.tools.filter(
         isHostedIntegrationToolVisibleForSelection,
       ),
     });
@@ -1128,6 +1214,7 @@ export function registerHostedIntegrationRoutes(
         familyId,
         generationId: sourceTarget.generationId,
         manifest: sourceTarget.manifest,
+        tools: sourceTarget.tools,
         entrypointPath: sourceTarget.manifest.runtime.entrypoint,
         source: sourceTarget.source,
         toolName,
@@ -1325,26 +1412,43 @@ export function registerHostedIntegrationRoutes(
         });
         if (ownerError) return ownerError;
 
-        const manifest = await readDraftManifest(service, draftId);
-        const toolIndex = manifest.tools.findIndex(
-          (tool) => tool.name === toolName,
+        const toolContract = await readDraftToolContract(service, draftId);
+        const toolIndex = toolContract.tools.findIndex(
+          (tool) => tool.openacme.toolName === toolName,
         );
         if (toolIndex < 0) return c.json({ error: "tool_not_found" }, 404);
 
         const help = HostedIntegrationToolHelpSchema.parse(
           objectField(body, "help"),
         );
-        const nextManifest: FamilyManifest = {
-          ...manifest,
-          tools: manifest.tools.map((tool, index) =>
-            index === toolIndex ? { ...tool, help } : tool,
+        const nextToolContract = {
+          ...toolContract,
+          tools: toolContract.tools.map((tool, index) =>
+            index === toolIndex
+              ? {
+                  ...tool,
+                  mcp: {
+                    ...tool.mcp,
+                    description: help.summary ?? tool.mcp.description,
+                  },
+                  openacme: {
+                    ...tool.openacme,
+                    fullHelp: help.full,
+                    selectWhen: help.whenToUse,
+                    doNotSelectWhen: help.whenNotToUse,
+                    parameterHelp: help.parameters,
+                    examples: help.examples,
+                    noExampleJustification: help.noExampleJustification,
+                  },
+                }
+              : tool,
           ),
         };
         const result = await service.drafts.writeDraftFile({
           draftId,
           lockId,
-          path: "family.yaml",
-          content: stringifyYaml(nextManifest),
+          path: "tools.yaml",
+          content: stringifyYaml(nextToolContract),
         });
         return writeResultResponse(c, result);
       } catch (error) {
@@ -1484,9 +1588,9 @@ export function registerHostedIntegrationRoutes(
           400,
         );
       }
-      const manifest = await readDraftManifest(service, draftId);
+      const tools = await readDraftTools(service, draftId);
       const examples = await service.examples.listExamples(draftId);
-      const missingExamples = missingExampleToolNames(manifest, examples);
+      const missingExamples = missingExampleToolNames(tools, examples);
       if (missingExamples.length > 0) {
         return c.json(
           {
@@ -1500,7 +1604,7 @@ export function registerHostedIntegrationRoutes(
         );
       }
 
-      const target = promotionTargetForDraft(draft, manifest);
+      const target = promotionTargetForDraft(draft, tools);
       const approvalId = optionalStringField(body, "approvalId");
       let approval: HostedIntegrationHumanApprovalRecord | null = null;
       if (approvalId)
@@ -1838,6 +1942,28 @@ function objectField(body: JsonRecord, name: string): JsonRecord {
   const value = body[name];
   if (!isRecord(value)) throw new Error(`${name} is required`);
   return value;
+}
+
+function packageExportSourceField(body: JsonRecord):
+  | { type: "active_generation"; familyId: string }
+  | { type: "generation"; generationId: string }
+  | { type: "draft"; draftId: string }
+  | { type: "current_source"; familyId: string } {
+  const source = objectField(body, "source");
+  const type = stringField(source, "type");
+  if (type === "active_generation") {
+    return { type, familyId: stringField(source, "familyId") };
+  }
+  if (type === "generation") {
+    return { type, generationId: stringField(source, "generationId") };
+  }
+  if (type === "draft") {
+    return { type, draftId: stringField(source, "draftId") };
+  }
+  if (type === "current_source") {
+    return { type, familyId: stringField(source, "familyId") };
+  }
+  throw new Error("source.type is invalid");
 }
 
 function actorField(body: JsonRecord): HostedIntegrationPolicyActor {
@@ -2196,6 +2322,35 @@ function statusForSourceViewError(
   }
 }
 
+function statusForPackageImportError(
+  code: string,
+): 400 | 403 | 404 | 409 | 429 | 500 | 504 {
+  switch (code) {
+    case "family_not_found":
+      return 404;
+    case "duplicate_family":
+    case "lock_required":
+    case "lock_conflict":
+      return 409;
+    default:
+      return 400;
+  }
+}
+
+function statusForPackageExportError(
+  code: string,
+): 400 | 403 | 404 | 409 | 429 | 500 | 504 {
+  switch (code) {
+    case "family_not_found":
+    case "generation_not_found":
+    case "draft_not_found":
+    case "source_not_found":
+      return 404;
+    default:
+      return 400;
+  }
+}
+
 function generationDiffMode(
   value: string | undefined,
 ): "summary" | "unified" | "manifest" | "tool_focused" {
@@ -2307,11 +2462,25 @@ async function runDraftExampleRoute(
     const example = examples.find((candidate) => candidate.id === exampleId);
     if (!example) return c.json({ ok: false, error: "not_found" }, 404);
     const manifest = await readDraftManifest(service, draftId);
-    const tool = manifest.tools.find(
+    const tools = await readDraftTools(service, draftId);
+    const tool = tools.find(
       (candidate) => candidate.name === example.toolName,
     );
     if (!tool) {
       return c.json({ ok: false, error: { code: "tool_not_found" } }, 404);
+    }
+    if (example.category === "discovery_required") {
+      return c.json(
+        {
+          ok: false,
+          error: {
+            code: "example_not_runnable",
+            message:
+              "discovery_required examples document prerequisite lookup and are not ready-to-send invocation payloads",
+          },
+        },
+        400,
+      );
     }
 
     const draftGenerationId = `draft:${draft.id}`;
@@ -2443,6 +2612,27 @@ async function readDraftManifest(
   return FamilyManifestSchema.parse(parseYaml(manifestFile.content));
 }
 
+async function readDraftToolContract(
+  service: HostedIntegrationService,
+  draftId: string,
+) {
+  const toolsFile = await service.drafts.readDraftFile({
+    draftId,
+    path: "tools.yaml",
+  });
+  if (!toolsFile.ok) throw new Error("tools.yaml is required");
+  return HostedToolContractDocumentSchema.parse(parseYaml(toolsFile.content));
+}
+
+async function readDraftTools(
+  service: HostedIntegrationService,
+  draftId: string,
+): Promise<HostedIntegrationToolSpec[]> {
+  return hostedToolContractToToolSpecs(
+    await readDraftToolContract(service, draftId),
+  );
+}
+
 async function readSourceViewTarget(args: {
   service: HostedIntegrationService;
   dataDir: string;
@@ -2454,6 +2644,7 @@ async function readSourceViewTarget(args: {
       ok: true;
       generationId: string;
       manifest: FamilyManifest;
+      tools: HostedIntegrationToolSpec[];
       source: string;
     }
   | { ok: false; reason: string }
@@ -2465,6 +2656,7 @@ async function readSourceViewTarget(args: {
       return { ok: false, reason: "not_found" };
     }
     const manifest = await readDraftManifest(args.service, args.draftId);
+    const tools = await readDraftTools(args.service, args.draftId);
     const source = await args.service.drafts.readDraftFile({
       draftId: args.draftId,
       path: manifest.runtime.entrypoint,
@@ -2474,6 +2666,7 @@ async function readSourceViewTarget(args: {
       ok: true,
       generationId: `draft:${draft.id}`,
       manifest,
+      tools,
       source: source.content,
     };
   }
@@ -2504,10 +2697,22 @@ async function readSourceViewTarget(args: {
         ),
       ),
     );
+    const tools = hostedToolContractToToolSpecs(
+      HostedToolContractDocumentSchema.parse(
+        parseYaml(
+          await readTextFileUnderRoot(
+            filesRoot,
+            "tools.yaml",
+            "generation files root",
+          ),
+        ),
+      ),
+    );
     return {
       ok: true,
       generationId: generation.id,
       manifest,
+      tools,
       source: await readTextFileUnderRoot(
         filesRoot,
         manifest.runtime.entrypoint,
@@ -2643,21 +2848,21 @@ async function copyDraftFilesToDirectory(
 }
 
 function missingExampleToolNames(
-  manifest: FamilyManifest,
+  tools: HostedIntegrationToolSpec[],
   examples: HostedIntegrationExample[],
 ): string[] {
   const covered = new Set(examples.map((example) => example.toolName));
-  return manifest.tools
+  return tools
     .map((tool) => tool.name)
     .filter((toolName) => !covered.has(toolName));
 }
 
 function promotionTargetForDraft(
   draft: HostedIntegrationDraft,
-  manifest: FamilyManifest,
+  tools: HostedIntegrationToolSpec[],
 ) {
-  const toolNames = manifest.tools.map((tool) => tool.name);
-  const destructiveToolNames = manifest.tools
+  const toolNames = tools.map((tool) => tool.name);
+  const destructiveToolNames = tools
     .filter((tool) => tool.classification.operation === "destructive")
     .map((tool) => tool.name);
   return HostedIntegrationPromotionApprovalTargetSchema.parse({
@@ -2665,25 +2870,23 @@ function promotionTargetForDraft(
     draftId: draft.id,
     draftRevisionId: draft.updatedAt,
     operation: "promote",
-    operationClass: operationClassForManifest(manifest),
+    operationClass: operationClassForTools(tools),
     toolNames,
     destructiveToolNames,
   });
 }
 
-function operationClassForManifest(
-  manifest: FamilyManifest,
+function operationClassForTools(
+  tools: HostedIntegrationToolSpec[],
 ): "read" | "write" | "destructive" {
   if (
-    manifest.tools.some(
+    tools.some(
       (tool) => tool.classification.operation === "destructive",
     )
   ) {
     return "destructive";
   }
-  if (
-    manifest.tools.some((tool) => tool.classification.operation === "write")
-  ) {
+  if (tools.some((tool) => tool.classification.operation === "write")) {
     return "write";
   }
   return "read";

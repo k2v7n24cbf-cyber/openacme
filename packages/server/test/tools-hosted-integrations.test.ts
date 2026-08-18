@@ -1,4 +1,11 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,9 +19,10 @@ import {
   createFileHostedIntegrationSecretStore,
 } from "@openacme/hosted-integrations";
 import {
-  LEGACY_INTEGRATION_HUB_FIVE_READONLY_TOOL_SYNC_FAMILY,
+  LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_TOOL_SYNC_FAMILY,
   type LegacyIntegrationHubReplacementFamilyFixture,
 } from "../../hosted-integrations/test-support/integration-hub/fixtures.js";
+import { withSplitToolContractFiles } from "../../hosted-integrations/test/test-support/split-contract-fixtures.js";
 import { registry as toolRegistry, toolCallContext } from "@openacme/tools";
 import { createApp } from "../src/app.js";
 
@@ -118,9 +126,9 @@ describe("/api/tools hosted integration surfacing", () => {
     ).toBe(true);
   });
 
-  it("syncs a five-tool integration-hub read-only pilot without hiding remote MCP tools", async () => {
+  it("syncs the current promoted integration-hub read-only pilot without hiding remote MCP tools", async () => {
     dataDir = mkdtempSync(path.join(tmpdir(), "openacme-tools-hosted-"));
-    const fixture = LEGACY_INTEGRATION_HUB_FIVE_READONLY_TOOL_SYNC_FAMILY;
+    const fixture = LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_TOOL_SYNC_FAMILY;
     writeFixtureFamily(dataDir, fixture);
     const locks = createFileHostedIntegrationLockStore({
       dataDir,
@@ -140,7 +148,7 @@ describe("/api/tools hosted integration surfacing", () => {
       familyId: "qualys",
       lockId: "lock_1",
       sourceRevisionId: "source_rev_5_tool_sync",
-      files: fixture.sourceFiles,
+      files: withSplitToolContractFiles(fixture.sourceFiles),
     });
     expect(draft.ok).toBe(true);
     const promoted = await createFileHostedIntegrationGenerationStore({
@@ -517,7 +525,7 @@ describe("/api/tools hosted integration surfacing", () => {
       dataDir,
       model: { provider: "anthropic", model: "claude-sonnet-4-6" },
     });
-    const { manager, close } = await createApp(config);
+    const { manager, runtime, close } = await createApp(config);
     closeApp = close;
     await manager.createAgent(
       AgentDefinitionSchema.parse({
@@ -636,6 +644,260 @@ describe("/api/tools hosted integration surfacing", () => {
         code: "policy_denied",
         message: "agent cannot manage hosted integrations",
       },
+    });
+  });
+
+  it("imports hosted family packages through the management tool binding", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "openacme-tools-hosted-"));
+
+    const config = ConfigSchema.parse({
+      dataDir,
+      model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+    });
+    const { manager, close } = await createApp(config);
+    closeApp = close;
+    await manager.createAgent(
+      AgentDefinitionSchema.parse({
+        id: "tool-developer",
+        name: "Tool Developer",
+        role: "",
+        model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+        persona: "Manage hosted integrations.",
+        tools: ["hosted_tool_family_import", "hosted_tool_family_export"],
+      }),
+    );
+
+    const tools = toolRegistry.getVercelTools(
+      new Set(["hosted_tool_family_import", "hosted_tool_family_export"]),
+    ) as Record<
+      string,
+      { execute: (args: Record<string, unknown>) => Promise<string> }
+    >;
+    const output = await toolCallContext.run(
+      {
+        agentId: "tool-developer",
+        sessionId: "session_import",
+        workspaceDir: path.join(
+          dataDir,
+          "agents",
+          "tool-developer",
+          "workspace",
+        ),
+      },
+      () =>
+        tools.hosted_tool_family_import!.execute({
+          mode: "create",
+          package_document: managementImportPackageDocument(),
+          ttl_ms: 60_000,
+        }),
+    );
+
+    const imported = JSON.parse(output);
+    expect(imported).toMatchObject({
+      ok: true,
+      mode: "create",
+      family: {
+        id: "github",
+        name: "GitHub",
+        toolNames: ["github_search"],
+      },
+      validation: { ok: true },
+      nextAction: "run_examples",
+    });
+
+    const exported = JSON.parse(
+      await toolCallContext.run(
+        {
+          agentId: "tool-developer",
+          sessionId: "session_export",
+          workspaceDir: path.join(
+            dataDir,
+            "agents",
+            "tool-developer",
+            "workspace",
+          ),
+        },
+        () =>
+          tools.hosted_tool_family_export!.execute({
+            source: { source_type: "draft", draft_id: imported.draft.id },
+            include_examples: false,
+          }),
+      ),
+    );
+    expect(exported).toMatchObject({
+      ok: true,
+      packageDocument: {
+        kind: "openacme.hostedFamilyPackage",
+        metadata: {
+          familyId: "github",
+          sourceDraftId: imported.draft.id,
+        },
+      },
+      exportedFiles: ["family.yaml", "github.py", "tools.yaml"],
+    });
+  });
+
+  it("rejects operational artifact paths through the package import management tool", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "openacme-tools-hosted-"));
+
+    const config = ConfigSchema.parse({
+      dataDir,
+      model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+    });
+    const { manager, runtime, close } = await createApp(config);
+    closeApp = close;
+    await manager.createAgent(
+      AgentDefinitionSchema.parse({
+        id: "tool-developer",
+        name: "Tool Developer",
+        role: "",
+        model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+        persona: "Manage hosted integrations.",
+        tools: ["hosted_tool_family_import"],
+      }),
+    );
+
+    const tools = toolRegistry.getVercelTools(
+      new Set(["hosted_tool_family_import"]),
+    ) as Record<
+      string,
+      { execute: (args: Record<string, unknown>) => Promise<string> }
+    >;
+    const packageDocument = managementImportPackageDocument();
+    const unsafePackageDocument = {
+      ...packageDocument,
+      files: [
+        ...((packageDocument.files as Array<Record<string, unknown>>) ?? []),
+        { path: "failure-buckets/bucket-1.json", content: "{}" },
+      ],
+    };
+
+    const output = await toolCallContext.run(
+      {
+        agentId: "tool-developer",
+        sessionId: "session_import_rejects_operational_path",
+        workspaceDir: path.join(
+          dataDir,
+          "agents",
+          "tool-developer",
+          "workspace",
+        ),
+      },
+      () =>
+        tools.hosted_tool_family_import!.execute({
+          mode: "create",
+          package_document: unsafePackageDocument,
+          ttl_ms: 60_000,
+        }),
+    );
+
+    expect(JSON.parse(output)).toMatchObject({
+      ok: false,
+      error: { code: "invalid_package" },
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({
+          code: "package_file_path_operational",
+        }),
+      ]),
+    });
+    await expect(runtime.hostedIntegrationService.listFamilies()).resolves.toEqual(
+      [],
+    );
+  });
+
+  it("spills large hosted family package exports through the management tool", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "openacme-tools-hosted-"));
+
+    const config = ConfigSchema.parse({
+      dataDir,
+      model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+    });
+    const { manager, close } = await createApp(config);
+    closeApp = close;
+    await manager.createAgent(
+      AgentDefinitionSchema.parse({
+        id: "tool-developer",
+        name: "Tool Developer",
+        role: "",
+        model: { provider: "anthropic", model: "claude-sonnet-4-6" },
+        persona: "Manage hosted integrations.",
+        tools: ["hosted_tool_family_import", "hosted_tool_family_export"],
+      }),
+    );
+
+    const tools = toolRegistry.getVercelTools(
+      new Set(["hosted_tool_family_import", "hosted_tool_family_export"]),
+    ) as Record<
+      string,
+      { execute: (args: Record<string, unknown>) => Promise<string> }
+    >;
+    const packageDocument = managementImportPackageDocument();
+    const largePackageDocument = {
+      ...packageDocument,
+      files: [
+        ...((packageDocument.files as Array<Record<string, unknown>>) ?? []),
+        {
+          path: "help/large-reference.md",
+          content: `# Large reference\n\n${"safe exported content\n".repeat(2_000)}`,
+        },
+      ],
+    };
+    const imported = JSON.parse(
+      await toolCallContext.run(
+        {
+          agentId: "tool-developer",
+          sessionId: "session_large_import",
+          workspaceDir: path.join(
+            dataDir,
+            "agents",
+            "tool-developer",
+            "workspace",
+          ),
+        },
+        () =>
+          tools.hosted_tool_family_import!.execute({
+            mode: "create",
+            package_document: largePackageDocument,
+            ttl_ms: 60_000,
+          }),
+      ),
+    );
+    expect(imported).toMatchObject({ ok: true });
+
+    const output = await toolCallContext.run(
+      {
+        agentId: "tool-developer",
+        sessionId: "session_large_export",
+        workspaceDir: path.join(
+          dataDir,
+          "agents",
+          "tool-developer",
+          "workspace",
+        ),
+      },
+      () =>
+        tools.hosted_tool_family_export!.execute({
+          source: { source_type: "draft", draft_id: imported.draft.id },
+          include_examples: false,
+        }),
+    );
+
+    expect(output).toContain("[overflow:");
+    expect(output).toContain("full result at ");
+    const spillPath = output.match(/full result at (.+?)\. Use /)?.[1];
+    expect(spillPath).toBeTruthy();
+    expect(existsSync(spillPath!)).toBe(true);
+    const spilled = readFileSync(spillPath!, "utf-8");
+    expect(JSON.parse(spilled)).toMatchObject({
+      ok: true,
+      packageDocument: {
+        kind: "openacme.hostedFamilyPackage",
+        metadata: { familyId: "github" },
+        files: expect.arrayContaining([
+          expect.objectContaining({ path: "help/large-reference.md" }),
+        ]),
+      },
+      exportedFiles: expect.arrayContaining(["help/large-reference.md"]),
     });
   });
 
@@ -831,6 +1093,38 @@ describe("/api/tools hosted integration surfacing", () => {
         },
       }),
     ).resolves.toMatchObject({ ok: true });
+
+    await expect(
+      call("hosted_tool_example_upsert", {
+        draft_id: draft.draft.id,
+        lock_id: lock.lock.id,
+        example: {
+          id: "fetch_after_discovery",
+          familyId: "qualys",
+          toolName: "qualys_count_assets",
+          category: "discovery_required",
+          args: {},
+          expected: {
+            discovery_tool: "qualys_search_assets",
+            requires_discovered_asset_id: true,
+            not_ready_to_send: true,
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    await expect(
+      call("hosted_tool_example_run", {
+        draft_id: draft.draft.id,
+        example_id: "fetch_after_discovery",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "example_not_runnable",
+        message: expect.stringContaining("not ready-to-send"),
+      },
+    });
 
     const run = await call("hosted_tool_example_run", {
       draft_id: draft.draft.id,
@@ -1181,11 +1475,11 @@ describe("/api/tools hosted integration surfacing", () => {
       familyId: "qualys",
       lockId: "lock_1",
       sourceRevisionId: "source_rev_1",
-      files: {
+      files: withSplitToolContractFiles({
         "family.yaml": familyYaml(),
         "qualys.py":
           "def tool_qualys_count_assets(args, context):\n    return {'count': 1}\n",
-      },
+      }),
     });
     if (!firstDraft.ok) throw new Error(firstDraft.reason);
     const first = await generations.promoteDraft({
@@ -1199,11 +1493,11 @@ describe("/api/tools hosted integration surfacing", () => {
       familyId: "qualys",
       lockId: "lock_1",
       sourceRevisionId: "source_rev_2",
-      files: {
+      files: withSplitToolContractFiles({
         "family.yaml": familyYaml(),
         "qualys.py":
           "def tool_qualys_count_assets(args, context):\n    return {'count': 2}\n",
-      },
+      }),
     });
     if (!secondDraft.ok) throw new Error(secondDraft.reason);
     const second = await generations.promoteDraft({
@@ -1296,10 +1590,11 @@ function writeFamily(
     "qualys",
   );
   mkdirSync(dir, { recursive: true });
-  writeFileSync(
-    path.join(dir, "family.yaml"),
-    familyYaml({ configBacked: options.configBacked ?? true }),
-  );
+  const splitFiles = withSplitToolContractFiles({
+    "family.yaml": familyYaml({ configBacked: options.configBacked ?? true }),
+  });
+  writeFileSync(path.join(dir, "family.yaml"), splitFiles["family.yaml"]);
+  writeFileSync(path.join(dir, "tools.yaml"), splitFiles["tools.yaml"]);
   writeFileSync(
     path.join(dir, "qualys.py"),
     source ??
@@ -1337,9 +1632,46 @@ function writeFixtureFamily(
     fixture.familyId,
   );
   mkdirSync(dir, { recursive: true });
-  for (const [filePath, content] of Object.entries(fixture.sourceFiles)) {
+  for (const [filePath, content] of Object.entries(
+    withSplitToolContractFiles(fixture.sourceFiles),
+  )) {
     writeFileSync(path.join(dir, filePath), content);
   }
+}
+
+function managementImportPackageDocument(): Record<string, unknown> {
+  const files = withSplitToolContractFiles({
+    "family.yaml": familyYaml({ configBacked: false })
+      .replace("id: qualys", "id: github")
+      .replace("name: Qualys", "name: GitHub")
+      .replace("entrypoint: qualys.py", "entrypoint: github.py")
+      .replace("name: qualys_count_assets", "name: github_search")
+      .replace("title: Count assets", "title: Search GitHub")
+      .replace("description: Count Qualys assets.", "description: Search GitHub issues."),
+    "github.py": [
+      "def authenticate(ctx):",
+      "    return {}",
+      "",
+      "def before_tool_call(tool_name, args, ctx, auth):",
+      "    return args",
+      "",
+      "def after_tool_call(tool_name, args, ctx, result, auth):",
+      "    return result",
+      "",
+      "def tool_github_search(args, context):",
+      "    return {'items': []}",
+      "",
+    ].join("\n"),
+  });
+  return {
+    kind: "openacme.hostedFamilyPackage",
+    version: 1,
+    metadata: { familyId: "github" },
+    files: Object.entries(files).map(([filePath, content]) => ({
+      path: filePath,
+      content,
+    })),
+  };
 }
 
 async function seedEnvironmentConfig(root: string): Promise<void> {

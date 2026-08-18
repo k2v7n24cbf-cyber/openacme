@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -14,6 +14,10 @@ import {
   type HostedIntegrationTelemetry,
   type HostedIntegrationTelemetrySpan,
 } from "../src/index.js";
+import {
+  withSplitToolContractFiles,
+  writeSplitFamilyFixture,
+} from "./test-support/split-contract-fixtures.js";
 
 let dataDir: string;
 let nowMs = Date.parse("2026-08-12T10:00:00.000Z");
@@ -213,8 +217,7 @@ async function seedSourceFamily(): Promise<void> {
     "families",
     "qualys",
   );
-  await mkdir(sourceDir, { recursive: true });
-  await writeFile(path.join(sourceDir, "family.yaml"), familyYaml(), "utf-8");
+  await writeSplitFamilyFixture(sourceDir, familyYaml());
   await writeFile(path.join(sourceDir, "qualys.py"), "def run(): pass\n");
 }
 
@@ -239,10 +242,10 @@ async function seedPromotedGeneration() {
     familyId: "qualys",
     lockId: "lock_1",
     sourceRevisionId: "source_rev_1",
-    files: {
+    files: withSplitToolContractFiles({
       "family.yaml": familyYaml(),
       "qualys.py": "def run(): pass\n",
-    },
+    }),
   });
   if (!draft.ok) throw new Error(draft.reason);
   const promoted = await createFileHostedIntegrationGenerationStore({

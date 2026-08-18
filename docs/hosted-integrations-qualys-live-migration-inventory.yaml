@@ -1,0 +1,891 @@
+version: 1
+familyId: qualys
+familyName: Qualys
+hostedNamespace: hosted_qualys
+statusVocabulary:
+  - included_live
+  - included_reference
+  - excluded_cache_local
+  - excluded_mutating
+  - excluded_scoped_out
+  - blocked_evidence_required
+canonicalSources:
+  - sourceId: qualys-toolkit
+    path: /Users/alenbohcelyan/.codex/skills/qualys-toolkit/SKILL.md
+    role: operational_tool_use_policy
+  - sourceId: qualys-tool-map
+    path: /Users/alenbohcelyan/.codex/skills/qualys-toolkit/references/tool-map.md
+    role: public_tool_inventory_and_module_boundary
+  - sourceId: qualys-filter-catalog
+    path: /Users/alenbohcelyan/.codex/skills/qualys-toolkit/references/filter-catalog.md
+    role: native_parameters_filters_endpoints_and_examples
+  - sourceId: qualys-module-authority
+    path: /Users/alenbohcelyan/.codex/skills/qualys-toolkit/references/module-evidence-authority.md
+    role: evidence_authority_and_join_boundary
+  - sourceId: hosted-m31-plan
+    path: docs/hosted-integrations-implementation-plan.md#milestone-31-qualys-live-hosted-surface-migration
+    role: migration_scope_and_tdd
+globalRules:
+  - Status included_live means the tool is in the current promoted/source-backed hosted contract and must also appear in currentPromotedBatch.tools.
+  - Broader planned migration rows stay blocked_evidence_required until exact endpoint, request, response, pagination, auth, and safety evidence exists.
+  - currentPromotedBatch is the authoritative current hosted Qualys contract scope until a later batch promotion updates it.
+  - Public hosted Qualys tools must be read-only live API-backed tools or reference-only quickref tools.
+  - Cache-local qualys_cache_* tools are excluded from this live migration.
+  - Mutating scan, report, purge, auth-record, and tag write operations are excluded.
+  - ETM/TruRisk, TotalCloud/CloudView, CDR, Container Security, CertView, and Patch Management are excluded until explicitly rescoped.
+  - Unknown provider endpoint, authentication, pagination, response, destructive, or parameter behavior must stop with EVIDENCE_REQUIRED before implementation.
+  - Quickref tools may provide source discovery but never tenant evidence.
+currentPromotedBatch:
+  description: Current promoted/source-backed hosted Qualys contract scope. Broader migration rows remain blocked_evidence_required until promoted here and covered by tools.yaml/help/live evidence.
+  tools:
+    - qualys_gav_asset_count
+    - qualys_gav_asset_get
+    - qualys_gav_asset_search
+    - qualys_cloud_agent_hostasset_count
+    - qualys_cloud_agent_hostasset_search
+    - qualys_vmdr_host_list
+    - qualys_vmdr_host_detection_list
+    - qualys_vmdr_asset_group_list
+    - qualys_vmdr_ip_list
+    - qualys_vmdr_excluded_ip_list
+    - qualys_vmdr_restricted_ip_list
+    - qualys_vmdr_virtual_host_list
+    - qualys_vmdr_scan_list
+    - qualys_vmdr_scan_fetch
+    - qualys_vmdr_kb_vuln_list
+    - qualys_vmdr_kb_qvs_list
+    - qualys_asset_management_tag_list
+    - qualys_asset_management_tag_search
+tools:
+  - toolName: qualys_gav_asset_count
+    status: included_live
+    hostedMcpName: hosted_qualys__qualys_gav_asset_count
+    handlerName: tool_qualys_gav_asset_count
+    operationCategory: gav_asset_inventory
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence: [POST /rest/2.0/count/am/asset]
+    resultMode: inline
+    paginationModel: count
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_gav_asset_search
+    status: included_live
+    hostedMcpName: hosted_qualys__qualys_gav_asset_search
+    handlerName: tool_qualys_gav_asset_search
+    operationCategory: gav_asset_inventory
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence: [POST /rest/2.0/search/am/asset]
+    resultMode: inline_or_artifact
+    paginationModel: lastSeenAssetId
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_gav_asset_get
+    status: included_live
+    hostedMcpName: hosted_qualys__qualys_gav_asset_get
+    handlerName: tool_qualys_gav_asset_get
+    operationCategory: gav_asset_inventory
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence: [GET /rest/2.0/get/am/asset]
+    resultMode: inline_or_artifact
+    paginationModel: none
+    idDiscoveryRequired: true
+    safety: read_only_live
+  - toolName: qualys_cloud_agent_hostasset_count
+    status: included_live
+    hostedMcpName: hosted_qualys__qualys_cloud_agent_hostasset_count
+    handlerName: tool_qualys_cloud_agent_hostasset_count
+    operationCategory: cloud_agent_hostasset
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence: [POST /rest/2.0/count/am/asset with asset.trackingMethod EQUALS QAGENT]
+    resultMode: inline
+    paginationModel: count
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_cloud_agent_hostasset_search
+    status: included_live
+    hostedMcpName: hosted_qualys__qualys_cloud_agent_hostasset_search
+    handlerName: tool_qualys_cloud_agent_hostasset_search
+    operationCategory: cloud_agent_hostasset
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence: [POST /rest/2.0/search/am/asset with asset.trackingMethod EQUALS QAGENT]
+    resultMode: inline_or_artifact
+    paginationModel: lastSeenAssetId
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_cloud_agent_hostasset_get
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_cloud_agent_hostasset_get
+    handlerName: tool_qualys_cloud_agent_hostasset_get
+    operationCategory: cloud_agent_hostasset
+    sourceReferences: [qualys-tool-map, qualys-module-authority]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: QPS HostAsset get endpoint path, auth/request shape, id parameter semantics, pagination/none behavior, and response structure need official/imported/safely observed evidence."
+      - Current references prove Cloud Agent HostAsset ids are QPS object ids and must not be substituted for GAV assetId.
+    resultMode: inline_or_artifact
+    paginationModel: none
+    idDiscoveryRequired: true
+    safety: read_only_live
+  - toolName: qualys_vmdr_host_list
+    status: included_live
+    hostedMcpName: hosted_qualys__qualys_vmdr_host_list
+    handlerName: tool_qualys_vmdr_host_list
+    operationCategory: vmdr_host_inventory
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence: [GET /api/5.0/fo/asset/host/]
+    resultMode: inline_or_artifact
+    paginationModel: FO warning URL with max_pages cap
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_vmdr_host_detection_list
+    status: included_live
+    hostedMcpName: hosted_qualys__qualys_vmdr_host_detection_list
+    handlerName: tool_qualys_vmdr_host_detection_list
+    operationCategory: vmdr_vulnerability_evidence
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog, qualys-module-authority]
+    endpointEvidence: [GET /api/2.0/fo/asset/host/vm/detection/]
+    resultMode: inline_or_artifact
+    paginationModel: FO warning URL with max_pages cap
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_vmdr_kb_vuln_list
+    status: included_live
+    hostedMcpName: hosted_qualys__qualys_vmdr_kb_vuln_list
+    handlerName: tool_qualys_vmdr_kb_vuln_list
+    operationCategory: vmdr_knowledgebase
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence: [POST /api/2.0/fo/knowledge_base/vuln/]
+    resultMode: inline_or_artifact
+    paginationModel: bounded params and max_pages
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_vmdr_kb_qvs_list
+    status: included_live
+    hostedMcpName: hosted_qualys__qualys_vmdr_kb_qvs_list
+    handlerName: tool_qualys_vmdr_kb_qvs_list
+    operationCategory: vmdr_knowledgebase
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence: [GET/POST /api/3.0/fo/knowledge_base/qvs/?action=list]
+    resultMode: inline_or_artifact
+    paginationModel: bounded params
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_vmdr_static_search_list
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_vmdr_static_search_list
+    handlerName: tool_qualys_vmdr_static_search_list
+    operationCategory: vmdr_search_lists
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact static search-list endpoint path, action/method, auth/request shape, pagination behavior, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent for existing QID search-list definitions but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: FO warning URL with max_pages cap
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_vmdr_dynamic_search_list
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_vmdr_dynamic_search_list
+    handlerName: tool_qualys_vmdr_dynamic_search_list
+    operationCategory: vmdr_search_lists
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact dynamic search-list endpoint path, action/method, auth/request shape, pagination behavior, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent for existing QID search-list definitions but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: FO warning URL with max_pages cap
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_vmdr_asset_group_list
+    status: included_live
+    hostedMcpName: hosted_qualys__qualys_vmdr_asset_group_list
+    handlerName: tool_qualys_vmdr_asset_group_list
+    operationCategory: vmdr_admin_read_view
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence: [GET /api/2.0/fo/asset/group/?action=list]
+    resultMode: inline_or_artifact
+    paginationModel: FO warning URL with max_pages cap
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_vmdr_ip_list
+    status: included_live
+    hostedMcpName: hosted_qualys__qualys_vmdr_ip_list
+    handlerName: tool_qualys_vmdr_ip_list
+    operationCategory: vmdr_admin_read_view
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence: [GET /api/2.0/fo/asset/ip/?action=list]
+    resultMode: inline_or_artifact
+    paginationModel: FO warning URL with max_pages cap
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_vmdr_excluded_ip_list
+    status: included_live
+    hostedMcpName: hosted_qualys__qualys_vmdr_excluded_ip_list
+    handlerName: tool_qualys_vmdr_excluded_ip_list
+    operationCategory: vmdr_admin_read_view
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence: [GET /api/2.0/fo/asset/excluded_ip/?action=list]
+    resultMode: inline_or_artifact
+    paginationModel: FO warning URL with max_pages cap
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_vmdr_restricted_ip_list
+    status: included_live
+    hostedMcpName: hosted_qualys__qualys_vmdr_restricted_ip_list
+    handlerName: tool_qualys_vmdr_restricted_ip_list
+    operationCategory: vmdr_admin_read_view
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence: [GET /api/2.0/fo/setup/restricted_ips/?action=list&output_format=xml]
+    resultMode: inline_or_artifact
+    paginationModel: FO warning URL with max_pages cap
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_vmdr_virtual_host_list
+    status: included_live
+    hostedMcpName: hosted_qualys__qualys_vmdr_virtual_host_list
+    handlerName: tool_qualys_vmdr_virtual_host_list
+    operationCategory: vmdr_admin_read_view
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence: [GET /api/2.0/fo/asset/vhost/?action=list]
+    resultMode: inline_or_artifact
+    paginationModel: FO warning URL with max_pages cap
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_vmdr_scan_list
+    status: included_live
+    hostedMcpName: hosted_qualys__qualys_vmdr_scan_list
+    handlerName: tool_qualys_vmdr_scan_list
+    operationCategory: vmdr_scan_read_view
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence: [GET /api/2.0/fo/scan/?action=list]
+    resultMode: inline_or_artifact
+    paginationModel: native params and max_pages where supported
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_vmdr_scan_fetch
+    status: included_live
+    hostedMcpName: hosted_qualys__qualys_vmdr_scan_fetch
+    handlerName: tool_qualys_vmdr_scan_fetch
+    operationCategory: vmdr_scan_read_view
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence: [GET /api/2.0/fo/scan/?action=fetch&scan_ref=<discovered-scan-ref>]
+    resultMode: artifact
+    paginationModel: none
+    idDiscoveryRequired: true
+    safety: read_only_live
+  - toolName: qualys_vmdr_scan_summary
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_vmdr_scan_summary
+    handlerName: tool_qualys_vmdr_scan_summary
+    operationCategory: vmdr_scan_read_view
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact VMDR scan summary endpoint path, method/action, auth/request shape, pagination behavior, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent and native params such as scan_reference and scan_datetime_since, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: native params and max_pages where supported
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_vmdr_scan_vm_summary
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_vmdr_scan_vm_summary
+    handlerName: tool_qualys_vmdr_scan_vm_summary
+    operationCategory: vmdr_scan_read_view
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact VMDR VM scan summary endpoint path, method/action, auth/request shape, pagination behavior, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent and native params such as scan_reference and scan_datetime_since, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: native params and max_pages where supported
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_policy_compliance_scan_list
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_policy_compliance_scan_list
+    handlerName: tool_qualys_policy_compliance_scan_list
+    operationCategory: policy_compliance_read_view
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact Policy Compliance scan list endpoint path, method/action, auth/request shape, pagination behavior, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent and native params such as state, processed, type, target, user_login, launched_after_datetime, and launched_before_datetime, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: native params and max_pages where supported
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_policy_compliance_scan_fetch
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_policy_compliance_scan_fetch
+    handlerName: tool_qualys_policy_compliance_scan_fetch
+    operationCategory: policy_compliance_read_view
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact Policy Compliance scan fetch endpoint path, method/action, auth/request shape, scan_ref placement, output format behavior, and response/artifact structure need official/imported/safely observed evidence."
+      - Current references prove selection intent and that a real discovered scan_ref is required, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: artifact
+    paginationModel: none
+    idDiscoveryRequired: true
+    safety: read_only_live
+  - toolName: qualys_policy_compliance_scap_scan_list
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_policy_compliance_scap_scan_list
+    handlerName: tool_qualys_policy_compliance_scap_scan_list
+    operationCategory: policy_compliance_read_view
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact Policy Compliance SCAP scan list endpoint path, method/action, auth/request shape, pagination behavior, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent and native params such as state, processed, target, user_login, launched_after_datetime, and launched_before_datetime, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: native params and max_pages where supported
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_policy_compliance_posture_list
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_policy_compliance_posture_list
+    handlerName: tool_qualys_policy_compliance_posture_list
+    operationCategory: policy_compliance_read_view
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact Policy Compliance posture list endpoint path, method/action, auth/request shape, pagination behavior, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent for posture records, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: native params and max_pages where supported
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_policy_compliance_control_list
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_policy_compliance_control_list
+    handlerName: tool_qualys_policy_compliance_control_list
+    operationCategory: policy_compliance_read_view
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact Policy Compliance control list endpoint path, method/action, auth/request shape, pagination behavior, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent for control metadata, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: native params and max_pages where supported
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_policy_compliance_policy_list
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_policy_compliance_policy_list
+    handlerName: tool_qualys_policy_compliance_policy_list
+    operationCategory: policy_compliance_read_view
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact Policy Compliance policy list endpoint path, method/action, auth/request shape, pagination behavior, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent for policy metadata, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: native params and max_pages where supported
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_policy_compliance_policy_export
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_policy_compliance_policy_export
+    handlerName: tool_qualys_policy_compliance_policy_export
+    operationCategory: policy_compliance_read_view
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact Policy Compliance policy export endpoint path, method/action, auth/request shape, id/title placement, output format behavior, and response/artifact structure need official/imported/safely observed evidence."
+      - Current references prove selection intent and that a real discovered policy id or title is required, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: artifact
+    paginationModel: none
+    idDiscoveryRequired: true
+    safety: read_only_live
+  - toolName: qualys_policy_compliance_exception_list
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_policy_compliance_exception_list
+    handlerName: tool_qualys_policy_compliance_exception_list
+    operationCategory: policy_compliance_read_view
+    sourceReferences: [qualys-tool-map, qualys-module-authority]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact Policy Compliance exception list endpoint path, method/action, auth/request shape, pagination behavior, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent for exception/risk-acceptance records, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: native params and max_pages where supported
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_vmdr_report_list
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_vmdr_report_list
+    handlerName: tool_qualys_vmdr_report_list
+    operationCategory: vmdr_report_read_view
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact VMDR report list endpoint path, method/action, auth/request shape, pagination behavior, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent and native params such as id, state, user_login, expires_before_datetime, client_id, and client_name, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: native params and max_pages where supported
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_vmdr_report_fetch
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_vmdr_report_fetch
+    handlerName: tool_qualys_vmdr_report_fetch
+    operationCategory: vmdr_report_read_view
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact VMDR report fetch endpoint path, method/action, auth/request shape, report_id placement, output format behavior, and response/artifact structure need official/imported/safely observed evidence."
+      - Current references prove selection intent and that a real discovered report_id is required, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: artifact
+    paginationModel: none
+    idDiscoveryRequired: true
+    safety: read_only_live
+  - toolName: qualys_vmdr_report_template_list
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_vmdr_report_template_list
+    handlerName: tool_qualys_vmdr_report_template_list
+    operationCategory: vmdr_report_read_view
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact VMDR report template list endpoint path, method/action, auth/request shape, pagination behavior, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent for existing report templates, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: native params and max_pages where supported
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_vmdr_scan_schedule_list
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_vmdr_scan_schedule_list
+    handlerName: tool_qualys_vmdr_scan_schedule_list
+    operationCategory: vmdr_report_read_view
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact VMDR scan schedule list endpoint path, method/action, auth/request shape, pagination behavior, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent and native params such as id, active, show_notifications, and show_cloud_details, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: native params and max_pages where supported
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_vmdr_report_schedule_list
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_vmdr_report_schedule_list
+    handlerName: tool_qualys_vmdr_report_schedule_list
+    operationCategory: vmdr_report_read_view
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact VMDR report schedule list endpoint path, method/action, auth/request shape, pagination behavior, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent and native params such as id, is_active, and show_notifications, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: native params and max_pages where supported
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_activity_audit_log_list
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_activity_audit_log_list
+    handlerName: tool_qualys_activity_audit_log_list
+    operationCategory: activity_audit
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact Activity Log endpoint path, method/action, auth/request shape, pagination behavior, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent and known params such as since_datetime, truncation_limit, and id_max but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: FO warning URL with truncation_limit
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_continuous_monitoring_search_alerts
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_continuous_monitoring_search_alerts
+    handlerName: tool_qualys_continuous_monitoring_search_alerts
+    operationCategory: continuous_monitoring
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact Continuous Monitoring alert search QPS endpoint path, auth/request shape, Criteria fields, pagination/limit behavior, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent and that QPS Criteria is expected, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: QPS search limit and criteria
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_continuous_monitoring_get_alert
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_continuous_monitoring_get_alert
+    handlerName: tool_qualys_continuous_monitoring_get_alert
+    operationCategory: continuous_monitoring
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact Continuous Monitoring alert get QPS endpoint path, auth/request shape, id placement, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent and that a real discovered alert id is required, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: none
+    idDiscoveryRequired: true
+    safety: read_only_live
+  - toolName: qualys_continuous_monitoring_download_alerts
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_continuous_monitoring_download_alerts
+    handlerName: tool_qualys_continuous_monitoring_download_alerts
+    operationCategory: continuous_monitoring
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact Continuous Monitoring alert download endpoint path, auth/request shape, format handling, Criteria behavior, no-limit behavior, and artifact response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent and no-limit guidance for downloads, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: artifact
+    paginationModel: download criteria without limit
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_continuous_monitoring_search_profiles
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_continuous_monitoring_search_profiles
+    handlerName: tool_qualys_continuous_monitoring_search_profiles
+    operationCategory: continuous_monitoring
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact Continuous Monitoring profile search QPS endpoint path, auth/request shape, Criteria fields, pagination/limit behavior, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent and that QPS Criteria is expected, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: QPS search limit and criteria
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_continuous_monitoring_get_profile
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_continuous_monitoring_get_profile
+    handlerName: tool_qualys_continuous_monitoring_get_profile
+    operationCategory: continuous_monitoring
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact Continuous Monitoring profile get QPS endpoint path, auth/request shape, id placement, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent and that a real discovered profile id is required, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: none
+    idDiscoveryRequired: true
+    safety: read_only_live
+  - toolName: qualys_continuous_monitoring_search_rulesets
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_continuous_monitoring_search_rulesets
+    handlerName: tool_qualys_continuous_monitoring_search_rulesets
+    operationCategory: continuous_monitoring
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact Continuous Monitoring ruleset search QPS endpoint path, auth/request shape, Criteria fields, pagination/limit behavior, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent and that QPS Criteria is expected, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: QPS search limit and criteria
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_continuous_monitoring_get_ruleset
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_continuous_monitoring_get_ruleset
+    handlerName: tool_qualys_continuous_monitoring_get_ruleset
+    operationCategory: continuous_monitoring
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact Continuous Monitoring ruleset get QPS endpoint path, auth/request shape, id placement, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent and that a real discovered ruleset id is required, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: none
+    idDiscoveryRequired: true
+    safety: read_only_live
+  - toolName: qualys_continuous_monitoring_search_rules
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_continuous_monitoring_search_rules
+    handlerName: tool_qualys_continuous_monitoring_search_rules
+    operationCategory: continuous_monitoring
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact Continuous Monitoring rule search QPS endpoint path, auth/request shape, Criteria fields, pagination/limit behavior, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent and that QPS Criteria is expected, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: QPS search limit and criteria
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_continuous_monitoring_get_rule
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_continuous_monitoring_get_rule
+    handlerName: tool_qualys_continuous_monitoring_get_rule
+    operationCategory: continuous_monitoring
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact Continuous Monitoring rule get QPS endpoint path, auth/request shape, id placement, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent and that a real discovered rule id is required, but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: none
+    idDiscoveryRequired: true
+    safety: read_only_live
+  - toolName: qualys_asset_management_tag_list
+    status: included_live
+    hostedMcpName: hosted_qualys__qualys_asset_management_tag_list
+    handlerName: tool_qualys_asset_management_tag_list
+    operationCategory: asset_management_tags
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence: [POST /qps/rest/2.0/search/am/tag]
+    resultMode: inline_or_artifact
+    paginationModel: QPS search limit
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_asset_management_tag_search
+    status: included_live
+    hostedMcpName: hosted_qualys__qualys_asset_management_tag_search
+    handlerName: tool_qualys_asset_management_tag_search
+    operationCategory: asset_management_tags
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence: [POST /qps/rest/2.0/search/am/tag with Criteria]
+    resultMode: inline_or_artifact
+    paginationModel: QPS search limit and criteria
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_asset_management_tag_count
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_asset_management_tag_count
+    handlerName: tool_qualys_asset_management_tag_count
+    operationCategory: asset_management_tags
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact QPS tag count endpoint path, auth/request shape, count response structure, and no-limit behavior need official/imported/safely observed evidence."
+      - Current references prove selection intent and Criteria-only/no-limit guidance but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline
+    paginationModel: count
+    idDiscoveryRequired: false
+    safety: read_only_live
+  - toolName: qualys_asset_management_tag_get
+    status: blocked_evidence_required
+    hostedMcpName: hosted_qualys__qualys_asset_management_tag_get
+    handlerName: tool_qualys_asset_management_tag_get
+    operationCategory: asset_management_tags
+    sourceReferences: [qualys-tool-map, qualys-module-authority]
+    endpointEvidence:
+      - "EVIDENCE_REQUIRED before promotion: exact QPS tag get endpoint path, auth/request shape, id semantics, pagination/none behavior, and response structure need official/imported/safely observed evidence."
+      - Current references prove selection intent for discovered tag ids but not enough endpoint contract detail to promote a hosted runtime tool.
+    resultMode: inline_or_artifact
+    paginationModel: none
+    idDiscoveryRequired: true
+    safety: read_only_live
+  - toolName: qualys_quickref_search
+    status: included_reference
+    hostedMcpName: hosted_qualys__qualys_quickref_search
+    handlerName: tool_qualys_quickref_search
+    operationCategory: quickref_reference
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence: [local reference catalog only]
+    resultMode: inline
+    paginationModel: local limit
+    idDiscoveryRequired: false
+    safety: reference_only_no_tenant_evidence
+  - toolName: qualys_quickref_get_endpoint
+    status: included_reference
+    hostedMcpName: hosted_qualys__qualys_quickref_get_endpoint
+    handlerName: tool_qualys_quickref_get_endpoint
+    operationCategory: quickref_reference
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence: [local reference catalog only]
+    resultMode: inline
+    paginationModel: none
+    idDiscoveryRequired: false
+    safety: reference_only_no_tenant_evidence
+  - toolName: qualys_quickref_list_parameters
+    status: included_reference
+    hostedMcpName: hosted_qualys__qualys_quickref_list_parameters
+    handlerName: tool_qualys_quickref_list_parameters
+    operationCategory: quickref_reference
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence: [local reference catalog only]
+    resultMode: inline
+    paginationModel: local limit
+    idDiscoveryRequired: false
+    safety: reference_only_no_tenant_evidence
+  - toolName: qualys_quickref_list_response_fields
+    status: included_reference
+    hostedMcpName: hosted_qualys__qualys_quickref_list_response_fields
+    handlerName: tool_qualys_quickref_list_response_fields
+    operationCategory: quickref_reference
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence: [local reference catalog only]
+    resultMode: inline
+    paginationModel: local limit
+    idDiscoveryRequired: false
+    safety: reference_only_no_tenant_evidence
+  - toolName: qualys_quickref_gav_reference
+    status: included_reference
+    hostedMcpName: hosted_qualys__qualys_quickref_gav_reference
+    handlerName: tool_qualys_quickref_gav_reference
+    operationCategory: quickref_reference
+    sourceReferences: [qualys-tool-map, qualys-filter-catalog]
+    endpointEvidence: [local GAV reference catalog only]
+    resultMode: inline
+    paginationModel: local limit
+    idDiscoveryRequired: false
+    safety: reference_only_no_tenant_evidence
+  - toolName: qualys_quickref_build_request
+    status: included_reference
+    hostedMcpName: hosted_qualys__qualys_quickref_build_request
+    handlerName: tool_qualys_quickref_build_request
+    operationCategory: quickref_reference
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence: [local request drafting only]
+    resultMode: inline
+    paginationModel: none
+    idDiscoveryRequired: false
+    safety: reference_only_no_tenant_evidence
+  - toolName: qualys_quickref_validate_request
+    status: included_reference
+    hostedMcpName: hosted_qualys__qualys_quickref_validate_request
+    handlerName: tool_qualys_quickref_validate_request
+    operationCategory: quickref_reference
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence: [local request-shape validation only]
+    resultMode: inline
+    paginationModel: none
+    idDiscoveryRequired: false
+    safety: reference_only_no_tenant_evidence
+  - toolName: qualys_quickref_explain
+    status: included_reference
+    hostedMcpName: hosted_qualys__qualys_quickref_explain
+    handlerName: tool_qualys_quickref_explain
+    operationCategory: quickref_reference
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence: [local reference explanation only]
+    resultMode: inline
+    paginationModel: local limit
+    idDiscoveryRequired: false
+    safety: reference_only_no_tenant_evidence
+  - toolName: qualys_cache_status
+    status: excluded_cache_local
+    hostedMcpName: hosted_qualys__qualys_cache_status
+    handlerName: tool_qualys_cache_status
+    operationCategory: cache_local
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence: [local snapshot cache only]
+    resultMode: inline
+    paginationModel: local cache
+    idDiscoveryRequired: false
+    safety: excluded_from_live_migration
+  - toolName: qualys_cache_export_plan
+    status: excluded_cache_local
+    hostedMcpName: hosted_qualys__qualys_cache_export_plan
+    handlerName: tool_qualys_cache_export_plan
+    operationCategory: cache_local
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence: [local export plan only]
+    resultMode: inline
+    paginationModel: local cache
+    idDiscoveryRequired: false
+    safety: excluded_from_live_migration
+  - toolName: qualys_cache_export_start
+    status: excluded_cache_local
+    hostedMcpName: hosted_qualys__qualys_cache_export_start
+    handlerName: tool_qualys_cache_export_start
+    operationCategory: cache_local
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence: [explicit-cache export workflow, not live endpoint surface]
+    resultMode: cache_workspace
+    paginationModel: explicit cache export bounds
+    idDiscoveryRequired: false
+    safety: excluded_from_live_migration
+  - toolName: qualys_cache_gav_filter_tokens
+    status: excluded_cache_local
+    hostedMcpName: hosted_qualys__qualys_cache_gav_filter_tokens
+    handlerName: tool_qualys_cache_gav_filter_tokens
+    operationCategory: cache_local
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence: [local snapshot cache only]
+    resultMode: inline
+    paginationModel: local limit
+    idDiscoveryRequired: false
+    safety: excluded_from_live_migration
+  - toolName: qualys_cache_qql_fields
+    status: excluded_cache_local
+    hostedMcpName: hosted_qualys__qualys_cache_qql_fields
+    handlerName: tool_qualys_cache_qql_fields
+    operationCategory: cache_local
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence: [local snapshot cache only]
+    resultMode: inline
+    paginationModel: local limit
+    idDiscoveryRequired: false
+    safety: excluded_from_live_migration
+  - toolName: qualys_cache_gav_asset_count
+    status: excluded_cache_local
+    hostedMcpName: hosted_qualys__qualys_cache_gav_asset_count
+    handlerName: tool_qualys_cache_gav_asset_count
+    operationCategory: cache_local
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence: [local snapshot cache only]
+    resultMode: inline
+    paginationModel: local cache
+    idDiscoveryRequired: false
+    safety: excluded_from_live_migration
+  - toolName: qualys_cache_gav_asset_search
+    status: excluded_cache_local
+    hostedMcpName: hosted_qualys__qualys_cache_gav_asset_search
+    handlerName: tool_qualys_cache_gav_asset_search
+    operationCategory: cache_local
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence: [local snapshot cache only]
+    resultMode: inline
+    paginationModel: local offset and limit
+    idDiscoveryRequired: false
+    safety: excluded_from_live_migration
+  - toolName: qualys_cache_vmdr_vulnerability_search
+    status: excluded_cache_local
+    hostedMcpName: hosted_qualys__qualys_cache_vmdr_vulnerability_search
+    handlerName: tool_qualys_cache_vmdr_vulnerability_search
+    operationCategory: cache_local
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence: [local snapshot cache only]
+    resultMode: inline
+    paginationModel: local offset and limit
+    idDiscoveryRequired: false
+    safety: excluded_from_live_migration
+  - toolName: qualys_cache_vmdr_library_search
+    status: excluded_cache_local
+    hostedMcpName: hosted_qualys__qualys_cache_vmdr_library_search
+    handlerName: tool_qualys_cache_vmdr_library_search
+    operationCategory: cache_local
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence: [local snapshot cache only]
+    resultMode: inline
+    paginationModel: local offset and limit
+    idDiscoveryRequired: false
+    safety: excluded_from_live_migration
+  - toolName: qualys_cache_metric
+    status: excluded_cache_local
+    hostedMcpName: hosted_qualys__qualys_cache_metric
+    handlerName: tool_qualys_cache_metric
+    operationCategory: cache_local
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence: [local snapshot cache only]
+    resultMode: inline
+    paginationModel: local cache
+    idDiscoveryRequired: false
+    safety: excluded_from_live_migration
+  - toolName: qualys_cache_get_raw_record
+    status: excluded_cache_local
+    hostedMcpName: hosted_qualys__qualys_cache_get_raw_record
+    handlerName: tool_qualys_cache_get_raw_record
+    operationCategory: cache_local
+    sourceReferences: [qualys-tool-map]
+    endpointEvidence: [local snapshot cache only]
+    resultMode: inline
+    paginationModel: none
+    idDiscoveryRequired: true
+    safety: excluded_from_live_migration
+excludedOperations:
+  - name: qualys_vmdr_scan_launch
+    status: excluded_mutating
+    reason: scan launch is mutating and requires explicit future scope
+  - name: qualys_vmdr_scan_action
+    status: excluded_mutating
+    reason: scan action/pause/resume/delete is mutating
+  - name: qualys_vmdr_report_launch
+    status: excluded_mutating
+    reason: report launch is mutating
+  - name: qualys_vmdr_report_cancel
+    status: excluded_mutating
+    reason: report cancel/delete is mutating
+  - name: qualys_asset_management_tag_create
+    status: excluded_mutating
+    reason: tag writes are excluded from the live read-only migration
+  - name: qualys_asset_management_tag_update
+    status: excluded_mutating
+    reason: tag writes are excluded from the live read-only migration
+  - name: qualys_asset_management_tag_delete
+    status: excluded_mutating
+    reason: tag writes are excluded from the live read-only migration
+scopedOutModules:
+  - name: ETM/TruRisk
+    status: excluded_scoped_out
+  - name: TotalCloud/CloudView
+    status: excluded_scoped_out
+  - name: CDR
+    status: excluded_scoped_out
+  - name: Container Security
+    status: excluded_scoped_out
+  - name: CertView
+    status: excluded_scoped_out
+  - name: Patch Management
+    status: excluded_scoped_out

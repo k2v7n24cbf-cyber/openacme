@@ -275,6 +275,14 @@ describe("AgentManager.ensureManagedAgents", () => {
     ).toBe(true);
     const platformSkill = manager.skillRegistry.getSkill("openacme-platform");
     expect(platformSkill?.body).toContain("$hosted-integrations-development");
+    expect(platformSkill?.body).toContain("Use **Hosted Tools**");
+    expect(platformSkill?.body).toContain(
+      "internal package/API/storage/runtime layer",
+    );
+    expect(platformSkill?.body).toContain(
+      "Do not call this feature managed tools",
+    );
+    expect(platformSkill?.body).toContain("remote MCP\nservers");
     expect(platformSkill?.body).toContain(
       "Tool Developer Agent owns routine hosted integration source work",
     );

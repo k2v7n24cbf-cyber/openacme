@@ -5,11 +5,17 @@ import { z } from "zod";
 import {
   FamilyManifestSchema,
   HostedIntegrationFamilyIdSchema,
+  HostedToolContractDocumentSchema,
+  hostedToolContractToToolSpecs,
+  type HostedToolContractDocument,
   type FamilyManifest,
   type HostedIntegrationFamilyId,
   type HostedIntegrationToolName,
   type HostedIntegrationToolSpec,
 } from "./schemas.js";
+
+export const HOSTED_INTEGRATION_MANIFEST_FILE = "family.yaml";
+export const HOSTED_TOOL_CONTRACT_FILE = "tools.yaml";
 
 export interface HostedIntegrationActiveFamilySummary {
   id: HostedIntegrationFamilyId;
@@ -25,6 +31,8 @@ export type HostedIntegrationFamilySummary =
 export interface HostedIntegrationFamilyDetail {
   summary: HostedIntegrationFamilySummary;
   manifest: FamilyManifest;
+  toolContract: HostedToolContractDocument;
+  tools: HostedIntegrationToolSpec[];
 }
 
 export interface HostedIntegrationCatalogDiagnostic {
@@ -126,7 +134,11 @@ class FileHostedIntegrationCatalog implements HostedIntegrationCatalog {
     | { family: HostedIntegrationFamilyDetail }
     | { diagnostic: HostedIntegrationCatalogDiagnostic }
   > {
-    const manifestPath = path.join(this.familiesDir, familyId, "family.yaml");
+    const manifestPath = path.join(
+      this.familiesDir,
+      familyId,
+      HOSTED_INTEGRATION_MANIFEST_FILE,
+    );
     let raw: string;
     try {
       raw = await readFile(manifestPath, "utf-8");
@@ -135,7 +147,7 @@ class FileHostedIntegrationCatalog implements HostedIntegrationCatalog {
         diagnostic: {
           familyId,
           severity: "error",
-          message: `failed to read family.yaml: ${messageFromUnknown(error)}`,
+          message: `failed to read ${HOSTED_INTEGRATION_MANIFEST_FILE}: ${messageFromUnknown(error)}`,
         },
       };
     }
@@ -148,7 +160,7 @@ class FileHostedIntegrationCatalog implements HostedIntegrationCatalog {
         diagnostic: {
           familyId,
           severity: "error",
-          message: `failed to parse family.yaml: ${messageFromUnknown(error)}`,
+          message: `failed to parse ${HOSTED_INTEGRATION_MANIFEST_FILE}: ${messageFromUnknown(error)}`,
         },
       };
     }
@@ -174,25 +186,83 @@ class FileHostedIntegrationCatalog implements HostedIntegrationCatalog {
       };
     }
 
-    const family = detailFromManifest(parsedManifest.data);
+    const toolContractPath = path.join(
+      this.familiesDir,
+      familyId,
+      HOSTED_TOOL_CONTRACT_FILE,
+    );
+    let rawToolContract: string;
+    try {
+      rawToolContract = await readFile(toolContractPath, "utf-8");
+    } catch (error) {
+      return {
+        diagnostic: {
+          familyId,
+          severity: "error",
+          message: `failed to read ${HOSTED_TOOL_CONTRACT_FILE}: ${messageFromUnknown(error)}`,
+        },
+      };
+    }
+
+    let parsedToolContractYaml: unknown;
+    try {
+      parsedToolContractYaml = parseYaml(rawToolContract);
+    } catch (error) {
+      return {
+        diagnostic: {
+          familyId,
+          severity: "error",
+          message: `failed to parse ${HOSTED_TOOL_CONTRACT_FILE}: ${messageFromUnknown(error)}`,
+        },
+      };
+    }
+    const parsedToolContract =
+      HostedToolContractDocumentSchema.safeParse(parsedToolContractYaml);
+    if (!parsedToolContract.success) {
+      return {
+        diagnostic: {
+          familyId,
+          severity: "error",
+          message: z.prettifyError(parsedToolContract.error),
+        },
+      };
+    }
+    if (parsedToolContract.data.family.id !== parsedManifest.data.id) {
+      return {
+        diagnostic: {
+          familyId,
+          severity: "error",
+          message: `family id mismatch: ${HOSTED_INTEGRATION_MANIFEST_FILE} declares ${parsedManifest.data.id} but ${HOSTED_TOOL_CONTRACT_FILE} declares ${parsedToolContract.data.family.id}`,
+        },
+      };
+    }
+
+    const family = detailFromManifest(
+      parsedManifest.data,
+      parsedToolContract.data,
+    );
     return { family };
   }
 }
 
 function detailFromManifest(
   manifest: FamilyManifest,
+  toolContract: HostedToolContractDocument,
 ): HostedIntegrationFamilyDetail {
+  const tools = hostedToolContractToToolSpecs(toolContract);
   return {
     summary: {
       id: manifest.id,
       name: manifest.name,
       version: manifest.version,
-      toolNames: manifest.tools
+      toolNames: tools
         .filter(isHostedIntegrationToolVisibleForSelection)
         .map((tool) => tool.name),
       status: "active",
     },
     manifest,
+    toolContract,
+    tools,
   };
 }
 

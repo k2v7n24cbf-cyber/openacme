@@ -1,0 +1,270 @@
+version: 1
+kind: hosted_tools_vocabulary_acceptance_matrix
+purpose: >
+  Deterministic validation map for shared vocabulary, hosted_tool_help,
+  example readiness, and unguided Qualys surface changes. Use this before
+  claiming a vocabulary/help/example-readiness slice complete; do not rely on
+  chat history to remember the required bundle.
+
+rules:
+  - id: no_mock_for_live_claims
+    requirement: >
+      Mocked provider proof is acceptable for deterministic contract and
+      analyzer behavior only. Any claim that provider-live behavior or
+      unguided model usability improved requires an explicit live Qualys
+      scenario run with real credentials.
+  - id: vocabulary_source_of_truth
+    requirement: >
+      Shared provider vocabularies live in family-local references files and
+      are linked from tools.yaml openacme.parameterHelp.<path>.vocabularyRef.
+      Large provider catalogs must not be copied into MCP inputSchema enums.
+  - id: aliases_are_not_exact_values
+    requirement: >
+      Aliases are search synonyms only. Exact checks must use real provider
+      values or documented invalidAliases guidance.
+  - id: unguided_claims_need_live_artifacts
+    requirement: >
+      A change may not claim that a normal agent can use the hosted surface
+      better unless at least one checked-in unguided scenario was run live with
+      real credentials, produced a persisted pass artifact, recorded that
+      artifact under the scenario manifest's acceptedArtifacts with a matching
+      runId/path, and the analyzer report states which capabilities passed,
+      failed, or remained untested.
+  - id: provider_faults_need_fault_injection
+    requirement: >
+      Provider authentication, permission, rate-limit, timeout, or upstream
+      error recovery cannot be claimed from platform policy_denied, missing
+      tool binding, validation-only, or mocked evidence. Those scenarios remain
+      planned until a bounded provider fault-injection or real upstream failure
+      artifact proves the provider-facing behavior.
+  - id: live_artifacts_are_evidence_records
+    requirement: >
+      A live artifact used as acceptance evidence must include the scenario id,
+      redacted bounded messageHistory transcript evidence, enabled hosted tool
+      surface, disabled remote MCP servers, hosted tool calls, analyzer result,
+      redacted run ids or artifact refs, and secret-scan pass status.
+
+areas:
+  - id: contract_shape
+    when_changed:
+      - packages/hosted-integrations/src/schemas.ts
+      - packages/hosted-integrations/src/validation.ts
+      - hosted family tools.yaml schema/help metadata
+      - hosted family references/*
+    must_prove:
+      - vocabularyRef is accepted under OpenAcme parameter help metadata
+      - missing, invalid, mismatched, or cross-family vocabulary refs fail
+      - family.yaml, tools.yaml, examples.yaml, and package imports reject
+        malformed YAML and duplicate YAML keys before promotion
+      - complex filter DSLs require nested catalog help in blocking mode
+      - generic complex request bodies do not require fake vocabulary files
+      - shared vocabulary entries are not duplicated into MCP inputSchema enum
+    commands:
+      - pnpm --filter @openacme/hosted-integrations test -- schemas.test.ts validation.test.ts packages.test.ts
+      - pnpm --filter @openacme/hosted-integrations check-types
+      - pnpm --filter @openacme/hosted-integrations build
+
+  - id: help_projection
+    when_changed:
+      - packages/hosted-integrations/src/help.ts
+      - packages/tools/src/builtins/hosted-integration-help.ts
+      - hosted family tools.yaml parameterHelp
+      - hosted family references/*
+    must_prove:
+      - null and omitted parameters return documented parameter help
+      - full and summary detail resolve from tools.yaml
+      - vocabulary metadata, entry counts, and invalid-alias counts are exposed
+      - query searches values, aliases, descriptions, and source labels
+      - exact invalid aliases return corrective guidance
+      - object-level lookup infers only when exactly one nested vocabulary exists
+      - ambiguous lookup returns candidate_parameter_paths and does not guess
+      - output is bounded, truncated when needed, and path/secret safe
+      - model-facing support-tool wording teaches precise retry after ambiguity
+    commands:
+      - pnpm --filter @openacme/hosted-integrations test -- help.test.ts integration-hub-replacement.test.ts
+      - pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts
+      - pnpm --filter @openacme/hosted-integrations check-types
+      - pnpm --filter @openacme/tools check-types
+
+  - id: current_qualys_vocabulary
+    when_changed:
+      - packages/hosted-integrations/test-support/integration-hub/qualys-source.ts
+      - docs/hosted-integrations-qualys-help-coverage.yaml
+      - docs/hosted-integrations-qualys-live-migration-inventory.yaml
+      - docs/hosted-tools-live-evaluation-scenarios.yaml
+      - Qualys hosted family package source files
+    must_prove:
+      - current GAV and Cloud Agent tools share references/gav-filter-fields.json
+      - required values include asset.name, asset.trackingMethod,
+        qualys.agent.lastCheckedInDate, operatingSystem.category1, and
+        operatingSystem.category2
+      - invalid aliases include assetName, asset_last_updated, and
+        agent.lastCheckedIn with corrective guidance
+      - examples use valid provider field values
+      - locally inspectable invalid aliases fail before provider calls
+      - help projection hides raw reference file paths
+    commands:
+      - pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts integration-hub-replacement.test.ts
+      - pnpm --filter @openacme/hosted-integrations check-types
+
+  - id: example_readiness
+    when_changed:
+      - packages/hosted-integrations/src/schemas.ts
+      - packages/hosted-integrations/src/examples.ts
+      - packages/tools/src/builtins/hosted-integration-management.ts
+      - packages/server/src/routes/hosted-integrations.ts
+      - packages/server/src/runtime.ts
+      - apps/web/app/lib/hosted-integrations-admin.ts
+      - hosted family examples.yaml
+      - hosted family tools.yaml examples
+    must_prove:
+      - discovery_required examples are contract/documentation evidence, not
+        ready-to-send invocation payloads
+      - discovery_required examples require expected.discovery_tool and a
+        requires_discovered_* condition
+      - normal runnable example categories still validate args against the MCP
+        input schema
+      - product HTTP route example execution returns example_not_runnable for
+        discovery_required
+      - hosted_tool_example_run returns example_not_runnable for
+        discovery_required
+      - UI action state disables run targets for discovery_required while
+        keeping save/edit available
+      - Tool Developer skill and architecture docs tell agents not to run
+        discovery_required examples directly
+      - provider placeholder ids or refs are not used to satisfy required input
+        schemas for discovery-bound examples
+      - downstream route/tool tests run only after rebuilding hosted-integrations
+        and tools packages
+    commands:
+      - pnpm --filter @openacme/hosted-integrations test -- examples.test.ts qualys-live-inventory.test.ts
+      - pnpm --dir apps/web test hosted-integrations-admin.test.ts
+      - pnpm --filter @openacme/server test -- hosted-integrations-legacy-surface.test.ts
+      - pnpm --filter @openacme/hosted-integrations build
+      - pnpm --filter @openacme/tools build
+      - pnpm --filter @openacme/server test -- hosted-integrations-routes.test.ts tools-hosted-integrations.test.ts
+      - pnpm --filter @openacme/tools test -- hosted-integration-management.test.ts
+      - pnpm --filter @openacme/hosted-integrations check-types
+      - pnpm --filter @openacme/tools check-types
+      - pnpm --filter @openacme/server check-types
+
+  - id: unguided_agent_evaluation
+    when_changed:
+      - docs/hosted-tools-live-evaluation-scenarios.yaml
+      - packages/server/test-support/hosted-tools/live-acceptance.ts
+      - packages/server/scripts/hosted-tools-live-acceptance.ts
+    must_prove:
+      - unguided prompts do not name hosted_tool_help, hosted tool names,
+        remote MCP tools, legacy managed_* tool names, or exact JSON argument
+        shapes
+      - hosted-only scenarios disable legacy integration-hub MCP
+      - required help/vocabulary evidence appears before hosted business calls
+      - help effectiveness is proven by carrying vocabulary-derived or
+        parameter-derived evidence from the help request into the subsequent
+        hosted business-call arguments, not merely by counting a help call
+      - agent-discovery claims are backed by live artifacts, not by prompted
+        operator tips or deterministic analyzer fixtures alone
+      - prompt-authored timestamp cutoffs appear in hosted argument evidence
+      - retry-after-help behavior is accepted when the later hosted call succeeds
+      - nested filter values remain present in hosted argument summaries used
+        by deterministic analyzers
+      - selected unguided-only reports do not emit unrelated missing outcomes
+        from prompt-guided lifecycle scenarios
+      - hosted run-id lookup diagnostics are suppressed when hosted tool-call
+        output already carries run ids and generation ids
+      - EVIDENCE_REQUIRED is required for unevidenced provider semantics
+      - non-call scenarios require positive outcome text evidence through
+        analyzer.requiredOutcomeFragments, not only generic outcome regexes or
+        forbidden-fragment absence
+      - hosted-tool-not-enabled recovery is classified separately from provider
+        auth/rate-limit recovery
+      - provider auth/rate-limit/upstream recovery scenarios stay planned until
+        backed by bounded fault-injection or real provider-failure artifacts
+      - the final report classifies each scenario capability as passed, failed,
+        or untested so failures are not hidden behind aggregate success wording
+      - live artifacts used for acceptance include scenario id, redacted bounded
+        messageHistory, enabled tool surface, disabled MCP servers, hosted
+        calls, analyzer result, redacted run/artifact refs, and secret-scan
+        status
+      - acceptedArtifacts claims can be checked against parsed live artifact
+        evidence for run id, pass status, secret-scan pass, scenario id,
+        expectedOutcome evidence, disabled MCP servers, expected hosted tool
+        calls, and non-call required/forbidden outcome text evidence
+      - acceptedArtifacts paths stay under
+        ~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance
+        as direct <runId>.json files and cannot point at arbitrary local files
+        or nested paths
+      - planned scenarios do not carry acceptedArtifacts; accepted evidence is
+        recorded only when the scenario is promoted to active
+      - active scenarios without acceptedArtifacts fail closeout audit even
+        outside the current Qualys-specific manifest guards
+      - acceptedArtifacts evidence summaries stay concise and do not become
+        embedded logs, multi-line notes, or long transcripts
+      - acceptedArtifacts audits reuse the same consumer analyzer semantics
+        for help, argument, result, forbidden-tool, and outcome checks
+      - acceptedArtifacts closeout audit can run without starting the live
+        server or making model/provider calls
+      - acceptedArtifacts closeout audit is active-scenario scoped; explicit
+        planned scenario ids fail instead of producing empty or premature
+        acceptance
+      - acceptedArtifacts closeout audit emits the same JSON result envelope
+        for pass and fail paths so operator tooling can parse diagnostics
+      - persisted artifacts and reports are redacted
+    commands:
+      - pnpm --filter @openacme/server test -- hosted-tools-live-acceptance.test.ts
+      - pnpm --filter @openacme/server check-types
+    live_commands_when_claiming_model_usability:
+      - OPENACME_DATA_DIR="$HOME/.openamce-hosted-integrations-test-env" OPENACME_E2E_PORT=3467 OPENACME_LIVE_HOSTED_TOOLS_SCENARIO_IDS=<scenario_ids> pnpm --filter @openacme/server dogfood:hosted-tools:live:unguided-consumer
+      - OPENACME_LIVE_HOSTED_TOOLS_SCENARIO_IDS=<scenario_ids> pnpm --filter @openacme/server dogfood:hosted-tools:accepted-artifacts:audit
+
+  - id: tool_developer_guidance
+    when_changed:
+      - packages/skills/builtin/hosted-integrations-development/SKILL.md
+      - packages/agent-catalog/templates/tool-developer/AGENT.md
+      - packages/server/test-support/hosted-tools/unguided-management.ts
+    must_prove:
+      - fresh sessions learn tools.yaml source-of-truth and family-local refs
+      - skill points to this acceptance matrix for vocabulary/help/example-readiness changes
+      - >
+        skill and template teach that unguided model-usability claims require
+        scenario manifest acceptedArtifacts with matching runId/path,
+        status: pass, secretScan: pass, and concise evidence
+      - platform-admin/Acme seeded skills preserve Hosted Tools product wording
+        and route lifecycle work to hosted-integrations-development without
+        duplicating lifecycle rules
+      - prompt lint rejects invention of provider fields, schemas, pagination,
+        destructive side effects, and confirmation behavior
+      - import/export remains the package movement path
+    commands:
+      - pnpm --filter @openacme/server test -- agent-catalog.test.ts hosted-integrations-legacy-surface.test.ts hosted-tools-unguided-management.test.ts
+      - pnpm --filter @openacme/server check-types
+
+complete_bundle:
+  deterministic_commands:
+    - pnpm --filter @openacme/hosted-integrations test -- schemas.test.ts validation.test.ts help.test.ts packages.test.ts integration-hub-replacement.test.ts qualys-live-inventory.test.ts
+    - pnpm --filter @openacme/hosted-integrations test -- examples.test.ts qualys-live-inventory.test.ts
+    - pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts hosted-integrations.test.ts hosted-integration-management.test.ts
+    - pnpm --dir apps/web test hosted-integrations-admin.test.ts
+    - pnpm --filter @openacme/server test -- hosted-tools-live-acceptance.test.ts hosted-tools-unguided-management.test.ts hosted-integrations-legacy-surface.test.ts agent-catalog.test.ts
+    - pnpm --filter @openacme/hosted-integrations check-types
+    - pnpm --filter @openacme/hosted-integrations build
+    - pnpm --filter @openacme/tools build
+    - pnpm --filter @openacme/server test -- hosted-integrations-routes.test.ts tools-hosted-integrations.test.ts
+    - pnpm --filter @openacme/tools check-types
+    - pnpm --filter @openacme/server check-types
+    - pnpm check-types
+    - git diff --check
+  live_optional_until_claimed:
+    requirement: >
+      Run only when the change claims real provider behavior or unguided model
+      usability. Use real Qualys credentials from the test environment; do not
+      mock live proof. The resulting artifact must be recorded under the
+      scenario manifest's acceptedArtifacts with matching runId/path,
+      status: pass, secretScan: pass, and concise evidence; the implementation
+      plan evidence must also record the artifact path, scenario ids, and
+      capability-level result classification. Before closing an accepted
+      artifact-backed model-usability claim, run
+      `pnpm --filter @openacme/server dogfood:hosted-tools:accepted-artifacts:audit`
+      with matching `OPENACME_LIVE_HOSTED_TOOLS_SCENARIO_IDS` so the current
+      harness parses and revalidates the manifest-owned artifacts without
+      starting a live server or making model/provider calls.

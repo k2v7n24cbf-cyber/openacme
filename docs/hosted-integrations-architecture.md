@@ -31,10 +31,15 @@ operator should be able to inspect families, understand tool mappings, edit
 source, validate, run examples/debug calls, compare versions, approve, promote,
 rollback, and repair without asking an agent to perform the action.
 
-## Vocabulary
+## Vocabulary And Naming Boundary
 
-- **Hosted integration**: A tool family hosted by OpenAcme and developed through
-  the hosted integrations lifecycle.
+- **Hosted Tools**: The product and human-facing feature name for OpenAcme-hosted
+  tool families and their callable tools. Use this wording in navigation,
+  Agent Settings grouping, operator UI labels, and user-facing docs.
+- **Hosted integration**: The internal package/API/storage/runtime layer that
+  implements Hosted Tools. Use this wording for TypeScript symbols, package
+  boundaries, database tables, source lifecycle internals, and low-level API
+  docs when it prevents ambiguity.
 - **Tool family**: The ownership and reload unit for related tools, such as
   `qualys`, `splunk`, `msgraph`, or `mde`.
 - **Tool**: A callable operation inside a tool family, such as
@@ -61,9 +66,11 @@ rollback, and repair without asking an agent to perform the action.
 - **Failure bucket**: Deduplicated error group assigned to the Tool Developer
   Agent for repair.
 
-Use `hosted integration` consistently for this layer. Use `built-in tool` only
-for existing OpenAcme tools in `packages/tools`. Use `MCP tool` only for tools
-discovered from configured MCP servers.
+Do not use `managed tool` for this feature. It is too close to remote MCP and
+agent management terminology and makes the namespace boundary harder to reason
+about. Use `built-in tool` only for existing OpenAcme tools in
+`packages/tools`. Use `MCP tool` only for tools discovered from configured MCP
+servers.
 
 ## Package Boundary
 
@@ -233,9 +240,9 @@ MCP tools:
 Built-in: filesystem
 Built-in: terminal
 MCP: github
-Hosted Integrations: qualys
-Hosted Integrations: splunk
-Hosted Integrations: msgraph
+Hosted Tools: qualys
+Hosted Tools: splunk
+Hosted Tools: msgraph
 ```
 
 Normal agents receive only invocation tools selected in their `agent.tools`
@@ -1133,46 +1140,159 @@ The response is normalized across all hosted tools:
 }
 ```
 
-Help content is source-controlled with the hosted family and promoted into each
-generation. It may live inline in `family.yaml` for small tools or in separate
-family files for larger domains:
+Hosted tool surface content is source-controlled with the hosted family and
+promoted into each generation. `tools.yaml` is the canonical source of truth for
+the public hosted MCP tool surface. `family.yaml` owns family identity, runtime,
+hooks, and config requirements only; it must not own active public tool
+definitions.
 
 ```text
 families/
   qualys/
     family.yaml
+    tools.yaml
     help/
       qualys_cloud_agent_hostasset_count.md
       gav-filter-body.md
-      gav-filter-fields.json
+    references/
+      gav-filter-fields.yaml
 ```
 
-The manifest owns the stable help contract:
+`tools.yaml` uses the official MCP Tool shape plus an internal `openacme`
+extension. The MCP section is the model-facing contract; the OpenAcme section is
+the harness-facing mapping, help, validation, safety, and lifecycle metadata:
 
 ```yaml
+kind: openacme.hostedToolFamily
+version: 1
+family:
+  id: qualys
 tools:
-  - name: qualys_cloud_agent_hostasset_count
-    description: Short selection-oriented description.
-    inputSchema: {}
-    help:
-      summary: One or two sentence calling summary.
-      full: help/qualys_cloud_agent_hostasset_count.md
-      noExampleJustification: Optional reason when examples would be misleading.
-      parameters:
+  - mcp:
+      name: hosted_qualys__qualys_cloud_agent_hostasset_count
+      title: Count Qualys Cloud Agent Host Assets
+      description: Short selection-oriented description.
+      inputSchema: {}
+      outputSchema: {}
+      annotations:
+        readOnlyHint: true
+        destructiveHint: false
+        idempotentHint: true
+        openWorldHint: true
+    openacme:
+      toolName: qualys_cloud_agent_hostasset_count
+      function: tool_qualys_cloud_agent_hostasset_count
+      lifecycle: active
+      classification:
+        operation: read
+        freshness: live
+        idempotency: idempotent
+        execution: sync
+        approval: none
+      selectWhen:
+        - Use when counting Qualys Cloud Agent host assets.
+      doNotSelectWhen:
+        - Do not use when asset detail rows are required.
+      prerequisites: []
+      parameterHelp:
         filter_body:
           summary: Native GAV FilterRequest JSON body.
           full: help/gav-filter-body.md
         filter_body.filters.field:
           summary: Native Qualys GAV filter token, not a response field.
-          full: help/gav-filter-fields.json
+          vocabularyRef: references/gav-filter-fields.yaml
+      examples: []
+      noExampleJustification: Optional reason when examples would be misleading.
+      errors: []
 ```
 
 For large target-system vocabularies, help should not bloat the model-facing
-tool description. The help metadata may point to a family-local reference file
-or a family-local reference tool. Qualys GAV filter fields are the first case:
-the tool description stays short, `hosted_tool_help` explains the filter-body
-contract, and a Qualys quickref/reference tool can perform domain lookup when
-the agent needs exact field discovery.
+tool description or duplicate enum lists in every tool `inputSchema`. The help
+metadata should point to a family-local shared vocabulary reference file. Qualys
+GAV filter fields are the first case: the tool description stays short,
+`hosted_tool_help` explains the filter-body contract, and the same
+`references/gav-filter-fields.yaml` or
+`references/gav-filter-fields.json` vocabulary can be reused by GAV count, GAV
+search, Cloud Agent count, and Cloud Agent search tools.
+
+Shared parameter vocabularies are generation-pinned family artifacts. They live
+under `references/` and are promoted, exported, imported, and validated with the
+rest of the family source. They are not platform-wide enums and are not copied
+into each tool contract:
+
+```yaml
+kind: openacme.hostedParameterVocabulary
+version: 1
+id: qualys.gav.filterFields
+familyId: qualys
+parameterPath: filter_body.filters.field
+entries:
+  - value: asset.name
+    summary: Asset name filter token.
+    valueType: string
+    operators: [EQUALS, CONTAINS]
+    examples:
+      - field: asset.name
+        operator: EQUALS
+        value: web-prod-01
+  - value: qualys.agent.lastCheckedInDate
+    summary: Cloud Agent last check-in timestamp.
+    valueType: datetime
+    operators: [GREATER, LESSER]
+invalidAliases:
+  - value: assetName
+    reason: Response projection field; use asset.name as a filter token.
+  - value: asset_last_updated
+    reason: Hosted top-level request parameter; do not use as a filter field.
+```
+
+`hosted_tool_help` remains the only normal-agent vocabulary discovery surface.
+It extends parameter-specific help requests with optional `query`, `value`, and
+`limit` fields:
+
+```json
+{
+  "tool_name": "hosted_qualys__qualys_cloud_agent_hostasset_count",
+  "tool_detail": "none",
+  "parameters": [
+    {
+      "name": "filter_body.filters.field",
+      "detail": "summary",
+      "query": "last check-in",
+      "limit": 10
+    }
+  ]
+}
+```
+
+`name` alone returns parameter help plus vocabulary metadata. `query` searches
+the referenced vocabulary including aliases as search synonyms. `value`
+performs exact lookup against real provider values only; aliases are not
+accepted as exact values. If an agent supplies both `query` and `value`,
+`hosted_tool_help` treats the request as a search, reports the supplied value as
+ignored guidance, and returns a warning instead of failing the help call. Exact
+lookup checks valid entries first, then `invalidAliases[]` so known wrong
+provider terms can return corrective guidance. A lookup against a parameter
+with no vocabulary reference returns structured `no_vocabulary` metadata.
+Large result sets are truncated with a clear indicator and should be narrowed
+by query. Unknown exact values return structured `not_found` guidance rather
+than encouraging the agent to guess.
+
+When a request asks vocabulary help for an object parameter such as
+`filter_body`, and that parameter has exactly one nested vocabulary-backed
+field such as `filter_body.filters.field`, help may infer that nested
+vocabulary and return a warning naming the more precise parameter path. This
+keeps agent-facing help tolerant without weakening business-tool input
+validation.
+
+For migrated Qualys hosted tools, external skills such as `qualys-toolkit` are
+allowed as migration evidence and operator/developer references, but they are
+not the production source of truth for tool use. The promoted `tools.yaml`
+contract must carry the tool selection guidance, parameter options, examples,
+caveats, pagination behavior, and error guidance needed by a normal tool-using
+agent. If the original skill or reference files contain a material rule for a
+migrated tool, that rule must either appear in the hosted contract/help surface
+or be explicitly marked not applicable by the Qualys migration coverage gate.
 
 Access policy applies to help:
 
@@ -1190,7 +1310,7 @@ Access policy applies to help:
 Promotion validation should require enough help for active hosted tools:
 
 - every active tool has a short description for selection
-- every active tool has a `help.summary`
+- every active tool has a concise MCP description and selection guidance
 - every public input parameter has at least a short parameter summary
 - complex parameters, filter DSLs, enum-like catalogs, pagination, result-file
   behavior, cache semantics, and destructive risk require full parameter help
@@ -1473,6 +1593,106 @@ source through an atomic source update under the family edit lock. The promoted
 generation records the resulting source revision. The next draft for that
 family starts from this updated source revision, not from the pre-promotion
 source.
+
+## Package Import And Export
+
+Hosted family import/export is a source lifecycle capability, not a runtime
+shortcut. It exists so complete family source can move between repository or
+operator workspaces and the OpenAcme platform without forcing an agent to replay
+dozens of individual draft-file patches. It also supports the human-native
+principle: when a human edits a family directly in the platform UI, that edited
+state must be exportable for review, reconciliation, archive, or reuse outside
+the platform.
+
+A hosted family package is a versioned text-only file bundle containing
+canonical family source files such as `family.yaml`, `tools.yaml`, Python
+runtime files, `help/**`, `provider/**`, and optional `examples.yaml`. The
+package format does not create a second source-of-truth model; the files inside
+the package are the same files stored in drafts, promoted into generations, and
+validated by the hosted integration validator. Binary payloads and archive
+formats are out of scope for the v1 package format.
+
+The v1 package document uses this shape:
+
+```yaml
+kind: openacme.hostedFamilyPackage
+version: 1
+metadata:
+  familyId: qualys
+  sourceRevisionId: optional-source-revision
+  sourceGenerationId: optional-generation
+  sourceDraftId: optional-draft
+  exportedBy: optional-actor
+  exportedAt: optional-iso-timestamp
+  digest: optional-sha256
+files:
+  - path: family.yaml
+    content: |
+      id: qualys
+      name: Qualys
+      version: 1
+      runtime: {}
+  - path: tools.yaml
+    content: |
+      kind: openacme.hostedToolFamily
+      version: 1
+      family:
+        id: qualys
+      tools: []
+```
+
+The digest is deterministic over normalized file paths and content. Metadata is
+provenance only; validation of the contained canonical files remains the
+authority.
+
+Import behavior:
+
+- import may create a proposed family and initial draft, or update an existing
+  family draft under a caller-owned edit lock
+- create-mode import derives the proposed family summary from package
+  `family.yaml` and `tools.yaml`; it must not require the old single-tool
+  scaffold parameter or create scaffold source that is immediately patched over
+- update-mode import may target a family that exists as canonical source or as
+  an active promoted generation created through package import; it still
+  requires the active caller-owned edit lock
+- import creates a package-backed draft from the exact package file set, runs
+  validation, and returns diagnostics plus the next required lifecycle action
+- import is not an overlay operation; omitted package files must not survive in
+  the imported draft
+- import must not promote directly, bypass validation, bypass examples, bypass
+  readiness, bypass destructive approval, or grant agent access
+- import must reject package paths that are absolute, escape the package root,
+  collide after normalization, or target unsupported runtime-owned files
+- import must keep integration-hub artifacts as evidence/test input only; it
+  must not turn legacy integration-hub source into runtime imports
+
+Export behavior:
+
+- export may target the active generation, a specific generation, a draft, or a
+  source revision
+- export returns a sanitized hosted family package inline, as a downloadable
+  HTTP JSON response, or through the existing management-tool spill mechanism
+  when the model-facing response would be too large
+- export includes canonical source files, referenced help/provider artifacts,
+  package metadata, content digest, and optionally examples
+- export may include environment config requirements and non-secret metadata,
+  but never raw secret values or resolved credentials
+- export does not include execution logs, transient run directories, failure
+  bucket internals, or raw provider responses by default
+
+The control plane exposes import/export through
+`POST /api/hosted-integrations/packages/validate`,
+`POST /api/hosted-integrations/packages/import`,
+`POST /api/hosted-integrations/packages/export`, and matching Tool Developer
+management tools `hosted_tool_family_import` and
+`hosted_tool_family_export`. The UI exposes the same actions at the family
+level. The validate route is read-only and returns package diagnostics without
+creating a draft. Import update is disabled until the current human owns the
+family edit lock, and import remains disabled until package preview is
+structurally readable and backend validation has passed. Export can target the
+active generation, pending draft changes, or current source. Raw package JSON
+and raw API result payloads stay behind explicit disclosure/copy actions so the
+default screen remains human-readable.
 
 ## Persistence Contract
 
@@ -2358,12 +2578,16 @@ smoke
 live_safe
 regression
 mock_only
+discovery_required
 destructive_requires_human
 ```
 
-Promotion requires the relevant examples to pass. If a production failure is
-fixed, the failing repro becomes a regression example before the failure bucket
-is closed.
+Promotion requires the relevant runnable examples to pass. If a production
+failure is fixed, the failing repro becomes a regression example before the
+failure bucket is closed.
+`discovery_required` examples document a prerequisite lookup or id/ref
+discovery flow and are not ready-to-send invocation payloads; they are reviewed
+as contract evidence and are not executed directly.
 
 The Tool Developer Agent may choose the initial example set. If the expected
 coverage is ambiguous, it should ask one focused question.

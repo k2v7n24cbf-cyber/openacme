@@ -88,6 +88,83 @@ describe("hosted tool help", () => {
     expect(calls[0]?.params).not.toHaveProperty("parameters", null);
   });
 
+  it("accepts vocabulary lookup fields for parameter-specific help", async () => {
+    const calls: HostedToolHelpRequest[] = [];
+    bindHostedToolHelp({
+      invoke: async (request) => {
+        calls.push(request);
+        return { ok: true };
+      },
+    });
+
+    await expect(
+      runHelpTool(
+        {
+          tool_name: "hosted_qualys__qualys_cloud_agent_hostasset_count",
+          parameters: [
+            {
+              name: "filter_body.filters.field",
+              query: "last check-in",
+              limit: 5,
+            },
+          ],
+        },
+        "analyst",
+      ),
+    ).resolves.toEqual({ ok: true });
+
+    expect(calls[0]?.params).toMatchObject({
+      tool_name: "hosted_qualys__qualys_cloud_agent_hostasset_count",
+      tool_detail: "summary",
+      include_examples: false,
+      parameters: [
+        {
+          name: "filter_body.filters.field",
+          detail: "summary",
+          include_examples: false,
+          query: "last check-in",
+          limit: 5,
+        },
+      ],
+    });
+  });
+
+  it("accepts mixed vocabulary query and exact value so help can return guidance", async () => {
+    const calls: HostedToolHelpRequest[] = [];
+    bindHostedToolHelp({
+      invoke: async (request) => {
+        calls.push(request);
+        return { ok: true };
+      },
+    });
+
+    await expect(
+      runHelpTool(
+        {
+          tool_name: "hosted_qualys__qualys_cloud_agent_hostasset_count",
+          parameters: [
+            {
+              name: "filter_body.filters.field",
+              query: "asset",
+              value: "asset.name",
+            },
+          ],
+        },
+        "analyst",
+      ),
+    ).resolves.toEqual({ ok: true });
+    expect(calls[0]?.params.parameters?.[0]).toMatchObject({
+      query: "asset",
+      value: "asset.name",
+    });
+  });
+
+  it("teaches ambiguous vocabulary recovery through the model-facing schema", () => {
+    const entry = registry.get(HOSTED_TOOL_HELP_TOOL_NAME);
+    expect(entry?.description).toContain("vocabulary lookup is ambiguous");
+    expect(entry?.description).toContain("candidate parameter path");
+  });
+
   it("requires active agent context", async () => {
     bindHostedToolHelp({
       invoke: async () => ({ ok: true }),
@@ -107,7 +184,10 @@ describe("hosted tool help", () => {
     });
 
     await expect(
-      runHelpTool({ tool_name: "mcp_integration-hub__qualys_count_assets" }, "analyst"),
+      runHelpTool(
+        { tool_name: "mcp_integration-hub__qualys_count_assets" },
+        "analyst",
+      ),
     ).rejects.toThrow(/hosted tool name/);
   });
 });

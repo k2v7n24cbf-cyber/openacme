@@ -8,6 +8,7 @@ import {
   buildHostedIntegrationExecutionLogActionState,
   buildHostedIntegrationExecutionLogRows,
   buildHostedIntegrationDraftFileActionState,
+  buildHostedIntegrationPackageActionState,
   hostedIntegrationDraftFileActionAccessibleLabels,
   hostedIntegrationEditorModeLabel,
   hostedIntegrationEditorSectionAccessibleLabel,
@@ -20,6 +21,7 @@ import {
   hostedIntegrationExampleSelectorAccessibleLabel,
   buildHostedIntegrationFailureBucketActionState,
   buildHostedIntegrationFailureSummaryState,
+  buildHostedIntegrationPackagePreviewState,
   buildHostedIntegrationPublishActionState,
   buildHostedIntegrationPublishViewState,
   buildHostedIntegrationToolMappings,
@@ -49,6 +51,7 @@ import {
   hostedIntegrationFailureBucketHitLabel,
   hostedIntegrationHandlerName,
   hostedIntegrationLogScopeAccessibleLabel,
+  hostedIntegrationPackageActionAccessibleLabels,
   hostedIntegrationPublishAccessibleLabels,
   hostedIntegrationRefreshActionAccessibleLabel,
   hostedIntegrationRefreshLogsAccessibleLabel,
@@ -2281,6 +2284,187 @@ describe("hosted integrations admin view model", () => {
     ).toBe("Refresh logs for family selected family");
   });
 
+  it("exposes package import and export actions only for valid lifecycle targets", () => {
+    expect(
+      buildHostedIntegrationPackageActionState({
+        canManage: true,
+        familyId: "qualys",
+        activeGenerationId: "gen_1",
+        draftId: null,
+        lock: null,
+        actorId: "web-settings",
+        busy: false,
+      }),
+    ).toMatchObject({
+      canImportCreate: true,
+      canImportUpdate: false,
+      canExportActiveGeneration: true,
+      canExportDraft: false,
+      canExportCurrentSource: true,
+      updateBlockedReason: "Lock for editing before importing over this family.",
+    });
+
+    expect(
+      buildHostedIntegrationPackageActionState({
+        canManage: true,
+        familyId: "qualys",
+        activeGenerationId: "gen_1",
+        draftId: "draft_1",
+        lock: {
+          id: "lock_1",
+          familyId: "qualys",
+          lockedBy: "web-settings",
+          expiresAt: "2026-08-17T00:30:00.000Z",
+          draftId: "draft_1",
+        },
+        actorId: "web-settings",
+        busy: false,
+      }),
+    ).toMatchObject({
+      importUpdateTarget: {
+        kind: "hosted_package_import_update",
+        id: "qualys:draft_1",
+      },
+      exportDraftTarget: {
+        kind: "hosted_package_export_draft",
+        id: "draft_1",
+      },
+      canImportCreate: true,
+      canImportUpdate: true,
+      canExportActiveGeneration: true,
+      canExportDraft: true,
+      canExportCurrentSource: true,
+      updateBlockedReason: null,
+    });
+
+    expect(
+      buildHostedIntegrationPackageActionState({
+        canManage: true,
+        familyId: "qualys",
+        activeGenerationId: "gen_1",
+        draftId: "draft_1",
+        lock: {
+          id: "lock_1",
+          familyId: "qualys",
+          lockedBy: "agent:tool-developer",
+          expiresAt: "2026-08-17T00:30:00.000Z",
+          draftId: "draft_1",
+        },
+        actorId: "web-settings",
+        busy: false,
+      }),
+    ).toMatchObject({
+      canImportUpdate: false,
+      canExportDraft: false,
+      updateBlockedReason: "Unlock is held by another editor.",
+    });
+  });
+
+  it("labels package actions with a concrete family target", () => {
+    expect(hostedIntegrationPackageActionAccessibleLabels("Qualys")).toEqual({
+      openPanel: "Show package import and export for Qualys",
+      closePanel: "Hide package import and export for Qualys",
+      importCreate: "Import package as a new hosted tool family",
+      importUpdate: "Import package into Qualys pending changes",
+      exportActiveGeneration: "Export current version package for Qualys",
+      exportDraft: "Export pending changes package for Qualys",
+      exportCurrentSource: "Export source package for Qualys",
+      copyExport: "Copy exported package for Qualys",
+      importPayload: "Hosted family package JSON to import",
+      exportPayload: "Exported hosted family package JSON for Qualys",
+    });
+  });
+
+  it("previews hosted package import contents before creating or updating a draft", () => {
+    const preview = buildHostedIntegrationPackagePreviewState({
+      mode: "update",
+      currentFilePaths: ["family.yaml", "tools.yaml", "old.py"],
+      packageJson: JSON.stringify({
+        kind: "openacme.hostedFamilyPackage",
+        version: 1,
+        metadata: { familyId: "qualys" },
+        files: [
+          {
+            path: "family.yaml",
+            content: "id: qualys\nname: Qualys\nversion: 1\nruntime:\n  entrypoint: qualys.py\n",
+          },
+          {
+            path: "tools.yaml",
+            content: [
+              "kind: openacme.hostedToolFamily",
+              "version: 1",
+              "family:",
+              "  id: qualys",
+              "tools:",
+              "  - mcp:",
+              "      name: hosted_qualys__qualys_count_assets",
+              "      title: Count assets",
+              "      description: Count Qualys assets.",
+              "      inputSchema: { type: object, additionalProperties: false }",
+              "      outputSchema: { type: object, additionalProperties: true }",
+              "      annotations: { readOnlyHint: true }",
+              "    openacme:",
+              "      toolName: qualys_count_assets",
+              "      lifecycle: active",
+              "      classification:",
+              "        operation: read",
+              "      fullHelp: help/count.md",
+              "      providerRef: { path: provider/qualys.yaml }",
+              "      parameterHelp:",
+              "        query:",
+              "          full: help/query.md",
+              "  - mcp:",
+              "      name: hosted_qualys__qualys_delete_asset",
+              "      title: Delete asset",
+              "      description: Delete a Qualys asset.",
+              "      inputSchema: { type: object, additionalProperties: false }",
+              "      outputSchema: { type: object, additionalProperties: true }",
+              "      annotations: { destructiveHint: true }",
+              "    openacme:",
+              "      toolName: qualys_delete_asset",
+              "      lifecycle: active",
+              "      classification:",
+              "        operation: destructive",
+            ].join("\n"),
+          },
+          {
+            path: "examples.yaml",
+            content: "examples:\n  - id: smoke\n",
+          },
+          { path: "qualys.py", content: "def tool_qualys_count_assets(args, ctx): pass\n" },
+        ],
+      }),
+    });
+
+    expect(preview).toMatchObject({
+      status: "ready",
+      modeLabel: "Update",
+      familyId: "qualys",
+      familyName: "Qualys",
+      toolNames: ["qualys_count_assets", "qualys_delete_asset"],
+      fileCount: 4,
+      addedFileCount: 2,
+      retainedFileCount: 2,
+      removedFileCount: 1,
+      exampleCount: 1,
+      providerRefCount: 1,
+      helpRefCount: 2,
+      destructiveToolNames: ["qualys_delete_asset"],
+    });
+  });
+
+  it("marks invalid hosted package preview payloads without throwing", () => {
+    expect(
+      buildHostedIntegrationPackagePreviewState({
+        mode: "create",
+        packageJson: "{",
+      }),
+    ).toMatchObject({
+      status: "invalid",
+      modeLabel: "Create",
+    });
+  });
+
   it("shows example save and run actions only for an editable draft target", () => {
     expect(
       buildHostedIntegrationExampleActionState({
@@ -2347,6 +2531,25 @@ describe("hosted integrations admin view model", () => {
       },
       canSaveExample: true,
       canRunExample: true,
+    });
+
+    expect(
+      buildHostedIntegrationExampleActionState({
+        canEdit: true,
+        draftId: "draft_1",
+        selectedExampleId: "example_2",
+        selectedExampleCategory: "discovery_required",
+      }),
+    ).toEqual({
+      saveTarget: {
+        kind: "editable_examples",
+        id: "draft_1",
+        ownedByCurrentHuman: true,
+        ready: true,
+      },
+      runTarget: null,
+      canSaveExample: true,
+      canRunExample: false,
     });
   });
 });

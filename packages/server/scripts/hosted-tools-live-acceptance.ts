@@ -12,6 +12,7 @@ import {
   runHostedIntegrationLiveParity,
 } from "../test-support/integration-hub/live-parity.js";
 import {
+  analyzeAcceptedLiveHostedToolArtifactClaims,
   analyzeCatalogRefreshEvidence,
   analyzeConsumerHostedToolEvidence,
   analyzeLiveParityMatrixEvidence,
@@ -20,23 +21,56 @@ import {
   assertLiveHostedToolsDataDirIsIsolated,
   buildLiveHostedToolAcceptanceArtifact,
   extractLiveHostedToolCallsFromMessageHistory,
+  extractLiveHostedToolMessageHistoryEvidence,
+  extractLiveHostedToolOutcomeTextFromMessageHistory,
+  extractUpstreamErrorDiagnosticsFromMessageHistory,
+  HOSTED_ONLY_LIVE_AGENT_MCP_DISABLED,
+  lintUnguidedConsumerPrompt,
+  readLiveHostedToolEvaluationScenarioManifest,
   resolveLiveHostedToolsDataDir,
   scanLiveHostedToolAcceptanceSecrets,
+  selectUnguidedQualysLiveHostedToolEvaluationScenarios,
+  shouldRunUnguidedQualysConsumerScenarios,
+  summarizeDirectHostedInvokeResult,
   writeLiveHostedToolAcceptanceArtifact,
   writeLiveHostedToolAcceptanceReport,
   type CatalogRefreshNoticeEvidence,
+  type LiveHostedToolEvaluationScenario,
+  type LiveHostedToolEvaluationScenarioManifest,
+  type LiveHostedToolCallEvidence,
   type LiveHostedToolScenarioEvidence,
 } from "../test-support/hosted-tools/live-acceptance.js";
 
 const dataDir = resolveLiveHostedToolsDataDir();
-const legacyMcpDataDir =
-  process.env["OPENACME_LEGACY_MCP_DATA_DIR"] ?? dataDir;
+const legacyMcpDataDir = process.env["OPENACME_LEGACY_MCP_DATA_DIR"] ?? dataDir;
 const requestedPort = positivePort(process.env["OPENACME_E2E_PORT"]) ?? 3466;
 const chatDeadlineMs =
   positiveInteger(process.env["OPENACME_LIVE_HOSTED_TOOLS_CHAT_TIMEOUT_MS"]) ??
   120_000;
 const settleBeforeCloseMs =
   positiveInteger(process.env["OPENACME_LIVE_HOSTED_TOOLS_SETTLE_MS"]) ?? 5_000;
+const nonCallOutcomeAttempts =
+  positiveInteger(
+    process.env["OPENACME_LIVE_HOSTED_TOOLS_NON_CALL_ATTEMPTS"],
+  ) ?? 2;
+const liveEvaluationScenarioManifestPath =
+  process.env["OPENACME_LIVE_HOSTED_TOOLS_SCENARIOS"] ??
+  new URL(
+    "../../../docs/hosted-tools-live-evaluation-scenarios.yaml",
+    import.meta.url,
+  ).pathname;
+const requestedLiveEvaluationScenarioIds = commaSeparatedList(
+  process.env["OPENACME_LIVE_HOSTED_TOOLS_SCENARIO_IDS"],
+);
+const runUnguidedConsumerScenario = shouldRunUnguidedQualysConsumerScenarios({
+  explicitRunRequested:
+    process.env["OPENACME_LIVE_HOSTED_TOOLS_UNGUIDED_CONSUMER"] === "1",
+  requestedScenarioIds: requestedLiveEvaluationScenarioIds,
+});
+const onlyUnguidedConsumerScenario =
+  process.env["OPENACME_LIVE_HOSTED_TOOLS_ONLY_UNGUIDED_CONSUMER"] === "1";
+const validateAcceptedArtifacts =
+  process.env["OPENACME_LIVE_HOSTED_TOOLS_VALIDATE_ACCEPTED_ARTIFACTS"] === "1";
 const liveQualysConsumerAgentId = "live-qualys-analyst";
 const liveQualysDeniedAgentId = "live-qualys-denied";
 const liveRepairConsumerAgentId = "live-repair-consumer";
@@ -101,14 +135,57 @@ async function main(): Promise<void> {
     );
     server = started.server;
     const baseUrl = `http://127.0.0.1:${started.port}`;
-    const scenarios = [
-      await healthScenario(baseUrl),
-      await toolDeveloperLoadsSkillScenario(baseUrl),
-      await liveParityMatrixScenario(runtime.hostedIntegrationService),
-      await qualysReadOnlyVendorScenario(baseUrl, config.model),
-      await designPreservingRepairScenario(baseUrl, config.model),
-      await catalogRefreshBoundaryScenario(baseUrl, config.model),
-    ];
+    const liveEvaluationScenarios =
+      await readLiveHostedToolEvaluationScenarioManifest(
+        liveEvaluationScenarioManifestPath,
+      );
+    const selectedUnguidedQualysScenarios =
+      selectUnguidedQualysLiveHostedToolEvaluationScenarios(
+        liveEvaluationScenarios,
+        requestedLiveEvaluationScenarioIds,
+      );
+    if (
+      (runUnguidedConsumerScenario || onlyUnguidedConsumerScenario) &&
+      selectedUnguidedQualysScenarios.length === 0
+    ) {
+      throw new Error(
+        "live hosted-tool acceptance requires at least one selected unguided Qualys scenario",
+      );
+    }
+    const scenarios = onlyUnguidedConsumerScenario
+      ? [
+          await healthScenario(baseUrl),
+          ...(await runActiveUnguidedQualysScenarios(
+            baseUrl,
+            config.model,
+            selectedUnguidedQualysScenarios,
+          )),
+        ]
+      : [
+          await healthScenario(baseUrl),
+          await toolDeveloperLoadsSkillScenario(baseUrl),
+          await liveParityMatrixScenario(runtime.hostedIntegrationService),
+          await qualysReadOnlyVendorScenario(baseUrl, config.model),
+          ...(runUnguidedConsumerScenario
+            ? await runActiveUnguidedQualysScenarios(
+                baseUrl,
+                config.model,
+                selectedUnguidedQualysScenarios,
+              )
+            : []),
+          await designPreservingRepairScenario(baseUrl, config.model),
+          await catalogRefreshBoundaryScenario(baseUrl, config.model),
+        ];
+    if (validateAcceptedArtifacts) {
+      scenarios.push(
+        await acceptedArtifactsManifestAuditScenario(
+          liveEvaluationScenarios,
+          selectedUnguidedQualysScenarios.length > 0
+            ? selectedUnguidedQualysScenarios
+            : undefined,
+        ),
+      );
+    }
     const artifact = buildLiveHostedToolAcceptanceArtifact({
       runId: process.env["OPENACME_LIVE_HOSTED_TOOLS_RUN_ID"] ?? undefined,
       startedAt,
@@ -130,13 +207,70 @@ async function main(): Promise<void> {
       artifact,
       artifactPath,
     );
-    console.log(JSON.stringify({ ...artifact, artifactPath, ...reportPaths }, null, 2));
+    console.log(
+      JSON.stringify({ ...artifact, artifactPath, ...reportPaths }, null, 2),
+    );
     process.exitCode = artifact.status === "fail" ? 1 : 0;
   } finally {
     await sleep(settleBeforeCloseMs);
     await withTimeout(closeServer(), 5_000, "HTTP server close");
     await withTimeout(close(), 5_000, "app runtime close");
   }
+}
+
+async function acceptedArtifactsManifestAuditScenario(
+  manifest: LiveHostedToolEvaluationScenarioManifest,
+  selectedScenarios?: LiveHostedToolEvaluationScenario[],
+): Promise<LiveHostedToolScenarioEvidence> {
+  const auditedScenarios =
+    selectedScenarios ??
+    manifest.scenarios.filter((scenario) => scenario.execution === "active");
+  const diagnostics = await analyzeAcceptedLiveHostedToolArtifactClaims({
+    manifest,
+    scenarios: auditedScenarios,
+  });
+  return {
+    id: "accepted-artifacts-manifest-audit",
+    guidance: "operator_instrumented",
+    expectedOutcome: "hosted_call",
+    status: diagnostics.length === 0 ? "pass" : "fail",
+    diagnostics,
+    prompts: [],
+    agentIds: [],
+    sessionIds: [],
+    messageIds: [],
+    messageHistory: [],
+    toolCalls: [],
+    availableToolNames: [],
+    preInvocationHelpParameterNames: [],
+    generationIds: [],
+    runIds: [],
+    failureBucketIds: [],
+    catalogNoticeIds: [],
+    parityResults: [],
+    artifactPaths: auditedScenarios.flatMap((scenario) =>
+      scenario.acceptedArtifacts.map((artifact) => artifact.path),
+    ),
+    mcpDisabled: [],
+  };
+}
+
+async function runActiveUnguidedQualysScenarios(
+  baseUrl: string,
+  model: { provider?: string; model?: string },
+  scenarioConfigs: LiveHostedToolEvaluationScenario[],
+): Promise<LiveHostedToolScenarioEvidence[]> {
+  const scenarios: LiveHostedToolScenarioEvidence[] = [];
+  for (const scenarioConfig of scenarioConfigs) {
+    scenarios.push(
+      await qualysUnguidedVocabularyDiscoveryScenario(
+        baseUrl,
+        model,
+        scenarioConfig,
+      ),
+    );
+  }
+  return scenarios;
 }
 
 async function healthScenario(
@@ -183,6 +317,7 @@ async function qualysReadOnlyVendorScenario(
     failureBucketIds: [] as string[],
     catalogNoticeIds: [] as string[],
     artifactPaths: [] as string[],
+    mcpDisabled: [...HOSTED_ONLY_LIVE_AGENT_MCP_DISABLED],
   };
 
   try {
@@ -191,7 +326,9 @@ async function qualysReadOnlyVendorScenario(
       `/api/hosted-integrations/families/${familyId}/tools`,
     );
     if (toolsRes.status === 404) {
-      return skippedScenario(scenarioBase, ["Qualys hosted family is not present"]);
+      return skippedScenario(scenarioBase, [
+        "Qualys hosted family is not present",
+      ]);
     }
     if (!toolsRes.ok) {
       return failedScenario(scenarioBase, [
@@ -206,9 +343,7 @@ async function qualysReadOnlyVendorScenario(
       : [];
     const tool =
       tools.find((candidate) => candidate.name === preferredToolName) ??
-      tools.find(
-        (candidate) => candidate.classification?.operation === "read",
-      );
+      tools.find((candidate) => candidate.classification?.operation === "read");
     if (!tool || typeof tool.name !== "string") {
       return skippedScenario(scenarioBase, [
         "Qualys hosted family has no active read-only tool",
@@ -216,6 +351,7 @@ async function qualysReadOnlyVendorScenario(
     }
     const toolName = tool.name;
     const hostedToolName = buildHostedToolName({ familyId, toolName });
+    scenarioBase.availableToolNames = [toolName];
     const runtimeConfigGeneration = await ensureLatestGenerationRuntimeConfig(
       baseUrl,
       familyId,
@@ -299,7 +435,7 @@ async function qualysReadOnlyVendorScenario(
       sessionId,
       hostedToolName,
     );
-    const toolCalls = extractLiveHostedToolCallsFromMessageHistory({
+    let toolCalls = extractLiveHostedToolCallsFromMessageHistory({
       agentId: liveQualysConsumerAgentId,
       sessionId,
       messages,
@@ -316,11 +452,9 @@ async function qualysReadOnlyVendorScenario(
       toolName,
       after: scenarioStartedAt,
     });
-    diagnostics.push(...runLookup.diagnostics);
-    let runIds = uniqueStrings([
-      ...runIdsFromToolCalls(toolCalls),
-      ...runLookup.runIds,
-    ]);
+    const toolCallRunIds = runIdsFromToolCalls(toolCalls);
+    diagnostics.push(...runLookupDiagnostics(runLookup, toolCallRunIds));
+    let runIds = uniqueStrings([...toolCallRunIds, ...runLookup.runIds]);
     let generationIds = uniqueStrings([
       ...generationIdsFromToolCalls(toolCalls),
       ...(await generationIdsFromRuns(baseUrl, runIds, {
@@ -331,7 +465,8 @@ async function qualysReadOnlyVendorScenario(
     ]);
     const hostedToolReturnedFailure = toolCalls.some(
       (call) =>
-        call.toolName === hostedToolName && call.resultSummary?.["ok"] === false,
+        call.toolName === hostedToolName &&
+        call.resultSummary?.["ok"] === false,
     );
     if (hostedToolReturnedFailure || runIds.length === 0) {
       const directInvoke = await directHostedInvokeDiagnostic(baseUrl, {
@@ -341,6 +476,7 @@ async function qualysReadOnlyVendorScenario(
         args: safeQualysCountArgs(),
       });
       diagnostics.push(...directInvoke.diagnostics);
+      toolCalls = [...toolCalls, ...directInvoke.toolCalls];
       runIds = uniqueStrings([...runIds, ...directInvoke.runIds]);
       generationIds = uniqueStrings([
         ...generationIds,
@@ -374,12 +510,22 @@ async function qualysReadOnlyVendorScenario(
       status: "pass",
       diagnostics,
       messageIds,
+      messageHistory: extractLiveHostedToolMessageHistoryEvidence({
+        agentId: liveQualysConsumerAgentId,
+        sessionId,
+        messages,
+      }),
+      outcomeText: extractLiveHostedToolOutcomeTextFromMessageHistory({
+        messages,
+      }),
       toolCalls,
       runIds,
       generationIds,
     };
     const analysis = analyzeConsumerHostedToolEvidence(scenario, {
       hostedToolName,
+      requireDetailedHelpOrVocabularyLookup: true,
+      requiredHostedArgumentFragments: ["qualys.agent.lastCheckedInDate"],
     });
     return {
       ...scenario,
@@ -387,6 +533,257 @@ async function qualysReadOnlyVendorScenario(
         blockingDiagnostics.length === 0 && analysis.status === "pass"
           ? "pass"
           : "fail",
+      diagnostics: [...diagnostics, ...analysis.diagnostics],
+    };
+  } catch (error) {
+    return failedScenario(scenarioBase, [
+      error instanceof Error ? error.message : String(error),
+    ]);
+  }
+}
+
+async function qualysUnguidedVocabularyDiscoveryScenario(
+  baseUrl: string,
+  model: { provider?: string; model?: string },
+  scenarioConfig: LiveHostedToolEvaluationScenario,
+): Promise<LiveHostedToolScenarioEvidence> {
+  const familyId = scenarioConfig.familyId;
+  const preferredToolName = scenarioConfig.preferredToolName;
+  const agentId = scenarioConfig.agent.id;
+  const disabledMcpServers =
+    scenarioConfig.analyzer.requiredDisabledMcpServers;
+  const scenarioBase: ScenarioEvidenceBase = {
+    id: scenarioConfig.id,
+    guidance: scenarioConfig.guidance,
+    expectedOutcome: scenarioConfig.expectedOutcome,
+    prompts: [] as string[],
+    agentIds: [agentId],
+    sessionIds: [] as string[],
+    generationIds: [] as string[],
+    runIds: [] as string[],
+    failureBucketIds: [] as string[],
+    catalogNoticeIds: [] as string[],
+    artifactPaths: [] as string[],
+    mcpDisabled: [...disabledMcpServers],
+  };
+
+  try {
+    const toolsRes = await req(
+      baseUrl,
+      `/api/hosted-integrations/families/${familyId}/tools`,
+    );
+    if (toolsRes.status === 404) {
+      return skippedScenario(scenarioBase, [
+        "Qualys hosted family is not present",
+      ]);
+    }
+    if (!toolsRes.ok) {
+      return failedScenario(scenarioBase, [
+        `Qualys tools lookup failed HTTP ${toolsRes.status}: ${await safeResponseText(toolsRes)}`,
+      ]);
+    }
+    const toolsBody = (await toolsRes.json()) as {
+      tools?: HostedToolRouteTool[];
+    };
+    const tools: HostedToolRouteTool[] = Array.isArray(toolsBody?.tools)
+      ? toolsBody.tools
+      : [];
+    const requiresHostedBusinessTool =
+      scenarioConfig.expectedOutcome === "hosted_call";
+    const tool = tools.find((candidate) => candidate.name === preferredToolName);
+    if (requiresHostedBusinessTool && (!tool || typeof tool.name !== "string")) {
+      return skippedScenario(scenarioBase, [
+        `Qualys hosted family does not have active preferred tool ${preferredToolName}`,
+      ]);
+    }
+    const toolName =
+      tool && typeof tool.name === "string" ? tool.name : preferredToolName;
+    const hostedToolName = buildHostedToolName({ familyId, toolName });
+    const requestedToolNames = uniqueStrings(
+      requiresHostedBusinessTool
+        ? [preferredToolName, ...scenarioConfig.availableToolNames]
+        : [...scenarioConfig.availableToolNames],
+    );
+    const missingRequestedToolNames = requestedToolNames.filter(
+      (candidate) => !tools.some((tool) => tool.name === candidate),
+    );
+    if (missingRequestedToolNames.length > 0) {
+      return skippedScenario(scenarioBase, [
+        `Qualys hosted family is missing manifest-requested tools: ${missingRequestedToolNames.join(", ")}`,
+      ]);
+    }
+    const availableToolNames = requestedToolNames.filter((candidate) =>
+      tools.some((tool) => tool.name === candidate),
+    );
+    if (requiresHostedBusinessTool && !availableToolNames.includes(toolName)) {
+      availableToolNames.unshift(toolName);
+    }
+    scenarioBase.availableToolNames = [...availableToolNames];
+    const availableHostedToolNames = availableToolNames.map((candidate) =>
+      buildHostedToolName({ familyId, toolName: candidate }),
+    );
+    const runtimeConfigGeneration =
+      availableToolNames.length > 0 || requiresHostedBusinessTool
+        ? await ensureLatestGenerationRuntimeConfig(baseUrl, familyId)
+        : { generationIds: [], diagnostics: [] };
+    scenarioBase.generationIds.push(...runtimeConfigGeneration.generationIds);
+    await upsertLiveAgent(baseUrl, {
+      id: agentId,
+      name: scenarioConfig.agent.name,
+      role: scenarioConfig.agent.role,
+      model,
+      persona: scenarioConfig.agent.persona,
+      tools: ["hosted_tool_help", ...availableHostedToolNames],
+      mcpDisabled: [...disabledMcpServers],
+      hostedIntegrationBindings: availableToolNames.map((candidate) =>
+        agentHostedBinding(familyId, candidate),
+      ),
+    });
+
+    if (requiresHostedBusinessTool) {
+      const readinessRes = await req(
+        baseUrl,
+        `/api/hosted-integrations/readiness/invocation?agentId=${encodeURIComponent(
+          agentId,
+        )}&familyId=${encodeURIComponent(familyId)}&toolName=${encodeURIComponent(
+          toolName,
+        )}`,
+      );
+      if (!readinessRes.ok) {
+        return skippedScenario(scenarioBase, [
+          `Qualys invocation readiness check failed HTTP ${readinessRes.status}: ${await safeResponseText(readinessRes)}`,
+        ]);
+      }
+      const readiness = (await readinessRes.json()) as {
+        ok?: unknown;
+        readiness?: { status?: unknown };
+      };
+      if (readiness?.ok !== true || readiness?.readiness?.status === "blocked") {
+        return skippedScenario(scenarioBase, [
+          `Qualys invocation readiness is not ready: ${summarizeJson(readiness)}`,
+        ]);
+      }
+    }
+
+    const prompt = scenarioConfig.prompt.trim();
+    const lint = lintUnguidedConsumerPrompt(prompt);
+    if (lint.status === "fail") {
+      return failedScenario(scenarioBase, [
+        ...lint.findings.map(
+          (finding) =>
+            `Unguided consumer prompt lint failed: ${finding.rule} (${finding.excerpt})`,
+        ),
+      ]);
+    }
+    const scenarioStartedAt = new Date();
+    const maxAttempts =
+      scenarioConfig.expectedOutcome === "hosted_call"
+        ? 1
+        : Math.max(1, nonCallOutcomeAttempts);
+    let messages: Array<{
+      id?: string;
+      role: string;
+      parts: Array<Record<string, unknown>>;
+    }> = [];
+    let toolCalls: LiveHostedToolCallEvidence[] = [];
+    let messageIds: string[] = [];
+    let outcomeText: string | undefined;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const sessionId = randomUUID();
+      scenarioBase.prompts.push(prompt);
+      scenarioBase.sessionIds.push(sessionId);
+
+      await postLiveChat(baseUrl, agentId, sessionId, prompt);
+
+      messages =
+        scenarioConfig.expectedOutcome === "hosted_call"
+          ? await waitForSessionMessagesWithTool(
+              baseUrl,
+              sessionId,
+              hostedToolName,
+            )
+          : await waitForAssistantMessagesAtLeast(baseUrl, sessionId, 1);
+      toolCalls = [
+        ...toolCalls,
+        ...extractLiveHostedToolCallsFromMessageHistory({
+          agentId,
+          sessionId,
+          messages,
+        }),
+      ];
+      messageIds = uniqueStrings([
+        ...messageIds,
+        ...messages
+          .map((message) => message.id)
+          .filter((id): id is string => typeof id === "string" && id.length > 0),
+      ]);
+      outcomeText = extractLiveHostedToolOutcomeTextFromMessageHistory({
+        messages,
+      });
+      if (scenarioConfig.expectedOutcome === "hosted_call" || outcomeText) {
+        break;
+      }
+    }
+    const diagnostics = [...runtimeConfigGeneration.diagnostics];
+    const toolCallRunIds = runIdsFromToolCalls(toolCalls);
+    const shouldLookupExecutionRuns =
+      scenarioConfig.expectedOutcome === "hosted_call" ||
+      toolCallRunIds.length > 0;
+    const runLookup = shouldLookupExecutionRuns
+      ? await runIdsFromExecutionLogs(baseUrl, {
+          actorId: agentId,
+          familyId,
+          toolName,
+          after: scenarioStartedAt,
+        })
+      : { runIds: [], diagnostics: [] };
+    diagnostics.push(...runLookupDiagnostics(runLookup, toolCallRunIds));
+    const runIds = uniqueStrings([...toolCallRunIds, ...runLookup.runIds]);
+    const generationIds = uniqueStrings([
+      ...runtimeConfigGeneration.generationIds,
+      ...generationIdsFromToolCalls(toolCalls),
+      ...(await generationIdsFromRuns(baseUrl, runIds, {
+        actorId: agentId,
+        familyId,
+        toolName,
+      })),
+    ]);
+    const missingNonCallOutcome =
+      scenarioConfig.expectedOutcome !== "hosted_call" && !outcomeText;
+    if (missingNonCallOutcome) {
+      diagnostics.push(
+        "provider_response_missing: assistant outcome text was unavailable for non-call scenario analysis",
+      );
+    }
+    const scenario: LiveHostedToolScenarioEvidence = {
+      ...scenarioBase,
+      status: "pass",
+      diagnostics,
+      messageIds,
+      messageHistory: extractLiveHostedToolMessageHistoryEvidence({
+        agentId,
+        sessionId: scenarioBase.sessionIds.at(-1),
+        messages,
+      }),
+      outcomeText,
+      toolCalls,
+      runIds,
+      generationIds,
+    };
+    const analysis = missingNonCallOutcome
+      ? { status: "fail" as const, diagnostics: [] }
+      : analyzeConsumerHostedToolEvidence(scenario, {
+          hostedToolName,
+          expectedOutcome: scenarioConfig.expectedOutcome,
+          ...scenarioConfig.analyzer,
+          forbiddenHostedToolNames:
+            scenarioConfig.analyzer.forbiddenToolNames.map((candidate) =>
+              buildHostedToolName({ familyId, toolName: candidate }),
+            ),
+        });
+    return {
+      ...scenario,
+      status: analysis.status === "pass" ? "pass" : "fail",
       diagnostics: [...diagnostics, ...analysis.diagnostics],
     };
   } catch (error) {
@@ -640,7 +1037,12 @@ async function catalogRefreshBoundaryScenario(
     ].join("\n");
     scenarioBase.prompts.push(grantedWarmupPrompt, ungrantedWarmupPrompt);
 
-    await postLiveChat(baseUrl, liveCatalogGrantedAgentId, grantedSessionId, grantedWarmupPrompt);
+    await postLiveChat(
+      baseUrl,
+      liveCatalogGrantedAgentId,
+      grantedSessionId,
+      grantedWarmupPrompt,
+    );
     await waitForAssistantMessagesAtLeast(baseUrl, grantedSessionId, 1);
     await postLiveChat(
       baseUrl,
@@ -663,7 +1065,12 @@ async function catalogRefreshBoundaryScenario(
       "Do not call remote MCP or managed_* tools. After the result, answer in one concise sentence.",
     ].join("\n");
     scenarioBase.prompts.push(grantedPrompt);
-    await postLiveChat(baseUrl, liveCatalogGrantedAgentId, grantedSessionId, grantedPrompt);
+    await postLiveChat(
+      baseUrl,
+      liveCatalogGrantedAgentId,
+      grantedSessionId,
+      grantedPrompt,
+    );
     const grantedMessages = await waitForSessionMessagesWithTool(
       baseUrl,
       grantedSessionId,
@@ -701,14 +1108,22 @@ async function catalogRefreshBoundaryScenario(
       ...(await catalogNoticesFromTimeline(baseUrl, grantedSessionId)),
       ...(await catalogNoticesFromTimeline(baseUrl, ungrantedSessionId)),
     ];
-    const directDenied = await postJson(baseUrl, "/api/hosted-integrations/invoke", {
-      actor: { id: liveCatalogUngrantedAgentId, kind: "agent", roles: ["agent"] },
-      familyId,
-      toolName,
-      args: { text: "remote-mcp-boundary" },
-      hostedToolBindings: [],
-      requestedEnvironment: "test_debug",
-    });
+    const directDenied = await postJson(
+      baseUrl,
+      "/api/hosted-integrations/invoke",
+      {
+        actor: {
+          id: liveCatalogUngrantedAgentId,
+          kind: "agent",
+          roles: ["agent"],
+        },
+        familyId,
+        toolName,
+        args: { text: "remote-mcp-boundary" },
+        hostedToolBindings: [],
+        requestedEnvironment: "test_debug",
+      },
+    );
     const directDeniedBody = await safeJson(directDenied);
     const directDeniedError = isRecord(directDeniedBody?.["error"])
       ? directDeniedBody["error"]
@@ -728,7 +1143,9 @@ async function catalogRefreshBoundaryScenario(
       messageIds: uniqueStrings(
         allMessages
           .map((message) => message.id)
-          .filter((id): id is string => typeof id === "string" && id.length > 0),
+          .filter(
+            (id): id is string => typeof id === "string" && id.length > 0,
+          ),
       ),
       toolCalls: [...grantedCalls, ...ungrantedCalls],
       generationIds: uniqueStrings([
@@ -740,7 +1157,9 @@ async function catalogRefreshBoundaryScenario(
       catalogNoticeIds: uniqueStrings(
         notices
           .map((notice) => notice.id)
-          .filter((id): id is string => typeof id === "string" && id.length > 0),
+          .filter(
+            (id): id is string => typeof id === "string" && id.length > 0,
+          ),
       ),
       artifactPaths: [],
     };
@@ -826,7 +1245,8 @@ async function liveParityMatrixScenario(
           (testCase) => testCase.status === "error",
         ).length,
       });
-      if (result.artifactPath) scenarioBase.artifactPaths.push(result.artifactPath);
+      if (result.artifactPath)
+        scenarioBase.artifactPaths.push(result.artifactPath);
     }
 
     const requiredPassFamilyIds = liveParityRequiredPassFamilies(parityResults);
@@ -845,7 +1265,9 @@ async function liveParityMatrixScenario(
     return {
       ...scenario,
       status:
-        diagnostics.length === 0 && analysis.status === "pass" ? "pass" : "fail",
+        diagnostics.length === 0 && analysis.status === "pass"
+          ? "pass"
+          : "fail",
       diagnostics: [...diagnostics, ...analysis.diagnostics],
     };
   } catch (error) {
@@ -968,9 +1390,7 @@ async function toolDeveloperLoadsSkillScenario(
     return {
       ...scenarioBase,
       status: "fail",
-      diagnostics: [
-        error instanceof Error ? error.message : String(error),
-      ],
+      diagnostics: [error instanceof Error ? error.message : String(error)],
       messageIds: [],
       toolCalls: [],
     };
@@ -1239,7 +1659,9 @@ async function waitForOpenFailureBucket(
       )}`,
     );
     if (res.ok) {
-      const body = (await res.json()) as { buckets?: Array<Record<string, unknown>> };
+      const body = (await res.json()) as {
+        buckets?: Array<Record<string, unknown>>;
+      };
       const bucket = (Array.isArray(body.buckets) ? body.buckets : [])
         .filter(
           (candidate) =>
@@ -1412,7 +1834,9 @@ async function waitForSessionMessagesWithTool(
   baseUrl: string,
   sessionId: string,
   toolName: string,
-): Promise<Array<{ id?: string; role: string; parts: Array<Record<string, unknown>> }>> {
+): Promise<
+  Array<{ id?: string; role: string; parts: Array<Record<string, unknown>> }>
+> {
   const deadline = Date.now() + chatDeadlineMs;
   let lastAssistantText = "";
   let lastMessages: Array<{
@@ -1432,8 +1856,16 @@ async function waitForSessionMessagesWithTool(
       if (assistant) lastAssistantText = textFromParts(assistant.parts);
     }
     if (Date.now() > deadline) {
+      const upstreamDiagnostics =
+        extractUpstreamErrorDiagnosticsFromMessageHistory({
+          messages: lastMessages,
+        });
+      const upstreamSuffix =
+        upstreamDiagnostics.length > 0
+          ? ` Upstream diagnostics: ${upstreamDiagnostics.join("; ")}`
+          : "";
       throw new Error(
-        `Timed out waiting for tool-${toolName}; observed ${lastMessages.length} messages. Last assistant text: ${lastAssistantText.slice(0, 500)}`,
+        `Timed out waiting for tool-${toolName}; observed ${lastMessages.length} messages. Last assistant text: ${lastAssistantText.slice(0, 500)}${upstreamSuffix}`,
       );
     }
     await sleep(500);
@@ -1444,7 +1876,9 @@ async function waitForAssistantMessagesAtLeast(
   baseUrl: string,
   sessionId: string,
   minAssistantMessages: number,
-): Promise<Array<{ id?: string; role: string; parts: Array<Record<string, unknown>> }>> {
+): Promise<
+  Array<{ id?: string; role: string; parts: Array<Record<string, unknown>> }>
+> {
   const deadline = Date.now() + chatDeadlineMs;
   let lastMessages: Array<{
     id?: string;
@@ -1462,8 +1896,16 @@ async function waitForAssistantMessagesAtLeast(
       if (assistantCount >= minAssistantMessages) return messages;
     }
     if (Date.now() > deadline) {
+      const upstreamDiagnostics =
+        extractUpstreamErrorDiagnosticsFromMessageHistory({
+          messages: lastMessages,
+        });
+      const upstreamSuffix =
+        upstreamDiagnostics.length > 0
+          ? ` Upstream diagnostics: ${upstreamDiagnostics.join("; ")}`
+          : "";
       throw new Error(
-        `Timed out waiting for ${minAssistantMessages} assistant messages; observed ${lastMessages.length} total messages.`,
+        `Timed out waiting for ${minAssistantMessages} assistant messages; observed ${lastMessages.length} total messages.${upstreamSuffix}`,
       );
     }
     await sleep(500);
@@ -1509,7 +1951,9 @@ async function catalogNoticesFromTimeline(
       `catalog notice timeline lookup failed HTTP ${res.status}: ${await safeResponseText(res)}`,
     );
   }
-  const body = (await res.json()) as { events?: Array<Record<string, unknown>> };
+  const body = (await res.json()) as {
+    events?: Array<Record<string, unknown>>;
+  };
   const events = Array.isArray(body.events) ? body.events : [];
   return events.flatMap((event) => {
     const payload = isRecord(event["payload"]) ? event["payload"] : null;
@@ -1635,6 +2079,7 @@ async function directHostedInvokeDiagnostic(
   diagnostics: string[];
   runIds: string[];
   generationIds: string[];
+  toolCalls: LiveHostedToolCallEvidence[];
 }> {
   const res = await postJson(baseUrl, "/api/hosted-integrations/invoke", {
     actor: { id: input.actorId, kind: "agent", roles: ["agent"] },
@@ -1650,6 +2095,7 @@ async function directHostedInvokeDiagnostic(
   const runId = typeof body?.["runId"] === "string" ? body["runId"] : null;
   const generationId =
     typeof body?.["generationId"] === "string" ? body["generationId"] : null;
+  const resultSummary = summarizeDirectHostedInvokeResult(body);
   const diagnostics = [
     `Direct hosted invoke diagnostic returned HTTP ${res.status}: ${summarizeJson(body)}`,
   ];
@@ -1657,6 +2103,17 @@ async function directHostedInvokeDiagnostic(
     diagnostics,
     runIds: runId ? [runId] : [],
     generationIds: generationId ? [generationId] : [],
+    toolCalls: [
+      {
+        toolName: buildHostedToolName({
+          familyId: input.familyId,
+          toolName: input.toolName,
+        }),
+        status: res.ok ? "output" : "error",
+        argsSummary: input.args,
+        ...(resultSummary ? { resultSummary } : {}),
+      },
+    ],
   };
 }
 
@@ -1691,7 +2148,9 @@ async function ensureLatestGenerationRuntimeConfig(
     const lock = isRecord(lockBody?.["lock"]) ? lockBody["lock"] : null;
     lockId = typeof lock?.["id"] === "string" ? lock["id"] : null;
     if (!lockId) {
-      diagnostics.push(`Could not read ${familyId} lock id from ${summarizeJson(lockBody)}`);
+      diagnostics.push(
+        `Could not read ${familyId} lock id from ${summarizeJson(lockBody)}`,
+      );
       return { diagnostics, generationIds: [] };
     }
 
@@ -1710,7 +2169,9 @@ async function ensureLatestGenerationRuntimeConfig(
     const draft = isRecord(draftBody?.["draft"]) ? draftBody["draft"] : null;
     const draftId = typeof draft?.["id"] === "string" ? draft["id"] : null;
     if (!draftId) {
-      diagnostics.push(`Could not read ${familyId} draft id from ${summarizeJson(draftBody)}`);
+      diagnostics.push(
+        `Could not read ${familyId} draft id from ${summarizeJson(draftBody)}`,
+      );
       return { diagnostics, generationIds: [] };
     }
 
@@ -1779,12 +2240,16 @@ async function latestGenerationDetail(
     `/api/hosted-integrations/generations?familyId=${encodeURIComponent(familyId)}`,
   );
   if (!res.ok) return null;
-  const body = (await res.json()) as { generations?: Array<Record<string, unknown>> };
+  const body = (await res.json()) as {
+    generations?: Array<Record<string, unknown>>;
+  };
   const generations = Array.isArray(body.generations) ? body.generations : [];
   const latest = generations
     .filter((generation) => generation["status"] === "active")
     .sort((a, b) =>
-      String(b["promotedAt"] ?? "").localeCompare(String(a["promotedAt"] ?? "")),
+      String(b["promotedAt"] ?? "").localeCompare(
+        String(a["promotedAt"] ?? ""),
+      ),
     )[0];
   const generationId =
     latest && typeof latest["id"] === "string" ? latest["id"] : null;
@@ -1794,7 +2259,9 @@ async function latestGenerationDetail(
     `/api/hosted-integrations/generations/${encodeURIComponent(generationId)}`,
   );
   if (!detail.ok) return null;
-  const detailBody = (await detail.json()) as { generation?: Record<string, unknown> };
+  const detailBody = (await detail.json()) as {
+    generation?: Record<string, unknown>;
+  };
   return isRecord(detailBody.generation) ? detailBody.generation : null;
 }
 
@@ -1809,7 +2276,9 @@ async function runIdsFromExecutionLogs(
 ): Promise<{ runIds: string[]; diagnostics: string[] }> {
   const res = await req(
     baseUrl,
-    `/api/hosted-integrations/runs?actorId=tool-developer&familyId=${encodeURIComponent(
+    `/api/hosted-integrations/runs?actorId=${encodeURIComponent(
+      expected.actorId,
+    )}&familyId=${encodeURIComponent(
       expected.familyId,
     )}&toolName=${encodeURIComponent(expected.toolName)}&limit=10`,
   );
@@ -1848,6 +2317,13 @@ function runIdsFromToolCalls(
       .map((call) => call.resultSummary?.["runId"])
       .filter((value): value is string => typeof value === "string"),
   );
+}
+
+function runLookupDiagnostics(
+  lookup: { diagnostics: string[] },
+  toolCallRunIds: readonly string[],
+): string[] {
+  return toolCallRunIds.length > 0 ? [] : lookup.diagnostics;
 }
 
 function generationIdsFromToolCalls(
@@ -1906,9 +2382,9 @@ function safeQualysCountArgs(): Record<string, unknown> {
     filter_body: {
       filters: [
         {
-          field: "asset.name",
-          operator: "EQUALS",
-          value: "definitely-missing-host",
+          field: "qualys.agent.lastCheckedInDate",
+          operator: "LESSER",
+          value: "2026-07-01T00:00:00Z",
         },
       ],
     },
@@ -2037,7 +2513,9 @@ function postJson(
   });
 }
 
-async function safeJson(res: Response): Promise<Record<string, unknown> | null> {
+async function safeJson(
+  res: Response,
+): Promise<Record<string, unknown> | null> {
   try {
     const parsed = await res.json();
     return parsed && typeof parsed === "object" && !Array.isArray(parsed)
@@ -2112,6 +2590,14 @@ function positiveInteger(value: string | undefined): number | null {
   return parsed;
 }
 
+function commaSeparatedList(value: string | undefined): string[] {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -2136,6 +2622,46 @@ async function withTimeout<T>(
     if (timer) clearTimeout(timer);
   }
 }
+
+function installLiveAcceptanceAbortGuards(): void {
+  const report = (kind: string, reason: unknown) => {
+    console.warn(
+      JSON.stringify({
+        status: "ignored_live_acceptance_abort",
+        kind,
+        message: abortErrorMessage(reason),
+      }),
+    );
+  };
+  process.on("unhandledRejection", (reason) => {
+    if (isAbortError(reason)) {
+      report("unhandledRejection", reason);
+      return;
+    }
+    throw reason;
+  });
+  process.on("uncaughtException", (error) => {
+    if (isAbortError(error)) {
+      report("uncaughtException", error);
+      return;
+    }
+    throw error;
+  });
+}
+
+function isAbortError(value: unknown): boolean {
+  if (!(value instanceof Error)) return false;
+  return (
+    value.name === "AbortError" ||
+    value.message.toLowerCase().includes("operation was aborted")
+  );
+}
+
+function abortErrorMessage(value: unknown): string {
+  return value instanceof Error ? value.message : String(value);
+}
+
+installLiveAcceptanceAbortGuards();
 
 main()
   .then(() => {

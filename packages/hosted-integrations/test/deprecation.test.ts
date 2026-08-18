@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -15,6 +15,10 @@ import {
   type HostedIntegrationPythonRuntime,
   type HostedIntegrationToolLifecycle,
 } from "../src/index.js";
+import {
+  splitLegacyFamilyFixture,
+  writeSplitFamilyFixture,
+} from "./test-support/split-contract-fixtures.js";
 
 let dataDir: string;
 
@@ -129,8 +133,7 @@ async function writeSourceFamily(yaml: string): Promise<void> {
     "families",
     "qualys",
   );
-  await mkdir(sourceDir, { recursive: true });
-  await writeFile(path.join(sourceDir, "family.yaml"), yaml, "utf-8");
+  await writeSplitFamilyFixture(sourceDir, yaml);
   await writeFile(path.join(sourceDir, "qualys.py"), "def run(): pass\n");
 }
 
@@ -155,11 +158,18 @@ async function createDraftFromSource(yaml: string) {
     sourceRevisionId: "source_rev_1",
   });
   if (!draft.ok) throw new Error(draft.reason);
+  const split = splitLegacyFamilyFixture(yaml);
   await draftStore.writeDraftFile({
     draftId: "draft_1",
     lockId: "lock_1",
     path: "family.yaml",
-    content: yaml,
+    content: split.familyYaml,
+  });
+  await draftStore.writeDraftFile({
+    draftId: "draft_1",
+    lockId: "lock_1",
+    path: "tools.yaml",
+    content: split.toolsYaml,
   });
   return draftStore;
 }

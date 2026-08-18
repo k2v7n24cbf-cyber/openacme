@@ -11,6 +11,12 @@ import { ServerRuntime } from "../src/runtime.js";
 
 let dataDirs: string[] = [];
 
+const hostedSourceFiles = {
+  "family.yaml": "id: qualys\nname: Qualys\nversion: 1\n",
+  "tools.yaml":
+    "kind: openacme.hostedToolFamily\nversion: 1\nfamily:\n  id: qualys\ntools: []\n",
+};
+
 afterEach(() => {
   for (const dir of dataDirs) rmSync(dir, { recursive: true, force: true });
   dataDirs = [];
@@ -51,9 +57,7 @@ describe("ServerRuntime", () => {
       familyId: "qualys",
       sourceRevisionId: "source_rev_1",
       updatedBy: "agent:tool-developer",
-      files: {
-        "family.yaml": "id: qualys\nname: Qualys\nversion: 1\ntools: []\n",
-      },
+      files: hostedSourceFiles,
     });
 
     const db = createDatabase(config);
@@ -81,9 +85,7 @@ describe("ServerRuntime", () => {
       familyId: "qualys",
       sourceRevisionId: "source_rev_1",
       updatedBy: "agent:tool-developer",
-      files: {
-        "family.yaml": "id: qualys\nname: Qualys\nversion: 1\ntools: []\n",
-      },
+      files: hostedSourceFiles,
     });
 
     const db = createDatabase(config);

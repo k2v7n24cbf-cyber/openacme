@@ -48,6 +48,11 @@ hosted integration lifecycle rules, management tool sequences, failure-bucket
 repair, promotion gates, environment config boundaries, and secret-handling guidance
 in that skill rather than duplicating them here.
 
+Use **Hosted Tools** as the product and human-facing wording. Treat
+`hosted integration` as the internal package/API/storage/runtime layer name.
+Do not call this feature managed tools or merge it conceptually with remote MCP
+servers.
+
 The hosted integrations development skill is intentionally a separate skill:
 
 - Packaged builtin source:

@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { saveGlobalMcpServers } from "@openacme/config";
 import { createFileHostedIntegrationService } from "@openacme/hosted-integrations";
+import { LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_TOOL_NAMES } from "../../hosted-integrations/test-support/integration-hub/fixtures.js";
 import {
   defaultLiveParityCasesForFamily,
   defaultSplunkLiveParityCases,
@@ -82,6 +83,19 @@ afterEach(() => {
 describe("hosted integration live parity runner", () => {
   it("builds default Splunk live parity cases from the replacement fixture", () => {
     expect(defaultSplunkLiveParityCases()).toEqual([splunkTestCase]);
+  });
+
+  it("builds default Qualys live parity cases from the current promoted read-only pilot", () => {
+    const result = defaultLiveParityCasesForFamily("qualys");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.diagnostic);
+    expect(result.cases.map((item) => item.toolName).sort()).toEqual(
+      [...LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_TOOL_NAMES].sort(),
+    );
+    expect(result.cases).toHaveLength(
+      LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_TOOL_NAMES.length,
+    );
   });
 
   it("selects only source-backed live parity families", () => {

@@ -21,7 +21,11 @@ import {
   type WriteHostedIntegrationDiagnosticsRequest,
   sanitizeHostedIntegrationJsonValue,
 } from "./artifacts.js";
-import type { HostedIntegrationCatalog } from "./catalog.js";
+import {
+  HOSTED_INTEGRATION_MANIFEST_FILE,
+  HOSTED_TOOL_CONTRACT_FILE,
+  type HostedIntegrationCatalog,
+} from "./catalog.js";
 import {
   hostedIntegrationEnvironmentConfigId,
   type HostedIntegrationEnvironmentConfigStore,
@@ -109,6 +113,7 @@ import {
 import {
   HOSTED_INTEGRATION_ENVIRONMENTS,
   FamilyManifestSchema,
+  HostedToolContractDocumentSchema,
   HostedIntegrationEnvironmentConfigSchema,
   HostedIntegrationEnvironmentSchema,
   HostedIntegrationHumanApprovalRecordSchema,
@@ -123,6 +128,7 @@ import {
   HostedIntegrationGenerationSchema,
   JsonObjectSchema,
   JsonValueSchema,
+  hostedToolContractToToolSpecs,
   type HostedIntegrationDraft,
   type HostedIntegrationEnvironment,
   type HostedIntegrationEnvironmentConfig,
@@ -161,7 +167,6 @@ import {
   type ReplaceHostedIntegrationSourceFilesResult,
 } from "./source-files.js";
 
-const MANIFEST_FILE = "family.yaml";
 const DEFAULT_INLINE_RESULT_TOKEN_LIMIT = 8_000;
 
 export interface HostedIntegrationSqlDatabase {
@@ -1177,10 +1182,14 @@ class DbHostedIntegrationGenerationStore implements HostedIntegrationGenerationS
       files[file.path] = read.content;
     }
     const manifest = manifestFromFiles(files);
-    const dependencyResolution = manifest
-      ? resolveHostedIntegrationPythonDependencies(manifest.runtime)
-      : null;
-    if (dependencyResolution && !dependencyResolution.ok) {
+    const tools = toolsFromFiles(files);
+    if (!manifest || !tools) {
+      return { ok: false, reason: "invalid_validation" };
+    }
+    const dependencyResolution = resolveHostedIntegrationPythonDependencies(
+      manifest.runtime,
+    );
+    if (!dependencyResolution.ok) {
       return { ok: false, reason: "invalid_validation" };
     }
     const generationId = this.createId();
@@ -1193,9 +1202,9 @@ class DbHostedIntegrationGenerationStore implements HostedIntegrationGenerationS
       status: "active",
       promotedAt: now,
       promotedBy: request.promotedBy,
-      runtime: manifest?.runtime,
-      runtimeConfig: manifest?.runtimeConfig,
-      tools: manifest?.tools,
+      runtime: manifest.runtime,
+      runtimeConfig: manifest.runtimeConfig,
+      tools,
       dependencyResolution: dependencyResolution?.dependencyResolution,
       provenance: buildHostedIntegrationGenerationProvenance({
         draftId: draft.id,
@@ -1243,7 +1252,7 @@ class DbHostedIntegrationGenerationStore implements HostedIntegrationGenerationS
       familyId: generation.familyId,
       generationId: generation.id,
       reason: "promote",
-      toolNames: manifest?.tools.map((tool) => tool.name) ?? [],
+      toolNames: tools.map((tool) => tool.name),
     });
     return { ok: true, generation };
   }
@@ -1274,6 +1283,24 @@ class DbHostedIntegrationGenerationStore implements HostedIntegrationGenerationS
       >("SELECT id, family_id, source_revision_id, status, promoted_at, promoted_by, " + "manifest_json, validation_json, dependency_resolution_json, provenance_json " + "FROM hosted_integration_generations WHERE id = ?")
       .get(generationId);
     return row ? generationFromRow(row) : null;
+  }
+
+  async readGenerationFiles(generationId: string) {
+    const generation = await this.getGeneration(generationId);
+    if (!generation) return { ok: false as const, reason: "generation_not_found" as const };
+    const rows = this.db
+      .prepare<[string], { path: string; content: string }>(
+        "SELECT path, content FROM hosted_integration_generation_files " +
+          "WHERE generation_id = ? ORDER BY path ASC",
+      )
+      .all(generation.id);
+    if (rows.length === 0) {
+      return { ok: false as const, reason: "generation_not_found" as const };
+    }
+    return {
+      ok: true as const,
+      files: Object.fromEntries(rows.map((row) => [row.path, row.content])),
+    };
   }
 
   async getActiveGeneration(
@@ -1411,7 +1438,7 @@ class DbHostedIntegrationGenerationStore implements HostedIntegrationGenerationS
       familyId,
       generationId: generation.id,
       reason: "rollback",
-      toolNames: generation.tools?.map((tool) => tool.name) ?? [],
+      toolNames: generation.tools.map((tool) => tool.name),
     });
     return {
       ok: true,
@@ -1442,7 +1469,7 @@ class DbHostedIntegrationGenerationStore implements HostedIntegrationGenerationS
           runtimeConfig: generation.runtimeConfig,
           tools: generation.tools,
         }),
-        JSON.stringify(generation.tools?.map((tool) => tool.name) ?? []),
+        JSON.stringify(generation.tools.map((tool) => tool.name)),
         JSON.stringify(generation.provenance?.validation ?? {}),
         generation.dependencyResolution
           ? JSON.stringify(generation.dependencyResolution)
@@ -2779,10 +2806,10 @@ function fileEntryFromRow(row: FileEntryRow): HostedIntegrationFileEntry {
 }
 
 function generationFromRow(row: GenerationRow): HostedIntegrationGeneration {
-  const manifest = JSON.parse(row.manifest_json) as {
+  const generationMetadata = JSON.parse(row.manifest_json) as {
     runtime?: unknown;
     runtimeConfig?: unknown;
-    tools?: unknown;
+    tools: unknown;
   };
   return HostedIntegrationGenerationSchema.parse({
     id: row.id,
@@ -2791,9 +2818,9 @@ function generationFromRow(row: GenerationRow): HostedIntegrationGeneration {
     status: row.status,
     promotedAt: row.promoted_at,
     promotedBy: row.promoted_by,
-    runtime: manifest.runtime,
-    runtimeConfig: manifest.runtimeConfig,
-    tools: manifest.tools,
+    runtime: generationMetadata.runtime,
+    runtimeConfig: generationMetadata.runtimeConfig,
+    tools: generationMetadata.tools,
     dependencyResolution: row.dependency_resolution_json
       ? JSON.parse(row.dependency_resolution_json)
       : undefined,
@@ -2982,9 +3009,17 @@ function idempotencyFromRow(
 }
 
 function manifestFromFiles(files: Record<string, string>) {
-  const manifestFile = files[MANIFEST_FILE];
+  const manifestFile = files[HOSTED_INTEGRATION_MANIFEST_FILE];
   if (!manifestFile) return null;
   return FamilyManifestSchema.parse(parseYaml(manifestFile));
+}
+
+function toolsFromFiles(files: Record<string, string>) {
+  const toolsFile = files[HOSTED_TOOL_CONTRACT_FILE];
+  if (!toolsFile) return undefined;
+  return hostedToolContractToToolSpecs(
+    HostedToolContractDocumentSchema.parse(parseYaml(toolsFile)),
+  );
 }
 
 async function materializeGenerationFiles(

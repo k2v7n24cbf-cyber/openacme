@@ -1,6 +1,6 @@
 # Hosted Integrations Implementation Plan
 
-Last revised: 2026-08-15.
+Last revised: 2026-08-18.
 
 ## Goal
 
@@ -20,9 +20,11 @@ This plan implements the architecture in
 ## Current Canonical Contract
 
 The current implementation contract is Milestone 18 and later, especially
-Milestones 20, 21, and 22. Earlier milestones remain historical evidence only
-where they use superseded terms such as migration fixtures, config scopes, or
-view-level cutover.
+Milestones 20, 21, 22, 29, 30, the Qualys-specific Milestone 31 migration gate,
+the shared-vocabulary Milestones 32-35, and the Milestone 36 acceptance
+hardening gate. Earlier milestones remain
+historical evidence only where they use superseded terms such as migration
+fixtures, config scopes, or view-level cutover.
 
 - Hosted integration product lifecycle states are source, draft, validation,
   example, generation, environment config, binding, invocation, debug run,
@@ -42,6 +44,16 @@ view-level cutover.
 - Tool Developer is the hosted integration maintainer persona. References to a
   generic engineering maintainer persona must not be introduced into hosted
   integration lifecycle guidance.
+- For Qualys, the hosted production surface must be self-sufficient from
+  `tools.yaml`: a tool-using agent should not need the external
+  `qualys-toolkit` skill to learn the tool's selection rules, parameter
+  options, examples, caveats, pagination, or error behavior.
+- Hosted family package import/export is the product path for moving complete
+  family source between repository/operator workspaces and the OpenAcme
+  platform. Import creates or updates a draft and validates it; it must not
+  bypass locks, validation, examples, readiness, access policy, or promotion.
+  Export returns sanitized family source/package artifacts and never includes
+  secret values.
 
 ## Delivery Rules
 
@@ -534,8 +546,8 @@ Goal:
 
 - Define `examples.yaml` format.
 - Read, add, and update examples in a draft.
-- Classify examples as `smoke`, `live_safe`, `regression`, `mock_only`, or
-  `destructive_requires_human`.
+- Classify examples as `smoke`, `live_safe`, `regression`, `mock_only`,
+  `discovery_required`, or `destructive_requires_human`.
 
 Non-goals:
 
@@ -9185,7 +9197,8 @@ Acceptance notes:
 
 ## Milestone 28: Unguided Hosted-Tool Management-Surface Evaluation
 
-Status: implemented; live-evaluated.
+Status: accepted with deterministic analyzer coverage and live-evaluated
+unguided management evidence.
 
 Goal:
 
@@ -9546,3 +9559,3712 @@ Evidence:
 - Validation:
   `pnpm --filter @openacme/server exec vitest run test/hosted-tools-unguided-management.test.ts --reporter=dot`
   passed 9 tests.
+
+## Milestone 29: Hosted Tool MCP Contract Source Of Truth
+
+Status: accepted.
+
+Goal:
+
+- Move public hosted tool surface ownership out of `family.yaml.tools[]` and
+  into `tools.yaml`, modeled as the official MCP Tool shape plus a minimal
+  OpenAcme extension.
+- Keep `family.yaml` scoped to family identity, runtime, hooks, and config
+  requirements.
+- Keep Tool Developer focused on hosted surface mapping, validation, help,
+  examples, wrappers, and small fixes. Complex provider client/API semantics
+  must be imported/provided or explicitly evidenced; otherwise Tool Developer
+  stops with `EVIDENCE_REQUIRED`.
+
+Canonical files:
+
+- `family.yaml`: family/runtime/config metadata.
+- `tools.yaml`: hosted MCP tool names, titles, descriptions, input/output
+  schemas, annotations, family-native handler mapping, help, examples,
+  classification, pagination/error metadata, and optional imported provider
+  references.
+- Provider OpenAPI/research artifacts are optional in v1. A missing provider
+  artifact is valid unless a tool declares an explicit `providerRef`.
+
+Slice 29.1:
+
+- Add `HostedToolContractDocumentSchema`, MCP tool schema, and OpenAcme
+  extension schema.
+- Catalog reads `family.yaml` and `tools.yaml` together and derives selectable
+  tools from `tools.yaml`.
+- Validation rejects old manifest-owned tool contracts by schema and validates
+  handler mapping, MCP naming, annotations, help, examples, cache, and optional
+  provider refs from `tools.yaml`.
+
+Slice 29.2:
+
+- Runtime/generation/help/source-view/registry projections consume derived
+  contract tools from `tools.yaml`.
+- Registry carries output schemas and MCP annotations without exposing internal
+  OpenAcme extension fields.
+
+Evidence:
+
+- `packages/tools/test/hosted-integrations.test.ts` verifies hosted registry
+  entries preserve MCP-facing description, `outputSchema`, and annotations in
+  both tool info and Vercel tool projection while not directly exposing
+  OpenAcme-only `errors` or `pagination` metadata. Those richer fields remain
+  available through `hosted_tool_help`.
+
+Slice 29.3:
+
+- Migrate tests, docs, skills, dogfood fixtures, and seeded families to split
+  source files.
+- No compatibility fallback from old `family.yaml.tools[]` is allowed after
+  migration.
+
+TDD:
+
+- Contract schema tests prove valid split files, required `outputSchema`,
+  invalid names, unsupported MCP custom fields, and old manifest tool ownership
+  rejection.
+- Catalog/detail tests prove tool names derive from `tools.yaml`.
+- Validation tests prove handler mapping, help quality, examples, provider refs,
+  cache semantics, and old-shape rejection.
+- Registry/runtime tests prove MCP fields project to tool registry and
+  invocation maps hosted names back to family-native handlers.
+- Skill/prompt lint proves Tool Developer receives `EVIDENCE_REQUIRED` guidance
+  and is not instructed to invent complex provider behavior.
+
+## Milestone 30: Hosted Family Package Import And Export
+
+Status: accepted.
+
+Goal:
+
+- Add a first-class hosted family package import/export capability before any
+  broad vendor migration such as Qualys Live.
+- Let complex family source be prepared outside the platform, reviewed as a
+  complete package, imported into OpenAcme as a locked draft, validated through
+  the normal hosted lifecycle, and promoted only by the existing promotion
+  gate.
+- Let human-native platform edits be exported back out as a complete sanitized
+  source package so repository/operator workspaces can reconcile, review, diff,
+  archive, or reuse the platform-edited family state.
+
+Non-goals:
+
+- Import does not promote directly to production.
+- Import does not create a new runtime execution path.
+- Import does not bypass family locks, validation, examples, readiness,
+  destructive approval boundaries, environment config readiness, or Agent
+  Settings access policy.
+- Export does not include raw secret values, resolved credentials, transient
+  run directories, execution logs by default, or failure-bucket internals.
+- This is not an integration-hub migration/import lifecycle. Legacy
+  integration-hub artifacts may be used as operator/test inputs only.
+
+Package contract:
+
+- A hosted family package is a versioned file bundle containing source files
+  such as `family.yaml`, `tools.yaml`, Python runtime files, `help/**`,
+  `provider/**`, and optional example definitions.
+- The v1 transport format is a text-only JSON/YAML bundle, not a tar/zip
+  archive. Binary payloads are rejected in v1. If a future archive format is
+  needed, it must still unpack into the same validated file-bundle model before
+  touching drafts.
+- Required package files are `family.yaml`, `tools.yaml`, and the runtime
+  entrypoint declared by `family.yaml`.
+- Optional provider/reference artifacts are allowed when referenced by
+  `tools.yaml` `openacme.providerRef` or help metadata.
+- Optional examples are represented by the canonical `examples.yaml` package
+  file. Import/export must not invent a second example source of truth.
+- Package metadata records package format version, family id, intended
+  source revision, exporter, exportedAt, source generation/draft when known,
+  and a content digest. The digest is evidence only; validation remains the
+  authority.
+- Import semantics are exact file-set replacement for the created draft. It is
+  not an overlay operation; files omitted from the package must not survive in
+  the imported draft.
+- Export reads canonical source files through hosted package/source interfaces,
+  not route-local filesystem helpers.
+
+Implementation seams:
+
+- Add package parsing/building logic inside `packages/hosted-integrations/src`,
+  for example `packages.ts`, and export its schemas/types through package
+  index.
+- Add an import/export service seam to `HostedIntegrationService` rather than
+  embedding package assembly in server routes or management tools.
+- Reuse existing draft/source/generation/example/validation stores. Add only
+  the minimal missing store/service helpers needed to read generation file
+  bundles and create exact package-backed drafts across both file-backed and
+  DB-backed persistence.
+- Create-mode import must be package-aware. It must not call the existing
+  one-tool proposed-family scaffold path and then patch over the scaffold,
+  because the package already owns the complete `tools.yaml` tool set and
+  runtime entrypoint.
+- Keep `packages/tools` as a thin management-tool schema/adapter layer and
+  `packages/server/src/routes/hosted-integrations.ts` as a thin HTTP adapter.
+
+### Slice 30.1: Package Format And Validation Contract
+
+Status: implemented.
+
+Goal:
+
+- Define the canonical hosted family package format and deterministic
+  validation behavior.
+
+Contract:
+
+- Add a package schema for file bundles and metadata without adding a second
+  source-of-truth model. The files inside the package remain the same canonical
+  hosted source files used by drafts and generations.
+- Package path rules reject absolute paths, `..`, duplicate normalized paths,
+  hidden host files that are not part of the hosted source model, and files
+  outside the family package root.
+- Package path rules also reject operational artifact roots such as `logs/`,
+  `runs/`, `run-artifacts/`, `artifacts/`, `failure-buckets/`, `workspace/`,
+  `tmp/`, and `execution-logs/`. These are not hosted source files and must not
+  enter package import/export bundles.
+- Package file rules reject unsupported binary content, package-level files
+  above the configured maximum, and total package bytes above the configured
+  maximum.
+- Package validation runs the same `family.yaml`, `tools.yaml`, handler,
+  providerRef, help, example, dependency, and safety validation used by draft
+  validation.
+- Package diagnostics are structured and point at package paths and schema
+  JSON paths where possible.
+- Package family id must match `family.yaml`, `tools.yaml`, and the target
+  family id for update imports.
+
+TDD:
+
+- Valid package with `family.yaml`, `tools.yaml`, runtime file, help file, and
+  examples parses.
+- Missing required files fail.
+- Package family id mismatch fails before draft creation.
+- Old `family.yaml.tools[]` active ownership fails.
+- Path traversal, absolute paths, duplicate paths, oversized files, unsupported
+  binary files, malformed YAML, and duplicate YAML keys fail.
+- Draft source-of-truth files reject malformed YAML and duplicate YAML keys
+  before schema validation; this covers `family.yaml`, `tools.yaml`, and
+  optional `examples.yaml`.
+- Provider refs and help file refs must resolve inside the imported package.
+- Package digest is deterministic for equivalent normalized file bundles.
+
+Implementation:
+
+- Added `packages/hosted-integrations/src/packages.ts` as the package contract
+  seam. It defines the v1 `openacme.hostedFamilyPackage` text bundle shape,
+  metadata schema, normalized file bundle, deterministic digest, path/size/text
+  validation, and package-level validation diagnostics.
+- Package validation uses an in-memory draft-store adapter and the existing
+  hosted draft validator, so `family.yaml`, `tools.yaml`, handler, providerRef,
+  help reference, examples, dependency, and safety validation stay shared with
+  normal draft validation.
+- Package validation is read-only: it does not create real drafts, acquire
+  locks, promote generations, grant access, or write source files.
+- Package validation now rejects operational artifact paths with
+  `package_file_path_operational`, closing the import-side gap where run logs,
+  run artifacts, failure-bucket internals, workspace cache, or tmp files could
+  be submitted as if they were source package files.
+- Product API package validate/import routes and the
+  `hosted_tool_family_import` management tool now have explicit regression
+  coverage for the same operational-path rejection, so outer adapters cannot
+  silently bypass the package contract.
+- Package validation now parses `family.yaml` and `tools.yaml` with strict
+  duplicate-key detection. Duplicate source-of-truth keys such as a second
+  `family.yaml` `id` or a second `tools.yaml` `family` block fail with
+  `package_manifest_yaml_invalid` or `package_tool_contract_yaml_invalid`
+  instead of silently overriding earlier values.
+- Optional package `examples.yaml` is also parsed as strict YAML when present.
+  Malformed or duplicate example document keys fail with
+  `package_examples_yaml_invalid` during package validation instead of being
+  deferred to a later import/draft adapter that could silently overwrite YAML
+  keys.
+- Draft validation now applies the same strict YAML gate to canonical
+  source-of-truth files. Duplicate keys in draft `family.yaml`, `tools.yaml`,
+  or `examples.yaml` fail with `manifest_yaml_invalid`,
+  `tool_contract_yaml_invalid`, or `examples_invalid`, so direct UI/API edits
+  are rejected deterministically before promotion.
+
+Evidence:
+
+- `pnpm --dir packages/hosted-integrations test packages.test.ts schemas.test.ts validation.test.ts`
+  passed 39 tests.
+- `pnpm --dir packages/hosted-integrations check-types` passed.
+- Current focused validation:
+  `pnpm --filter @openacme/hosted-integrations test -- packages.test.ts`
+  passed 21 tests, and
+  `pnpm --filter @openacme/hosted-integrations check-types` passed.
+- After extending strict package YAML parsing to `examples.yaml`, the same
+  focused validation passed again: `packages.test.ts` (`21` passed),
+  hosted-integrations check-types, and `git diff --check`.
+- After extending strict draft YAML parsing to `family.yaml`, `tools.yaml`, and
+  `examples.yaml`, focused validation passed:
+  `pnpm --filter @openacme/hosted-integrations test -- validation.test.ts packages.test.ts`
+  (`52` passed),
+  `pnpm --filter @openacme/hosted-integrations check-types`, and
+  `git diff --check`.
+- Adapter validation:
+  `pnpm --filter @openacme/server test -- hosted-integrations-routes.test.ts`
+  and
+  `pnpm --filter @openacme/server test -- tools-hosted-integrations.test.ts`
+  prove product API validate/import and management-tool import reject
+  operational package paths with `package_file_path_operational` without
+  creating proposed families or mutating hosted family state.
+
+### Slice 30.2: Import API And Management Tool
+
+Status: implemented.
+
+Goal:
+
+- Add a product-level import path that creates or updates a draft through the
+  existing lifecycle.
+
+Contract:
+
+- Add an HTTP import route and a `hosted_tool_family_import` management tool.
+- Import modes:
+  - `create`: create a proposed family, acquire a lock, create an initial draft,
+    write package files, import examples, validate, and return diagnostics.
+  - `update`: require an existing family lock, create or update a draft from
+    the selected source revision/generation, write package files, import
+    examples, validate, and return diagnostics.
+- Update-mode v1 creates a new package-backed draft from the exact package file
+  set. It must not overlay package files onto an existing draft because that can
+  leave stale omitted files behind. Updating an existing open draft by
+  replace-all may be a later explicit mode.
+- Import is atomic at the draft level: if package parsing or draft creation
+  fails, no partial draft is left behind and nothing is promoted.
+- Import returns draft id, lock id when created by the import, source revision,
+  validation result, imported files, imported examples, diagnostics, and
+  next required lifecycle action.
+- Create-mode import derives proposed family summary fields from the package:
+  family id/name/version from `family.yaml` and tool names from `tools.yaml`.
+  It must not require or invent an extra initial `tool_name` parameter.
+- Import cannot target a hosted family whose lock is held by another actor.
+- Import cannot introduce tools outside the hosted namespace or grant tools to
+  agents. Agent Settings remains the only access-policy control surface.
+- Import validates before returning success, but a validation failure is an
+  import result with diagnostics rather than an automatic promotion blocker
+  hidden from the caller. Promotion remains the hard gate.
+
+TDD:
+
+- Create-mode import creates proposed family, lock, draft, source files,
+  examples, and validation diagnostics.
+- Create-mode import preserves all package tool names in the proposed family
+  summary and does not emit the old single-tool scaffold files.
+- Update-mode import requires a valid lock, creates a new exact package-backed
+  draft, and refuses another owner's lock.
+- Update-mode import does not retain files from the previous generation or
+  source revision when those files are omitted from the package.
+- Import of an invalid package leaves no promoted generation and returns
+  actionable diagnostics.
+- Import cannot bypass destructive approval, readiness, examples, or validation.
+- Management-tool tests prove Tool Developer can call import without raw
+  filesystem access.
+- Runtime binding tests prove `hosted_tool_family_import` routes through
+  `packages/server/src/runtime.ts` and the service seam, not direct filesystem
+  writes.
+- Tool Developer skill/prompt lint proves package import is preferred over
+  manually replaying many draft patches when a complete family package is
+  available.
+
+Implementation:
+
+- Added package import orchestration to the hosted package seam exposed through
+  `HostedIntegrationService.packages.importPackage`.
+- Added package-backed proposed family creation so create-mode import derives
+  family summary and tool names from package `family.yaml` and `tools.yaml`
+  without invoking the old one-tool scaffold path.
+- Update-mode import requires an active caller-owned family lock and creates a
+  new exact package-backed draft from the imported file set.
+- Added `hosted_tool_family_import` as a Tool Developer management tool and
+  routed it through `packages/server/src/runtime.ts` to the service seam.
+- Added `POST /api/hosted-integrations/packages/import` as the product API
+  route. The route enforces Tool Developer actor policy and delegates lifecycle
+  behavior to the service.
+
+Evidence:
+
+- `pnpm --dir packages/hosted-integrations test packages.test.ts proposed-family.test.ts schemas.test.ts validation.test.ts`
+  passed 44 tests.
+- `pnpm --dir packages/server exec vitest run test/hosted-integrations-routes.test.ts -t "imports a hosted family package through the product API"`
+  passed.
+- `pnpm --dir packages/server exec vitest run test/tools-hosted-integrations.test.ts -t "imports hosted family packages through the management tool binding"`
+  passed.
+- `pnpm --dir packages/tools test` passed 251 tests.
+- `pnpm --dir packages/server exec vitest run test/hosted-integrations-routes.test.ts test/tools-hosted-integrations.test.ts`
+  passed 58 tests.
+- `pnpm --dir packages/hosted-integrations check-types`,
+  `pnpm --dir packages/tools check-types`, and
+  `pnpm --dir packages/server check-types` passed after rebuilding dependent
+  package declarations with `pnpm --dir packages/hosted-integrations build` and
+  `pnpm --dir packages/tools build`.
+
+### Slice 30.3: Export API And Management Tool
+
+Status: implemented.
+
+Goal:
+
+- Add a product-level export path for platform-edited hosted families.
+
+Contract:
+
+- Add an HTTP export route and a `hosted_tool_family_export` management tool.
+- Export sources:
+  - active generation
+  - specific generation
+  - draft
+  - current source revision when no generation exists
+- Export returns a sanitized package file bundle or a ToolRegistry spill
+  reference when the package is too large for inline management-tool output.
+  For v1, HTTP export may return a downloadable JSON package response;
+  management-tool export relies on the existing ToolRegistry spill mechanism
+  for large responses rather than introducing run-log artifacts.
+- Export includes canonical source files, referenced help/provider artifacts,
+  and optionally examples. Exported environment config contains only non-secret
+  config metadata and secret key names/requirements, never secret values.
+- Export records package metadata and content digest so a later import can
+  detect stale base revisions and support review.
+- Export from generation must use a service-level generation-file reader that
+  works for both file-backed and DB-backed persistence. Route-local helpers such
+  as generation diff snapshot readers must not become the export
+  implementation.
+
+TDD:
+
+- Export active generation returns the exact promoted source files and examples.
+- Export draft returns unpromoted platform edits when authorized.
+- Export never includes secret values, run artifacts, raw logs, or failure
+  bucket internals by default.
+- Large management-tool export uses the existing ToolRegistry spill behavior;
+  large HTTP export returns a downloadable JSON package response.
+- Importing an exported package round-trips source files, examples, provider
+  refs, help refs, and validation status.
+- DB-backed and file-backed export tests return equivalent normalized package
+  bundles for the same source files.
+- Tool Developer skill/prompt lint proves platform-edited families can be
+  exported for review/reconciliation and that export never claims to include
+  secret values.
+
+Implementation:
+
+- Added service-level export through
+  `HostedIntegrationService.packages.exportPackage`.
+- Added `HostedIntegrationGenerationStore.readGenerationFiles` for both
+  file-backed and DB-backed generation stores so export no longer depends on
+  route-local generation diff helpers.
+- Export supports draft, current source, active generation, and specific
+  generation sources.
+- Export produces the v1 `openacme.hostedFamilyPackage` document with
+  provenance metadata, deterministic digest, canonical file entries, and no
+  secret values or run/failure artifacts.
+- Added `hosted_tool_family_export` management tool and
+  `POST /api/hosted-integrations/packages/export` product API route.
+
+Evidence:
+
+- `pnpm --dir packages/hosted-integrations test packages.test.ts proposed-family.test.ts schemas.test.ts validation.test.ts generations.test.ts db-store.test.ts`
+  passed 64 tests.
+- `pnpm --dir packages/tools test` passed 251 tests.
+- `pnpm --dir packages/server exec vitest run test/hosted-integrations-routes.test.ts test/tools-hosted-integrations.test.ts`
+  passed 58 tests.
+- Current management-tool regression coverage proves large
+  `hosted_tool_family_export` responses use the existing ToolRegistry spill
+  path instead of returning the full package inline. The test imports a package
+  with a large `help/` reference file, exports the draft through
+  `hosted_tool_family_export`, asserts the overflow response, reads the spill
+  file, and verifies the exported package still contains the large source file.
+- `pnpm --dir packages/hosted-integrations build`,
+  `pnpm --dir packages/tools build`, `pnpm --dir packages/tools check-types`,
+  and `pnpm --dir packages/server check-types` passed.
+
+### Slice 30.4: Human-Native UI Flow
+
+Status: accepted for the deterministic human-native import/export UI flow;
+operator round-trip acceptance is covered by Slice 30.5.
+
+Goal:
+
+- Make import/export usable from the Hosted Tools UI without requiring an agent.
+- Preserve the canonical human-native Hosted Tools UX principles from
+  `docs/hosted-integrations-architecture.md#human-native-hosted-tools-ux`;
+  import/export must add capability without reintroducing duplicated facts,
+  unexplained action strips, nested boxes, raw implementation jargon, or
+  always-visible low-value sections.
+
+Contract:
+
+- Family-level UI exposes:
+  - Import package
+  - Export active generation
+  - Export selected draft/generation
+- Import preview shows family id, tool names, files changed, examples changed,
+  provider/help refs, validation diagnostics, destructive classification, and
+  whether the import creates or updates a draft.
+- Import/export controls live where the user is already making the relevant
+  family or draft decision. Do not add a separate registry/workbench header or
+  repeat the selected family/tool title when the left navigation already owns
+  that context.
+- Progressive disclosure is required: show summary, changed files, diagnostics,
+  and secret-exclusion state first; expose raw package JSON/YAML, full file
+  lists, and detailed validation payloads only on demand.
+- Import update requires a lock and displays holder/TTL if blocked.
+- Export makes clear that secrets are excluded and shows the package source
+  generation/draft.
+- UI implementation updates live in the existing Hosted Tools surface:
+  `apps/web/app/routes/hosted-tools.tsx` for page actions and
+  `apps/web/app/lib/hosted-integrations-admin.ts` for derived UI state,
+  labels, and action availability.
+
+TDD:
+
+- UI tests prove import/export actions are visible in the right family states.
+- Import preview does not duplicate family/tool information already visible in
+  the page.
+- Error states show validation diagnostics without exposing secrets.
+- `apps/web/test/hosted-integrations-admin.test.ts` covers import/export
+  action state, accessible labels, lock-blocked messaging, and secret-excluded
+  export labels.
+- Route/component tests cover successful import preview, failed package
+  diagnostics, export active generation, export draft, and refresh after import.
+
+Implementation:
+
+- Added package import/export action-state helpers to
+  `apps/web/app/lib/hosted-integrations-admin.ts`.
+- Added a single family-context package panel to the existing Hosted Tools
+  editor surface. It exposes create/update import, current-version export,
+  pending-changes export, source export, result details, and copy-to-clipboard
+  without adding another registry/workbench section.
+- Added a read-only product package validation route used by the UI preview so
+  validation diagnostics are visible before an import commits package files into
+  a draft.
+- The UI preview parses the package file bundle and shows create/update mode,
+  family identity, tool names, file delta, examples, provider refs, help refs,
+  destructive tools, and validation state before enabling import.
+- Update import is disabled unless the current human owns the family edit lock
+  and has an editable draft. Create import remains available to Tool Developer
+  users. Import is enabled only after the package preview is structurally ready
+  and backend package validation has passed.
+- Export calls the product package API and renders package JSON only after the
+  user asks for export. The panel states that configs/secrets/logs/failure
+  internals are excluded and keeps raw API payloads behind disclosure.
+
+Evidence:
+
+- `pnpm --dir apps/web test hosted-integrations-admin.test.ts` passed 40 tests.
+- `pnpm --dir apps/web check-types` passed.
+- `pnpm --dir apps/web build` passed with the existing Vite chunk-size warning.
+- `pnpm --dir packages/server exec vitest run test/hosted-integrations-routes.test.ts test/tools-hosted-integrations.test.ts`
+  passed 59 tests, including the read-only package validation route.
+- Operator round-trip acceptance is covered by Slice 30.5 so the UI surface and
+  package lifecycle stay aligned around the same import/export contract.
+
+### Slice 30.5: Round-Trip And Operator/Dogfood Acceptance
+
+Status: accepted for deterministic package lifecycle and operator round-trip
+acceptance. Live Qualys smoke remains gated for Milestone 31.
+
+Goal:
+
+- Prove import/export can safely carry a real hosted family package before
+  Qualys Live is built/imported on top of it.
+
+Contract:
+
+- Use a small non-destructive fixture family first.
+- Then use the existing Qualys pilot as an operator/test package
+  candidate, without broadening Qualys scope yet.
+- The acceptance path is export -> import to isolated test env -> validate ->
+  run safe examples -> promote -> export promoted generation -> re-import into
+  a fresh draft -> validate unchanged.
+
+TDD:
+
+- Deterministic round-trip tests pass without vendor credentials.
+- Live-gated Qualys pilot import can validate and run bounded real Qualys
+  smoke when `OPENACME_LIVE_QUALYS=1` and credentials are configured.
+- Transcript/dogfood tests prove Tool Developer uses import/export when given a
+  complete family package and does not manually replay dozens of draft patches.
+- No integration-hub runtime import is introduced.
+
+Implementation:
+
+- Added deterministic package lifecycle acceptance in
+  `packages/hosted-integrations/test/packages.test.ts`:
+  export from a promoted source family, import into an isolated environment,
+  validate, promote, export the promoted generation, and re-import into a fresh
+  update draft with unchanged normalized file content and digest.
+- The round-trip test checks imported examples as first-class package content
+  and keeps provider calls out of the deterministic gate.
+- Added a second deterministic round-trip guard for the current Qualys pilot
+  package. It validates, imports, promotes, exports, imports into
+  an isolated service, promotes again, and exports again while preserving
+  `family.yaml`, `tools.yaml`, `qualys.py`,
+  `references/gav-filter-fields.json`, `examples.yaml`, the current promoted
+  tool/example ids, `vocabularyRef: references/gav-filter-fields.json`,
+  actionable `openacme.errors`, row-returning `openacme.pagination`, and the
+  package digest.
+- The acceptance test exposed and fixed a lifecycle gap: package update import
+  previously required the family to exist in the source catalog even when it had
+  already been created by package import and promoted as an active generation.
+  Update import now treats an active promoted generation as a valid existing
+  hosted family while still requiring the caller-owned edit lock and exact
+  package file set.
+- Confirmed runtime package source does not introduce integration-hub runtime
+  imports; legacy integration-hub references remain docs/test/operator evidence
+  only.
+
+Evidence:
+
+- `pnpm --dir packages/hosted-integrations test packages.test.ts proposed-family.test.ts schemas.test.ts validation.test.ts generations.test.ts db-store.test.ts`
+  passed 65 tests.
+- `pnpm --filter @openacme/hosted-integrations test -- packages.test.ts`
+  passed 19 tests, including the Qualys pilot package
+  references/examples round trip.
+- `pnpm --dir apps/web test hosted-integrations-admin.test.ts` passed 38 tests.
+- `pnpm --dir apps/web check-types` passed.
+- `pnpm --dir packages/hosted-integrations build`,
+  `pnpm --dir packages/tools build`, `pnpm --dir packages/tools check-types`,
+  and `pnpm --dir packages/server check-types` passed.
+- `pnpm --dir packages/server exec vitest run test/hosted-integrations-routes.test.ts test/tools-hosted-integrations.test.ts`
+  passed 59 tests.
+- Runtime source scan:
+  `rg -n "integration-hub|integration_hub|legacy-qualys-source|test-support/integration-hub" packages/hosted-integrations/src packages/server/src packages/tools/src apps/web/app ...`
+  returned no runtime source hits; remaining hits are docs/test/operator
+  references.
+
+## Milestone 31: Qualys Live Hosted Surface Migration
+
+Status: in progress.
+
+Current boundary:
+
+- The current accepted Hosted Tools Qualys surface is the 18-tool
+  `currentPromotedBatch` guarded by the inventory, help coverage matrix,
+  live-evaluation scenario manifest, accepted live artifacts, and deterministic
+  M36 acceptance bundle. Broader M31 migration rows remain deferred and
+  `blocked_evidence_required` until a later explicit batch supplies exact
+  endpoint, request, response, pagination, auth, safety, help, and live-proof
+  evidence.
+
+Goal:
+
+- Build the Qualys Live hosted family as a complete hosted family package after
+  Milestone 30 import/export is accepted, then import it into the isolated
+  hosted tools test environment through the product import path before
+  validation and promotion.
+- Migrate the current Qualys read-only live API-backed endpoint surface from the
+  integration-hub/operator evidence model into the hosted Qualys family.
+- Make `tools.yaml` the self-sufficient Qualys agent-facing source of truth:
+  every migrated tool must carry enough MCP metadata, full help, parameter
+  help, examples, caveats, pagination, and error guidance for an agent to use
+  the tool without reading the external `qualys-toolkit` skill.
+- Keep integration-hub as offline parity/evidence input only. No Qualys
+  integration-hub runtime imports, generated runtime inventories, or migration
+  adapters may become part of the hosted runtime package.
+- Keep the scope read-only and API-backed. Mutating Qualys tools, hidden local
+  analytics, cache-only workflows, and scoped-out Qualys product REST families
+  remain outside this migration unless a later explicit milestone changes that
+  boundary.
+
+Dependency:
+
+- Milestone 31 must not begin broad QualysLive family import until Milestone 30
+  proves package import/export with deterministic round-trip tests and at least
+  the existing Qualys pilot package.
+- QualysLive development happens outside the platform as a reviewed hosted
+  family package where practical; platform-side follow-up edits remain allowed
+  and must be exportable through Milestone 30.
+
+Scope contract:
+
+- Included: public read-only live Qualys tools for GAV/CSAM asset inventory,
+  Cloud Agent HostAsset QPS records, VMDR host/detection/KB/QVS/admin/scan/
+  report read views, Policy Compliance read views, Activity Audit logs,
+  Continuous Monitoring read/search/get/download views, and Asset Management
+  tag read views.
+- Included as reference/discovery, not tenant evidence: the consolidated
+  Qualys quickref surface (`qualys_quickref_search`,
+  `qualys_quickref_get_endpoint`, `qualys_quickref_list_parameters`,
+  `qualys_quickref_list_response_fields`, `qualys_quickref_gav_reference`,
+  `qualys_quickref_build_request`, `qualys_quickref_validate_request`, and
+  `qualys_quickref_explain`) when those tools are needed to replace
+  skill-only help and source-check behavior.
+- Excluded: scan launch/action/pause/resume/delete, report launch/cancel/
+  delete, purge, auth-record updates, tag create/update/delete, and any other
+  mutating or destructive operation.
+- Excluded until explicitly rescoped and regenerated: ETM/TruRisk,
+  TotalCloud/CloudView, CDR, Container Security, CertView, and Patch
+  Management.
+- Excluded from this live-endpoint migration: `qualys_cache_*` local snapshot
+  analytics. Cache tools may be handled by a later explicit-cache milestone and
+  must remain visibly cache-local if exposed.
+
+Canonical source inputs:
+
+- Operational Qualys skill:
+  `/Users/alenbohcelyan/.codex/skills/qualys-toolkit/SKILL.md`.
+- Qualys reference files under
+  `/Users/alenbohcelyan/.codex/skills/qualys-toolkit/references/`,
+  especially `tool-map.md`, `filter-catalog.md`,
+  `api-usage-playbook.md`, `call-recipes.md`,
+  `gav-asset-agent-inventory.md`, `vmdr-vulnerability-impact.md`,
+  `vmdr-operational-views.md`, `rti-threat-intelligence.md`, and
+  `resilience.md`.
+- Existing integration-hub Qualys code, configs, quickref libraries, and live
+  parity scripts may be read or imported by test/operator scripts as evidence.
+  They must not be imported by hosted runtime code.
+
+### Slice 31.1: Qualys Inventory Freeze
+
+Status: implemented.
+
+Goal:
+
+- Produce a deterministic Qualys migration inventory before writing or
+  promoting additional hosted tools.
+- The canonical inventory artifact is
+  `docs/hosted-integrations-qualys-live-migration-inventory.yaml`.
+
+Contract:
+
+- The inventory classifies every current Qualys skill/tool-map entry as
+  `included_live`, `included_reference`, `excluded_mutating`,
+  `excluded_cache_local`, `excluded_scoped_out`, or
+  `blocked_evidence_required`.
+- The inventory records the family-native `toolName`, hosted MCP name,
+  operation category, source references, live endpoint evidence, expected
+  handler name, result mode, pagination model, and whether real ids must be
+  discovered before invocation.
+- `included_live` means the row is in the current promoted/source-backed
+  hosted Qualys contract and must also appear in `currentPromotedBatch.tools`.
+  Broader planned migration rows remain `blocked_evidence_required` until exact
+  endpoint, request, response, pagination, auth, and safety evidence exists and
+  a later batch promotion updates the current surface.
+- The existing source-backed Qualys hosted tools remain in scope and keep their
+  public names as they enter `currentPromotedBatch.tools`:
+  `qualys_gav_asset_count`, `qualys_gav_asset_get`,
+  `qualys_gav_asset_search`,
+  `qualys_cloud_agent_hostasset_count`,
+  `qualys_cloud_agent_hostasset_search`, `qualys_vmdr_host_list`, and
+  `qualys_vmdr_host_detection_list`.
+- Unknown or disputed provider behavior is not guessed. The row is marked
+  `blocked_evidence_required` until official docs, imported source, imported
+  provider docs, or approved sanitized live debug evidence resolves it.
+
+TDD:
+
+- Inventory tests fail when a tool-map Qualys entry is missing from the
+  migration inventory or has no explicit status.
+- Inventory tests fail when a mutating, cache-local, or scoped-out product tool
+  is marked `included_live`.
+- Inventory tests fail when an included live tool lacks source references,
+  output intent, safety classification, or endpoint evidence.
+- Boundary tests prove integration-hub artifacts are used only by test/operator
+  support and are not imported from hosted runtime source.
+- `packages/hosted-integrations/test/qualys-live-inventory.test.ts` validates
+  the inventory against the current Qualys tool list, hosted naming rules,
+  status vocabulary, cache/reference/live boundaries, mutating exclusions, and
+  no integration-hub runtime import leakage.
+- The same test file proves `currentPromotedBatch.tools` matches both the
+  current source-backed hosted contract and every `included_live` inventory row;
+  broader migration rows remain `blocked_evidence_required` until promoted.
+- The same test file now parses the Qualys migration inventory, Qualys help
+  coverage matrix, live evaluation scenario manifest, and vocabulary acceptance
+  matrix with duplicate-key detection enabled. This keeps YAML source-of-truth
+  files from silently losing fields such as `sourceReferences` through parser
+  overwrite behavior.
+
+### Slice 31.2: Qualys Help Coverage Matrix
+
+Status: implemented for the current read-only Qualys batch; broader
+Qualys batches must add rows before promotion.
+
+Goal:
+
+- Convert the Qualys operational skill and reference help into explicit,
+  checkable hosted contract coverage.
+
+Contract:
+
+- Every included Qualys hosted tool has a help coverage row that maps source
+  guidance into `tools.yaml` fields:
+  `mcp.description`, `openacme.fullHelp`, `selectWhen`,
+  `doNotSelectWhen`, `prerequisites`, `parameterHelp`, `examples`, `errors`,
+  `pagination`, and optional `providerRef`.
+- Full help may be long. Do not truncate critical parameter options, examples,
+  caveats, source-check instructions, or "do not use" rules merely to keep
+  `tools.yaml` short.
+- Shared Qualys rules must be represented in every tool where they materially
+  affect correct use. Examples include: quickref is source discovery, not
+  tenant evidence; optional fields are omitted rather than filled with empty
+  strings or wildcards; QPS count/download tools must not send `limit`; GAV
+  filters use `filter_body.filters[]`; VMDR FO native parameters usually live
+  under `params`; placeholders are not ready-to-send arguments; source-check
+  unresolved provider behavior before live calls.
+- Large reference catalogs such as the full GAV token universe do not need to
+  be duplicated into every live tool. The live tool help must instead name the
+  supported discovery path and the reference/quickref tool that exposes the
+  large catalog.
+
+TDD:
+
+- Help coverage tests fail when a source rule from the operational skill or
+  selected reference files is neither represented in the relevant `tools.yaml`
+  contract nor explicitly marked `not_applicable`.
+- `hosted_tool_help` summary and full-detail tests prove the migrated help is
+  served from `tools.yaml`, not from the external Qualys skill.
+- Parameter-help tests prove short and full detail are available for every
+  meaningful input path and include options/enums/rules/examples where known.
+- Regression tests cover known failure-prone guidance: GAV `include_fields`
+  versus `fields`, GAV `filter_body.filters[]` versus bare criteria, QPS count
+  without `limit`, VMDR Host Detection `params.qids` rather than `params.qid`,
+  Host Detection top-level `status`, and no `page_size` on VMDR KB/QVS flows.
+
+Evidence:
+
+- Added `docs/hosted-integrations-qualys-help-coverage.yaml` as the
+  deterministic coverage matrix for the current promoted read-only Qualys
+  tools. It records the contract paths in `tools.yaml` that carry each critical
+  source rule instead of duplicating full help text.
+- `packages/hosted-integrations/test/qualys-live-inventory.test.ts` now checks
+  that every current coverage row corresponds to an `included_live`
+  inventory row, that the help matrix points at
+  `currentPromotedBatch`, and that each declared coverage path is present in
+  the current fixture's explicit `tools.yaml` contract.
+- The Qualys help coverage matrix now explicitly tracks actionable
+  `openacme.errors` and row-returning `openacme.pagination` coverage, so these
+  fields are not only present in validation but also tied to the current
+  source/help evidence.
+- The inventory test now meta-validates the coverage matrix itself: global
+  rules must include `openacme.errors` and `openacme.pagination`, every current
+  tool row must cover `openacme.errors`, and row-returning tools must cover an
+  `openacme.pagination*` path.
+- The current source-backed Qualys fixture now stores explicit
+  `family.yaml + tools.yaml`; legacy `family.yaml.tools[]` splitting remains
+  only a conversion helper for old-shape test input.
+- Verified with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`.
+
+### Slice 31.3: Qualys Contract Migration Batches
+
+Status: accepted for the current 18-tool read-only pilot. Broader Qualys
+batches are deferred and remain `blocked_evidence_required` until exact
+provider evidence is supplied. The current pilot has deterministic
+source-shape guards and includes direct GAV asset get, VMDR Host Detection,
+VMDR KnowledgeBase vuln metadata, VMDR KnowledgeBase QVS enrichment, VMDR asset
+group/IP/excluded-IP/restricted-IP/virtual-host listing, Asset Management tag
+list/search, and VMDR scan list/fetch read evidence.
+
+Goal:
+
+- Move Qualys hosted contracts into complete `tools.yaml` entries in small,
+  reviewable batches.
+
+Contract:
+
+- Every migrated tool uses:
+  `mcp.name = hosted_qualys__<toolName>` and
+  `openacme.function = tool_<toolName>`.
+- `mcp.inputSchema` rejects unsupported or ambiguous argument shapes.
+- `mcp.outputSchema` is present and matches returned structured content or the
+  artifact/result-path envelope.
+- `openacme.classification` accurately distinguishes read-only live tools from
+  reference-only quickref tools and any future explicit cache-local tools.
+- `openacme.examples` use safe bounded calls. Get/fetch/download examples must
+  either use fixture ids in non-live tests or document the discovery call that
+  obtains a real id before the target call.
+- No old `family.yaml.tools[]` ownership or compatibility fallback is
+  reintroduced.
+
+Batch order:
+
+1. Existing read-only pilot cleanup and full help completion.
+2. GAV/CSAM asset inventory: count, search, get, projection, update-window,
+   and filter-token discovery guidance.
+3. Cloud Agent HostAsset QPS read tools: count, search, get, Criteria rules,
+   and QPS count/download `limit` prohibition.
+4. VMDR vulnerability evidence: host list, host detection list, KB vuln list,
+   QVS list, static/dynamic search-list read views.
+5. VMDR operational read views: asset groups, IP scope, scans, scan fetch/
+   summaries, reports, templates, schedules.
+6. Policy Compliance read views.
+7. Activity Audit logs.
+8. Continuous Monitoring read/search/get/download views.
+9. Asset Management tag read views.
+10. Quickref/reference hosted tools required to replace skill-only lookup
+    behavior.
+
+TDD:
+
+- Contract schema tests cover every batch before implementation promotion.
+- Source fixture tests prove each migrated batch is stored as explicit
+  `family.yaml + tools.yaml`; `family.yaml.tools[]` is allowed only inside
+  legacy conversion test input, not in the current hosted source fixture.
+- Batch tests prove `listFamilies()`, `getFamily()`, registry snapshots,
+  source views, and `hosted_tool_help` derive the tool list and help from
+  `tools.yaml`.
+- Handler validation tests prove every contract has a matching
+  `tool_<toolName>(args, context)` implementation and no stale handler remains
+  published.
+- Hidden/removed/excluded tools are absent from runtime selection and Agent
+  Settings.
+
+Evidence:
+
+- The current source-backed Qualys fixture stores explicit
+  `family.yaml + tools.yaml` before tests seed source or drafts. The
+  `family.yaml` fixture has no `tools` property.
+- The first GAV/CSAM batch expansion now adds `qualys_gav_asset_get` to the
+  source-backed current promoted batch. Its `tools.yaml` contract, help
+  coverage row, registered live-safe example, Python handler
+  `tool_qualys_gav_asset_get`, and shared `QualysClient.get_asset()` method are
+  all covered by the same inventory/readiness/replacement tests as the existing
+  promoted tools.
+- The inventory now uses a real `blocked_evidence_required` row for
+  `qualys_cloud_agent_hostasset_get`. Existing references prove the selection
+  intent and that Cloud Agent HostAsset ids are QPS object ids, but they do not
+  yet prove enough endpoint/auth/request/response contract detail to promote a
+  hosted runtime tool. Inventory tests reject blocked rows in
+  `currentPromotedBatch.tools` and require their endpoint evidence to state
+  `EVIDENCE_REQUIRED`.
+- Deterministic validation after the get expansion passed with:
+  `pnpm --filter @openacme/hosted-integrations test -- packages.test.ts validation.test.ts help.test.ts qualys-live-inventory.test.ts integration-hub-replacement.test.ts`
+  (`5` files, `103` passed, `1` skipped), and
+  `pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts hosted-integrations.test.ts`
+  (`2` files, `13` passed).
+- The legacy `family.yaml.tools[]` split helper is centralized in
+  `packages/hosted-integrations/test-support/split-contract.ts` and remains a
+  test-support conversion utility only. Current source fixtures and runtime
+  persistence fixtures should not carry manifest-owned active tool lists.
+- Verified with:
+  `pnpm --filter @openacme/hosted-integrations test -- validation.test.ts qualys-live-inventory.test.ts integration-hub-replacement.test.ts`.
+- Verified runtime persistence fixture alignment with:
+  `pnpm --filter @openacme/server test -- runtime.test.ts`.
+- The Qualys inventory test now also cross-checks
+  `docs/hosted-tools-live-evaluation-scenarios.yaml`: active evaluation
+  scenarios must target a tool in `currentPromotedBatch`, and planned scenarios
+  must target either an inventoried Qualys tool, an explicitly excluded
+  operation, or an explicitly scoped-out module. This caught and fixed a
+  planned mutating-refusal scenario that used the invented name
+  `qualys_scan_launch` instead of the inventory-owned
+  `qualys_vmdr_scan_launch`.
+- The VMDR vulnerability-evidence batch now promotes
+  `qualys_vmdr_host_detection_list` into the current read-only Qualys contract.
+  Its `tools.yaml` contract, help coverage row, live-safe registered example,
+  Python handler `tool_qualys_vmdr_host_detection_list`, shared
+  `QualysClient.list_host_detections()` method, and FO warning URL pagination
+  use source-backed Host Detection evidence from the Qualys toolkit references.
+  Deterministic guards now verify the key agent-facing semantics: detection
+  status is a top-level argument, `params.qids` is plural, `params.qid` and
+  `params.status` are rejected, and unresolved CVE/title-to-QID questions must
+  require source-backed evidence instead of inventing provider behavior.
+- The same VMDR vulnerability-evidence batch now promotes
+  `qualys_vmdr_kb_vuln_list` into the current read-only Qualys contract as a
+  metadata-only KnowledgeBase lookup. Its `tools.yaml` contract, help coverage
+  row, live-safe registered example, Python handler
+  `tool_qualys_vmdr_kb_vuln_list`, shared `QualysClient.list_kb_vulns()`
+  method, and FO warning URL pagination use source-backed KB evidence from the
+  Qualys toolkit references. Deterministic guards verify `params` is required,
+  `page_size`/`truncation_limit` are not exposed, `params.cve` and `params.ids`
+  are taught, unsupported `params.cve_ids`/title/RTI invention is rejected
+  before provider calls, and KB rows are metadata only rather than tenant
+  exposure proof.
+- The VMDR vulnerability-evidence batch now also promotes
+  `qualys_vmdr_kb_qvs_list` into the current read-only Qualys contract as a
+  bounded QVS enrichment lookup. Its `tools.yaml` contract, help coverage row,
+  live-safe registered example, Python handler
+  `tool_qualys_vmdr_kb_qvs_list`, shared `QualysClient.list_kb_qvs()` method,
+  and bounded-params pagination metadata use source-backed QVS evidence from
+  the Qualys toolkit references. Deterministic guards verify `params` is
+  required, `page_size`/`truncation_limit` are not exposed, QVS is taught as
+  CVE/vulnerability-level score context distinct from Host Detection QDS,
+  unbounded empty params and QDS/Host Detection params are rejected before
+  provider calls, and QVS rows do not prove tenant exposure.
+- The next planned VMDR search-list read views were intentionally not
+  implemented. `qualys_vmdr_static_search_list` and
+  `qualys_vmdr_dynamic_search_list` now remain
+  `blocked_evidence_required` because current references prove selection intent
+  for existing QID search-list definitions but do not prove exact endpoint path,
+  method/action, auth/request shape, pagination behavior, or response
+  structure. The inventory guard now fails if VMDR search-list rows are marked
+  `included_live` with only generic "FO ... with native params" evidence.
+- The Activity Audit read view was also intentionally not implemented.
+  `qualys_activity_audit_log_list` now remains `blocked_evidence_required`
+  because current references prove selection intent and known params such as
+  `since_datetime`, `truncation_limit`, and `id_max`, but not the exact endpoint
+  path, method/action, auth/request shape, pagination behavior, or response
+  structure. The inventory guard now fails if an Activity Audit row is marked
+  `included_live` without an endpoint-like `/api/` or `/rest/` evidence string.
+- Asset tag count/get were intentionally not implemented while tag list/search
+  remain eligible for a later exact-endpoint QPS batch. `qualys_asset_management_tag_count`
+  and `qualys_asset_management_tag_get` now remain `blocked_evidence_required`
+  because current references prove selection intent and no-limit/discovered-id
+  guidance, but not exact endpoint paths, auth/request shapes, count/get
+  response structures, or id semantics. The inventory guard now fails if an
+  Asset Management tag row is marked `included_live` without `/qps/rest/2.0/`
+  endpoint evidence.
+- Deterministic validation after the KB vuln metadata expansion passed with:
+  `pnpm --filter @openacme/hosted-integrations test -- schemas.test.ts validation.test.ts help.test.ts packages.test.ts integration-hub-replacement.test.ts qualys-live-inventory.test.ts`
+  (`6` files, `120` passed, `1` skipped),
+  `pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts hosted-integrations.test.ts hosted-integration-management.test.ts`
+  (`3` files, `24` passed), and
+  `pnpm --filter @openacme/server test -- hosted-integration-live-parity.test.ts runtime.test.ts hosted-tools-live-acceptance.test.ts hosted-integrations-legacy-surface.test.ts`
+  (`5` files, `87` passed). Type and hygiene checks passed with
+  `pnpm --filter @openacme/hosted-integrations check-types`,
+  `pnpm --filter @openacme/hosted-integrations build`,
+  `pnpm --filter @openacme/tools check-types`,
+  `pnpm --filter @openacme/server check-types`, and `git diff --check`.
+- Deterministic validation after the QVS enrichment expansion passed with:
+  `pnpm --filter @openacme/hosted-integrations test -- schemas.test.ts validation.test.ts help.test.ts packages.test.ts integration-hub-replacement.test.ts qualys-live-inventory.test.ts`
+  (`6` files, `121` passed, `1` skipped),
+  `pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts hosted-integrations.test.ts hosted-integration-management.test.ts`
+  (`3` files, `24` passed), and
+  `pnpm --filter @openacme/server test -- hosted-integration-live-parity.test.ts runtime.test.ts hosted-tools-live-acceptance.test.ts hosted-integrations-legacy-surface.test.ts`
+  (`5` files, `87` passed). Type and hygiene checks passed with
+  `pnpm --filter @openacme/hosted-integrations check-types`,
+  `pnpm --filter @openacme/hosted-integrations build`,
+  `pnpm --filter @openacme/tools check-types`,
+  `pnpm --filter @openacme/server check-types`, and `git diff --check`.
+- Deterministic validation after the search-list evidence rectification passed
+  with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`22` tests).
+- Deterministic validation after the Activity Audit evidence rectification
+  passed with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`22` tests).
+- Deterministic validation after the Asset Tag count/get evidence
+  rectification passed with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`22` tests).
+- The Asset Management tag read batch now promotes
+  `qualys_asset_management_tag_search` into the current read-only Qualys
+  contract. Its `tools.yaml` contract, help coverage row, live-safe registered
+  example, Python handler `tool_qualys_asset_management_tag_search`, shared
+  `QualysClient.search_asset_tags()` method, and QPS XML
+  `ServiceRequest`/`Criteria` request builder use imported legacy
+  integration-hub/operator evidence for `POST /qps/rest/2.0/search/am/tag`.
+  Deterministic guards verify `criteria[]` is required, `page_size`/`max_pages`
+  are not exposed, `limit` maps to QPS `preferences.limitResults`, wildcard
+  enumeration is rejected, and results are documented as
+  `ServiceResponse.data.Tag` records rather than GAV assets.
+- Deterministic validation after the Asset Management tag search expansion
+  passed with:
+  `pnpm --filter @openacme/hosted-integrations test -- schemas.test.ts validation.test.ts help.test.ts packages.test.ts integration-hub-replacement.test.ts qualys-live-inventory.test.ts`
+  (`6` files, `122` passed, `1` skipped),
+  `pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts hosted-integrations.test.ts hosted-integration-management.test.ts`
+  (`3` files, `24` passed), and
+  `pnpm --filter @openacme/server test -- hosted-integration-live-parity.test.ts runtime.test.ts hosted-tools-live-acceptance.test.ts hosted-integrations-legacy-surface.test.ts`
+  (`5` files, `87` passed).
+- The same Asset Management tag read batch now also promotes
+  `qualys_asset_management_tag_list` into the current read-only Qualys
+  contract as a bounded, limit-only QPS tag listing tool. Its `tools.yaml`
+  contract, help coverage row, live-safe registered example, Python handler
+  `tool_qualys_asset_management_tag_list`, and shared
+  `QualysClient.list_asset_tags()` method use the same source-backed
+  `POST /qps/rest/2.0/search/am/tag` QPS `ServiceRequest` evidence while
+  deliberately exposing no Criteria/filter inputs. Deterministic guards verify
+  only `limit` is accepted, `limit` maps to `preferences.limitResults`,
+  wildcard/filter placeholders are rejected by guidance and runtime validation,
+  and results are documented as `ServiceResponse.data.Tag` records.
+- Deterministic validation after the Asset Management tag list expansion
+  passed with:
+  `pnpm --filter @openacme/hosted-integrations test -- schemas.test.ts validation.test.ts help.test.ts packages.test.ts integration-hub-replacement.test.ts qualys-live-inventory.test.ts`
+  (`6` files, `123` passed, `1` skipped),
+  `pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts hosted-integrations.test.ts hosted-integration-management.test.ts`
+  (`3` files, `24` passed), and
+  `pnpm --filter @openacme/server test -- hosted-integration-live-parity.test.ts runtime.test.ts hosted-tools-live-acceptance.test.ts hosted-integrations-legacy-surface.test.ts`
+  (`5` files, `87` passed).
+- The VMDR admin read-view batch now promotes
+  `qualys_vmdr_asset_group_list` into the current read-only Qualys contract.
+  Its `tools.yaml` contract, help coverage row, live-safe registered example,
+  Python handler `tool_qualys_vmdr_asset_group_list`, shared
+  `QualysClient.list_asset_groups()` method, and FO warning URL pagination use
+  imported legacy integration-hub/operator evidence for
+  `GET /api/2.0/fo/asset/group/?action=list` and `ASSET_GROUP` records.
+  Deterministic guards verify `params` and `max_pages` are the exposed inputs,
+  `page_size` is not exposed, native params are bounded and source-backed, and
+  unsupported title/text/GAV-filter invention is rejected before provider
+  calls.
+- Deterministic validation after the VMDR asset group expansion passed with:
+  `pnpm --filter @openacme/hosted-integrations test -- schemas.test.ts validation.test.ts help.test.ts packages.test.ts integration-hub-replacement.test.ts qualys-live-inventory.test.ts`
+  (`6` files, `124` passed, `1` skipped),
+  `pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts hosted-integrations.test.ts hosted-integration-management.test.ts`
+  (`3` files, `24` passed), and
+  `pnpm --filter @openacme/server test -- hosted-integration-live-parity.test.ts runtime.test.ts hosted-tools-live-acceptance.test.ts hosted-integrations-legacy-surface.test.ts`
+  (`5` files, `87` passed).
+- The same VMDR admin read-view batch now promotes `qualys_vmdr_ip_list` into
+  the current read-only Qualys contract. Its `tools.yaml` contract, help
+  coverage row, live-safe registered example, Python handler
+  `tool_qualys_vmdr_ip_list`, shared `QualysClient.list_ips()` method, and FO
+  warning URL pagination use imported legacy integration-hub/operator evidence
+  for `GET /api/2.0/fo/asset/ip/?action=list`. Deterministic guards verify
+  `params` and `max_pages` are the exposed inputs, `page_size`/GAV
+  `filter_body` are not exposed, native `params.ips` is taught, and unsupported
+  GAV filter, Asset Group, and free-text host-search invention is rejected
+  before provider calls.
+- Deterministic validation after the VMDR IP list expansion passed with:
+  `pnpm --filter @openacme/hosted-integrations test -- schemas.test.ts validation.test.ts help.test.ts packages.test.ts integration-hub-replacement.test.ts qualys-live-inventory.test.ts`
+  (`6` files, `125` passed, `1` skipped),
+  `pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts hosted-integrations.test.ts hosted-integration-management.test.ts`
+  (`3` files, `24` passed), and
+  `pnpm --filter @openacme/server test -- hosted-integration-live-parity.test.ts runtime.test.ts hosted-tools-live-acceptance.test.ts hosted-integrations-legacy-surface.test.ts`
+  (`5` files, `87` passed).
+- The same VMDR admin read-view batch now promotes
+  `qualys_vmdr_excluded_ip_list` into the current read-only Qualys contract.
+  Its `tools.yaml` contract, help coverage row, live-safe registered example,
+  Python handler `tool_qualys_vmdr_excluded_ip_list`, shared
+  `QualysClient.list_excluded_ips()` method, and FO warning URL pagination use
+  imported legacy integration-hub/operator evidence for
+  `GET /api/2.0/fo/asset/excluded_ip/?action=list`. Deterministic guards verify
+  `params` and `max_pages` are the exposed inputs, `page_size`/GAV
+  `filter_body` are not exposed, native `params.ips` is taught, and unsupported
+  GAV filter, Asset Group, included-IP, and free-text host-search invention is
+  rejected before provider calls.
+- Deterministic validation after the VMDR excluded IP list expansion passed
+  with:
+  `pnpm --filter @openacme/hosted-integrations test -- schemas.test.ts validation.test.ts help.test.ts packages.test.ts integration-hub-replacement.test.ts qualys-live-inventory.test.ts`
+  (`6` files, `126` passed, `1` skipped),
+  `pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts hosted-integrations.test.ts hosted-integration-management.test.ts`
+  (`3` files, `24` passed), and
+  `pnpm --filter @openacme/server test -- hosted-integration-live-parity.test.ts runtime.test.ts hosted-tools-live-acceptance.test.ts hosted-integrations-legacy-surface.test.ts`
+  (`5` files, `87` passed).
+- The same VMDR admin read-view batch now promotes
+  `qualys_vmdr_restricted_ip_list` into the current read-only Qualys contract.
+  Its `tools.yaml` contract, help coverage row, live-safe registered example,
+  Python handler `tool_qualys_vmdr_restricted_ip_list`, shared
+  `QualysClient.list_restricted_ips()` method, and FO warning URL pagination use
+  imported legacy integration-hub/operator evidence for
+  `GET /api/2.0/fo/setup/restricted_ips/?action=list&output_format=xml`.
+  Deterministic guards verify `params` and `max_pages` are the exposed inputs,
+  `page_size`/GAV `filter_body` are not exposed, `output_format=xml` is
+  enforced by the tool rather than caller input, and unsupported GAV filter,
+  Asset Group, included/excluded-IP, and free-text host-search invention is
+  rejected before provider calls.
+- Deterministic validation after the VMDR restricted IP list expansion passed
+  with:
+  `pnpm --filter @openacme/hosted-integrations test -- schemas.test.ts validation.test.ts help.test.ts packages.test.ts integration-hub-replacement.test.ts qualys-live-inventory.test.ts`
+  (`6` files, `127` passed, `1` skipped),
+  `pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts hosted-integrations.test.ts hosted-integration-management.test.ts`
+  (`3` files, `24` passed), and
+  `pnpm --filter @openacme/server test -- hosted-integration-live-parity.test.ts runtime.test.ts hosted-tools-live-acceptance.test.ts hosted-integrations-legacy-surface.test.ts`
+  (`5` files, `87` passed).
+- The same VMDR admin read-view batch now promotes
+  `qualys_vmdr_virtual_host_list` into the current read-only Qualys contract.
+  Its `tools.yaml` contract, help coverage row, live-safe registered example,
+  Python handler `tool_qualys_vmdr_virtual_host_list`, shared
+  `QualysClient.list_virtual_hosts()` method, and FO warning URL pagination use
+  imported legacy integration-hub/operator evidence for
+  `GET /api/2.0/fo/asset/vhost/?action=list` and `VIRTUAL_HOST` records.
+  Deterministic guards verify `params` and `max_pages` are the exposed inputs,
+  `page_size`/GAV `filter_body` are not exposed, `VIRTUAL_HOST` extraction is
+  explicit, and unsupported GAV filter, Host List, IP scope, and free-text
+  search invention is rejected before provider calls.
+- Deterministic validation after the VMDR virtual host list expansion passed
+  with:
+  `pnpm --filter @openacme/hosted-integrations test -- schemas.test.ts validation.test.ts help.test.ts packages.test.ts integration-hub-replacement.test.ts qualys-live-inventory.test.ts`
+  (`6` files, `128` passed, `1` skipped),
+  `pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts hosted-integrations.test.ts hosted-integration-management.test.ts`
+  (`3` files, `24` passed), and
+  `pnpm --filter @openacme/server test -- hosted-integration-live-parity.test.ts runtime.test.ts hosted-tools-live-acceptance.test.ts hosted-integrations-legacy-surface.test.ts`
+  (`5` files, `87` passed).
+- The VMDR operational read-view batch now promotes
+  `qualys_vmdr_scan_list` into the current read-only Qualys contract. Its
+  `tools.yaml` contract, help coverage row, live-safe registered example,
+  Python handler `tool_qualys_vmdr_scan_list`, shared
+  `QualysClient.list_vm_scans()` method, and FO warning URL pagination use
+  imported legacy integration-hub/operator evidence for
+  `GET /api/2.0/fo/scan/?action=list` and `SCAN` records. Deterministic guards
+  verify `params` and `max_pages` are the exposed inputs,
+  `page_size`/GAV `filter_body`/`scan_ref` are not exposed, `scan_ref` is
+  taught as belonging to `qualys_vmdr_scan_fetch`, and launch/cancel/pause/
+  resume/delete or other scan-state mutation is rejected by selection guidance.
+- Deterministic validation after the VMDR scan list expansion passed with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`30` tests),
+  `pnpm --filter @openacme/hosted-integrations test -- schemas.test.ts validation.test.ts help.test.ts packages.test.ts integration-hub-replacement.test.ts qualys-live-inventory.test.ts`
+  (`6` files, `129` passed, `1` skipped),
+  `pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts hosted-integrations.test.ts hosted-integration-management.test.ts`
+  (`3` files, `24` passed), and
+  `pnpm --filter @openacme/server test -- hosted-integration-live-parity.test.ts runtime.test.ts hosted-tools-live-acceptance.test.ts hosted-integrations-legacy-surface.test.ts`
+  (`5` files, `87` passed). Type, build, and hygiene checks passed with
+  `pnpm --filter @openacme/hosted-integrations check-types`,
+  `pnpm --filter @openacme/tools check-types`,
+  `pnpm --filter @openacme/server check-types`,
+  `pnpm --filter @openacme/hosted-integrations build`, and
+  `git diff --check`.
+- The same VMDR operational read-view batch now promotes
+  `qualys_vmdr_scan_fetch` into the current read-only Qualys contract as the
+  scan result payload fetch tool for a real discovered `scan_ref`. Its
+  `tools.yaml` contract, help coverage row, registered example, Python handler
+  `tool_qualys_vmdr_scan_fetch`, shared `QualysClient.fetch_vm_scan()` method,
+  and response-size/artifact guidance use source-backed Qualys toolkit evidence
+  for `GET /api/2.0/fo/scan/?action=fetch&scan_ref=<discovered-scan-ref>`.
+  Deterministic guards verify `scan_ref` is required at the top level,
+  `params` carries optional native fetch params such as `mode`, `output_format`,
+  and `ips`, list-only pagination controls are not exposed, placeholder-like
+  refs are rejected before provider calls, and discovery routes back to
+  `qualys_vmdr_scan_list`.
+- The scan fetch example is intentionally not a direct `live_safe` call
+  example because a real tenant `scan_ref` must be discovered first. Its
+  registered example is `discovery_required` with empty `args` and explicit
+  `requires_discovered_scan_ref`/`discovery_tool` metadata, and its contract
+  help example is a `not_ready_to_send` discovery flow rather than a
+  placeholder `scan_ref` argument an agent might copy into a live call.
+- `discovery_required` is now a first-class example category. It lets human or
+  Tool Developer edits store prerequisite/discovery examples through the normal
+  example registry without forcing placeholder required args that are not
+  ready to invoke. Normal `smoke`, `live_safe`, `regression`, and `mock_only`
+  examples still validate args against the tool input schema.
+- After tightening the scan fetch example boundary, deterministic validation
+  passed with the focused Qualys package/runtime bundle:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts packages.test.ts integration-hub-replacement.test.ts`
+  (`78` passed, `1` skipped), the broader hosted/tools/server bundles
+  (`130` passed and `1` skipped, `24` passed, `87` passed), hosted-integrations
+  check-types/build, tools check-types, server check-types, and
+  `git diff --check`.
+- The first downstream server rerun intentionally failed before rebuilding
+  `@openacme/hosted-integrations`, because server live-parity tests saw the
+  stale generated example-category schema. Rebuilding hosted-integrations before
+  server tests fixed the failure. This confirms the M36.6 build-order gate is
+  not cosmetic.
+- After the `discovery_required` category was added, deterministic validation
+  passed with hosted-integrations examples/schema/package/Qualys/runtime tests
+  (`94` passed, `1` skipped), the broader hosted-integrations bundle (`135`
+  passed, `1` skipped), tools (`24` passed), server routes/runtime/parity/
+  acceptance bundle (`149` passed), hosted-integrations check-types/build,
+  tools check-types, server check-types, and `git diff --check`.
+- The management-tool adapter, architecture document, and bundled Tool
+  Developer skill now teach and accept `discovery_required`. Focused validation
+  passed with `pnpm --filter @openacme/tools test -- hosted-integration-management.test.ts`
+  (`12` tests), `pnpm --filter @openacme/server test -- hosted-integrations-legacy-surface.test.ts`
+  (`7` tests), the focused hosted example/Qualys guard (`4` passed, `32`
+  skipped), and `git diff --check`.
+- Broader validation after aligning those adapter/docs/skill surfaces passed
+  with the hosted-integrations bundle (`135` passed, `1` skipped), tools bundle
+  (`25` passed), server routes/runtime/parity/acceptance bundle (`149`
+  passed), hosted-integrations check-types/build, tools check-types, server
+  check-types, and `git diff --check`.
+- The plan's current canonical-contract pointer now includes the M36 acceptance
+  hardening gate, and the legacy-surface guard locks the architecture
+  `discovery_required` example-category wording. Focused validation passed with
+  `pnpm --filter @openacme/server test -- hosted-integrations-legacy-surface.test.ts`,
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts -t "closeout documentation boundaries"`,
+  and `git diff --check`.
+- `discovery_required` examples are now blocked from direct example execution
+  in both product HTTP routes and `hosted_tool_example_run` management-tool
+  execution. The Hosted Tools UI action state also disables run targets for
+  `discovery_required` examples while keeping them editable. Focused validation
+  passed with `pnpm --dir apps/web test hosted-integrations-admin.test.ts`,
+  `pnpm --filter @openacme/hosted-integrations build`,
+  `pnpm --filter @openacme/tools build`, and
+  `pnpm --filter @openacme/server test -- hosted-integrations-routes.test.ts tools-hosted-integrations.test.ts`.
+- Deterministic validation after the VMDR scan fetch expansion passed with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`31` tests),
+  `pnpm --filter @openacme/hosted-integrations test -- schemas.test.ts validation.test.ts help.test.ts packages.test.ts integration-hub-replacement.test.ts qualys-live-inventory.test.ts`
+  (`6` files, `130` passed, `1` skipped),
+  `pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts hosted-integrations.test.ts hosted-integration-management.test.ts`
+  (`3` files, `24` passed), and
+  `pnpm --filter @openacme/server test -- hosted-integration-live-parity.test.ts runtime.test.ts hosted-tools-live-acceptance.test.ts hosted-integrations-legacy-surface.test.ts`
+  (`5` files, `87` passed). Type, build, and hygiene checks passed with
+  `pnpm --filter @openacme/hosted-integrations check-types`,
+  `pnpm --filter @openacme/tools check-types`,
+  `pnpm --filter @openacme/server check-types`,
+  `pnpm --filter @openacme/hosted-integrations build`, and
+  `git diff --check`.
+- The planned VMDR scan summary read views were intentionally not implemented.
+  `qualys_vmdr_scan_summary` and `qualys_vmdr_scan_vm_summary` now remain
+  `blocked_evidence_required` because current references prove selection
+  intent and native params such as `scan_reference`/`scan_datetime_since`, but
+  do not prove exact endpoint path, method/action, auth/request shape,
+  pagination behavior, or response structure. The inventory guard now fails if
+  either scan summary row is marked `included_live` with only generic
+  "FO ... with native params" evidence.
+- Deterministic validation after the VMDR scan summary evidence rectification
+  passed with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`31` tests), and
+  `pnpm --filter @openacme/hosted-integrations test -- schemas.test.ts validation.test.ts help.test.ts packages.test.ts integration-hub-replacement.test.ts qualys-live-inventory.test.ts`
+  (`6` files, `130` passed, `1` skipped).
+- The planned VMDR report and schedule read views were intentionally not
+  implemented. `qualys_vmdr_report_list`, `qualys_vmdr_report_fetch`,
+  `qualys_vmdr_report_template_list`, `qualys_vmdr_scan_schedule_list`, and
+  `qualys_vmdr_report_schedule_list` now remain `blocked_evidence_required`
+  because current references prove selection intent and some native parameter
+  names, but do not prove exact endpoint paths, method/action, auth/request
+  shape, pagination behavior, report id placement, output format behavior, or
+  response/artifact structure. The inventory guard now fails if a
+  `vmdr_report_read_view` row is marked `included_live` with only generic
+  "FO ... with native params" evidence or without endpoint-like evidence.
+- Deterministic validation after the VMDR report/schedule evidence
+  rectification passed with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`31` tests), and
+  `pnpm --filter @openacme/hosted-integrations test -- schemas.test.ts validation.test.ts help.test.ts packages.test.ts integration-hub-replacement.test.ts qualys-live-inventory.test.ts`
+  (`6` files, `130` passed, `1` skipped).
+- The planned Policy Compliance read views were intentionally not implemented.
+  `qualys_policy_compliance_scan_list`,
+  `qualys_policy_compliance_scan_fetch`,
+  `qualys_policy_compliance_scap_scan_list`,
+  `qualys_policy_compliance_posture_list`,
+  `qualys_policy_compliance_control_list`,
+  `qualys_policy_compliance_policy_list`,
+  `qualys_policy_compliance_policy_export`, and
+  `qualys_policy_compliance_exception_list` now remain
+  `blocked_evidence_required` because current references prove selection
+  intent and some native parameter names, but do not prove exact endpoint
+  paths, method/action, auth/request shape, pagination behavior, id/ref
+  placement, output format behavior, or response/artifact structure. The
+  inventory guard now fails if a `policy_compliance_read_view` row is marked
+  `included_live` with generic "Policy Compliance ... with native params"
+  evidence or without endpoint-like evidence.
+- Deterministic validation after the Policy Compliance evidence rectification
+  passed with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`31` tests), and
+  `pnpm --filter @openacme/hosted-integrations test -- schemas.test.ts validation.test.ts help.test.ts packages.test.ts integration-hub-replacement.test.ts qualys-live-inventory.test.ts`
+  (`6` files, `130` passed, `1` skipped).
+- The planned Continuous Monitoring read views were intentionally not
+  implemented. `qualys_continuous_monitoring_search_alerts`,
+  `qualys_continuous_monitoring_get_alert`,
+  `qualys_continuous_monitoring_download_alerts`,
+  `qualys_continuous_monitoring_search_profiles`,
+  `qualys_continuous_monitoring_get_profile`,
+  `qualys_continuous_monitoring_search_rulesets`,
+  `qualys_continuous_monitoring_get_ruleset`,
+  `qualys_continuous_monitoring_search_rules`, and
+  `qualys_continuous_monitoring_get_rule` now remain
+  `blocked_evidence_required` because current references prove selection
+  intent, QPS/Criteria/id/download expectations, and no-limit download
+  guidance, but do not prove exact endpoint paths, auth/request shapes,
+  Criteria fields, pagination/limit behavior, id placement, format handling,
+  or response/artifact structures. The inventory guard now fails if a
+  `continuous_monitoring` row is marked `included_live` without endpoint-like
+  QPS/API evidence or with only generic "Continuous Monitoring ... search/get/
+  download" evidence.
+- After the evidence rectifications, `included_live` rows now align exactly
+  with `currentPromotedBatch.tools`; broader migration rows remain explicit
+  `blocked_evidence_required` until exact endpoint/request/response evidence
+  exists. The inventory tests were updated to guard this invariant and to keep
+  blocked broader rows out of `tools.yaml`, help coverage, and current examples.
+- Deterministic validation after the Continuous Monitoring evidence
+  rectification passed with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`31` tests), and
+  `pnpm --filter @openacme/hosted-integrations test -- schemas.test.ts validation.test.ts help.test.ts packages.test.ts integration-hub-replacement.test.ts qualys-live-inventory.test.ts`
+  (`6` files, `130` passed, `1` skipped).
+- The Qualys inventory wording now matches the new invariant: `included_live`
+  means a row is in the current promoted/source-backed hosted contract and must
+  appear in `currentPromotedBatch.tools`; broader migration rows stay
+  `blocked_evidence_required` until promoted. The closeout documentation guard
+  now rejects the stale "broader included_live rows are planned migration
+  scope" wording. Verified with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`31` tests), and the same six-file hosted-integrations bundle
+  (`130` passed, `1` skipped).
+
+### Slice 31.4: Qualys Runtime And Shared Client Migration
+
+Status: accepted for the current 18-tool read-only pilot. Broader Qualys
+runtime coverage is deferred and remains `blocked_evidence_required` until
+exact provider evidence is supplied. The current pilot has deterministic shared
+client ownership guards, including direct GAV asset get and KB vuln metadata
+lookup, QVS enrichment, VMDR asset group/IP/excluded-IP/restricted-IP/virtual-host
+and scan list/fetch, and Asset Management tag list/search through the shared
+Qualys client.
+
+Goal:
+
+- Implement included Qualys tools through one hosted Qualys family runtime with
+  shared authentication, request, retry, timeout, pagination, parsing,
+  artifact, and error-normalization behavior.
+
+Contract:
+
+- Qualys credentials and endpoint config come from hosted environment config
+  metadata and secret refs. Tool code must not request, print, or hard-code raw
+  secrets.
+- Authentication, base URL resolution, request construction, retries, timeout,
+  XML/JSON parsing, pagination, truncation, and artifact writing are shared
+  helper/client concerns, not reimplemented per tool.
+- Tool-specific functions map MCP arguments to native Qualys request shapes and
+  parse output into the declared output schema or artifact envelope.
+- Provider/network errors are normalized into actionable, credential-safe tool
+  execution errors.
+- Result files are used for oversized or downloadable responses; returned
+  content states truncation, continuation, result path, and source mode.
+
+TDD:
+
+- Unit tests prove shared auth/client construction is used by all migrated
+  tools.
+- Schema tests reject unsupported fields before network calls.
+- Error tests prove bad arguments, auth failures, permission failures, rate
+  limits, provider errors, parse failures, and truncation are distinguishable
+  and redacted.
+- Contract tests prove normalized runtime error categories remain visible in
+  the tool contract guidance agents read through hosted help and tool metadata.
+- Artifact tests prove large responses spill to run artifacts instead of model
+  context.
+
+Evidence:
+
+- `packages/hosted-integrations/test/integration-hub-replacement.test.ts`
+  now verifies every current Qualys handler obtains its provider
+  access through `_authenticated_client(context)` and does not contain direct
+  network, config, or secret primitives such as `urlopen`, `Request`,
+  `_secret`, `_config`, `QUALYS_USERNAME`, or `QUALYS_PASSWORD`.
+- The same test verifies `QualysClient` owns config/secret lookup, XML/Gateway
+  requests, and normalized `QualysToolError` categories for auth failure, rate
+  limiting, upstream errors, and connection errors.
+- The same test now verifies every current Qualys contract includes
+  the runtime error categories `bad_arguments`, `auth_failed`, `rate_limited`,
+  `upstream_error`, and `connection_error` in agent-facing error guidance.
+- Verified with:
+  `pnpm --filter @openacme/hosted-integrations test -- integration-hub-replacement.test.ts qualys-live-inventory.test.ts`.
+
+### Slice 31.5: Real Qualys Live Smoke And Parity
+
+Status: accepted for the current 18-tool read-only pilot. Broader batch live
+smoke/parity is deferred and remains scenario-based until exact provider
+evidence and new accepted live artifacts are supplied. The current pilot has a
+credential-gated live smoke test and deterministic no-mock endpoint guard.
+
+Goal:
+
+- Prove the migrated hosted Qualys surface works against real Qualys APIs with
+  bounded, read-only calls.
+
+Contract:
+
+- Live validation is operator-gated by `OPENACME_LIVE_QUALYS=1` and real Qualys
+  credentials. No mock Qualys server may satisfy the live gate.
+- Smoke tests prefer counts first. Row-returning probes use bounded
+  `limit`, `page_size`, `max_pages`, and/or `truncation_limit` values.
+- Get/fetch/download tools discover a real id/ref from a bounded read call
+  before making the target call.
+- Live parity may compare hosted behavior with integration-hub behavior only
+  from test/operator code. Runtime code remains independent.
+- Every live result records selected hosted tool, exact sanitized arguments,
+  success/blocker, result summary, result path inspection, pagination/
+  truncation, and whether quickref/reference handoff occurred.
+
+TDD / Live Validation:
+
+- Deterministic tests skip cleanly when Qualys credentials are absent.
+- Live tests fail closed when a configured Qualys run uses mocks, skips result
+  path inspection for artifact responses, leaks secrets, or calls an excluded
+  tool.
+- At least one live bounded smoke per included batch must pass before that
+  batch is considered migrated.
+- The current promoted Qualys read-only parity cases must continue to match
+  `currentPromotedBatch.tools` and pass after broader migration work.
+
+Evidence:
+
+- The current live smoke remains gated by `OPENACME_LIVE_QUALYS=1`
+  and requires `QUALYS_VM_URL`, `QUALYS_USERNAME`, and `QUALYS_PASSWORD`.
+- `packages/hosted-integrations/test/integration-hub-replacement.test.ts`
+  now rejects non-HTTPS, localhost/loopback, and `mock` hostnames for
+  `QUALYS_VM_URL` and `QUALYS_GATEWAY_URL` before the live run can seed hosted
+  environment config. This keeps the live gate from being satisfied by a local
+  or mock Qualys endpoint.
+- `packages/hosted-integrations/test/qualys-live-inventory.test.ts` now
+  enforces that every current promoted Qualys source-backed direct-call example
+  is `live_safe`, read-only, bounded (`page_size`, `max_pages`, or
+  `truncation_limit` where applicable), and does not use legacy Cloud Agent
+  aliases such as `agent.lastCheckedIn`. Discovery-required fetch tools such
+  as `qualys_vmdr_scan_fetch` must instead carry smoke/discovery metadata and
+  must not expose placeholder ids as ready-to-send examples.
+- Current promoted live-safe example coverage now includes
+  `qualys_vmdr_host_detection_list` with `status: New,Active,Re-Opened`,
+  `truncation_limit: 1`, `max_pages: 1`, and `params.show_asset_id: 1` so live
+  smoke remains bounded while exercising the Host Detection endpoint.
+- Current promoted live-safe example coverage now also includes
+  `qualys_vmdr_kb_vuln_list` with `params.ids: "90043"`, `params.details: All`,
+  and `max_pages: 1`, so a future real-Qualys smoke can exercise KB metadata
+  without broad tenant-wide pulls.
+- Current promoted live-safe example coverage now also includes
+  `qualys_vmdr_kb_qvs_list` with `params.qvs_min: 80` and
+  `params.details: Basic`, so a future real-Qualys smoke can exercise bounded
+  QVS enrichment without treating QVS as affected-host evidence.
+- `packages/server/test-support/hosted-tools/live-acceptance.ts` now lets
+  consumer live-acceptance analyzers require hosted result fragments and
+  dotted result-summary keys. Analyzer tests prove strict scenarios can fail
+  closed when result-path inspection or pagination/truncation evidence is
+  missing from the hosted tool result summary.
+- The live acceptance runner now converts fallback direct hosted invoke
+  responses into normal hosted tool-call evidence, including sanitized args,
+  run/generation ids, response mode, result-path inspection, and compact
+  inline/artifact result summary. This prevents fallback diagnostics from
+  rescuing a scenario while losing the hosted invocation evidence shape.
+- `packages/server/test/hosted-integration-live-parity.test.ts` now proves the
+  default Qualys live parity case set is built from the current promoted
+  read-only pilot tool list, not from a stale fixed five-case expectation.
+- Verified current-promoted parity case alignment with:
+  `pnpm --filter @openacme/server test -- hosted-integration-live-parity.test.ts`
+  (`18` tests) and `pnpm --filter @openacme/server check-types`.
+- Verified with:
+  `pnpm --filter @openacme/hosted-integrations test -- integration-hub-replacement.test.ts qualys-live-inventory.test.ts`.
+- Verified with:
+  `pnpm --filter @openacme/server test -- hosted-tools-live-acceptance.test.ts`.
+
+### Slice 31.6: Unguided Qualys Agent Usability Evaluation
+
+Status: accepted for the current active unguided Qualys scenarios. Broader
+unguided scenario coverage is deferred for planned tools and provider
+fault-injection recovery outside the current promoted batch. The Qualys
+unguided vocabulary scenario, the current-batch-ready broader hosted-call
+scenarios, the QPS count/download rules scenario, the VMDR Host Detection
+known-QID scenario, and the VMDR CVE-to-QID evidence-required scenario are
+active with deterministic clean manifest evidence. The mutating/scoped-out
+request refusal scenario is also active with clean non-call refusal evidence,
+and the hosted-tool-not-enabled recovery scenario is active with clean non-call
+recovery evidence.
+
+Goal:
+
+- Evaluate whether agents can use the hosted Qualys surface correctly without
+  operator-provided hints or the external Qualys skill.
+
+Contract:
+
+- Evaluation prompts must not tell the agent which Qualys tool to call, which
+  help parameter to request, or which management sequence to use.
+- The agent is expected to discover relevant `hosted_qualys__*` tools through
+  the normal catalog and call `hosted_tool_help` when the MCP schema/description
+  alone is insufficient.
+- Quickref/reference calls are allowed only as preparation. A tenant-evidence
+  question must hand off to the smallest safe live target tool when a valid
+  field, endpoint, or parameter has been found.
+- If the agent cannot source-check authentication, endpoint semantics,
+  destructive behavior, pagination, response shape, or parameter meaning, it
+  must stop with `EVIDENCE_REQUIRED` instead of inventing a tool contract or
+  call shape.
+- For VMDR Host Detection, known-QID prompts are active hosted-call scenarios:
+  the agent must discover `qualys_vmdr_host_detection_list`, request help for
+  `status` and `params.qids`, use top-level `status`, use plural
+  `params.qids`, and bound FO warning URL pagination with
+  `truncation_limit`/`max_pages`.
+
+TDD / Evaluation:
+
+- Analyzer tests fail when prompts contain tool names, exact arguments, or
+  explicit "call help for parameter X" hints.
+- Scenarios cover overlapping tool selection, known-id direct get versus
+  unnecessary search, GAV filter construction, VMDR QID/CVE workflow, QPS
+  count/download argument rules, pagination continuation, validation-error
+  recovery, auth/rate-limit recovery, artifact/result-path inspection, and
+  mutating/scoped-out request refusal.
+- Host Detection scenarios distinguish known-QID hosted calls from CVE/title
+  workflows that still require source-backed QID mapping evidence.
+- Hard failures include: using `mcp_integration-hub__*` or `managed_*` as the
+  target surface, inventing unsupported provider parameters, treating quickref
+  as tenant evidence, calling excluded mutating tools, or bypassing hosted
+  access policy.
+
+Evidence:
+
+- The live acceptance scenario artifact now records `mcpDisabled` server names
+  per scenario, and the unguided Qualys analyzer requires
+  `integration-hub` to be present in that evidence. This proves the scenario was
+  isolated from the legacy remote MCP surface, not merely that the sampled
+  message history avoided old tool names.
+- The Qualys unguided runner writes
+  `mcpDisabled: ["integration-hub"]` into the scenario evidence while creating
+  the live analyst agent with the same disabled MCP server list.
+- Analyzer tests fail when a scenario is not `unguided`, lacks hosted
+  help/vocabulary lookup, omits the required
+  `qualys.agent.lastCheckedInDate` hosted argument evidence, or does not record
+  disabled `integration-hub` MCP evidence.
+- Unguided live evaluation prompts and analyzer requirements are now stored in
+  `docs/hosted-tools-live-evaluation-scenarios.yaml` instead of being embedded
+  directly in the runner code. The manifest currently owns the
+  `qualys-unguided-vocabulary-discovery` prompt, target family/tool preference,
+  agent identity/persona, guidance classification, required vocabulary
+  evidence, and disabled legacy MCP server requirement.
+- `packages/server/test-support/hosted-tools/live-acceptance.ts` now validates
+  that manifest with a strict zod schema before use, and the live runner loads
+  the Qualys unguided scenario from that manifest. This preserves the
+  "do not hard-code live test cases in code" boundary while keeping execution
+  deterministic.
+- The same manifest now distinguishes `execution: active` from
+  `execution: planned` and carries coverage labels for the broader M31.6
+  evaluation suite. Planned rows cover overlapping tool selection, known-id
+  direct-get behavior, GAV filter construction, VMDR QID/CVE workflow, QPS
+  count/download argument rules, pagination continuation, validation-error
+  recovery, auth/rate-limit recovery, artifact/result-path inspection, and
+  mutating/scoped-out refusal without making the live runner execute unfinished
+  scenarios.
+- The manifest now also carries `expectedOutcome` for each scenario, so
+  evidence-required, refusal, recovery, and normal hosted-call expectations are
+  machine-readable instead of being implicit in prompt text. Deterministic
+  tests require provider-evidence-boundary scenarios to expect
+  `evidence_required`, mutating/scoped-out scenarios to expect `refusal`, and
+  validation/auth recovery scenarios to expect `recovery`.
+- Live acceptance scenario evidence can now carry compact `outcomeText`
+  extracted from the final assistant message. The Qualys consumer runner writes
+  this outcome text for prompt-guided and unguided consumer scenarios, so
+  future `evidence_required`, `refusal`, and `recovery` scenarios can be judged
+  from stored message-history evidence rather than only tool-call evidence.
+- The consumer analyzer now consumes manifest `expectedOutcome` for unguided
+  Qualys scenarios. `hosted_call` preserves the existing hosted tool/run
+  evidence requirements, while `evidence_required`, `refusal`, and `recovery`
+  validate the stored `outcomeText` signal without forcing a business hosted
+  tool call when the correct behavior is to stop, refuse, or explain recovery.
+- Live acceptance markdown summaries now include compact `outcomeText` snippets
+  in critical outcome lines, so evidence-required/refusal/recovery conclusions
+  are visible from the report without opening the raw JSON artifact.
+- Regression tests now prove the runner selects only active manifest scenarios,
+  all manifest prompts pass unguided prompt lint, and the manifest represents
+  the planned M31.6 coverage categories. The strict schema caught a YAML type
+  issue where an unquoted known asset id parsed as a number instead of a string.
+- The manifest regression now also requires every unguided Qualys scenario,
+  active or planned, to carry `analyzer.requireUnguided: true` and
+  `requiredDisabledMcpServers: ["integration-hub"]`. This prevents future
+  planned scenarios from silently reintroducing the legacy remote MCP surface
+  while waiting to become active.
+- The manifest schema now also runs unguided prompt lint during parse, not only
+  in the live runner and repository tests. A bad manifest that includes
+  `hosted_tool_help`, `hosted_qualys__*`, remote MCP names, managed tool names,
+  or exact JSON argument hints now fails before any live scenario can start.
+- The manifest schema itself now rejects Qualys unguided scenarios that lose
+  those hosted-only analyzer invariants, make active scenarios expect anything
+  other than `hosted_call`, or mismatch coverage labels with expected outcomes
+  for provider-evidence, mutating-refusal, validation-recovery, and
+  auth/rate-limit-recovery cases. Bad manifests now fail before the live runner
+  can execute them.
+- The unguided Qualys runner now writes disabled MCP servers to the live agent
+  settings and scenario evidence from the manifest-owned
+  `analyzer.requiredDisabledMcpServers` list instead of a separate runner-local
+  constant. A regression test fails if the runner drifts back to hard-coded
+  hosted-only MCP disablement.
+- The unguided Qualys runner now also builds the live agent's hosted tool
+  allow-list and hosted integration bindings from the manifest-owned
+  `availableToolNames` plus the scenario `preferredToolName`. This fixes the
+  gap where planned tool-selection scenarios could declare candidate tools but
+  the unguided runner would not actually grant them when the row became active.
+- The same unguided runner now requires the manifest `preferredToolName` to be
+  active in the hosted family before running the scenario. It skips with an
+  explicit diagnostic instead of falling back to an arbitrary read-only Qualys
+  tool, so scenario evidence cannot be accidentally attributed to the wrong
+  business capability.
+- It also skips with an explicit diagnostic when any manifest-requested
+  candidate from `preferredToolName + availableToolNames` is missing from the
+  active hosted family. Tool-selection evaluations therefore run against the
+  exact candidate surface described by the manifest rather than a silently
+  reduced allow-list.
+- Scenario evidence can now persist `availableToolNames`, and the unguided
+  runner writes the exact family-native candidate surface it granted. Markdown
+  summaries render those candidates when present, so live reports show not only
+  what tool was expected but also which overlapping hosted tools the agent
+  could choose from. Regression tests also assert the candidate list survives
+  persisted JSON artifact writing, including the redacted artifact path.
+- GAV filter-construction and vocabulary-discovery scenarios now declare
+  `analyzer.requiredHelpParameterNames: ["filter_body.filters.field"]`. The
+  analyzer fails a run that only requests full tool help but never asks for the
+  relevant parameter/vocabulary path, so live evidence proves the agent learned
+  the filter field through the hosted help surface rather than passing by
+  chance.
+- Live acceptance markdown summaries now include actual `hosted_tool_help`
+  parameter paths observed in successful help calls. Operators can see
+  `help parameters filter_body.filters.field` directly in the compact report
+  without reopening raw message-history JSON.
+- The strict consumer analyzer now evaluates detailed-help and required
+  parameter-path evidence across all successful `hosted_tool_help` calls before
+  the hosted business invocation. This allows normal help retries, but a
+  vocabulary lookup that occurs only after the business tool call does not
+  satisfy pre-invocation discovery evidence.
+- Scenario artifacts now derive `preInvocationHelpParameterNames` from the same
+  pre-business-call help evidence. Automated report consumers can query the
+  machine-readable JSON directly instead of re-walking raw `toolCalls`
+  arguments to prove which parameter/vocabulary paths were consulted.
+  Regression coverage asserts the derived field survives persisted JSON
+  artifact writing.
+- The same redaction regression now covers help-parameter evidence in both
+  persisted JSON and markdown summaries. A failed test caught that markdown
+  summaries initially rendered `preInvocationHelpParameterNames` without
+  redaction; summary rendering now redacts help parameter paths before display.
+- The live acceptance artifact schema version is bumped to
+  `2026-08-18.live-hosted-tool-acceptance.v2` because
+  `preInvocationHelpParameterNames` is a new machine-readable contract field.
+- Runner source guards now assert the live runner still builds artifacts
+  through `buildLiveHostedToolAcceptanceArtifact()` and writes them through
+  `writeLiveHostedToolAcceptanceArtifact()`, so derived evidence and redaction
+  cannot be bypassed by ad hoc JSON writing.
+- A prompt-guided Qualys runner bug was fixed where
+  `qualysReadOnlyVendorScenario()` referenced unguided-only `scenarioConfig`
+  while preparing candidate tools. The prompt-guided scenario now records its
+  single selected active tool in `availableToolNames`, and a source guard keeps
+  that function free of `scenarioConfig` references.
+- Server `check-types` now chains `check-types:operator`, and the focused
+  acceptance test guards both that link and the operator tsconfig's
+  `scripts/**/*.ts` include. This makes the normal workspace/CI type gate cover
+  live runner scripts instead of relying on a separate remembered command.
+- Unguided-management artifact tests now assert
+  `relatedLiveAcceptanceSchemaVersion` equals the live acceptance schema
+  constant, so the companion management evidence stays explicitly tied to the
+  current live acceptance contract after schema bumps.
+- `forbiddenHostedToolNames` remains a call-level assertion, not a grant-level
+  assertion: an avoid-unnecessary-search scenario may intentionally make a
+  discovery tool available to prove the agent did not use it. The persisted
+  candidate surface makes that distinction auditable in the live report.
+- Live execution-log lookup now uses the scenario actor id in the runs query
+  instead of a hard-coded Tool Developer actor. This keeps consumer unguided
+  scenarios from silently losing run/generation evidence when the business tool
+  call was made by the live analyst agent.
+- Live scenario evidence now carries optional `expectedOutcome`, and the
+  unguided Qualys runner writes it from the manifest. Markdown summaries show
+  the expected outcome when present, so pass/fail reports remain auditable
+  without reopening the manifest that generated the run.
+- Artifact schema tests now reject invalid `expectedOutcome` values in live
+  scenario evidence, keeping stored run artifacts aligned with the manifest
+  outcome enum.
+- The live runner now selects active unguided Qualys scenarios from the
+  manifest instead of hard-coding
+  `qualys-unguided-vocabulary-discovery`. Turning a planned scenario active is
+  now a manifest change, not a script patch, and the runner fails early if an
+  unguided run is requested while the manifest has no active Qualys unguided
+  scenario.
+- Scenario manifests can now declare `availableToolNames` for tool-selection
+  evaluations and `analyzer.forbiddenToolNames` for negative selection checks.
+  The runner grants the manifest-declared candidate hosted tools to the live
+  agent, and the analyzer fails when a scenario calls a forbidden hosted tool.
+  This makes overlapping-tool selection and known-id direct-get versus
+  unnecessary-search coverage enforceable by artifact evidence instead of only
+  by prompt wording.
+- The manifest schema now rejects duplicate scenario ids and rejects candidate
+  tool lists that omit the scenario's `preferredToolName`. This keeps active
+  and planned usability rows addressable and prevents tool-selection tests from
+  accidentally hiding the expected target tool from the agent.
+- The manifest schema now also rejects duplicate `availableToolNames`, and the
+  inventory alignment test proves the checked-in scenario YAML carries a clean
+  candidate surface. Live tool-selection reports should never show duplicate
+  grant candidates.
+- Manifest-authored forbidden tool names are now explicitly family-native
+  names. The live runner maps them to hosted MCP names before analyzer
+  execution, and schema/inventory tests reject `hosted_*` names in
+  `analyzer.forbiddenToolNames` so negative selection evidence cannot be lost
+  through accidental double-prefixing.
+- Analyzer evidence lists now reject duplicate values, and the inventory
+  alignment test proves the checked-in scenario YAML keeps those lists unique.
+  This prevents repeated analyzer requirements from making a scenario look more
+  complete than it is.
+- The manifest schema now also ties key coverage labels to analyzer evidence
+  requirements: GAV filter-construction scenarios must require
+  `qualys.agent.lastCheckedInDate`, collection-limit scenarios must require
+  `page_size`, pagination-continuation scenarios must require `page_size`,
+  `max_pages`, `result.next_last_seen_asset_id`, and `result.truncated`
+  evidence, and
+  artifact-result-path scenarios must require `resultPathInspected`.
+- The manifest schema now also requires any prompt-authored ISO timestamp
+  cutoff, such as `2026-07-01T00:00:00Z`, to appear in
+  `analyzer.requiredHostedArgumentFragments`. This prevents an agent from
+  passing a live scenario by selecting the right filter field but omitting the
+  cutoff value from the hosted tool call.
+- QPS count/download scenarios now carry negative argument evidence too:
+  `qps_count_download_argument_rules` requires
+  `analyzer.forbiddenHostedArgumentFragments: ["limit"]`, and the consumer
+  analyzer fails if a hosted tool call includes a forbidden argument fragment in
+  its captured arguments.
+- QPS filter-construction evidence is separated from GAV filter-construction:
+  `qps_filter_construction` requires help evidence for
+  `filter_body.filters.field` and hosted argument evidence for
+  `operatingSystem.category2 = Server`; GAV scenarios continue to require
+  `qualys.agent.lastCheckedInDate`.
+- The QPS count/download rules scenario is a hosted-call scenario, not a
+  recovery scenario: a correct agent should count Cloud Agent HostAsset records
+  without sending unsupported `limit`, while still using hosted help for the
+  provider filter field and preserving `operatingSystem.category2 = Server`
+  evidence in captured arguments. Validation-error recovery remains a future
+  scenario only when the prompt and analyzer intentionally create and verify a
+  rejected-argument recovery path.
+- A live QPS count/download run was attempted through explicit scenario id
+  selection:
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_qps_count_no_limit_20260818084545.json`.
+  The run kept the correct hosted-only boundary (`integration-hub` disabled),
+  granted only `qualys_cloud_agent_hostasset_count` and
+  `qualys_cloud_agent_hostasset_search`, and used generation
+  `gen_a6987c5a-940b-4079-9715-7ab85437ac11`, but it failed before a hosted
+  business call because the assistant turn timed out after upstream provider
+  errors. A later retry
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_qps_count_download_retry_20260818110950.json`
+  failed for the same reason and showed that timeout artifacts did not preserve
+  provider-error context. The live runner now extracts redacted
+  `data-upstream-error` parts from message history into timeout diagnostics.
+  Clean rerun
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_qps_count_download_upstream_diag_20260818111536.json`
+  passed with hosted help before the business call, `filter_body` full help
+  queried for operating-system fields, hosted arguments containing
+  `operatingSystem.category2 = Server`, no forbidden `limit` argument, real run
+  id `call_92530f58-2ff8-454e-a6a8-edb71d7a4e89`, generation
+  `gen_6098741e-7399-4870-bf04-c3e7934a6ebb`, returned count `746`, secret
+  scan pass, and `integration-hub` disabled. The scenario is now active.
+- Confirmation-boundary scenarios now carry negative outcome evidence too:
+  `confirmation_boundary` requires `analyzer.forbiddenOutcomeFragments`, and
+  the consumer analyzer fails if the final outcome text contains forbidden
+  mutation-success claims such as saying a scan was launched.
+- Non-call outcome scenarios now also carry positive outcome text evidence:
+  manifest `analyzer.requiredOutcomeFragments` is required whenever
+  `expectedOutcome` is `evidence_required`, `refusal`, or `recovery`. The
+  consumer analyzer fails if the final `outcomeText` omits those fragments, so
+  future active non-call runs cannot pass from only generic refusal/recovery
+  regexes or forbidden-fragment absence.
+- Active unguided scenarios no longer have to expect `hosted_call`. The runner
+  waits for hosted business tool output only for `hosted_call` scenarios; for
+  `evidence_required`, `refusal`, and `recovery` scenarios it waits for the
+  assistant response and lets the analyzer judge the stored `outcomeText`.
+  This allows planned non-call scenarios to become active without creating a
+  false timeout against the preferred business tool.
+- The same runner only requires the preferred tool to be active, readiness-
+  checked, and implicitly granted for `hosted_call` scenarios. For
+  `evidence_required`, `refusal`, and `recovery`, `preferredToolName` remains
+  the conceptual target under evaluation; the actual granted candidate surface is
+  only `availableToolNames`. This lets scoped-out/refusal and missing-evidence
+  scenarios run instead of being skipped just because the target operation is not
+  an active hosted business tool.
+- Inventory cross-checks now prove active unguided scenarios only target the
+  current promoted batch when they expect a real `hosted_call`, while planned
+  scenarios and active non-call scenarios still reference inventory-owned or
+  explicitly excluded Qualys operations. The same check now validates
+  manifest-declared `availableToolNames`, and active hosted-call candidate tools
+  must also be in the current promoted batch. This keeps future usability
+  scenarios from silently inventing or granting out-of-scope hosted tool names
+  without blocking active evidence-required/refusal/recovery evaluations.
+- Inventory cross-checks also prove the current-batch-ready hosted-call
+  scenarios are part of the default active unguided set:
+  `qualys-unguided-overlapping-tool-selection`,
+  `qualys-unguided-known-id-direct-get`, and
+  `qualys-unguided-pagination-continuation`. They were promoted from planned
+  rows after clean live proof existed; future broader rows remain planned until
+  they have comparable live evidence or target newly promoted tools.
+- The active unguided set now also includes
+  `qualys-unguided-vmdr-known-qid-detections` after
+  `qualys_vmdr_host_detection_list` entered `currentPromotedBatch.tools`. This
+  scenario does not tell the agent which tool or parameter path to use; the
+  analyzer treats it as an MCP-metadata argument-construction proof, not a
+  vocabulary/help-discovery proof. It requires hosted arguments containing
+  top-level status, plural `qids`, QID `12345`, `truncation_limit`, and
+  `max_pages`, plus FO result evidence `result.pages_fetched` and
+  `result.truncated`.
+- The active `qualys-unguided-known-id-direct-get` scenario now uses
+  live-evidenced asset id `2639118` instead of the placeholder-like `48291`.
+  The id appears in prior real hosted Cloud Agent search artifacts such as
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_m36_combined_clean_diag_20260818071044.json`.
+  Clean live artifact
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_known_id_direct_get_after_order_fix_20260818110556.json`
+  proves the agent called `qualys_gav_asset_get` with that known id, kept
+  `integration-hub` disabled, and did not perform unnecessary discovery through
+  `qualys_gav_asset_search`.
+- A first direct-get live run
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_known_id_direct_get_20260818104846.json`
+  failed usefully: the agent selected `hosted_qualys__qualys_gav_asset_get`,
+  did not call the forbidden search tool, and sent `asset_id: 2639118`, but the
+  tool failed because model-supplied empty projection arrays
+  `include_fields: []` and `exclude_fields: []` were treated as conflicting
+  optional arguments. `qualys.py` now normalizes empty projection arrays to
+  omitted values through `_optional_string_list()`, and
+  `packages/hosted-integrations/test/integration-hub-replacement.test.ts` guards
+  both direct get and list/search handlers against regressing.
+- After promoting refreshed Qualys source to isolated test generation
+  `gen_6098741e-7399-4870-bf04-c3e7934a6ebb`, rerun artifact
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_known_id_direct_get_after_empty_projection_fix_20260818105321.json`
+  proved the runtime fix: `hosted_qualys__qualys_gav_asset_get` returned
+  `ok: true`, produced run id `call_7f0c038e-1a47-4206-86f1-b45fa93a90b0`,
+  inspected an artifact result, kept `integration-hub` disabled, and did not
+  call the forbidden search tool. The scenario still failed because the analyzer
+  required `hosted_tool_help` even though known-id direct-get is an
+  MCP-metadata-only scenario. The manifest now sets
+  `analyzer.requireHostedHelp: false` for this row, while vocabulary/filter
+  scenarios keep help evidence required.
+- A follow-up live run with the analyzer exception in place,
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_known_id_direct_get_after_analyzer_fix_20260818105750.json`,
+  did not provide acceptance evidence because the OpenAI provider returned
+  `server_is_overloaded` before the hosted business tool was called. The next
+  retry
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_known_id_direct_get_retry_20260818110305.json`
+  exposed an analyzer false positive: optional help called after a direct
+  known-id business call was still treated as a pre-invocation help violation
+  even though `analyzer.requireHostedHelp: false` is intentional for this
+  metadata-only scenario. The analyzer now applies the help-order gate only
+  when help is required, and
+  `packages/server/test/hosted-tools-live-acceptance.test.ts` covers the exact
+  business-call-then-help pattern. Clean rerun
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_known_id_direct_get_after_order_fix_20260818110556.json`
+  passed with run ids `call_7cb89987-1cce-4ffe-bbed-885e6df47495` and
+  `call_6f3544dc-0ba6-45df-af86-9f70d735da50`, generation
+  `gen_6098741e-7399-4870-bf04-c3e7934a6ebb`, secret scan pass, and no
+  forbidden search call.
+- Live Host Detection dogfood was attempted with only
+  `qualys-unguided-vmdr-known-qid-detections` selected after promoting current
+  Qualys source to the isolated test environment generation
+  `gen_a6987c5a-940b-4079-9715-7ab85437ac11`. The first run
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_m31_host_detection_known_qid_20260818080235.json`
+  failed before business-tool evidence because the OpenAI provider returned a
+  server error. The retry
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_m31_host_detection_known_qid_retry_20260818080455.json`
+  reached the hosted Qualys tool and made a real successful
+  `hosted_qualys__qualys_vmdr_host_detection_list` call with run id
+  `call_979458f3-34a7-4b86-8b33-dcbd6cd744e5`, but failed the unguided
+  usability gate because the agent used `memory` instead of
+  `hosted_tool_help` before invocation. This is a real model/harness usability
+  issue, not a Qualys runtime failure.
+- The same live retry exposed an evidence-summarization gap: hosted argument
+  summaries collapsed native `params` to `[object]`, and inline result summaries
+  dropped FO `pages_fetched`. `packages/server/test-support/hosted-tools/live-acceptance.ts`
+  now preserves primitive native `params` values and `pages_fetched`, and
+  `packages/server/test/hosted-tools-live-acceptance.test.ts` has a regression
+  for Host Detection args/result evidence. The scenario analyzer now accepts
+  semantically correct `status: Active` for a currently-active prompt while
+  still requiring top-level `status`, plural `qids`, QID evidence,
+  `truncation_limit`, and `max_pages`.
+- The live retry also showed why memory cannot be treated as provider/tool
+  evidence for hosted-only usability claims: memory is an always-on system tool,
+  even when the live agent's explicit tool allow-list contains only
+  `hosted_tool_help` and hosted Qualys tools. The checked-in unguided scenario
+  personas now state that hosted metadata and `hosted_tool_help` are the
+  canonical source for provider/tool semantics and that memory/remembered notes
+  must not be used for that purpose. The consumer analyzer now fails hosted-only
+  evidence when a scenario uses `memory`, with regression coverage in
+  `packages/server/test/hosted-tools-live-acceptance.test.ts`.
+- A follow-up live run after the memory-boundary change,
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_m31_host_detection_memory_gate_retry_20260818081349.json`,
+  showed the memory bypass was gone and the analyzer now saw the complete
+  hosted evidence: `params.qids`, QID `12345`, top-level `status: Active`,
+  `truncation_limit`, `max_pages`, `result.pages_fetched`, and
+  `result.truncated`. The real hosted Qualys call succeeded with run id
+  `call_84397239-474b-41df-9f11-a02bf10301d9`. This is accepted as
+  Host Detection MCP-metadata argument-construction evidence. Help-discovery
+  claims remain owned by the vocabulary scenarios, where the requested
+  provider value is intentionally not sufficient from the prompt alone.
+- A later selected live rerun exposed a runner-resilience issue before hosted
+  business-tool evidence: upstream OpenAI server errors could trigger a
+  subagent `AbortError` outside the scenario catch path, causing the process to
+  exit without writing an acceptance artifact. The live acceptance script now
+  installs a script-local AbortError guard, matching the existing real-LLM
+  dogfood pattern, so provider/subagent aborts are reported and the runner can
+  continue to produce normal scenario diagnostics and artifacts. Non-Abort
+  exceptions still fail the process.
+- The selected Host Detection live rerun after the scenario/analyzer split
+  passed:
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_mcp_metadata_host_detection_retry_20260818082121.json`.
+  Evidence: `integration-hub` was disabled, the normal agent called
+  `hosted_tool_help` before the business tool without prompt naming the help
+  tool, requested full detail for `status`, `params.qids`,
+  `truncation_limit`, and `max_pages`, then invoked
+  `hosted_qualys__qualys_vmdr_host_detection_list` against real Qualys with
+  `status: Active`, `params.qids: "12345"`, `truncation_limit: 100`, and
+  `max_pages: 1`. The hosted call succeeded with run id
+  `call_41a206ee-b7b8-40e9-a856-110a66521a8a`, generation
+  `gen_a6987c5a-940b-4079-9715-7ab85437ac11`, `result.pages_fetched: 1`, and
+  `result.truncated: false`.
+- The VMDR CVE-to-QID scenario now has clean live proof and is active:
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_evidence_required_cve_qid_clean_20260818082641.json`.
+  Evidence: `integration-hub` was disabled, no hosted business tool was called,
+  the agent used `hosted_tool_help` for
+  `hosted_qualys__qualys_vmdr_host_detection_list` and `params.qids`, then
+  stopped with `EVIDENCE_REQUIRED` because CVE-2024-6387 requires a
+  source-backed CVE-to-Qualys-QID mapping capability before Host Detection can
+  be queried. Secret scan passed and scenario diagnostics were empty.
+- The unguided runner no longer queries execution logs for non-call
+  `evidence_required`, `refusal`, or `recovery` scenarios unless a hosted tool
+  run id is already present in message-history evidence. This removes false
+  403 diagnostics from correct stop/refusal/recovery outcomes while preserving
+  run-id lookup for hosted-call scenarios.
+- The mutating-request refusal scenario was attempted twice after the non-call
+  runner fixes, and both early attempts failed before usable assistant outcome
+  text due upstream OpenAI server errors:
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_mutating_refusal_clean_20260818083225.json`
+  and
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_mutating_refusal_retry_20260818083246.json`.
+  The attempts still exposed and fixed two harness semantics: non-call
+  scenarios no longer grant inactive conceptual `preferredToolName` targets as
+  available hosted tools, and refusal/recovery outcomes no longer require a
+  `hosted_tool_help` call unless the scenario explicitly asks for help or
+  vocabulary evidence. The runner also now classifies missing assistant text in
+  non-call scenarios as `provider_response_missing` before analyzer evaluation,
+  instead of misreporting the provider failure as if the agent produced a bad
+  refusal/recovery answer. Later clean evidence promoted the scenario to active
+  after it showed refusal outcome text with the manifest-owned `read-only` and
+  `outside` evidence and no mutation-success fragments.
+- The provider-missing classification was verified with
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_mutating_refusal_provider_diag_20260818083607.json`.
+  The artifact failed only with
+  `provider_response_missing: assistant outcome text was unavailable for
+  non-call scenario analysis`, while `availableToolNames` remained empty and no
+  hosted business tool was granted or called.
+- Clean rerun
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_mutating_refusal_retry_20260818112047.json`
+  passed and promoted the scenario to `active`: the assistant refused to launch
+  a scan, named the available hosted Qualys surface as read-only, identified the
+  requested scan launch as outside the allowed boundary, produced no mutation
+  success fragments, called no hosted business tools, kept `integration-hub`
+  disabled, and passed the secret scan.
+- Non-call unguided scenarios now use a bounded assistant-outcome retry loop
+  before declaring `provider_response_missing`. Hosted-call scenarios still run
+  once because their acceptance waits for the selected hosted business tool;
+  `evidence_required`, `refusal`, and `recovery` scenarios may retry a fresh
+  session when the provider returns no assistant text. The default is two
+  attempts and can be overridden with
+  `OPENACME_LIVE_HOSTED_TOOLS_NON_CALL_ATTEMPTS`.
+- The retry loop was verified with
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_mutating_refusal_noncall_retry_20260818083907.json`.
+  The refusal scenario opened two distinct sessions, both failed from upstream
+  provider overload before assistant outcome text, and the artifact remained a
+  clean `provider_response_missing` failure with no hosted business tool grant
+  or call.
+- The original auth/rate recovery probe
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_auth_rate_recovery_probe_20260818112501.json`
+  proved a different recovery class than its name claimed: because the non-call
+  scenario granted no hosted business tools, the agent encountered platform
+  `policy_denied: hosted integration tool is not enabled for agent` from
+  `hosted_tool_help`, not a Qualys provider authentication/rate-limit failure.
+  The manifest now splits this cleanly. `qualys-unguided-tool-not-enabled-recovery`
+  is the active platform capability recovery row, while
+  `qualys-unguided-auth-rate-limit-recovery` remains planned until a future
+  bounded fault-injection contract can produce a real provider auth,
+  permission, or rate-limit failure without mutating shared credentials.
+- Clean tool-not-enabled recovery rerun
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_tool_not_enabled_recovery_after_rerun_fix_20260818112902.json`
+  passed: the agent reported the hosted Qualys count capability was not enabled
+  for the agent, gave an actionable enable/grant/configure/re-run path, did not
+  expose secrets, called no hosted business tool, kept `integration-hub`
+  disabled, and passed secret scan. The recovery analyzer now accepts `re-run`
+  as recovery guidance in addition to `retry`/`rerun`.
+- The live runner now supports
+  `OPENACME_LIVE_HOSTED_TOOLS_SCENARIO_IDS=<comma-separated ids>` to opt in
+  specific unguided Qualys scenarios, including planned scenarios, without
+  editing the manifest to `active`. Requested scenario ids are resolved through
+  the manifest, and setting this variable by itself triggers the selected
+  unguided Qualys block in the full live runner. The runner rejects any
+  requested row that is not an unguided Qualys scenario.
+- Scenario selection now lives in the shared live-acceptance test-support
+  helper instead of only inside the runner script. Unit coverage proves the
+  default selector returns active unguided Qualys rows, explicit ids can select
+  planned candidate rows, and non-Qualys rows are rejected.
+- The decision to run unguided Qualys consumer scenarios also lives in
+  live-acceptance test-support: either the explicit unguided flag or requested
+  scenario ids start the block. Unit coverage proves scenario ids alone trigger
+  the selected unguided run path.
+- Broader current-batch-ready live dogfood was exercised through explicit
+  scenario ids without editing planned rows to active. The first broader run
+  exposed two real issues: the overlapping Cloud Agent prompt expected the wrong
+  preferred tool, and pagination evidence was tied to an unrealized
+  `pagination.max_pages` summary key. The manifest now aligns the overlapping
+  scenario with `qualys_cloud_agent_hostasset_search`, and pagination evidence
+  now checks the real hosted result shape:
+  `result.next_last_seen_asset_id` and `result.truncated`.
+- Live rerun evidence:
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_m35_broader_fixed_20260818061942.json`
+  shows `qualys-unguided-overlapping-tool-selection` passed with hosted-only
+  MCP isolation, `hosted_tool_help` discovery, Cloud Agent search/count hosted
+  calls, `qualys.agent.lastCheckedInDate`, and live run ids. The combined run
+  remained fail because the then-old pagination scenario still used the
+  unfiltered GAV search design.
+- Live pagination rerun evidence:
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_m35_pagination_fixed_20260818062446.json`
+  passed. The agent used `hosted_tool_help`, requested
+  `filter_body.filters.field`, `page_size`, and `max_pages`, invoked
+  `hosted_qualys__qualys_cloud_agent_hostasset_search` with
+  `qualys.agent.lastCheckedInDate`, and the result summary included
+  `resultPathInspected`, `result.truncated`, and
+  `result.next_last_seen_asset_id`.
+- Combined current-batch-ready live dogfood exposed and then verified a stricter
+  argument-evidence gate. The first combined retry
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_m36_combined_value_gate_20260818065426.json`
+  failed because hosted argument summaries did not include the prompt cutoff
+  `2026-07-01T00:00:00Z`, even though final assistant text claimed the cutoff.
+  Inspection of execution logs showed sanitized runtime args did contain the
+  value, so `filterBodySummary()` now preserves redacted
+  `filter_body.filters[].value` in live evidence artifacts and analyzer tests
+  lock that behavior.
+- Combined live rerun evidence:
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_m36_combined_summary_fix_retry_20260818070309.json`
+  passed for both `qualys-unguided-overlapping-tool-selection` and
+  `qualys-unguided-pagination-continuation` without enabling legacy
+  `integration-hub`. The artifact shows real hosted Qualys calls with
+  `qualys.agent.lastCheckedInDate`, `2026-07-01T00:00:00Z`, bounded page sizes,
+  run ids, generation id
+  `gen_3a96788c-d5b9-456b-9e4b-08d93a21cc67`, and truncation/continuation
+  evidence. Secret scan passed.
+- Live acceptance markdown summaries now distinguish selected unguided-only
+  runs from the full Milestone 27 critical-outcome suite. When a run only
+  executes unguided hosted scenarios, the summary reports an aggregate
+  `Unguided hosted scenarios` outcome with scenario count, run ids, and
+  generation ids instead of rendering unrelated full-suite outcomes as
+  `missing`. Full-suite reports still render the fixed Tool Developer,
+  business invocation, access boundary, repair, catalog refresh, and parity
+  lines when those scenarios are present.
+- Live runner execution-log lookup diagnostics are now suppressed when the
+  hosted tool-call evidence already contains run ids. Consumer agents may not be
+  authorized to list execution logs directly, so a fallback 403 should not make
+  a passed scenario look suspicious when the message-history hosted tool output
+  already carries run/generation evidence. A clean diagnostic rerun
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_m36_combined_clean_diag_20260818071044.json`
+  passed both current-batch-ready unguided scenarios with empty scenario diagnostics (`diagnostics: []`) and secret scan pass.
+- After that clean live proof, `docs/hosted-tools-live-evaluation-scenarios.yaml`
+  promotes `qualys-unguided-overlapping-tool-selection` and
+  `qualys-unguided-pagination-continuation` from `planned` to `active`; later
+  clean direct-get proof also promoted
+  `qualys-unguided-known-id-direct-get`. The active unguided hosted-call set
+  has since expanded to vocabulary discovery, overlapping tool selection,
+  known-id direct get, VMDR known-QID Host Detection, and pagination
+  continuation. Future broader Qualys rows stay planned until their target
+  tools and live evidence exist.
+- Active unguided Qualys scenarios now carry manifest-owned
+  `acceptedArtifacts` entries with the accepted live artifact path, status, and
+  evidence summary. This keeps active scenario state recoverable from the
+  repository manifest instead of requiring fresh sessions to rediscover artifact
+  paths from prose or chat history. Active scenario `acceptedArtifacts` must
+  have a `runId` matching the JSON artifact filename plus `status: pass` and
+  `secretScan: pass`; failed, skipped, mismatched, or secret-scan failed
+  artifacts may remain diagnostic evidence, but they are not accepted
+  activation evidence.
+- Accepted artifact paths are now constrained to the isolated hosted tools test
+  environment evidence directory:
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/`.
+  This prevents active scenario evidence from pointing at arbitrary local JSON
+  files that happen to have a matching filename shape.
+- Accepted artifact paths must now be exactly
+  `<accepted-live-artifact-path-prefix><runId>.json`. Nested paths, traversal
+  shapes, or subdirectory artifacts are rejected even if the basename matches
+  the run id.
+- Planned scenarios now must not carry `acceptedArtifacts`; accepted evidence
+  is recorded only when the scenario is promoted to `active`. This keeps
+  planned/future evaluation rows from looking accepted before clean live proof
+  exists.
+- Accepted artifact evidence summaries are now bounded to 240 characters. The
+  manifest keeps compact capability evidence, while detailed transcript,
+  hosted-call, diagnostic, and secret-scan data remain in the referenced live
+  artifact JSON.
+- Accepted artifact evidence summaries are also required to be single-line.
+  Multi-line notes and pasted log snippets belong in the referenced artifact,
+  not in the scenario manifest.
+- `qualys-unguided-vocabulary-discovery` was rerun against the real hosted
+  Qualys surface because its previous accepted artifact used the older
+  `2026-08-15.live-hosted-tool-acceptance.v1` schema and did not carry
+  scenario-level `expectedOutcome` evidence. The scenario manifest now points
+  at the passing v2 artifact
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/live_hosted_tools_7eeb7936-82ee-4f48-b811-f124a3938bc0.json`.
+  Evidence: the unguided agent called `hosted_tool_help`, then
+  `hosted_qualys__qualys_gav_asset_count` with
+  `qualys.agent.lastCheckedInDate LESSER 2026-07-01T00:00:00Z`,
+  `integration-hub` disabled, `expectedOutcome: hosted_call`, and
+  `secretScan: pass`.
+- `packages/server/test-support/hosted-tools/live-acceptance.ts` now exposes
+  `analyzeAcceptedLiveHostedToolArtifactClaim()` so a manifest-owned
+  `acceptedArtifacts` claim can be checked against a parsed live artifact for
+  run id, artifact pass status, secret-scan pass, scenario id, scenario pass
+  status, required `expectedOutcome` evidence, required disabled MCP servers,
+  and expected hosted tool-call evidence. It also checks non-call accepted
+  evidence for required and forbidden outcome fragments plus expected
+  `EVIDENCE_REQUIRED`, refusal, or recovery wording.
+  The accepted-artifact audit now reuses the same consumer analyzer semantics
+  for hosted help order/detail, required and forbidden argument fragments,
+  required result fragments/summary keys, forbidden hosted tools, run evidence,
+  disabled MCP servers, and outcome text checks instead of maintaining a
+  looser parallel validator.
+  Duplicate manual checks for analyzer-owned evidence were removed from the
+  accepted-artifact validator, so accepted-artifact diagnostics now come from
+  one behavior source rather than two slightly different message paths.
+  Server tests now explicitly prove accepted artifact claims fail when parsed
+  hosted-call evidence omits a required argument fragment or required dotted
+  result-summary key.
+  This keeps accepted live evidence from being only a path-shaped manifest
+  entry when a closeout review has the artifact JSON available.
+- The accepted-artifact audit was run directly against the checked-in scenario
+  manifest and current evidence directory after the v2 rerun; it passed for all
+  `9` active scenarios.
+- `packages/server/scripts/hosted-tools-accepted-artifacts-audit.ts` now gives
+  closeout reviews a server-free audit path:
+  `pnpm --filter @openacme/server dogfood:hosted-tools:accepted-artifacts:audit`.
+  It reads the checked-in scenario manifest, optionally narrows by
+  `OPENACME_LIVE_HOSTED_TOOLS_SCENARIO_IDS`, parses manifest-owned accepted
+  artifact JSON files, and exits non-zero when analyzer diagnostics are present.
+  This avoids starting a live server or making model/provider calls just to
+  revalidate already-recorded acceptance evidence.
+  The audit-only command is active-scenario scoped: with no explicit ids it
+  audits all active scenarios, and with explicit ids it rejects planned scenario
+  ids instead of producing empty or premature acceptance.
+  Both pass and fail paths emit the same JSON result envelope with `status`,
+  `manifestPath`, `auditedScenarioIds`, `artifactPaths`, and `diagnostics`, so
+  operator tooling can parse failure diagnostics without scraping stderr text.
+- The closeout analyzer now also fails any audited active scenario that has no
+  `acceptedArtifacts` claim, even outside the current Qualys-specific manifest
+  guard. This keeps future active scenario rows from passing audit merely
+  because they have no evidence files to read.
+- The live runner can now run that closeout audit explicitly with
+  `OPENACME_LIVE_HOSTED_TOOLS_VALIDATE_ACCEPTED_ARTIFACTS=1`; it adds an
+  `accepted-artifacts-manifest-audit` scenario that reads manifest-owned
+  accepted artifact JSON files and fails the current acceptance run if the
+  parsed evidence no longer matches the manifest claim. The default live run
+  remains unchanged so historical artifact files are not required for every
+  local smoke run.
+- The audit scenario records the same audited scenario set's accepted artifact
+  paths in `artifactPaths`, including the all-active default audit case. This
+  keeps the closeout artifact self-describing instead of emitting a pass/fail
+  audit with no evidence file references.
+- The acceptance matrix now exposes the explicit live closeout command that
+  runs
+  `OPENACME_LIVE_HOSTED_TOOLS_SCENARIO_IDS=<scenario_ids> pnpm --filter @openacme/server dogfood:hosted-tools:accepted-artifacts:audit`,
+  and its complete-bundle requirement requires that audit before closing an
+  accepted-artifact-backed model-usability claim.
+- Focused acceptance for the audit-only command passed with:
+  `OPENACME_LIVE_HOSTED_TOOLS_SCENARIO_IDS=qualys-unguided-vocabulary-discovery pnpm --filter @openacme/server dogfood:hosted-tools:accepted-artifacts:audit`
+  and then all-active audit passed with
+  `pnpm --filter @openacme/server dogfood:hosted-tools:accepted-artifacts:audit`.
+  The all-active audit returned `status: pass` with `9` audited scenario ids
+  and empty diagnostics.
+- Negative scoped-audit acceptance also passed:
+  `OPENACME_LIVE_HOSTED_TOOLS_SCENARIO_IDS=qualys-unguided-auth-rate-limit-recovery pnpm --filter @openacme/server dogfood:hosted-tools:accepted-artifacts:audit`
+  exited non-zero with a JSON `status: fail` result because that scenario is
+  still `planned`, not `active`.
+- After the audit-only closeout hardening, the current complete deterministic
+  M36 bundle passed again: hosted-integrations contract/help/package/Qualys
+  bundle (`6` files, `133` passed, `1` skipped), hosted-integrations example
+  readiness bundle (`2` files, `38` passed), tools bundle (`3` files, `25`
+  passed), Hosted Tools UI bundle (`40` passed), server analyzer/skill bundle
+  (`3` files, `72` passed), hosted-integrations check-types/build, tools
+  build, server route/management-tool bundle (`2` files, `63` passed), tools
+  check-types, server check-types, all-active accepted-artifact audit
+  (`9` active scenarios, `status: pass`), and `git diff --check`.
+- Root type gate also passed after the audit-only command was added:
+  `pnpm check-types` completed `21` package tasks successfully. This proves the
+  server operator tsconfig includes the new accepted-artifacts audit script
+  through the normal workspace type-check path.
+- Verified with:
+  `pnpm --filter @openacme/server test -- hosted-tools-live-acceptance.test.ts`
+  (`54` tests).
+- Verified with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`22` tests).
+- Accepted artifact path-boundary hardening was verified with:
+  `pnpm --filter @openacme/server test -- hosted-tools-live-acceptance.test.ts`
+  (`54` passed),
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`32` passed),
+  `pnpm --filter @openacme/server check-types`,
+  `pnpm --filter @openacme/hosted-integrations check-types`, and
+  `git diff --check`.
+- Accepted artifact exact-path hardening was verified with:
+  `pnpm --filter @openacme/server test -- hosted-tools-live-acceptance.test.ts`
+  (`54` passed),
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`32` passed),
+  `pnpm --filter @openacme/server check-types`,
+  `pnpm --filter @openacme/hosted-integrations check-types`, and
+  `git diff --check`.
+- Planned-scenario accepted-evidence state hardening was verified with:
+  `pnpm --filter @openacme/server test -- hosted-tools-live-acceptance.test.ts`
+  (`54` passed),
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`32` passed),
+  `pnpm --filter @openacme/server check-types`,
+  `pnpm --filter @openacme/hosted-integrations check-types`, and
+  `git diff --check`.
+- Accepted artifact concise-evidence hardening was verified with:
+  `pnpm --filter @openacme/server test -- hosted-tools-live-acceptance.test.ts`
+  (`54` passed),
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`32` passed),
+  `pnpm --filter @openacme/server check-types`,
+  `pnpm --filter @openacme/hosted-integrations check-types`, and
+  `git diff --check`.
+- Accepted artifact single-line evidence hardening was verified with:
+  `pnpm --filter @openacme/server test -- hosted-tools-live-acceptance.test.ts`
+  (`54` passed),
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`32` passed),
+  `pnpm --filter @openacme/server check-types`,
+  `pnpm --filter @openacme/hosted-integrations check-types`, and
+  `git diff --check`.
+- Verified with:
+  `pnpm --filter @openacme/server check-types` and
+  `pnpm --filter @openacme/server check-types:operator`.
+- Verified the workspace gate with `pnpm check-types`; Turbo ran server
+  `check-types`, which now chained `check-types:operator`.
+- Hosted integration package `check-types` now also chains
+  `check-types:test-support`, and package tests guard that script wiring. This
+  keeps Qualys fixtures, split-contract helpers, and operator/test-support
+  package code inside the normal root type gate.
+- The hosted integration test-support tsconfig now includes both
+  `test-support/**/*.ts` and `test/test-support/**/*.ts`, so package-level
+  fixtures and test-local split-contract helpers are covered by the same root
+  `pnpm check-types` gate.
+
+### Slice 31.7: Promotion Gate And Documentation Closeout
+
+Status: accepted for the current 18-tool read-only pilot. Final broader Qualys
+closeout is deferred and remains `blocked_evidence_required` until later batch
+evidence exists. The current pilot has a deterministic promotion-readiness
+bundle test.
+
+Goal:
+
+- Make the Qualys migration repeatable and keep future hosted Qualys changes
+  from drifting back into skill-only or integration-hub-dependent behavior.
+
+Contract:
+
+- Promotion of new or changed Qualys hosted tools is rejected unless:
+  `tools.yaml` passes schema validation, handler validation passes, help
+  coverage passes, examples exist, required safe runnable examples pass,
+  publish readiness passes, and any required live smoke/parity evidence is
+  recorded. A `discovery_required` example may satisfy contract/example
+  presence for a tool that needs a real provider id/ref first, but it is not
+  executed directly.
+- The hosted Qualys surface documentation records the final included/excluded
+  tool set, help coverage status, known provider evidence gaps, live validation
+  commands, and artifact locations.
+- The operational `qualys-toolkit` skill may remain as a human/Codex reference,
+  but production hosted Qualys tool use must not depend on it for selection,
+  argument construction, parameter options, caveats, or examples.
+
+TDD:
+
+- Promotion-readiness tests prove missing help coverage, missing examples,
+  missing output schemas, stale provider refs, excluded-tool exposure, and
+  integration-hub runtime imports block promotion.
+- Documentation tests or lint prove the final Qualys migration docs mention
+  the included/excluded boundary, quickref/reference status, no-mock live gate,
+  and `EVIDENCE_REQUIRED` behavior.
+- No-secrets scans cover migrated examples, live artifacts, help output, error
+  fixtures, logs, and reports.
+
+Evidence:
+
+- `packages/hosted-integrations/test/qualys-live-inventory.test.ts` now has a
+  current-batch promotion-readiness bundle test. For every promoted Qualys
+  pilot contract in `currentPromotedBatch.tools` it requires: inventory
+  status `included_live`, help coverage row present, `mcp.outputSchema`,
+  `openacme.function = tool_<toolName>`, matching Python handler source,
+  read/live classification, read-only/non-destructive MCP annotations,
+  contract examples, and registered source-backed examples.
+- The readiness bundle also fails if current promoted pilot contract help still
+  contains `EVIDENCE_REQUIRED`, which keeps unresolved provider behavior out of
+  the promoted current surface.
+- The readiness bundle now also checks any current promoted tool
+  `openacme.providerRef` against the actual source package file set. This keeps
+  stale provider references from passing the Qualys promotion-readiness gate.
+- The readiness bundle now also requires every current promoted Qualys tool to
+  carry non-empty MCP title/description, full help, positive and negative
+  selection guidance, parameter help, and actionable error guidance. Tools whose
+  inventory row has a real pagination model must also carry
+  `openacme.pagination`.
+- The readiness bundle now also proves the registered source-backed example
+  set exactly matches `currentPromotedBatch.tools`; extra stale examples and
+  missing promoted-tool examples both fail. Current read-only examples may only
+  be `live_safe` or `discovery_required`; `discovery_required` examples must
+  carry explicit discovered-id/ref metadata and a discovery tool, while
+  `live_safe` examples must not be empty placeholder payloads.
+- The readiness bundle now also builds a real current Qualys draft from the
+  source-backed `family.yaml`, `tools.yaml`, runtime files, references, and
+  registered `examples.yaml`, then runs the normal draft validator with
+  `helpQualityMode: error`. This proves the current package passes the same
+  schema, handler, reference, providerRef, dependency-policy, example, and
+  help-quality gate used before promotion instead of relying only on bespoke
+  inventory assertions.
+- `hostedToolContractToolToSpec()` now carries `openacme.errors` and
+  `openacme.pagination` from `tools.yaml` into the runtime/help tool spec, and
+  `hosted_tool_help` returns those fields in `tool_help`. This closes the
+  projection gap where the contract had error/pagination guidance but an agent
+  could not see it through the help surface.
+- Draft/package validation help-quality checks now report missing
+  `openacme.errors` and missing `openacme.pagination` for tools with explicit
+  page/limit/cursor/truncation controls. This keeps actionable recovery and
+  pagination guidance from being optional, while count-only tools are not
+  forced to invent pagination metadata.
+- The Tool Developer skill now explicitly requires actionable
+  `openacme.errors` guidance and `openacme.pagination` guidance before
+  promotion, and a server legacy-surface test guards that fresh sessions keep
+  this validation expectation in their durable operating instructions.
+- The same test file now lints the Qualys closeout documentation and inventory
+  for included/excluded status vocabulary, quickref/reference-only status,
+  live evaluation `expectedOutcome` outcomes, `outcomeText` reporting,
+  `EVIDENCE_REQUIRED`, the no-mock live gate, mock-endpoint rejection, and the
+  promotion-readiness bundle evidence.
+- The closeout documentation lint now also requires the plan and inventory to
+  preserve the boundary between the current promoted pilot and the broader
+  open Qualys migration: contract batches, shared runtime coverage, live
+  smoke/parity, unguided usability coverage, and final closeout must remain
+  explicitly open until their broad evidence exists.
+- The same test file now validates current promoted Qualys example
+  `filter_body.filters[].field` values against
+  `references/gav-filter-fields.json`. This caught and fixed the legacy
+  `agent.lastCheckedIn` field in the Cloud Agent count example; examples now
+  use canonical `qualys.agent.lastCheckedInDate`.
+- The live evaluation manifest and schema now require every active unguided
+  Qualys scenario to record accepted live artifact evidence in
+  `acceptedArtifacts`. The Qualys inventory test verifies each active row has a
+  run id matching the live-acceptance JSON artifact filename,
+  `secretScan: pass`, and a non-empty evidence summary.
+  Server manifest validation rejects active rows whose accepted artifact status
+  is not `pass`.
+- The same test file now runs a current-pilot denylist secret scan across the
+  source package files, registered examples, help coverage matrix, migration
+  inventory, and live evaluation scenario manifest. The scan targets raw
+  credential material such as bearer tokens, access-token assignments,
+  client-secret assignments, raw-token/raw-secret markers, literal password
+  assignments, and JWT-shaped values while allowing required config/secret key
+  names in manifests.
+- The same no-secret gate now also builds an active generation from the current
+  Qualys source package and resolves full `hosted_tool_help` output
+  for every current promoted tool. This scans the actual agent-facing help
+  projection, not only the source files and docs behind it.
+- Current-pilot fixture names now use `CURRENT_PROMOTED_READONLY` instead of
+  the stale `FIVE_READONLY` wording. The pilot now contains eighteen promoted tools,
+  so active test-support names, live parity wiring, server surfacing tests, and
+  Qualys inventory tests no longer imply a five-tool contract.
+- `packages/hosted-integrations/test/qualys-live-inventory.test.ts` now guards
+  active current-pilot test-support and server wiring against reintroducing
+  stale five-tool naming. Historical milestone prose remains allowed, but active
+  code/test fixtures must use the current promoted pilot vocabulary.
+- The same inventory test now explicitly proves broader
+  `blocked_evidence_required` migration rows stay out of current `tools.yaml`,
+  current help coverage, and source-backed examples until those tools are
+  deliberately added to `currentPromotedBatch.tools`. This keeps migration-
+  scope rows from being mistaken for promoted hosted contract rows.
+- Live acceptance artifacts now redact secret-looking values before writing
+  persisted JSON evidence, while retaining the failed secret-scan finding. The
+  markdown summary also redacts rendered scenario outcome text, critical
+  failure diagnostics, and skipped live-parity diagnostics. The report writer
+  is covered by regression tests that verify the persisted artifact JSON,
+  markdown summary, and `latest.json` pointer do not contain the raw secret
+  string.
+- Verified with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`.
+- Current-pilot example-readiness bundle strengthening was verified with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`31` passed),
+  `pnpm --filter @openacme/hosted-integrations check-types`, and
+  `git diff --check`.
+- Current-pilot draft-validation readiness was verified with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`32` passed),
+  `pnpm --filter @openacme/hosted-integrations check-types`, and
+  `git diff --check`.
+- Current-pilot fixture naming cleanup was verified with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts integration-hub-replacement.test.ts packages.test.ts`.
+  `pnpm --filter @openacme/server test -- tools-hosted-integrations.test.ts`.
+  `pnpm --filter @openacme/hosted-integrations check-types`.
+- Current-pilot naming regression guard was verified with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`17` tests) and
+  `pnpm --filter @openacme/hosted-integrations check-types`.
+- Current versus broader blocked-evidence boundary guard was verified with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`18` tests) and
+  `pnpm --filter @openacme/hosted-integrations check-types`.
+- Current-pilot closeout regression was also checked across the hosted
+  contract/import/help/runtime/API surface with:
+  `pnpm --filter @openacme/hosted-integrations test -- validation.test.ts schemas.test.ts packages.test.ts help.test.ts integration-hub-replacement.test.ts qualys-live-inventory.test.ts catalog.test.ts gateway.test.ts generation-diff.test.ts source-view.test.ts`.
+  `pnpm --filter @openacme/server test -- hosted-tools-live-acceptance.test.ts hosted-tools-unguided-management.test.ts hosted-integrations-legacy-surface.test.ts tools-hosted-integrations.test.ts hosted-integrations-routes.test.ts`.
+- Current-pilot model-facing registry/help/management and human admin view
+  regressions were checked with:
+  `pnpm --filter @openacme/tools test -- hosted-integrations.test.ts hosted-integration-help.test.ts hosted-integration-management.test.ts`.
+  `pnpm --filter web test -- hosted-integrations-admin.test.ts hosted-integrations-rich-editor.test.ts hosted-integration-agent-settings.test.ts`.
+- Server hosted-adjacent regression now passes across runtime wiring, managed
+  agent catalog, live parity, management tools, routes, and live/unguided
+  analyzers:
+  `pnpm --filter @openacme/server test -- runtime.test.ts agent-catalog.test.ts hosted-integration-live-parity.test.ts hosted-integrations-legacy-surface.test.ts tools-hosted-integrations.test.ts hosted-integrations-routes.test.ts hosted-tools-live-acceptance.test.ts hosted-tools-unguided-management.test.ts`
+  (`9` test files, `152` passed in the latest rerun after the M31.6
+  live-evaluation runner/analyzer evidence fixes). The earlier run caught and
+  fixed two source-of-truth drifts: the platform-managed Tool Developer
+  template now grants
+  `hosted_tool_family_import`/`hosted_tool_family_export`, and the Splunk live
+  parity fixture now seeds split `family.yaml + tools.yaml` source files rather
+  than old `family.yaml.tools[]`.
+- Full `@openacme/hosted-integrations` package regression now passes:
+  `pnpm --filter @openacme/hosted-integrations test` (`40` test files,
+  `272` passed, `1` skipped). This full run caught and fixed two remaining
+  quality-rule drifts: the dependency-policy fixture and proposed-family
+  template now include actionable `openacme.errors` guidance.
+- Full model-facing tools package regression now passes:
+  `pnpm --filter @openacme/tools test` (`28` test files, `253` passed), plus
+  `pnpm --filter @openacme/tools check-types`. This covers hosted tool
+  registry projection, hosted help, hosted management/import/export bindings,
+  tool observation, spill behavior, and the wider built-in tool registry.
+- Full human admin web package regression now passes:
+  `pnpm --filter web test` (`17` test files, `174` passed), plus
+  `pnpm --filter web check-types`. This covers the hosted tools admin/editor
+  UI, agent settings exposure, and adjacent workflow/task UI tests.
+
+## Milestone 32: Shared Vocabulary Contract
+
+Status: accepted for the hosted source model and validation gates through the
+Milestone 36 acceptance bundle.
+
+Goal:
+
+- Add a reusable, family-local source-of-truth model for parameter vocabularies
+  that are shared by multiple hosted tools.
+
+Contract:
+
+- Large provider vocabularies must not be duplicated into every tool
+  `mcp.inputSchema.enum`.
+- Shared vocabularies live in promoted family source under `references/*.yaml`
+  or `references/*.json`.
+- Vocabulary files are normal hosted package/source files and must fit package
+  file-size and total-size limits. Large catalogs should be curated or split
+  by parameter/domain rather than bypassing package validation.
+- A vocabulary document has `kind: openacme.hostedParameterVocabulary`,
+  `version: 1`, `id`, `familyId`, `parameterPath`, `entries[]`, and optional
+  `invalidAliases[]`.
+- Vocabulary entries use `value`, `summary`, optional `description`,
+  `valueType`, `operators`, `aliases`, `examples`, and `source`.
+- `tools.yaml` references vocabulary files from
+  `openacme.parameterHelp.<path>.vocabularyRef`.
+- `vocabularyRef` is parsed as a structured vocabulary document. It is not a
+  replacement for `full` help text and must not be served through the generic
+  help-file text resolver.
+
+### Slice 32.1: Vocabulary Source Model
+
+Status: implemented.
+
+Goal:
+
+- Define the hosted parameter vocabulary schema and reference convention.
+
+TDD:
+
+- valid vocabulary file parses
+- missing required fields fail
+- duplicate `entries[].value` fails
+- duplicate `invalidAliases[].value` fails
+- a value present in both `entries[].value` and `invalidAliases[].value` fails
+- `familyId` mismatch fails
+- `parameterPath` mismatch between `parameterHelp.<path>.vocabularyRef` and
+  the referenced vocabulary fails unless an explicit compatibility rule is
+  added later
+- `vocabularyRef` outside source/generation root fails
+- same vocabulary file can be referenced by multiple tools
+- oversized vocabulary files fail through existing package file-size
+  gates unless deliberately split or the platform limit is explicitly changed
+
+Evidence:
+
+- `HostedParameterVocabularySchema` defines the family-local structured
+  vocabulary document with strict `kind`, `version`, `familyId`,
+  `parameterPath`, `entries[]`, and `invalidAliases[]` fields.
+- Schema tests reject duplicate vocabulary entries, duplicate invalid aliases,
+  and entry/invalid-alias collisions.
+- Draft validation parses `openacme.parameterHelp.<path>.vocabularyRef` as a
+  structured vocabulary file under `references/*.yaml`, `references/*.yml`, or
+  `references/*.json`; it rejects missing files, unsafe/out-of-convention refs,
+  malformed documents, family mismatches, and parameter-path mismatches.
+- Validation tests prove the same vocabulary file can be referenced by multiple
+  tools without duplicating enum lists into each tool schema.
+- Verified with:
+  `pnpm --filter @openacme/hosted-integrations test -- validation.test.ts schemas.test.ts`.
+
+### Slice 32.2: Validation Gates
+
+Status: implemented.
+
+Goal:
+
+- Draft, package, and promotion validation reject broken vocabulary contracts.
+
+TDD:
+
+- missing `vocabularyRef` file fails validation
+- malformed vocabulary file fails validation
+- complex `filter_body` without nested field help or vocabulary fails in
+  blocking help-quality mode
+- package validation includes vocabulary validation
+- unrelated reference files remain allowed when not declared as vocabulary refs
+
+Evidence:
+
+- Draft validation emits blocking diagnostics for missing or malformed
+  vocabulary references and for complex filter bodies that lack nested
+  vocabulary-backed field help when help quality is enforced.
+- Package validation includes vocabulary-reference checks; unresolved
+  `vocabularyRef` files inside imported package bundles fail before import.
+- Unrelated files under the package/reference bundle remain allowed unless a
+  tool contract declares them as `vocabularyRef`.
+- Verified with:
+  `pnpm --filter @openacme/hosted-integrations test -- validation.test.ts schemas.test.ts packages.test.ts`.
+
+## Milestone 33: `hosted_tool_help` Vocabulary Lookup
+
+Status: accepted through deterministic hosted help, model-facing support-tool,
+and Milestone 36 acceptance coverage.
+
+Goal:
+
+- Keep `hosted_tool_help` as the only normal-agent vocabulary discovery surface
+  and extend parameter-specific requests with vocabulary lookup.
+
+Contract:
+
+- Extend parameter help requests with optional `query`, `value`, and `limit`.
+- `name` alone returns parameter help plus vocabulary metadata.
+- `name + query` searches the referenced vocabulary.
+- `name + value` performs exact vocabulary lookup against real provider values;
+  aliases are search synonyms and are not accepted as exact values.
+- `query` and `value` together are tolerated for help requests: `query` is
+  used, `value` is reported as ignored guidance, and the response includes a
+  warning. This keeps the help surface corrective instead of forcing repeated
+  model retries.
+- Query searches `entries[].value`, `summary`, `description`, `aliases`, and
+  source labels when present.
+- Exact value lookup checks `entries[].value` first, then `invalidAliases[]`.
+- A parameter without `vocabularyRef` returns parameter help plus structured
+  `no_vocabulary` metadata when `query` or `value` was requested.
+- Large result sets are bounded and report `truncated: true`.
+- Unknown exact values return structured `not_found` guidance.
+
+### Slice 33.1: Parameter Request Extension
+
+Status: implemented.
+
+Goal:
+
+- Add vocabulary lookup fields to the existing `parameters[]` request model
+  instead of creating a separate vocabulary tool.
+
+TDD:
+
+- parameter help without query returns vocabulary metadata
+- query returns matching entries
+- value returns exact entry
+- value returns invalid-alias guidance when the value is listed under
+  `invalidAliases[]`
+- query/value against a parameter without `vocabularyRef` returns
+  `no_vocabulary`
+- unknown value returns structured `not_found`
+- query/value together return a search result with ignored-value warning
+- vocabulary lookup requested against an object parameter such as `filter_body`
+  can infer one nested vocabulary-backed field such as
+  `filter_body.filters.field` and returns a warning naming the precise path
+- large result set is truncated
+- response does not leak unsafe filesystem paths
+
+Evidence:
+
+- `HostedIntegrationParameterHelpRequestSchema` accepts optional `query`,
+  `value`, and bounded `limit` on existing `parameters[]` help requests.
+- `resolveHostedIntegrationToolHelp()` reads family-local vocabulary files from
+  `vocabularyRef`, returns vocabulary metadata when no lookup is requested,
+  searches entries for `query`, checks exact provider values for `value`, and
+  reports `invalid_alias`, `not_found`, `no_vocabulary`, truncation, and
+  corrective query/value warnings.
+- Help lookup can infer a single nested vocabulary-backed parameter from an
+  object request such as `filter_body`, while warning the agent to request the
+  precise nested path next time.
+- Help tests prove the response does not expose raw reference file paths or
+  local data directories.
+- Verified with:
+  `pnpm --filter @openacme/hosted-integrations test -- help.test.ts integration-hub-replacement.test.ts`.
+
+### Slice 33.2: Agent Usability Copy
+
+Status: implemented.
+
+Goal:
+
+- Make vocabulary discovery clear from the tool schema without prompt tips.
+
+TDD:
+
+- built-in `hosted_tool_help` schema exposes `query`, `value`, and `limit`
+- description tells agents to use vocabulary search for unfamiliar enum-like
+  filter/query/body values
+- normal agents can use `hosted_tool_help`; hosted management tools remain
+  unavailable unless explicitly granted
+- Live M35 evidence showed repeated invalid help attempts when `query` and
+  `value` were hard-rejected. The help contract is intentionally tolerant here;
+  business tool schemas and runtime guards remain strict.
+
+Evidence:
+
+- The built-in `hosted_tool_help` parameter schema describes `query`, `value`,
+  `limit`, direct vocabulary search, exact value checks, null `parameters`, and
+  tolerant query/value handling.
+- The built-in tool description tells agents to use help before filters, query
+  DSLs, request bodies, pagination, or unfamiliar parameters.
+- Registry tests keep `hosted_tool_help` in the support toolset instead of the
+  hosted invocation namespace and require an active agent context.
+- Verified with:
+  `pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts`.
+
+## Milestone 34: Qualys GAV Vocabulary Dogfood
+
+Status: accepted for the current Qualys read-only pilot through deterministic
+inventory/help/runtime guards and active accepted live artifacts.
+
+Goal:
+
+- Move Qualys GAV filter field knowledge into one shared vocabulary artifact and
+  reuse it across relevant Qualys tools.
+
+Contract:
+
+- Add `references/gav-filter-fields.yaml` or
+  `references/gav-filter-fields.json` to the Qualys family package.
+- Include at least `asset.name`, `asset.trackingMethod`,
+  `qualys.agent.lastCheckedInDate`, `operatingSystem.category1`, and
+  `operatingSystem.category2`.
+- Include invalid aliases for `assetName`, `asset_last_updated`, and legacy
+  `agent.lastCheckedIn`.
+- Reference the same vocabulary from GAV asset count/search and Cloud Agent
+  hostasset count/search.
+
+### Slice 34.1: Qualys Shared Vocabulary
+
+Status: implemented.
+
+Goal:
+
+- Make the shared Qualys vocabulary discoverable through `hosted_tool_help`.
+
+TDD:
+
+- all relevant Qualys tools reference the same vocabulary id/path
+- query `"last check-in"` finds `qualys.agent.lastCheckedInDate`
+- query `"asset name"` finds `asset.name`
+- exact lookup for `assetName` returns invalid alias guidance
+- exact lookup for `asset_last_updated` explains top-level parameter usage
+- exact lookup for `agent.lastCheckedIn` points to
+  `qualys.agent.lastCheckedInDate`
+- no per-tool duplicated enum list appears in `inputSchema`
+
+Evidence:
+
+- The current Qualys source-backed package includes
+  `references/gav-filter-fields.json` with `kind:
+  openacme.hostedParameterVocabulary`, family `qualys`, parameter path
+  `filter_body.filters.field`, and the required GAV field entries and invalid
+  aliases.
+- GAV asset count/search and Cloud Agent hostasset count/search all reference
+  the same `openacme.parameterHelp["filter_body.filters.field"].vocabularyRef`
+  path instead of duplicating field enums per tool.
+- `hosted_tool_help` tests prove query lookup for `"asset name"` and
+  `"last check-in"`, exact invalid-alias lookup for `assetName`,
+  `asset_last_updated`, and `agent.lastCheckedIn`, and guidance to use
+  `qualys.agent.lastCheckedInDate`.
+- The Qualys replacement test recursively scans each current tool
+  `mcp.inputSchema` and fails if GAV vocabulary values are copied into any
+  input-schema `enum`.
+- Verified with:
+  `pnpm --filter @openacme/hosted-integrations test -- integration-hub-replacement.test.ts qualys-live-inventory.test.ts`.
+
+### Slice 34.2: Runtime Guard Alignment
+
+Status: implemented for the current Qualys read-only pilot.
+
+Goal:
+
+- Align Qualys runtime validation with the shared vocabulary where practical.
+
+TDD:
+
+- `assetName` is rejected before network access
+- `asset_last_updated` inside `filter_body.filters.field` is rejected before
+  network access
+- legacy `agent.lastCheckedIn` inside `filter_body.filters.field` is rejected
+  before network access with guidance to use `qualys.agent.lastCheckedInDate`
+- valid `qualys.agent.lastCheckedInDate` passes
+- Cloud Agent tools still enforce QAGENT scoping and reject `operation: OR`
+- helper-level tests prove the runtime guard loads invalid alias guidance from
+  the shared `references/gav-filter-fields.*` artifact rather than a copied
+  hard-coded list
+
+Evidence:
+
+- `packages/hosted-integrations/test-support/integration-hub/qualys-source.ts`
+  now lists `agent.lastCheckedIn` as an invalid alias with
+  `use: qualys.agent.lastCheckedInDate`.
+- `packages/hosted-integrations/test-support/integration-hub/fixtures.ts`
+  now uses `qualys.agent.lastCheckedInDate` in the Cloud Agent count source
+  example.
+- `packages/hosted-integrations/test/integration-hub-replacement.test.ts`
+  verifies `hosted_tool_help` exact lookup for `agent.lastCheckedIn` returns
+  invalid-alias guidance to `qualys.agent.lastCheckedInDate`.
+- The current Qualys Python runtime guard loads invalid alias guidance from
+  `references/gav-filter-fields.json`; it rejects invalid GAV field aliases
+  before network access and keeps Cloud Agent QAGENT scoping and OR rejection
+  in the shared request path.
+- Verified with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts integration-hub-replacement.test.ts`.
+
+## Milestone 35: Agent Dogfood And Documentation
+
+Status: accepted for the current unguided Qualys vocabulary/help evidence and
+generalized by the Milestone 36 acceptance gate.
+
+Goal:
+
+- Prove agents can discover shared vocabularies without operator tips and make
+  the behavior durable for fresh sessions.
+
+### Slice 35.1: Unguided Agent Evaluation
+
+Goal:
+
+- Validate a normal agent can solve a filtered Qualys task through help-driven
+  vocabulary discovery.
+
+TDD / Evaluation:
+
+- prompt contains no hosted tool name, exact argument shape, or explicit help
+  instruction
+- checked-in unguided scenario prompts are deterministically linted so planned
+  scenarios cannot smuggle hosted tool names, help tool names, remote MCP names,
+  managed tool names, or exact JSON argument hints
+- agent calls `hosted_tool_help` before the business tool
+- help call requests full parameter detail or vocabulary lookup
+- business call uses `qualys.agent.lastCheckedInDate`
+- no `integration-hub`, `managed_*`, cache, or local snapshot tool is used
+- answer cites live Qualys response evidence
+
+Status: implemented for the original Qualys vocabulary-discovery dogfood;
+generalized and hardened by Milestone 36.
+
+- Deterministic live-acceptance analyzer coverage now enforces the vocabulary
+  evidence shape for the Qualys consumer scenario: `hosted_tool_help` must
+  request full parameter detail or vocabulary lookup, and the hosted business
+  call must include `qualys.agent.lastCheckedInDate` evidence.
+- The checked-in live-evaluation manifest is now also guarded from the hosted
+  integrations package tests: every scenario marked `unguided` must set
+  `analyzer.requireUnguided: true`, and its prompt must remain free of hosted
+  tool names, `hosted_tool_help`, remote MCP names, managed tool names, and
+  exact JSON argument hints before any live model run starts.
+- The server-side manifest parser now enforces the same unguided prompt lint at
+  schema-parse time, so prompt hints cannot reach live execution even if a
+  future caller bypasses repository manifest tests.
+- The existing live acceptance runner still marks the Qualys consumer scenario
+  as `prompt_guided`; it has been tightened to use
+  `qualys.agent.lastCheckedInDate`, but it still gives the agent the hosted
+  tool name, help instruction, and exact argument shape.
+- Added an opt-in unguided Qualys consumer scenario to the live runner. It is
+  enabled with
+  `OPENACME_LIVE_HOSTED_TOOLS_UNGUIDED_CONSUMER=1` or the package script
+  `pnpm --filter @openacme/server dogfood:hosted-tools:live:unguided-consumer`.
+  Its prompt omits hosted tool names, exact argument shape, and explicit help
+  instructions; prompt lint rejects those hints before the live run starts.
+- First live execution found a real surface-quality failure, not a prompt-lint
+  failure:
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_m35_vocab_retry_20260818022408.json`.
+  The consumer used legacy `mcp_integration-hub__*` Qualys quick-reference/count
+  tools, did not call `hosted_tool_help`, and used `agent.lastCheckedIn`
+  instead of the hosted vocabulary value `qualys.agent.lastCheckedInDate`.
+- Root cause for the acceptance setup: normal agents inherit global MCP servers
+  from `mcp.json` unless `mcpDisabled` excludes them. The unguided hosted-only
+  consumer now disables the legacy `integration-hub` MCP server explicitly so
+  the test measures the hosted surface instead of a mixed hosted/remote surface.
+- The unguided runner now records the disabled MCP server list in scenario
+  evidence, not only in the created agent settings. A regression test fails if
+  `qualysUnguidedVocabularyDiscoveryScenario` stops writing
+  `mcpDisabled: [...HOSTED_ONLY_LIVE_AGENT_MCP_DISABLED]` into the artifact
+  scenario base.
+- Rerun passed after hosted-only MCP isolation:
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_m35_vocab_isolated_20260818022820.json`.
+  Evidence: `live-qualys-unguided-analyst` had `mcpDisabled:
+  ["integration-hub"]`, called `hosted_tool_help`, then invoked
+  `hosted_qualys__qualys_gav_asset_count` with
+  `filter_body.filters[].field = qualys.agent.lastCheckedInDate`. No
+  `mcp_integration-hub__*` or `managed_*` tool call was present in the passing
+  scenario.
+- Follow-up ergonomics fix: the pass artifact showed the agent repeatedly sent
+  `query` and `value` together while trying to learn the filter vocabulary.
+  `hosted_tool_help` now treats that as a corrective help request instead of a
+  hard validation error: `query` wins, `value` is returned as ignored guidance,
+  and a warning explains the correction. If vocabulary lookup is requested for
+  an object parameter such as `filter_body`, help may infer the single nested
+  vocabulary-backed parameter such as `filter_body.filters.field` and warn with
+  the precise path.
+- Live rerun after the tolerant help change passed:
+  `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_m35_help_tolerant_20260818023547.json`.
+  Evidence: the agent made two successful `hosted_tool_help` calls with mixed
+  `query`/`value` parameter requests, made no failed help calls, and then
+  invoked `hosted_qualys__qualys_gav_asset_count` with
+  `asset.trackingMethod EQUALS` and
+  `qualys.agent.lastCheckedInDate LESSER`.
+
+Verified:
+
+- `pnpm --filter @openacme/server test -- hosted-tools-live-acceptance.test.ts`
+- `pnpm --filter @openacme/server check-types`
+- `pnpm --filter @openacme/server test -- hosted-integrations-legacy-surface.test.ts hosted-tools-unguided-management.test.ts`
+- `pnpm --filter @openacme/hosted-integrations test -- help.test.ts`
+- `pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts`
+- `OPENACME_DATA_DIR="$HOME/.openamce-hosted-integrations-test-env" OPENACME_E2E_PORT=3467 OPENACME_LIVE_HOSTED_TOOLS_CHAT_TIMEOUT_MS=240000 OPENACME_LIVE_HOSTED_TOOLS_SETTLE_MS=5000 pnpm --filter @openacme/server dogfood:hosted-tools:live:unguided-consumer`
+
+### Slice 35.2: Tool Developer Skill And Docs
+
+Status: implemented for the shared-vocabulary and evidence-required guidance
+guard.
+
+Goal:
+
+- Update the Tool Developer skill and durable docs so fresh sessions know
+  shared vocabularies are family-local references, not per-tool enums, and
+  unknown provider fields require `EVIDENCE_REQUIRED`.
+
+TDD:
+
+- Tool Developer skill says shared vocabularies live under `references/`
+- docs mention `vocabularyRef`
+- Tool Developer skill says unguided live/dogfood scenarios belong in the
+  repository scenario manifest, not runner code, and prompt text must remain
+  free of tool/help/argument hints
+- prompt lint flags instructions that tell Tool Developer to invent provider
+  fields
+- existing hosted integration tests still pass
+
+Evidence:
+
+- `packages/server/test/hosted-integrations-legacy-surface.test.ts` now fails
+  if the bundled Tool Developer skill stops teaching family-local
+  `references/`, `parameterHelp` `vocabularyRef`, no per-tool catalog copying,
+  complex parameter help, and the architecture doc's shared-vocabulary wording.
+- The same legacy-surface test now also fails if the platform-managed Tool
+  Developer agent template stops carrying the critical fresh-session guardrails:
+  `tools.yaml` as hosted MCP surface source of truth, `EVIDENCE_REQUIRED` for
+  undocumented provider behavior, shared vocabulary references, and package
+  import/export management tools.
+- The Tool Developer agent template now includes those guardrails directly in
+  addition to requiring `skill_view` for the full
+  `hosted-integrations-development` lifecycle playbook.
+- The Tool Developer skill now also teaches that live dogfood/usability
+  scenarios are repository-manifest-owned, runner code must not own prompt
+  cases, unguided prompts must not name tools/help/exact arguments, and analyzer
+  evidence owns the expected behavior.
+- `packages/server/test-support/hosted-tools/unguided-management.ts` now
+  rejects unguided management prompts that tell Tool Developer to invent, guess,
+  or fabricate provider API fields, parameters, pagination, response schemas,
+  or semantics.
+- `packages/server/test/hosted-tools-unguided-management.test.ts` covers that
+  `invent-provider-behavior` prompt lint rule.
+- Verified with:
+  `pnpm --filter @openacme/server test -- hosted-tools-unguided-management.test.ts hosted-integrations-legacy-surface.test.ts`.
+  `pnpm --filter @openacme/server test -- agent-catalog.test.ts`.
+  `pnpm --filter @openacme/server check-types`.
+- Current focused regression for the shared-vocabulary/help/dogfood slice also
+  passes:
+  `pnpm --filter @openacme/hosted-integrations test -- help.test.ts schemas.test.ts validation.test.ts packages.test.ts integration-hub-replacement.test.ts qualys-live-inventory.test.ts`
+  (`6` test files, `109` passed, `1` skipped),
+  `pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts`
+  (`7` passed), and
+  `pnpm --filter @openacme/server test -- hosted-tools-live-acceptance.test.ts hosted-tools-unguided-management.test.ts hosted-integrations-legacy-surface.test.ts`
+  (`3` test files, `58` passed).
+
+## Milestone 36: Shared Vocabulary Acceptance Hardening
+
+Status: accepted for deterministic vocabulary/help/example-readiness gates and
+for the current active unguided Qualys live-artifact claims. New provider-live
+or model-usability claims remain scenario-based and require fresh accepted
+artifacts plus the accepted-artifacts audit.
+
+Goal:
+
+- Turn the shared vocabulary approach from "implemented behavior" into a
+  durable acceptance gate for future hosted tool families, without adding a
+  second help tool or pushing large provider catalogs into every tool schema.
+
+Non-goals:
+
+- Do not create a generic provider ontology service.
+- Do not require every parameter to have a vocabulary file.
+- Do not duplicate vocabulary entries into MCP `inputSchema.enum` unless the
+  enum is genuinely small and owned by the hosted surface itself.
+- Do not make live model evaluation mandatory for every small bug fix.
+
+### Slice 36.1: Vocabulary Contract Completeness Gate
+
+Status: implemented for draft/package validation of complex filter DSL
+parameters.
+
+Goal:
+
+- Make validation fail when complex provider-backed filter/query/body
+  parameters are not backed by usable parameter help and, where value selection
+  is catalog-like, a shared vocabulary reference.
+
+TDD:
+
+- complex `filter_body`, `query`, or provider DSL body parameters fail in
+  blocking help-quality mode when only top-level help exists
+- nested catalog-like parameter paths pass only when `summary` plus
+  `vocabularyRef` resolve to a structured vocabulary file
+- vocabulary files fail when `familyId`, `parameterPath`, `kind`, or `version`
+  drift from the referencing contract
+- multiple tools can share one vocabulary file without per-tool schema enum
+  duplication
+- unrelated reference files remain allowed and are not parsed as vocabularies
+  unless referenced by `parameterHelp`
+- package import, draft validation, and promotion readiness all run the same
+  vocabulary validation path
+
+Evidence:
+
+- `requiresNestedVocabularyHelp()` now detects provider filter DSLs from schema
+  shape as well as from the legacy `filter_body` parameter name. A complex
+  object parameter such as `query_body` with `filters[].field` now requires
+  nested `query_body.filters.field` help plus a `vocabularyRef` in blocking
+  help-quality mode.
+- Generic complex request bodies without a `filters[].field` catalog shape
+  still require full parameter help but do not require a vocabulary file. This
+  keeps the gate focused on catalog-like provider value selection rather than
+  forcing every object body into a vocabulary workflow.
+- `packages/hosted-integrations/test/validation.test.ts` covers both sides:
+  `query_body.filters.field` fails without nested vocabulary help, while a
+  generic `request_body` object with full help does not emit
+  `help_parameter_vocabulary_missing`.
+- Package validation continues to run the same draft validator path, including
+  vocabulary-reference resolution and help-quality checks.
+- Verified with:
+  `pnpm --filter @openacme/hosted-integrations test -- validation.test.ts`.
+  `pnpm --filter @openacme/hosted-integrations test -- packages.test.ts`.
+  `pnpm --filter @openacme/hosted-integrations check-types`.
+
+### Slice 36.2: Help Lookup Usability Gate
+
+Status: implemented for deterministic core/help and model-facing support-tool
+coverage.
+
+Goal:
+
+- Prove `hosted_tool_help` is sufficient for agents to list, search, validate,
+  and recover from vocabulary choices.
+
+TDD:
+
+- `parameters: null` and omitted `parameters` both return documented
+  parameter help
+- `name` alone returns vocabulary metadata, entry count, invalid-alias count,
+  and no raw file path
+- `name + query` searches values, summaries, descriptions, aliases, and source
+  labels
+- `name + value` returns exact valid values and invalid-alias guidance
+- `query + value` is accepted as corrective help: query wins and ignored value
+  is reported as a warning
+- object-level lookup such as `filter_body + query` can infer exactly one
+  nested vocabulary-backed parameter and warns with the precise path
+- ambiguous object-level lookup with multiple possible nested vocabularies does
+  not guess; it returns structured guidance asking for a precise parameter path
+- large vocabulary searches are bounded, truncated, and stable
+- missing vocabulary refs and unknown exact values return actionable
+  `no_vocabulary` / `not_found` responses
+- help output never exposes local filesystem paths, data directories, secrets,
+  or unsafe provider response fragments
+
+Evidence:
+
+- `resolveHostedIntegrationToolHelp()` now returns structured
+  `ambiguous_vocabulary` guidance when an object-level lookup such as
+  `filter_body + query` could match more than one nested vocabulary-backed
+  parameter. It reports `candidate_parameter_paths` and asks for a precise
+  parameter path instead of guessing or misreporting `no_vocabulary`.
+- `packages/hosted-integrations/test/help.test.ts` now explicitly covers
+  vocabulary metadata-only requests (`entry_count`, `invalid_alias_count`,
+  `parameter_path`), alias-backed query search, source-label-backed query
+  search, exact invalid-alias guidance, mixed query/value correction,
+  object-level single-vocabulary inference, ambiguous object-level guidance,
+  bounded/truncated search, `not_found`, `no_vocabulary`, null/omitted
+  parameter behavior, and path/data-dir redaction.
+- Regression coverage in `packages/hosted-integrations/test/help.test.ts`
+  proves ambiguous object-level lookup across
+  `filter_body.filters.field` and `filter_body.filters.operator` returns no
+  matches, exposes both candidate parameter paths, and keeps the agent on the
+  corrective help path.
+- The model-facing `hosted_tool_help` support-tool description now tells agents
+  to retry ambiguous vocabulary lookup with a precise candidate parameter path
+  before calling the hosted tool. `packages/tools/test/hosted-integration-help.test.ts`
+  locks that recovery wording so the resolver behavior remains discoverable
+  from the normal tool surface.
+- Verified with:
+  `pnpm --filter @openacme/hosted-integrations test -- help.test.ts`.
+  `pnpm --filter @openacme/hosted-integrations check-types`.
+  `pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts`.
+  `pnpm --filter @openacme/tools check-types`.
+
+### Slice 36.3: Qualys Vocabulary Coverage Gate
+
+Status: implemented for the current Qualys read-only pilot.
+
+Goal:
+
+- Keep the current Qualys read-only hosted family from regressing into
+  duplicated or undocumented filter semantics while the broader Qualys family
+  is migrated.
+
+TDD:
+
+- every Qualys tool that accepts GAV/QPS-style filter fields links the intended
+  shared vocabulary path for `filter_body.filters.field`
+- required field entries include `asset.name`, `asset.trackingMethod`,
+  `qualys.agent.lastCheckedInDate`, `operatingSystem.category1`, and
+  `operatingSystem.category2`
+- invalid aliases include `assetName`, `asset_last_updated`, and
+  `agent.lastCheckedIn`, with corrective guidance
+- current Qualys examples use only valid vocabulary values
+- current Qualys runtime validation rejects invalid aliases before network
+  access where the request shape is locally inspectable
+- no current Qualys `mcp.inputSchema` duplicates the shared GAV vocabulary as
+  a per-tool enum
+- full `hosted_tool_help` output for each promoted Qualys tool exposes the
+  vocabulary path through structured help behavior, not raw JSON instructions
+
+Evidence:
+
+- Current-batch Qualys tests now assert the four GAV/Cloud Agent tools share
+  `references/gav-filter-fields.json`, while `qualys_vmdr_host_list` is not
+  forced into the GAV vocabulary contract because it uses a different VMDR Host
+  List parameter surface.
+- `packages/hosted-integrations/test/qualys-live-inventory.test.ts` now
+  promotes the current Qualys source-backed package and resolves
+  full `hosted_tool_help` projection for every current tool that declares the
+  shared GAV vocabulary. The projected help must expose structured vocabulary
+  metadata (`id`, `parameter_path`, `entry_count`, `invalid_alias_count`) for
+  `filter_body.filters.field` and must not leak the raw
+  `references/gav-filter-fields.json` file path into agent-facing help.
+- Existing replacement coverage still checks required vocabulary values,
+  invalid aliases, no per-tool enum duplication in `mcp.inputSchema`, help
+  lookup for `"asset name"` and `"last check-in"`, invalid-alias guidance for
+  `assetName`, `asset_last_updated`, and `agent.lastCheckedIn`, and runtime
+  invalid-alias rejection before Qualys network access where locally
+  inspectable.
+- Verified with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`.
+  `pnpm --filter @openacme/hosted-integrations test -- integration-hub-replacement.test.ts`.
+  `pnpm --filter @openacme/hosted-integrations check-types`.
+
+### Slice 36.4: Unguided Agent Evaluation Gate
+
+Status: implemented for deterministic manifest/analyzer gates; live execution
+remains opt-in and scenario-based.
+
+Goal:
+
+- Measure whether a normal agent can discover and apply hosted vocabulary
+  details without operator tips.
+
+TDD / Live Evaluation:
+
+- checked-in unguided scenario prompts deterministically reject hosted tool
+  names, `hosted_tool_help`, remote MCP names, managed tool names, and exact
+  JSON argument shapes
+- live runner rejects hinted prompts at manifest parse time before any model
+  call
+- agent must call `hosted_tool_help` before the first hosted business call when
+  the scenario requires vocabulary evidence
+- scenarios that only prove MCP metadata-driven tool choice and argument
+  construction must not be failed solely because metadata was sufficient and no
+  help lookup was needed
+- help call must request full parameter detail or perform vocabulary lookup
+- business call must contain required vocabulary-derived fragments such as
+  `qualys.agent.lastCheckedInDate`
+- nested hosted argument summaries used by deterministic analyzers must keep
+  filter `field`, `operator`, and `value` evidence instead of dropping
+  prompt-authored values such as timestamp cutoffs
+- analyzer prefers a later successful retry over an earlier failed exploratory
+  hosted call
+- analyzer can inspect hosted envelope summaries, artifact result paths,
+  truncation flags, continuation fields, and redacted run ids
+- selected unguided-only report summaries must not emit unrelated missing
+  prompt-guided lifecycle outcomes
+- hosted run-id lookup diagnostics must stay quiet when hosted tool-call output
+  already carries run ids and generation ids
+- provider/subagent `AbortError` noise must not crash the live runner before it
+  writes acceptance artifacts; non-Abort exceptions still fail normally
+- upstream provider errors persisted as `data-upstream-error` message parts
+  must appear as redacted live-run timeout diagnostics instead of blank
+  assistant-text timeouts
+- hosted-only scenarios must disable legacy `integration-hub` MCP and must not
+  use `managed_*` or remote MCP calls
+- agent help effectiveness must be accepted only when help evidence is carried
+  into the later hosted business-call arguments, not merely because
+  `hosted_tool_help` was called
+- evidence-required scenarios pass only when the final answer stops with
+  `EVIDENCE_REQUIRED` instead of inventing provider mappings
+- evidence-required, refusal, and recovery scenarios must also declare
+  `analyzer.requiredOutcomeFragments`, so stored `outcomeText` has
+  manifest-owned positive evidence instead of passing only from generic regexes
+- persisted live artifacts and markdown summaries are redacted before storage
+
+Evidence:
+
+- `docs/hosted-tools-live-evaluation-scenarios.yaml` owns the unguided Qualys
+  scenario manifest. Prompts are repository-owned, scenario rows declare
+  `guidance: unguided`, and analyzers carry the evidence requirements instead
+  of embedding prompt hints in runner code.
+- `packages/server/test-support/hosted-tools/live-acceptance.ts` parses the
+  manifest with deterministic guardrails: Qualys unguided scenarios must set
+  `analyzer.requireUnguided: true`, must disable the legacy
+  `integration-hub` MCP server, must pass prompt lint before any live run, and
+  provider-evidence-boundary scenarios must expect `evidence_required`.
+- `packages/server/test/hosted-tools-live-acceptance.test.ts` covers prompt
+  lint, active/planned scenario selection, hosted-only MCP isolation, strict
+  help/vocabulary evidence, metadata-only argument construction scenarios,
+  retry-before-business-call behavior,
+  forbidden-tool and forbidden-argument failures, result summary key checks,
+  nested filter-value evidence, upstream provider error diagnostics,
+  unguided-only report summaries, quiet run-id lookup diagnostics,
+  manifest-owned positive outcome fragments for
+  `EVIDENCE_REQUIRED`/refusal/recovery outcomes, non-hosted `managed_*`
+  rejection, redacted bounded message-history evidence, and redacted live
+  artifact/report persistence.
+- `packages/hosted-integrations/test/qualys-live-inventory.test.ts` also
+  validates every checked-in unguided prompt stays free of hosted tool names,
+  `hosted_tool_help`, remote MCP names, managed tool names, and exact JSON
+  argument hints; the active current-batch hosted-call set is exactly
+  vocabulary discovery, overlapping tool selection, known-id direct get, QPS
+  count/download rules, VMDR known-QID Host Detection, and pagination
+  continuation, while broader future Qualys scenarios remain planned until live
+  proof is intentionally collected.
+- Verified with:
+  `pnpm --filter @openacme/server test -- hosted-tools-live-acceptance.test.ts`.
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`.
+  `pnpm --filter @openacme/server check-types`.
+  `pnpm --filter @openacme/hosted-integrations check-types`.
+
+### Slice 36.5: Tool Developer Skill Gate
+
+Status: implemented.
+
+Goal:
+
+- Ensure fresh Tool Developer sessions know the vocabulary contract and do not
+  invent provider fields when help or imported evidence is missing.
+
+TDD:
+
+- bundled Tool Developer skill says shared vocabularies live under
+  family-local `references/`
+- skill says `tools.yaml` `parameterHelp.<path>.vocabularyRef` is the contract
+  link and large vocabularies must not be copied into each tool schema
+- skill teaches aliases are search synonyms, while exact checks use real
+  provider values or explicit `invalidAliases`
+- skill says complex provider semantics require official/imported/safely
+  observed evidence or `EVIDENCE_REQUIRED`
+- skill says unguided dogfood scenarios live in the repository scenario
+  manifest, not runner code
+- platform-managed Tool Developer agent template carries the same bootstrap
+  guardrails and has import/export management tools available
+- prompt lint rejects Tool Developer tasks that instruct the agent to invent,
+  guess, or fabricate provider fields, pagination, response schemas, or
+  destructive behavior
+
+Evidence:
+
+- `packages/skills/builtin/hosted-integrations-development/SKILL.md` now
+  explicitly teaches family-local `references/`, `parameterHelp`
+  `vocabularyRef`, no per-tool catalog copying, aliases as search synonyms
+  rather than accepted exact provider values, and documented `invalidAliases`
+  for corrective exact-value guidance.
+- `packages/agent-catalog/templates/tool-developer/AGENT.md` carries the
+  fresh-session bootstrap guardrails for `tools.yaml` source-of-truth,
+  family-local vocabularies, `EVIDENCE_REQUIRED`, package import/export, and
+  hosted management-tool lifecycle ownership.
+- `packages/server/test/hosted-integrations-legacy-surface.test.ts` locks the
+  skill/template wording for MCP surface ownership, provider evidence
+  boundaries, actionable errors, pagination guidance, scenario-manifest
+  ownership, shared vocabularies, import/export tools, and alias semantics.
+- `lintUnguidedManagementPrompt()` now rejects instructions that tell Tool
+  Developer to invent, guess, assume, make up, or fabricate provider/API fields,
+  pagination, response schemas, semantics, destructive side effects, or
+  confirmation behavior.
+- `packages/server/test/hosted-tools-unguided-management.test.ts` covers both
+  provider-field/schema invention prompts and destructive-behavior invention
+  prompts.
+- Verified with:
+  `pnpm --filter @openacme/server test -- hosted-tools-unguided-management.test.ts hosted-integrations-legacy-surface.test.ts`.
+  `pnpm --filter @openacme/server check-types`.
+
+### Slice 36.6: Vocabulary Acceptance Matrix Gate
+
+Status: implemented.
+
+Goal:
+
+- Make the shared-vocabulary TDD package explicit enough that future hosted
+  tool work cannot accidentally pass a narrow focused test while regressing the
+  public help, validation, scenario, or Tool Developer behavior.
+
+TDD:
+
+- contract-shape changes must run schema and validation tests that prove
+  `parameterHelp.<path>.vocabularyRef` is accepted only under OpenAcme help
+  metadata and never copied into MCP `inputSchema.enum`
+- contract-shape changes must also prove `family.yaml`, `tools.yaml`,
+  `examples.yaml`, and package imports reject malformed YAML and duplicate YAML
+  keys before promotion; source-of-truth YAML must not silently overwrite
+  earlier keys
+- help-resolution changes must run core help tests and model-facing
+  `hosted_tool_help` tests that prove null/omitted parameters, full detail,
+  vocabulary search, exact invalid-alias guidance, object-level inference,
+  ambiguous lookup recovery, truncation, and redaction
+- Qualys contract changes must run inventory/replacement tests that prove the
+  current GAV/Cloud Agent tools share `references/gav-filter-fields.json`,
+  required values and invalid aliases are present, examples use valid fields,
+  and runtime-rejectable invalid aliases fail before provider calls
+- live-evaluation manifest changes must run server analyzer tests that prove
+  unguided prompts stay hint-free, hosted-only scenarios disable legacy
+  `integration-hub`, help evidence precedes hosted business calls, retry
+  recovery is accepted, help-derived parameter or vocabulary evidence is
+  carried into later hosted business-call arguments, nested filter values remain
+  visible to analyzers,
+  unguided-only summaries do not report unrelated missing lifecycle outcomes,
+  run-id fallback diagnostics stay quiet when tool-call evidence is already
+  present, and `EVIDENCE_REQUIRED` is required for unevidenced provider
+  semantics with manifest-owned positive `requiredOutcomeFragments` evidence
+- live-evaluation changes must keep platform/tool availability recovery
+  separate from provider auth, permission, rate-limit, timeout, and upstream
+  failure recovery; provider-facing recovery scenarios remain planned until a
+  bounded fault-injection or real upstream failure artifact proves the behavior
+- live artifacts used as acceptance evidence must include scenario id, redacted
+  bounded `messageHistory`, enabled hosted tool surface, disabled MCP servers,
+  hosted tool calls, analyzer result, redacted run/artifact refs, and
+  secret-scan status
+- scenario-manifest `acceptedArtifacts` are not documentation-only claims:
+  deterministic acceptance must be able to parse the referenced artifact and
+  re-run the same analyzer semantics for help, argument, result, forbidden-tool,
+  non-call outcome, and redaction evidence
+- accepted-artifact audit must be explicitly invokable without starting the
+  live server through
+  `pnpm --filter @openacme/server dogfood:hosted-tools:accepted-artifacts:audit`;
+  without that audit path, live model-usability claims stay unaccepted
+- Tool Developer skill/template changes must run legacy-surface and unguided
+  management tests that prove fresh sessions learn the vocabulary contract and
+  prompt lint rejects invention of provider fields, schemas, pagination,
+  destructive side effects, and confirmation behavior. The same guard must
+  prove fresh sessions learn that unguided model-usability claims require
+  scenario-manifest `acceptedArtifacts` with matching runId/path,
+  `status: pass`, `secretScan: pass`, and concise evidence.
+- acceptance cannot be claimed from mocked provider proof when the changed
+  behavior is explicitly provider-live; live Qualys smoke remains opt-in for
+  deterministic contract-only changes and required when claiming live provider
+  behavior or unguided model usability
+- unguided model-usability claims must include a persisted live artifact path,
+  the exact scenario ids, and a capability-level result summary that says what
+  passed, failed, or remained untested; deterministic analyzer fixtures alone
+  are not enough for this claim
+- every command listed in the acceptance matrix must resolve to an actual
+  package script or an explicitly allowed hygiene command such as
+  `git diff --check`; stale matrix commands fail acceptance
+- exported hosted-integration type changes must rebuild
+  `@openacme/hosted-integrations` before downstream tools/server type checks,
+  so stale declaration output cannot hide source-of-truth drift
+- promoted generation metadata must keep derived `tools` required; file-backed
+  stores, DB-backed stores, rollback paths, registry projection, and tests must
+  not reintroduce optional `generation.tools?.` or empty-list fallbacks
+- example-readiness changes must prove `discovery_required` is a contract and
+  documentation category only: it can be saved and promoted as prerequisite
+  evidence, but product routes, management tools, runtime helpers, and UI action
+  state must refuse to execute it as a ready-to-send payload
+- tool-specific examples that require a real discovered provider id/ref must not
+  use placeholder ids to satisfy input-schema validation; they must use
+  `discovery_required` with explicit discovery metadata, or remain
+  `blocked_evidence_required` until a safe real id/ref is available
+
+Evidence:
+
+- `docs/hosted-tools-vocabulary-acceptance-matrix.yaml` maps each M36 contract
+  area to the exact focused tests, package type-checks, and optional live
+  scenario commands that must be run before claiming that area complete. It
+  now also makes live artifacts mandatory before claiming improved unguided
+  agent usability and requires capability-level pass/fail/untested reporting.
+- Unguided prompt requirements now refer to legacy `managed_*` tool names rather
+  than a generic "managed tools" category. The analyzer still forbids
+  `managed_<family>__<tool>` namespace escapes, but the documentation no longer
+  implies a second active product surface named managed tools.
+- The matrix now explicitly prevents provider auth/rate-limit/upstream recovery
+  claims from being satisfied by platform policy-denied or missing-tool-binding
+  evidence. Those cases stay separate: hosted-tool-not-enabled recovery can be
+  active with policy evidence, while provider-facing recovery remains planned
+  until fault-injection or real upstream-failure evidence exists.
+- The matrix also defines the minimum live artifact evidence record: scenario
+  id, redacted bounded `messageHistory`, enabled hosted tool surface, disabled
+  MCP servers, hosted calls, analyzer result, redacted run/artifact refs, and
+  secret-scan status.
+- The matrix now also requires `acceptedArtifacts` paths to stay under the
+  isolated hosted tools test environment live-acceptance directory, and the
+  server scenario schema rejects arbitrary local JSON paths even when the
+  filename matches the run id.
+- The accepted artifact path contract is exact: the path must be the configured
+  accepted live artifact prefix plus `<runId>.json`, directly under that
+  directory.
+- The matrix also records the accepted-evidence state boundary: planned
+  scenarios must not carry `acceptedArtifacts`, and accepted evidence becomes
+  valid only when a scenario is active.
+- The matrix now also requires accepted artifact evidence summaries to stay
+  concise; the schema rejects summaries longer than 240 characters so the
+  manifest cannot become a transcript/log store.
+- The schema also rejects multi-line accepted artifact evidence summaries, and
+  the matrix records that detailed notes stay in artifacts rather than in the
+  scenario manifest.
+- The live runner now writes bounded redacted `messageHistory` evidence for
+  Qualys live scenario artifacts in addition to message ids, outcome text, and
+  hosted tool-call summaries. This gives future acceptance reviews enough
+  transcript context without persisting raw provider/tool output or secrets.
+- Live artifact construction now returns redacted artifacts, not only redacted
+  files. This keeps the runner's console JSON output and any in-memory artifact
+  handoff from exposing raw transcript/provider secrets while still preserving
+  secret-scan findings and failing the artifact when raw secrets were supplied.
+- `packages/skills/builtin/hosted-integrations-development/SKILL.md` references
+  the matrix so fresh Tool Developer sessions know which validation bundle
+  belongs to vocabulary, help, and example-readiness changes without relying on
+  chat history.
+- The Tool Developer skill and managed-agent template now also teach that
+  unguided model-usability claims must be backed by scenario-manifest
+  `acceptedArtifacts` entries whose `runId` matches the JSON artifact filename
+  and whose status and secret scan both pass. This keeps future fresh sessions
+  from claiming live model behavior from chat memory or unrecorded output.
+- `packages/server/test/hosted-integrations-legacy-surface.test.ts` locks the
+  skill reference to the matrix alongside the existing source-of-truth,
+  evidence-boundary, scenario-manifest accepted-artifact, and
+  shared-vocabulary guidance.
+- `docs/hosted-integrations-architecture.md` now defines the naming boundary:
+  `Hosted Tools` is the product and human-facing feature name, while
+  `hosted integration` remains the internal package/API/storage/runtime layer.
+  The same legacy-surface guard prevents Agent Settings grouping examples and
+  the Hosted Tools route from drifting back to public `Hosted Integrations`
+  wording or `managed tool` terminology, including generic `managed tools`
+  copy on public/user-facing surfaces.
+- `packages/skills/builtin/openacme-platform/SKILL.md` now carries the same
+  thin routing boundary: platform-admin/Acme sessions route hosted tool work to
+  `$hosted-integrations-development`, use Hosted Tools as product wording, and
+  do not duplicate lifecycle rules or merge the feature with remote MCP.
+  `packages/server/test/hosted-integrations-legacy-surface.test.ts` locks this
+  routing guidance.
+- `packages/hosted-integrations/test/qualys-live-inventory.test.ts` now
+  structurally validates the acceptance matrix itself: the five matrix areas,
+  rule ids, focused command bundles, complete deterministic bundle, and
+  live-artifact requirement for real provider or unguided model-usability
+  claims are checked from the YAML source. It also proves the
+  Tool Developer guidance area requires `acceptedArtifacts`, matching
+  runId/path evidence, and `secretScan: pass`. This keeps the matrix from
+  becoming a free-form note that fresh sessions can accidentally ignore or
+  narrow.
+- The same guard now verifies every matrix-owned `pnpm --filter <package>
+  <script>` command resolves to a real package script in the target package.
+  The non-package hygiene command `git diff --check` remains explicitly allowed.
+  This prevents stale acceptance-matrix commands such as renamed dogfood scripts
+  from becoming fresh-session instructions.
+- The complete matrix bundle now includes
+  `pnpm --filter @openacme/hosted-integrations build` before downstream
+  tools/server type-checking, so declaration output cannot stay stale after
+  source-level hosted integration schema changes.
+- The matrix guard also requires the same hosted-integrations build command in
+  the `contract_shape` slice commands and asserts that the complete bundle runs
+  it before both `pnpm --filter @openacme/tools check-types` and
+  `pnpm --filter @openacme/server check-types`, so exported contract changes
+  cannot pass only because stale declarations still type-check.
+- `packages/hosted-integrations/test/catalog.test.ts` now covers the
+  source-of-truth split at the file-backed catalog boundary: a family directory
+  with `family.yaml` but no `tools.yaml` is omitted from `listFamilies()`,
+  `getFamily()` returns `null`, and diagnostics report the missing
+  `tools.yaml`. This closes the catalog side of the "missing `tools.yaml`
+  fails" TDD requirement without adding any old-shape fallback.
+- `packages/hosted-integrations/src/generations.ts` now enforces the same
+  split contract at promotion time. Even if a stale caller supplies
+  `validation.ok`, promotion returns `invalid_validation` when the draft cannot
+  read both `family.yaml` and `tools.yaml`, and registry refresh tool names are
+  derived from the parsed `tools.yaml` contract without an empty-tools fallback.
+  `packages/hosted-integrations/test/generations.test.ts` covers the missing
+  `tools.yaml` promotion path.
+- `packages/hosted-integrations/src/db-store.ts` now applies the same promotion
+  gate for DB-backed stores. DB-backed promotion refuses stale `validation.ok`
+  when `tools.yaml` is missing, writes generation runtime/tools metadata only
+  from parsed split files, and emits registry refresh names from parsed
+  `tools.yaml`. `packages/hosted-integrations/test/db-store.test.ts` covers the
+  DB missing-`tools.yaml` promotion path.
+- `HostedIntegrationGenerationSchema` now requires promoted generation `tools`
+  metadata instead of accepting tools-free generations. The schema test rejects
+  generation records without derived tool metadata, which prevents new
+  file-backed or DB-backed stores from reintroducing tools-free generation
+  compatibility.
+- DB rollback, DB generation insertion, and replacement-family tests now use
+  required `generation.tools` directly instead of optional `generation.tools?.`
+  or empty-list fallbacks. A focused search for optional generation-tool access
+  under `packages/hosted-integrations/src` and `packages/hosted-integrations/test`
+  returns no matches, keeping the required-tools schema contract visible in
+  runtime code and tests.
+- `packages/server/src/runtime.ts` now projects hosted registry snapshots from
+  required `generation.tools` directly instead of treating missing tools as an
+  empty family. This keeps tools-free generation records from being silently
+  translated into registry removal. `@openacme/hosted-integrations` was rebuilt
+  so downstream tools/server type-checking reads the required-tools declaration
+  from `dist`.
+- Full deterministic M36 acceptance passed with:
+  `pnpm --filter @openacme/hosted-integrations test -- schemas.test.ts validation.test.ts help.test.ts packages.test.ts integration-hub-replacement.test.ts qualys-live-inventory.test.ts`
+  (`6` files, `119` passed, `1` skipped),
+  `pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts hosted-integrations.test.ts hosted-integration-management.test.ts`
+  (`3` files, `24` passed), and
+  `pnpm --filter @openacme/server test -- hosted-tools-live-acceptance.test.ts hosted-tools-unguided-management.test.ts hosted-integrations-legacy-surface.test.ts`
+  (`3` files, `72` passed).
+- Type and hygiene acceptance passed with:
+  `pnpm --filter @openacme/hosted-integrations check-types`,
+  `pnpm --filter @openacme/hosted-integrations build`,
+  `pnpm --filter @openacme/tools check-types`,
+  `pnpm --filter @openacme/server check-types`, and
+  `git diff --check`.
+- After the accepted-artifacts manifest-audit runner wiring and
+  analyzer-source de-duplication, the complete deterministic matrix bundle was
+  rerun with the same commands and passed again: hosted-integrations (`119`
+  passed, `1` skipped), tools (`24` passed), server (`72` passed), followed by
+  hosted-integrations check-types/build, tools check-types, server check-types,
+  and `git diff --check`.
+- After adding the explicit accepted-artifacts audit live command to the
+  acceptance matrix, the same complete deterministic matrix bundle passed
+  again with hosted-integrations (`119` passed, `1` skipped), tools (`24`
+  passed), server (`72` passed), hosted-integrations check-types/build, tools
+  check-types, server check-types, and `git diff --check`.
+- Current focused matrix guard was verified with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`22` tests), `pnpm --filter @openacme/hosted-integrations check-types`,
+  `pnpm --filter @openacme/hosted-integrations build`,
+  `pnpm --filter @openacme/tools check-types`,
+  `pnpm --filter @openacme/server check-types`, and `git diff --check`.
+- Current focused Tool Developer guidance guard was verified with:
+  `pnpm --filter @openacme/server test -- hosted-integrations-legacy-surface.test.ts hosted-tools-unguided-management.test.ts`
+  (`2` files, `17` tests), `pnpm --filter @openacme/server check-types`, and
+  `git diff --check`.
+- After strengthening the M36.6 TDD list for accepted-artifact audit,
+  acceptance-matrix command validity, build ordering, and required generation
+  tool metadata, the complete deterministic matrix bundle was rerun and
+  passed: hosted-integrations (`130` passed, `1` skipped), tools (`24`
+  passed), and server (`72` passed), followed by hosted-integrations
+  check-types/build, tools check-types, server check-types, and
+  `git diff --check`.
+- The acceptance matrix `contract_shape` area now explicitly requires strict
+  source-of-truth YAML rejection for `family.yaml`, `tools.yaml`,
+  `examples.yaml`, and package imports. The matrix guard asserts that this TDD
+  requirement stays present, and the draft/package validators reject duplicate
+  keys before schema validation. Focused verification passed with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts validation.test.ts packages.test.ts`
+  (`83` passed), `pnpm --filter @openacme/hosted-integrations check-types`,
+  and `git diff --check`.
+
+### Slice 36.7: Example Readiness Boundary Gate
+
+Status: implemented.
+
+Goal:
+
+- Make example categories precise enough that agents and humans can store
+  prerequisite/discovery examples without creating runnable placeholder calls or
+  accidentally hitting live providers with invented ids.
+
+TDD:
+
+- `discovery_required` parses as a first-class example category
+- normal runnable categories still validate `args` against the MCP input schema
+- `discovery_required` examples may use empty `args` only when metadata names
+  the required discovery condition and discovery tool
+- direct draft example execution through product HTTP routes returns
+  `example_not_runnable` for `discovery_required`
+- `hosted_tool_example_run` returns `example_not_runnable` for
+  `discovery_required`
+- UI action state disables run targets for `discovery_required` while keeping
+  save/edit available
+- Tool Developer skill and architecture docs explain that
+  `discovery_required` is not ready-to-send and must not be executed directly
+- Qualys scan-fetch coverage proves no placeholder scan refs such as
+  `scan/123456.789` or `<real-scan-ref>` appear in registered or contract
+  examples
+- downstream server/tool tests are run only after rebuilding
+  `@openacme/hosted-integrations` and `@openacme/tools`, so generated
+  declarations cannot hide stale example-category schemas
+
+Evidence:
+
+- `HostedIntegrationExampleSchema` now validates `discovery_required`
+  examples as a distinct contract category: `expected.discovery_tool` must be a
+  non-empty string and `expected` must contain a `requires_discovered_*`
+  condition. This prevents placeholder-free examples from becoming ambiguous
+  documentation blobs.
+- `packages/hosted-integrations/test/examples.test.ts` proves
+  `discovery_required` examples can document prerequisite lookup with empty
+  `args`, while missing discovery metadata is rejected deterministically.
+- `packages/server/test/hosted-integrations-routes.test.ts` and
+  `packages/server/test/tools-hosted-integrations.test.ts` prove both product
+  HTTP route execution and `hosted_tool_example_run` return
+  `example_not_runnable` instead of invoking `discovery_required` examples.
+- `apps/web/test/hosted-integrations-admin.test.ts` proves the UI action state
+  keeps discovery examples editable/saveable but disables the run target.
+- Qualys inventory coverage continues to prove `qualys_vmdr_scan_fetch` uses a
+  `discovery_required` registered example with discovered-scan-ref metadata
+  and does not publish placeholder scan refs in registered or contract
+  examples.
+- `docs/hosted-tools-vocabulary-acceptance-matrix.yaml` now includes an
+  `example_readiness` area for this gate. Its required command bundle covers
+  core example/schema tests, Qualys placeholder guards, UI action state,
+  skill/doc wording, route/runtime execution refusal, management-tool adapter
+  behavior, type checks, and the required hosted-integrations/tools build order
+  before downstream server route tests.
+- `packages/hosted-integrations/test/qualys-live-inventory.test.ts` now locks
+  the matrix's `example_readiness` area and validates both `pnpm --filter`
+  package commands and the `pnpm --dir apps/web` UI command against real
+  package scripts. This prevents the matrix from becoming a stale free-form
+  checklist.
+- The bundled Tool Developer skill now routes shared vocabulary, hosted help,
+  and example-readiness changes through the acceptance matrix. The
+  platform-managed Tool Developer template also teaches that
+  `discovery_required` examples are prerequisite id/ref discovery evidence,
+  not ready-to-send payloads, must not contain placeholder ids or refs, and
+  must not be run directly with `hosted_tool_example_run`.
+- Focused acceptance passed with:
+  `pnpm --filter @openacme/hosted-integrations test -- examples.test.ts qualys-live-inventory.test.ts`
+  (`2` files, `37` passed),
+  `pnpm --dir apps/web test hosted-integrations-admin.test.ts` (`40` passed),
+  `pnpm --filter @openacme/server test -- hosted-integrations-legacy-surface.test.ts`
+  (`7` passed),
+  `pnpm --filter @openacme/hosted-integrations build`,
+  `pnpm --filter @openacme/tools build`,
+  `pnpm --filter @openacme/server test -- hosted-integrations-routes.test.ts tools-hosted-integrations.test.ts`
+  (`2` files, `63` passed),
+  `pnpm --filter @openacme/tools test -- hosted-integration-management.test.ts`
+  (`12` passed),
+  `pnpm --filter @openacme/hosted-integrations check-types`,
+  `pnpm --filter @openacme/tools check-types`,
+  `pnpm --filter @openacme/server check-types`, and
+  `git diff --check`.
+- Focused matrix acceptance after adding `example_readiness` passed with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`31` passed),
+  `pnpm --filter @openacme/hosted-integrations test -- examples.test.ts qualys-live-inventory.test.ts`
+  (`37` passed),
+  `pnpm --dir apps/web test hosted-integrations-admin.test.ts` (`40` passed),
+  `pnpm --filter @openacme/hosted-integrations check-types`, and
+  `git diff --check`.
+- Focused fresh-session guidance acceptance for example readiness passed with:
+  `pnpm --filter @openacme/server test -- hosted-integrations-legacy-surface.test.ts`
+  (`7` passed),
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`31` passed),
+  `pnpm --filter @openacme/server check-types`, and `git diff --check`.
+- The updated complete deterministic matrix bundle also passed after adding
+  `example_readiness`: hosted-integrations contract/help/package/Qualys bundle
+  (`130` passed, `1` skipped), hosted-integrations example readiness bundle
+  (`37` passed), tools bundle (`25` passed), Hosted Tools UI action-state
+  bundle (`40` passed), server live-acceptance/guidance bundle (`72` passed),
+  hosted-integrations check-types/build, tools build, server
+  route/management-tool execution bundle (`63` passed), tools check-types,
+  server check-types, and `git diff --check`.
+- The matrix purpose and Tool Developer guidance area now explicitly name
+  example readiness alongside vocabulary/help changes, and the adjacent
+  acceptance sections are titled `Slice 36.7 Acceptance` and
+  `Milestone 36 Acceptance` so fresh sessions do not confuse slice-local gates
+  with the broader milestone bundle. Verified with:
+  `pnpm --filter @openacme/hosted-integrations test -- qualys-live-inventory.test.ts`
+  (`31` passed) and `git diff --check`.
+- Help-effectiveness acceptance was tightened so live analyzer proof requires
+  learned vocabulary or parameter evidence to appear in the later hosted
+  business-call arguments, not merely a prior `hosted_tool_help` call. Verified
+  with `pnpm --filter @openacme/server test -- hosted-tools-live-acceptance.test.ts`
+  (`55` passed), `pnpm --filter @openacme/server check-types`, and
+  `git diff --check`. Accepted live-artifact closeout also passed with
+  `pnpm --filter @openacme/server dogfood:hosted-tools:accepted-artifacts:audit`
+  across `9` active scenarios and empty diagnostics.
+- The complete deterministic matrix bundle now includes root `pnpm check-types`
+  as a broad workspace type gate in addition to the focused package type
+  checks. Verified with `pnpm check-types`, which completed `21` package
+  check-type tasks successfully.
+- Current complete deterministic matrix bundle was rerun after the root gate
+  addition and passed end to end: hosted-integrations contract/help/package/
+  Qualys bundle (`133` passed, `1` skipped), hosted-integrations example
+  readiness bundle (`38` passed), tools bundle (`25` passed), Hosted Tools UI
+  bundle (`40` passed), server analyzer/guidance bundle (`73` passed),
+  hosted-integrations build, tools build, server route/management-tool bundle
+  (`63` passed), tools check-types, server check-types, root `pnpm check-types`
+  (`21` successful package tasks), and `git diff --check`.
+- Focused platform routing guard passed with
+  `pnpm --filter @openacme/server test -- hosted-integrations-legacy-surface.test.ts`
+  (`8` passed), `pnpm --filter @openacme/server check-types`, and
+  `git diff --check`.
+- Managed-agent installation now also preserves the platform Hosted Tools
+  routing boundary when `openacme-platform` is seeded into the data directory.
+  Verified with
+  `pnpm --filter @openacme/server test -- agent-catalog.test.ts hosted-integrations-legacy-surface.test.ts`
+  (`19` passed), `pnpm --filter @openacme/server check-types`, and
+  `git diff --check`.
+- The acceptance matrix now requires the same agent-catalog seed guard for
+  Tool Developer guidance changes, and the complete deterministic server
+  analyzer/guidance bundle includes `agent-catalog.test.ts` alongside live
+  acceptance, unguided management, and legacy-surface tests. Verified with
+  `pnpm --filter @openacme/server test -- hosted-tools-live-acceptance.test.ts hosted-tools-unguided-management.test.ts hosted-integrations-legacy-surface.test.ts agent-catalog.test.ts`
+  (`85` passed).
+- Current complete deterministic matrix bundle was rerun after adding the
+  agent-catalog seed guard to the server analyzer/guidance bundle and passed
+  end to end: hosted-integrations contract/help/package/Qualys bundle (`133`
+  passed, `1` skipped), hosted-integrations example readiness bundle (`38`
+  passed), tools bundle (`25` passed), Hosted Tools UI bundle (`40` passed),
+  server analyzer/guidance bundle with agent-catalog (`85` passed),
+  hosted-integrations check-types/build, tools check-types/build, server
+  route/management-tool bundle (`63` passed), server check-types, root
+  `pnpm check-types` (`21` successful package tasks), accepted-artifacts
+  closeout audit across `9` active scenarios with empty diagnostics, and
+  `git diff --check`.
+- Current complete deterministic matrix bundle was rerun after the M31/M36
+  closeout status language was tightened from open-ended "remains open" wording
+  to "current pilot accepted; broader work deferred and
+  `blocked_evidence_required`" wording. The rerun passed end to end:
+  hosted-integrations contract/help/package/Qualys bundle (`133` passed, `1`
+  skipped), hosted-integrations example readiness bundle (`38` passed), tools
+  bundle (`25` passed), Hosted Tools UI bundle (`40` passed), server
+  analyzer/guidance bundle with agent-catalog (`85` passed),
+  hosted-integrations check-types/build, tools build, server
+  route/management-tool bundle (`63` passed), tools check-types, server
+  check-types, root `pnpm check-types` (`21` successful package tasks),
+  accepted-artifacts closeout audit across `9` active scenarios with empty
+  diagnostics, and `git diff --check`.
+- Current complete deterministic matrix bundle was rerun after M32-M35
+  milestone-level status was aligned to the accepted M36 vocabulary/help/live
+  artifact gates. The rerun passed end to end: hosted-integrations
+  contract/help/package/Qualys bundle (`133` passed, `1` skipped),
+  hosted-integrations example readiness bundle (`38` passed), tools bundle
+  (`25` passed), Hosted Tools UI bundle (`40` passed), server
+  analyzer/guidance bundle with agent-catalog (`85` passed),
+  hosted-integrations check-types/build, tools build, server
+  route/management-tool bundle (`63` passed), tools check-types, server
+  check-types, root `pnpm check-types` (`21` successful package tasks),
+  accepted-artifacts closeout audit across `9` active scenarios with empty
+  diagnostics, and `git diff --check`.
+
+Slice 36.7 Acceptance:
+
+- Focused acceptance must include:
+  `pnpm --dir apps/web test hosted-integrations-admin.test.ts`.
+- Skill/doc acceptance must include:
+  `pnpm --filter @openacme/server test -- hosted-integrations-legacy-surface.test.ts`.
+- Source/category acceptance must include:
+  `pnpm --filter @openacme/hosted-integrations test -- examples.test.ts qualys-live-inventory.test.ts`.
+- Downstream execution acceptance must include:
+  `pnpm --filter @openacme/hosted-integrations build`,
+  `pnpm --filter @openacme/tools build`, and
+  `pnpm --filter @openacme/server test -- hosted-integrations-routes.test.ts tools-hosted-integrations.test.ts`.
+- Hygiene acceptance must include `git diff --check`.
+
+Milestone 36 Acceptance:
+
+- Focused deterministic acceptance must include:
+  `pnpm --filter @openacme/hosted-integrations test -- schemas.test.ts validation.test.ts help.test.ts packages.test.ts integration-hub-replacement.test.ts qualys-live-inventory.test.ts`.
+- Model-facing/support-tool acceptance must include:
+  `pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts hosted-integrations.test.ts hosted-integration-management.test.ts`.
+- Server analyzer/skill acceptance must include:
+  `pnpm --filter @openacme/server test -- hosted-tools-live-acceptance.test.ts hosted-tools-unguided-management.test.ts hosted-integrations-legacy-surface.test.ts agent-catalog.test.ts`.
+- Type and hygiene acceptance must include relevant package `check-types`,
+  `pnpm --filter @openacme/hosted-integrations build` before downstream
+  tools/server type-checking when hosted integration exported types change,
+  root `pnpm check-types`, and `git diff --check`.
+- Active live-artifact closeout acceptance must include:
+  `pnpm --filter @openacme/server dogfood:hosted-tools:accepted-artifacts:audit`.
+- Live Qualys acceptance remains opt-in and scenario-based; it is required only
+  when claiming unguided agent usability or provider-live behavior improved.
+  Those claims must first record the passing artifact under the scenario
+  manifest's `acceptedArtifacts` with matching runId/path, `status: pass`,
+  `secretScan: pass`, and concise evidence. They must also record the live
+  artifact path, scenario ids, and capability-level result classification in
+  this plan.

@@ -8,6 +8,7 @@ import {
   createFileHostedIntegrationDraftValidator,
   createFileHostedIntegrationLockStore,
 } from "../src/index.js";
+import { splitLegacyFamilyFixture } from "./test-support/split-contract-fixtures.js";
 
 let dataDir: string;
 
@@ -24,7 +25,10 @@ async function setupDraft(
   draftManifest = sourceManifest,
   options: {
     examplesYaml?: string;
+    extraFiles?: Record<string, string>;
     helpQualityMode?: "warning" | "error";
+    draftFamilyYaml?: string;
+    draftToolsYaml?: string;
     sourcePy?: string;
   } = {},
 ): Promise<ReturnType<typeof createFileHostedIntegrationDraftValidator>> {
@@ -36,7 +40,18 @@ async function setupDraft(
     "qualys",
   );
   await mkdir(sourceDir, { recursive: true });
-  await writeFile(path.join(sourceDir, "family.yaml"), sourceManifest, "utf-8");
+  const sourceFiles = splitLegacyFamilyFixture(sourceManifest);
+  const draftFiles = splitLegacyFamilyFixture(draftManifest);
+  await writeFile(
+    path.join(sourceDir, "family.yaml"),
+    sourceFiles.familyYaml,
+    "utf-8",
+  );
+  await writeFile(
+    path.join(sourceDir, "tools.yaml"),
+    sourceFiles.toolsYaml,
+    "utf-8",
+  );
   await writeFile(
     path.join(sourceDir, "qualys.py"),
     options.sourcePy ?? validPythonHandlers(),
@@ -66,7 +81,13 @@ async function setupDraft(
     draftId: "draft_1",
     lockId: "lock_1",
     path: "family.yaml",
-    content: draftManifest,
+    content: options.draftFamilyYaml ?? draftFiles.familyYaml,
+  });
+  await draftStore.writeDraftFile({
+    draftId: "draft_1",
+    lockId: "lock_1",
+    path: "tools.yaml",
+    content: options.draftToolsYaml ?? draftFiles.toolsYaml,
   });
   if (options.examplesYaml) {
     await draftStore.writeDraftFile({
@@ -74,6 +95,14 @@ async function setupDraft(
       lockId: "lock_1",
       path: "examples.yaml",
       content: options.examplesYaml,
+    });
+  }
+  for (const [filePath, content] of Object.entries(options.extraFiles ?? {})) {
+    await draftStore.writeDraftFile({
+      draftId: "draft_1",
+      lockId: "lock_1",
+      path: filePath,
+      content,
     });
   }
 
@@ -117,6 +146,8 @@ tools:
       idempotency: idempotent
       execution: sync
       approval: none
+    errors:
+      - bad_arguments means the request shape is unsupported; fix input before retrying.
     help:
       summary: Count Qualys assets.
       examples:
@@ -134,6 +165,8 @@ tools:
       idempotency: idempotent
       execution: sync
       approval: none
+    errors:
+      - bad_arguments means the request shape is unsupported; fix input before retrying.
     help:
       summary: List Qualys assets.
       examples:
@@ -169,6 +202,264 @@ describe("hosted integration draft validation", () => {
       ok: true,
       diagnostics: [],
     });
+  });
+
+  it("accepts a valid shared parameter vocabulary reference", async () => {
+    const manifest = familyYaml()
+      .replace(
+        "properties: {}",
+        "properties:\n        filter_body:\n          type: object",
+      )
+      .replace(
+        "summary: Count Qualys assets.",
+        "summary: Count Qualys assets.\n      parameters:\n        filter_body:\n          summary: Native Qualys filter body.\n          full: Full inline filter help.\n        filter_body.filters.field:\n          summary: Native Qualys GAV field token.\n          vocabularyRef: references/gav-filter-fields.yaml",
+      );
+    const validator = await setupDraft(familyYaml(), manifest, {
+      extraFiles: {
+        "references/gav-filter-fields.yaml": `
+kind: openacme.hostedParameterVocabulary
+version: 1
+id: qualys-gav-filter-fields
+familyId: qualys
+parameterPath: filter_body.filters.field
+entries:
+  - value: asset.name
+    summary: Asset name field.
+invalidAliases:
+  - value: asset_last_updated
+    reason: Use updateDate instead.
+    use: updateDate
+`,
+      },
+    });
+
+    const result = await validator.validateDraft("draft_1");
+
+    expect(result.diagnostics).not.toContainEqual(
+      expect.objectContaining({ code: "vocabulary_ref_missing" }),
+    );
+    expect(result.diagnostics).not.toContainEqual(
+      expect.objectContaining({ code: "vocabulary_ref_invalid" }),
+    );
+    expect(result.diagnostics).not.toContainEqual(
+      expect.objectContaining({ code: "vocabulary_parameter_path_mismatch" }),
+    );
+  });
+
+  it("accepts the same shared parameter vocabulary referenced by multiple tools", async () => {
+    const manifest = familyYaml()
+      .replace(
+        "properties: {}",
+        "properties:\n        filter_body:\n          type: object",
+      )
+      .replace(
+        "properties: {}",
+        "properties:\n        filter_body:\n          type: object",
+      )
+      .replace(
+        "summary: Count Qualys assets.",
+        "summary: Count Qualys assets.\n      parameters:\n        filter_body:\n          summary: Native Qualys filter body.\n          full: Use filters[] with native Qualys GAV field tokens.\n        filter_body.filters.field:\n          summary: Native Qualys GAV field token.\n          vocabularyRef: references/gav-filter-fields.yaml",
+      )
+      .replace(
+        "summary: List Qualys assets.",
+        "summary: List Qualys assets.\n      parameters:\n        filter_body:\n          summary: Native Qualys filter body.\n          full: Use filters[] with native Qualys GAV field tokens.\n        filter_body.filters.field:\n          summary: Native Qualys GAV field token.\n          vocabularyRef: references/gav-filter-fields.yaml",
+      );
+    const validator = await setupDraft(familyYaml(), manifest, {
+      extraFiles: {
+        "references/gav-filter-fields.yaml": `
+kind: openacme.hostedParameterVocabulary
+version: 1
+id: qualys-gav-filter-fields
+familyId: qualys
+parameterPath: filter_body.filters.field
+entries:
+  - value: asset.name
+    summary: Asset name field.
+`,
+      },
+    });
+
+    const result = await validator.validateDraft("draft_1");
+
+    expect(result.ok).toBe(true);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("fails when a vocabulary reference is missing", async () => {
+    const manifest = familyYaml().replace(
+      "summary: Count Qualys assets.",
+      "summary: Count Qualys assets.\n      parameters:\n        query:\n          summary: Query field.\n          vocabularyRef: references/missing.yaml",
+    );
+    const validator = await setupDraft(familyYaml(), manifest);
+
+    const result = await validator.validateDraft("draft_1");
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        code: "vocabulary_ref_missing",
+        path: "$.tools.0.openacme.parameterHelp.query.vocabularyRef",
+      }),
+    );
+  });
+
+  it("fails when vocabulary familyId does not match the draft family", async () => {
+    const manifest = familyYaml().replace(
+      "summary: Count Qualys assets.",
+      "summary: Count Qualys assets.\n      parameters:\n        query:\n          summary: Query field.\n          vocabularyRef: references/query-fields.yaml",
+    );
+    const validator = await setupDraft(familyYaml(), manifest, {
+      extraFiles: {
+        "references/query-fields.yaml": `
+kind: openacme.hostedParameterVocabulary
+version: 1
+id: query-fields
+familyId: splunk
+parameterPath: query
+entries:
+  - value: asset.name
+    summary: Asset name field.
+`,
+      },
+    });
+
+    const result = await validator.validateDraft("draft_1");
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        code: "vocabulary_family_mismatch",
+        path: "$.tools.0.openacme.parameterHelp.query.vocabularyRef",
+      }),
+    );
+  });
+
+  it("fails when vocabulary parameterPath does not match the help parameter", async () => {
+    const manifest = familyYaml().replace(
+      "summary: Count Qualys assets.",
+      "summary: Count Qualys assets.\n      parameters:\n        query:\n          summary: Query field.\n          vocabularyRef: references/query-fields.yaml",
+    );
+    const validator = await setupDraft(familyYaml(), manifest, {
+      extraFiles: {
+        "references/query-fields.yaml": `
+kind: openacme.hostedParameterVocabulary
+version: 1
+id: query-fields
+familyId: qualys
+parameterPath: filter_body.filters.field
+entries:
+  - value: asset.name
+    summary: Asset name field.
+`,
+      },
+    });
+
+    const result = await validator.validateDraft("draft_1");
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        code: "vocabulary_parameter_path_mismatch",
+        path: "$.tools.0.openacme.parameterHelp.query.vocabularyRef",
+      }),
+    );
+  });
+
+  it("fails complex filter bodies without nested field vocabulary help in blocking mode", async () => {
+    const manifest = familyYaml()
+      .replace(
+        "properties: {}",
+        "properties:\n        filter_body:\n          type: object",
+      )
+      .replace(
+        "summary: Count Qualys assets.",
+        "summary: Count Qualys assets.\n      parameters:\n        filter_body:\n          summary: Native Qualys filter body.\n          full: Full inline filter help.",
+      );
+    const validator = await setupDraft(familyYaml(), manifest, {
+      helpQualityMode: "error",
+    });
+
+    const result = await validator.validateDraft("draft_1");
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        code: "help_parameter_vocabulary_missing",
+        path: "$.tools.0.help.parameters.filter_body.filters.field",
+      }),
+    );
+  });
+
+  it("fails complex query/body filter DSLs without nested field vocabulary help in blocking mode", async () => {
+    const manifest = familyYaml()
+      .replace(
+        "properties: {}",
+        [
+          "properties:",
+          "        query_body:",
+          "          type: object",
+          "          properties:",
+          "            filters:",
+          "              type: array",
+          "              items:",
+          "                type: object",
+          "                properties:",
+          "                  field:",
+          "                    type: string",
+        ].join("\n"),
+      )
+      .replace(
+        "summary: Count Qualys assets.",
+        "summary: Count Qualys assets.\n      parameters:\n        query_body:\n          summary: Native provider query body.\n          full: Full inline query body help.",
+      );
+    const validator = await setupDraft(familyYaml(), manifest, {
+      helpQualityMode: "error",
+    });
+
+    const result = await validator.validateDraft("draft_1");
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        code: "help_parameter_vocabulary_missing",
+        path: "$.tools.0.help.parameters.query_body.filters.field",
+      }),
+    );
+  });
+
+  it("does not require vocabulary help for generic complex bodies without filter field catalogs", async () => {
+    const manifest = familyYaml()
+      .replace(
+        "properties: {}",
+        [
+          "properties:",
+          "        request_body:",
+          "          type: object",
+          "          properties:",
+          "            include_metadata:",
+          "              type: boolean",
+        ].join("\n"),
+      )
+      .replace(
+        "summary: Count Qualys assets.",
+        "summary: Count Qualys assets.\n      parameters:\n        request_body:\n          summary: Native provider request body.\n          full: Full inline request body help.",
+      );
+    const validator = await setupDraft(familyYaml(), manifest, {
+      helpQualityMode: "error",
+    });
+
+    const result = await validator.validateDraft("draft_1");
+
+    expect(result.diagnostics).not.toContainEqual(
+      expect.objectContaining({
+        code: "help_parameter_vocabulary_missing",
+      }),
+    );
   });
 
   it("fails when a new-format Python entrypoint lacks a derived tool handler", async () => {
@@ -375,8 +666,8 @@ describe("hosted integration draft validation", () => {
     expect(result.diagnostics).toContainEqual(
       expect.objectContaining({
         severity: "error",
-        code: "manifest_invalid",
-        path: "$.tools.0",
+        code: "tool_contract_invalid",
+        path: "$.tools.0.openacme.function",
       }),
     );
   });
@@ -396,8 +687,8 @@ describe("hosted integration draft validation", () => {
     expect(result.diagnostics).toContainEqual(
       expect.objectContaining({
         severity: "error",
-        code: "manifest_invalid",
-        path: "$.tools.0.classification",
+        code: "tool_contract_invalid",
+        path: "$.tools.0.openacme.classification",
       }),
     );
   });
@@ -417,6 +708,48 @@ describe("hosted integration draft validation", () => {
         path: "$.tools.1.name",
       }),
     );
+  });
+
+  it("fails duplicate YAML keys in draft source-of-truth files", async () => {
+    const baseSplit = splitLegacyFamilyFixture(familyYaml());
+    const manifestValidator = await setupDraft(familyYaml(), familyYaml(), {
+      draftFamilyYaml: `${familyYaml()}\nid: splunk\n`,
+    });
+    await expect(manifestValidator.validateDraft("draft_1")).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [
+        expect.objectContaining({ code: "manifest_yaml_invalid", path: "$" }),
+      ],
+    });
+
+    const toolsValidator = await setupDraft(familyYaml(), familyYaml(), {
+      draftToolsYaml: `${baseSplit.toolsYaml}\nfamily:\n  id: splunk\n`,
+    });
+    await expect(toolsValidator.validateDraft("draft_1")).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [
+        expect.objectContaining({
+          code: "tool_contract_yaml_invalid",
+          path: "$",
+        }),
+      ],
+    });
+
+    const examplesValidator = await setupDraft(familyYaml(), familyYaml(), {
+      examplesYaml: `
+examples: []
+examples: []
+`,
+    });
+    await expect(examplesValidator.validateDraft("draft_1")).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [
+        expect.objectContaining({
+          code: "examples_invalid",
+          path: "$.examples",
+        }),
+      ],
+    });
   });
 
   it("fails direct removal of an existing source tool", async () => {
@@ -472,8 +805,8 @@ describe("hosted integration draft validation", () => {
     expect(result.diagnostics).toContainEqual(
       expect.objectContaining({
         severity: "warning",
-        code: "help_summary_missing",
-        path: "$.tools.0.help.summary",
+        code: "help_example_missing",
+        path: "$.tools.0.help.examples",
       }),
     );
     expect(result.diagnostics).toContainEqual(
@@ -500,15 +833,18 @@ describe("hosted integration draft validation", () => {
     expect(result.diagnostics).toContainEqual(
       expect.objectContaining({
         severity: "error",
-        code: "help_summary_missing",
-        path: "$.tools.0.help.summary",
+        code: "help_example_missing",
+        path: "$.tools.0.help.examples",
       }),
     );
   });
 
   it("requires full help for complex public parameters", async () => {
     const manifestWithFilterHelp = familyYaml()
-      .replace("properties: {}", "properties:\n        filter_body:\n          type: object")
+      .replace(
+        "properties: {}",
+        "properties:\n        filter_body:\n          type: object",
+      )
       .replace(
         "summary: Count Qualys assets.",
         "summary: Count Qualys assets.\n      parameters:\n        filter_body:\n          summary: Native Qualys filter body.",
@@ -534,9 +870,13 @@ describe("hosted integration draft validation", () => {
       "summary: Count Qualys assets.\n      examples:\n        - {}",
       "summary: Count Qualys assets.\n      noExampleJustification: Count-only tool has no extra meaningful payload example.",
     );
-    const validator = await setupDraft(familyYaml(), manifestWithJustification, {
-      helpQualityMode: "error",
-    });
+    const validator = await setupDraft(
+      familyYaml(),
+      manifestWithJustification,
+      {
+        helpQualityMode: "error",
+      },
+    );
 
     const result = await validator.validateDraft("draft_1");
 
@@ -553,8 +893,11 @@ describe("hosted integration draft validation", () => {
       /\n      examples:\n        - \{\}/,
       "",
     );
-    const validator = await setupDraft(familyYaml(), manifestWithoutCountExamples, {
-      examplesYaml: `
+    const validator = await setupDraft(
+      familyYaml(),
+      manifestWithoutCountExamples,
+      {
+        examplesYaml: `
 examples:
   - id: list-smoke
     familyId: qualys
@@ -562,8 +905,9 @@ examples:
     category: smoke
     args: {}
 `,
-      helpQualityMode: "error",
-    });
+        helpQualityMode: "error",
+      },
+    );
 
     const result = await validator.validateDraft("draft_1");
 
@@ -596,6 +940,48 @@ examples:
         severity: "error",
         code: "help_parameter_unknown",
         path: "$.tools.0.help.parameters.made_up",
+      }),
+    );
+  });
+
+  it("requires actionable error guidance in help quality diagnostics", async () => {
+    const manifestWithoutErrors = familyYaml().replace(
+      /    errors:\n      - bad_arguments means the request shape is unsupported; fix input before retrying\.\n/g,
+      "",
+    );
+    const validator = await setupDraft(familyYaml(), manifestWithoutErrors, {
+      helpQualityMode: "error",
+    });
+
+    const result = await validator.validateDraft("draft_1");
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        code: "help_errors_missing",
+        path: "$.tools.0.openacme.errors",
+      }),
+    );
+  });
+
+  it("requires pagination guidance when public inputs expose pagination controls", async () => {
+    const paginatedManifest = familyYaml().replace(
+      "properties: {}",
+      "properties:\n        page_size:\n          type: integer",
+    );
+    const validator = await setupDraft(familyYaml(), paginatedManifest, {
+      helpQualityMode: "error",
+    });
+
+    const result = await validator.validateDraft("draft_1");
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        code: "help_pagination_missing",
+        path: "$.tools.0.openacme.pagination",
       }),
     );
   });

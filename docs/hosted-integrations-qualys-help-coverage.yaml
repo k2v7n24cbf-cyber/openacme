@@ -1,0 +1,823 @@
+version: 1
+familyId: qualys
+scope: current_readonly_surface
+contractSource: tools.yaml
+batchSource: docs/hosted-integrations-qualys-live-migration-inventory.yaml#currentPromotedBatch
+sourceInputs:
+  - sourceId: qualys-toolkit
+    path: /Users/alenbohcelyan/.codex/skills/qualys-toolkit/SKILL.md
+  - sourceId: qualys-filter-catalog
+    path: /Users/alenbohcelyan/.codex/skills/qualys-toolkit/references/filter-catalog.md
+  - sourceId: qualys-live-inventory
+    path: docs/hosted-integrations-qualys-live-migration-inventory.yaml
+globalRules:
+  - ruleId: gav_native_filter_tokens
+    representedBy:
+      - openacme.parameterHelp.filter_body.rules
+      - openacme.parameterHelp.filter_body.filters.field.vocabularyRef
+  - ruleId: response_fields_not_filter_fields
+    representedBy:
+      - mcp.description
+      - openacme.parameterHelp.filter_body.rules
+      - openacme.parameterHelp.filter_body.filters.field.full
+  - ruleId: asset_last_updated_top_level_not_filter_field
+    representedBy:
+      - openacme.parameterHelp.asset_last_updated.summary
+      - openacme.parameterHelp.filter_body.rules
+  - ruleId: examples_are_safe_bounded_reads
+    representedBy:
+      - openacme.examples
+  - ruleId: actionable_error_guidance
+    representedBy:
+      - openacme.errors
+  - ruleId: row_returning_pagination_guidance
+    representedBy:
+      - openacme.pagination
+tools:
+  - toolName: qualys_gav_asset_count
+    status: covered_current_batch
+    requiredCoverage:
+      - path: mcp.description
+        contains:
+          - Count CSAM/GAV assets
+      - path: openacme.selectWhen
+        contains:
+          - Count assets by native GAV filters.
+      - path: openacme.doNotSelectWhen
+        contains:
+          - Do not use when asset records or pagination are required.
+      - path: openacme.parameterHelp.filter_body.rules
+        contains:
+          - assetName is invalid; use asset.name.
+          - asset_last_updated is a hosted tool request parameter, not a filter field token.
+      - path: openacme.parameterHelp.filter_body.filters.field.vocabularyRef
+        equals: references/gav-filter-fields.json
+      - path: openacme.parameterHelp.search_body.full
+        contains:
+          - Prefer filter_body.
+      - path: openacme.parameterHelp.filter_xml.full
+        contains:
+          - Do not combine filter_xml with filter_body or search_body.
+      - path: openacme.examples
+        contains:
+          - definitely-missing-host
+      - path: openacme.errors
+        contains:
+          - bad_arguments means
+          - auth_failed means
+          - upstream_error or rate_limited
+  - toolName: qualys_gav_asset_search
+    status: covered_current_batch
+    requiredCoverage:
+      - path: openacme.selectWhen
+        contains:
+          - Retrieve asset records by native GAV filters.
+          - Page through CSAM/GAV search results.
+      - path: openacme.doNotSelectWhen
+        contains:
+          - Use the count tool when only cardinality is needed.
+      - path: openacme.parameterHelp.page_size.full
+        contains:
+          - Use conservative values for live Qualys calls
+      - path: openacme.parameterHelp.max_pages.full
+        contains:
+          - bound runtime and response size
+      - path: openacme.parameterHelp.filter_body.rules
+        contains:
+          - Use asset.name instead of assetName.
+          - asset_last_updated is a hosted tool request parameter, not a filter field token.
+      - path: openacme.parameterHelp.filter_body.filters.field.vocabularyRef
+        equals: references/gav-filter-fields.json
+      - path: openacme.parameterHelp.include_fields.full
+        contains:
+          - response projection fields
+      - path: openacme.parameterHelp.exclude_fields.full
+        contains:
+          - Do not combine with include_fields.
+      - path: openacme.errors
+        contains:
+          - bad_arguments means
+          - reduce page_size/max_pages
+      - path: openacme.pagination.model
+        equals: lastSeenAssetId
+      - path: openacme.pagination.limitArgs
+        contains:
+          - page_size
+          - max_pages
+  - toolName: qualys_gav_asset_get
+    status: covered_current_batch
+    requiredCoverage:
+      - path: mcp.description
+        contains:
+          - one known CSAM/GAV asset
+      - path: openacme.fullHelp
+        contains:
+          - GET /rest/2.0/get/am/asset
+      - path: openacme.selectWhen
+        contains:
+          - Retrieve detailed GAV asset context for one known asset_id.
+      - path: openacme.doNotSelectWhen
+        contains:
+          - discover it with qualys_gav_asset_search first
+          - legacy asset_ids array
+      - path: openacme.parameterHelp.asset_id.full
+        contains:
+          - assetId
+          - one asset_id per call
+      - path: openacme.parameterHelp.include_fields.full
+        contains:
+          - Do not combine with exclude_fields.
+      - path: openacme.parameterHelp.exclude_fields.full
+        contains:
+          - Do not combine with include_fields.
+      - path: openacme.examples
+        contains:
+          - operatingSystem
+      - path: openacme.errors
+        contains:
+          - bad_arguments means
+          - auth_failed means
+  - toolName: qualys_cloud_agent_hostasset_count
+    status: covered_current_batch
+    requiredCoverage:
+      - path: mcp.description
+        contains:
+          - QAGENT
+      - path: openacme.selectWhen
+        contains:
+          - Count Cloud Agent host assets.
+      - path: openacme.doNotSelectWhen
+        contains:
+          - Do not pass operation OR.
+      - path: openacme.parameterHelp.filter_body.full
+        contains:
+          - asset.trackingMethod EQUALS QAGENT
+          - operation OR is rejected
+      - path: openacme.parameterHelp.filter_body.rules
+        contains:
+          - operation must be absent or AND.
+          - asset.trackingMethod values other than QAGENT are rejected.
+      - path: openacme.parameterHelp.filter_body.filters.field.vocabularyRef
+        equals: references/gav-filter-fields.json
+      - path: openacme.parameterHelp.filter_body.operation.full
+        contains:
+          - OR is rejected
+      - path: openacme.errors
+        contains:
+          - bad_arguments means
+          - Cloud Agent scope
+          - auth_failed means
+  - toolName: qualys_cloud_agent_hostasset_search
+    status: covered_current_batch
+    requiredCoverage:
+      - path: mcp.description
+        contains:
+          - QAGENT
+      - path: openacme.selectWhen
+        contains:
+          - Retrieve Cloud Agent asset records.
+      - path: openacme.doNotSelectWhen
+        contains:
+          - Do not use operation OR or non-QAGENT trackingMethod filters.
+      - path: openacme.parameterHelp.filter_body.full
+        contains:
+          - enforces QAGENT scope
+      - path: openacme.parameterHelp.filter_body.rules
+        contains:
+          - operation must be absent or AND.
+          - asset_last_updated is a hosted tool request parameter, not a filter field token.
+      - path: openacme.parameterHelp.filter_body.filters.field.vocabularyRef
+        equals: references/gav-filter-fields.json
+      - path: openacme.parameterHelp.include_fields.full
+        contains:
+          - Do not combine with exclude_fields.
+      - path: openacme.errors
+        contains:
+          - bad_arguments means
+          - reduce page_size/max_pages
+      - path: openacme.pagination.model
+        equals: lastSeenAssetId
+      - path: openacme.pagination.limitArgs
+        contains:
+          - page_size
+          - max_pages
+  - toolName: qualys_vmdr_host_list
+    status: covered_current_batch
+    requiredCoverage:
+      - path: mcp.description
+        contains:
+          - VMDR Host List API v5
+      - path: openacme.selectWhen
+        contains:
+          - Retrieve VMDR host records through Host List API v5.
+      - path: openacme.doNotSelectWhen
+        contains:
+          - Use Cloud Agent tools for QAGENT-scoped CSAM/GAV assets.
+      - path: openacme.parameterHelp.params.full
+        contains:
+          - action=list
+          - Do not include tracking_method or trackingMethod.
+      - path: openacme.parameterHelp.max_pages.full
+        contains:
+          - bound runtime and response size
+      - path: openacme.parameterHelp.tracking_method.full
+        contains:
+          - Cloud Agent tracking_method belongs to the CSAM/GAV Cloud Agent tools
+      - path: openacme.errors
+        contains:
+          - bad_arguments means
+          - reduce truncation_limit/max_pages
+      - path: openacme.pagination.model
+        equals: foWarningUrl
+      - path: openacme.pagination.limitArgs
+        contains:
+          - truncation_limit
+          - max_pages
+  - toolName: qualys_vmdr_asset_group_list
+    status: covered_current_batch
+    requiredCoverage:
+      - path: mcp.description
+        contains:
+          - /api/2.0/fo/asset/group/
+          - native Qualys params
+          - ASSET_GROUP records
+      - path: openacme.fullHelp
+        contains:
+          - action=list
+          - ASSET_GROUP records
+          - Do not invent free-text search
+      - path: openacme.selectWhen
+        contains:
+          - List VMDR asset groups
+          - Fetch a known VMDR asset group
+      - path: openacme.doNotSelectWhen
+        contains:
+          - Do not use for CSAM/GAV asset inventory
+          - Do not invent text search
+          - creating, updating, or deleting asset groups
+      - path: openacme.parameterHelp.params.full
+        contains:
+          - params.ids
+          - Omit params for a bounded broad list.
+          - Do not
+          - invent title text-search
+      - path: openacme.parameterHelp.params.rules
+        contains:
+          - Do not invent unsupported text-search
+          - Use params.ids only when the asset group id is known.
+      - path: openacme.parameterHelp.max_pages.full
+        contains:
+          - FO warning URL pagination
+          - Use 1 for bounded live probes
+      - path: openacme.examples
+        contains:
+          - max_pages
+          - ids
+      - path: openacme.errors
+        contains:
+          - bad_arguments means
+          - reduce max_pages
+      - path: openacme.pagination.model
+        equals: foWarningUrl
+      - path: openacme.pagination.limitArgs
+        contains:
+          - max_pages
+  - toolName: qualys_vmdr_ip_list
+    status: covered_current_batch
+    requiredCoverage:
+      - path: mcp.description
+        contains:
+          - /api/2.0/fo/asset/ip/
+          - native Qualys params
+          - IP/RANGE records
+      - path: openacme.fullHelp
+        contains:
+          - action=list
+          - IP/RANGE records
+          - Do not invent GAV filter_body
+      - path: openacme.selectWhen
+        contains:
+          - List VMDR IP/range records
+          - params.ips
+      - path: openacme.doNotSelectWhen
+        contains:
+          - Do not use for CSAM/GAV asset inventory
+          - qualys_vmdr_host_list
+          - changing IP scope
+      - path: openacme.parameterHelp.params.full
+        contains:
+          - params.ips
+          - Omit params for a bounded broad list.
+          - Do not
+          - invent GAV filter_body
+      - path: openacme.parameterHelp.params.rules
+        contains:
+          - Do not invent unsupported GAV filter_body
+          - Use params.ips only when the IP/range scope is known.
+      - path: openacme.parameterHelp.max_pages.full
+        contains:
+          - FO warning URL pagination
+          - Use 1 for bounded live probes
+      - path: openacme.examples
+        contains:
+          - max_pages
+          - ips
+      - path: openacme.errors
+        contains:
+          - bad_arguments means
+          - reduce max_pages
+      - path: openacme.pagination.model
+        equals: foWarningUrl
+      - path: openacme.pagination.limitArgs
+        contains:
+          - max_pages
+  - toolName: qualys_vmdr_excluded_ip_list
+    status: covered_current_batch
+    requiredCoverage:
+      - path: mcp.description
+        contains:
+          - /api/2.0/fo/asset/excluded_ip/
+          - native Qualys params
+          - excluded IP/range records
+      - path: openacme.fullHelp
+        contains:
+          - action=list
+          - excluded IP/range records
+          - Do not invent GAV filter_body
+      - path: openacme.selectWhen
+        contains:
+          - List VMDR excluded IP/range records
+          - params.ips
+      - path: openacme.doNotSelectWhen
+        contains:
+          - qualys_vmdr_ip_list
+          - Do not use for CSAM/GAV asset inventory
+          - changing excluded IP scope
+      - path: openacme.parameterHelp.params.full
+        contains:
+          - params.ips
+          - Omit params for a
+          - bounded broad list
+          - Do not invent GAV filter_body
+      - path: openacme.parameterHelp.params.rules
+        contains:
+          - Do not invent unsupported GAV filter_body
+          - Use params.ips only when the excluded IP/range scope is known.
+      - path: openacme.parameterHelp.max_pages.full
+        contains:
+          - FO warning URL pagination
+          - Use 1 for bounded live probes
+      - path: openacme.examples
+        contains:
+          - max_pages
+          - ips
+      - path: openacme.errors
+        contains:
+          - bad_arguments means
+          - reduce max_pages
+      - path: openacme.pagination.model
+        equals: foWarningUrl
+      - path: openacme.pagination.limitArgs
+        contains:
+          - max_pages
+  - toolName: qualys_vmdr_restricted_ip_list
+    status: covered_current_batch
+    requiredCoverage:
+      - path: mcp.description
+        contains:
+          - /api/2.0/fo/setup/restricted_ips/
+          - output_format=xml
+          - restricted IP/range records
+      - path: openacme.fullHelp
+        contains:
+          - action=list
+          - output_format=xml
+          - restricted IP/range records
+      - path: openacme.selectWhen
+        contains:
+          - List VMDR restricted IP/range records
+          - output_format=xml
+      - path: openacme.doNotSelectWhen
+        contains:
+          - qualys_vmdr_ip_list
+          - qualys_vmdr_excluded_ip_list
+          - changing restricted IP scope
+      - path: openacme.parameterHelp.params.full
+        contains:
+          - output_format=xml
+          - Omit
+          - bounded broad list
+          - do not invent GAV filter_body
+      - path: openacme.parameterHelp.params.rules
+        contains:
+          - output_format=xml is enforced by the tool.
+          - Do not invent unsupported GAV filter_body
+      - path: openacme.parameterHelp.max_pages.full
+        contains:
+          - FO warning URL pagination
+          - Use 1 for bounded live probes
+      - path: openacme.examples
+        contains:
+          - max_pages
+      - path: openacme.errors
+        contains:
+          - bad_arguments means
+          - reduce max_pages
+      - path: openacme.pagination.model
+        equals: foWarningUrl
+      - path: openacme.pagination.limitArgs
+        contains:
+          - max_pages
+  - toolName: qualys_vmdr_virtual_host_list
+    status: covered_current_batch
+    requiredCoverage:
+      - path: mcp.description
+        contains:
+          - /api/2.0/fo/asset/vhost/
+          - native Qualys params
+          - VIRTUAL_HOST records
+      - path: openacme.fullHelp
+        contains:
+          - action=list
+          - VIRTUAL_HOST
+          - Do not invent GAV
+      - path: openacme.selectWhen
+        contains:
+          - List VMDR virtual host records
+          - virtual host inventory
+      - path: openacme.doNotSelectWhen
+        contains:
+          - qualys_vmdr_host_list
+          - IP scope inventory
+          - CSAM/GAV asset inventory
+      - path: openacme.parameterHelp.params.full
+        contains:
+          - Omit params for a bounded broad
+          - Do not invent GAV filter_body
+          - VMDR Host List params
+      - path: openacme.parameterHelp.params.rules
+        contains:
+          - Do not invent unsupported GAV filter_body
+          - IP scope
+      - path: openacme.parameterHelp.max_pages.full
+        contains:
+          - FO warning URL pagination
+          - Use 1 for bounded live probes
+      - path: openacme.examples
+        contains:
+          - max_pages
+      - path: openacme.errors
+        contains:
+          - bad_arguments means
+          - reduce max_pages
+      - path: openacme.pagination.model
+        equals: foWarningUrl
+      - path: openacme.pagination.limitArgs
+        contains:
+          - max_pages
+  - toolName: qualys_vmdr_scan_list
+    status: covered_current_batch
+    requiredCoverage:
+      - path: mcp.description
+        contains:
+          - /api/2.0/fo/scan/
+          - SCAN records
+          - does not fetch scan result payloads
+      - path: openacme.fullHelp
+        contains:
+          - action=list
+          - scan_ref values
+          - does not fetch scan result payloads
+      - path: openacme.selectWhen
+        contains:
+          - List VMDR scan metadata
+          - discover scan_ref values
+      - path: openacme.doNotSelectWhen
+        contains:
+          - qualys_vmdr_scan_fetch
+          - launch, cancel
+          - mutate scan state
+      - path: openacme.parameterHelp.params.full
+        contains:
+          - launched_after_datetime
+          - scan_ref
+          - qualys_vmdr_scan_fetch
+      - path: openacme.parameterHelp.params.rules
+        contains:
+          - scan_ref belongs to qualys_vmdr_scan_fetch.
+          - Do not invent unsupported GAV filter_body
+      - path: openacme.parameterHelp.max_pages.full
+        contains:
+          - FO warning URL pagination
+          - Use 1 for bounded live probes
+      - path: openacme.examples
+        contains:
+          - launched_after_datetime
+          - max_pages
+      - path: openacme.errors
+        contains:
+          - bad_arguments means
+          - reduce max_pages
+      - path: openacme.pagination.model
+        equals: foWarningUrl
+      - path: openacme.pagination.limitArgs
+        contains:
+          - max_pages
+  - toolName: qualys_vmdr_scan_fetch
+    status: covered_current_batch
+    requiredCoverage:
+      - path: mcp.description
+        contains:
+          - /api/2.0/fo/scan/
+          - action=fetch
+          - discovered scan_ref
+          - artifact
+      - path: openacme.fullHelp
+        contains:
+          - action=fetch
+          - qualys_vmdr_scan_list
+          - artifact reference
+          - does not list scans
+      - path: openacme.selectWhen
+        contains:
+          - known, real scan_ref
+          - mode, output_format, or ips
+      - path: openacme.doNotSelectWhen
+        contains:
+          - scan_ref is unknown
+          - qualys_vmdr_scan_list
+          - mutate scan state
+      - path: openacme.parameterHelp.scan_ref.full
+        contains:
+          - Discover this value with qualys_vmdr_scan_list
+          - Do not pass placeholder refs
+      - path: openacme.parameterHelp.scan_ref.rules
+        contains:
+          - Discover scan_ref with qualys_vmdr_scan_list
+          - Do not pass placeholder or guessed scan refs.
+      - path: openacme.parameterHelp.params.full
+        contains:
+          - output_format
+          - scan_ref belongs at the top level
+          - payloads can be large
+      - path: openacme.examples
+        contains:
+          - scan_ref
+          - output_format
+      - path: openacme.errors
+        contains:
+          - bad_arguments means
+          - discover a real scan_ref first
+      - path: openacme.pagination.model
+        equals: none
+  - toolName: qualys_vmdr_kb_vuln_list
+    status: covered_current_batch
+    requiredCoverage:
+      - path: mcp.description
+        contains:
+          - POST /api/2.0/fo/knowledge_base/vuln/
+          - metadata only
+      - path: openacme.fullHelp
+        contains:
+          - action=list
+          - does not prove that any tenant host is affected
+          - qualys_vmdr_host_detection_list
+      - path: openacme.selectWhen
+        contains:
+          - Resolve CVE or known QID input
+          - Fetch bounded KB details
+      - path: openacme.doNotSelectWhen
+        contains:
+          - Do not use as tenant exposure proof
+          - Do not pass title-like strings, RTI names
+          - Do not add page_size
+      - path: openacme.parameterHelp.params.full
+        contains:
+          - Use params.cve
+          - Use params.ids
+          - last_modified_after
+          - show_qid_change_log
+      - path: openacme.parameterHelp.params.cve.full
+        contains:
+          - not params.cve_ids
+      - path: openacme.parameterHelp.params.details.full
+        contains:
+          - details=All
+          - THREAT_INTELLIGENCE
+      - path: openacme.parameterHelp.max_pages.full
+        contains:
+          - FO warning URL pagination
+          - Use 1 for bounded live probes
+      - path: openacme.examples
+        contains:
+          - CVE-2021-44228
+          - "90043,92080"
+      - path: openacme.errors
+        contains:
+          - bad_arguments means
+          - reduce max_pages
+      - path: openacme.pagination.model
+        equals: foWarningUrl
+      - path: openacme.pagination.limitArgs
+        contains:
+          - max_pages
+  - toolName: qualys_vmdr_kb_qvs_list
+    status: covered_current_batch
+    requiredCoverage:
+      - path: mcp.description
+        contains:
+          - /api/3.0/fo/knowledge_base/qvs/
+          - QVS enrichment
+          - does not prove tenant exposure
+      - path: openacme.fullHelp
+        contains:
+          - QVS is not QDS
+          - QVS does not prove tenant exposure
+          - qualys_vmdr_host_detection_list
+      - path: openacme.selectWhen
+        contains:
+          - CVE/vulnerability-level QVS metadata
+          - Enrich KB/QID analysis
+      - path: openacme.doNotSelectWhen
+        contains:
+          - Do not use as tenant exposure proof
+          - Host Detection QDS
+          - Do not add page_size
+      - path: openacme.parameterHelp.params.full
+        contains:
+          - qvs_min
+          - qvs_last_modified_after
+          - nvd_published_after
+          - show_qds
+      - path: openacme.parameterHelp.params.rules
+        contains:
+          - QVS is CVE/vulnerability-level score context, not Host Detection QDS.
+          - Do not send unbounded empty params.
+      - path: openacme.parameterHelp.params.qvs_min.full
+        contains:
+          - QVS is CVE/vulnerability-level
+          - Host Detection qds_min
+      - path: openacme.examples
+        contains:
+          - CVE-2021-44228
+          - qvs_min
+      - path: openacme.errors
+        contains:
+          - bad_arguments means
+          - narrow params
+      - path: openacme.pagination.model
+        equals: boundedParams
+      - path: openacme.pagination.limitArgs
+        contains:
+          - params.cve
+          - params.qvs_min
+          - params.qvs_last_modified_after
+  - toolName: qualys_asset_management_tag_list
+    status: covered_current_batch
+    requiredCoverage:
+      - path: mcp.description
+        contains:
+          - POST /qps/rest/2.0/search/am/tag
+          - ServiceRequest XML
+          - intentionally accepts only limit
+      - path: openacme.fullHelp
+        contains:
+          - ServiceRequest XML body and no
+          - Criteria filters
+          - ServiceResponse.data.Tag records
+          - qualys_asset_management_tag_search
+      - path: openacme.selectWhen
+        contains:
+          - Pull a bounded page of Asset Management tag records without filters.
+      - path: openacme.doNotSelectWhen
+        contains:
+          - no filter input
+          - Do not pass criteria
+          - qualys_asset_management_tag_search
+      - path: openacme.parameterHelp.limit.full
+        contains:
+          - preferences.limitResults
+          - only accepted
+          - input; the tool does not accept criteria
+          - wildcard filters
+      - path: openacme.examples
+        contains:
+          - limit
+      - path: openacme.errors
+        contains:
+          - bad_arguments means
+          - unsupported filter/search arguments
+      - path: openacme.pagination.model
+        equals: qpsLimitResults
+      - path: openacme.pagination.limitArgs
+        contains:
+          - limit
+  - toolName: qualys_asset_management_tag_search
+    status: covered_current_batch
+    requiredCoverage:
+      - path: mcp.description
+        contains:
+          - POST /qps/rest/2.0/search/am/tag
+          - ServiceRequest XML Criteria
+          - ServiceResponse.data.Tag records
+      - path: openacme.fullHelp
+        contains:
+          - ServiceRequest XML body
+          - ServiceResponse.data.Tag records
+          - not a GAV asset search
+      - path: openacme.selectWhen
+        contains:
+          - Search Asset Management tag records by bounded QPS Criteria.
+      - path: openacme.doNotSelectWhen
+        contains:
+          - empty values to enumerate every tag
+          - Do not use for GAV asset inventory
+          - creating, updating, or deleting tags
+      - path: openacme.parameterHelp.criteria.full
+        contains:
+          - field, operator, and value
+          - id, name, created, modified, and color
+          - Do not pass a bare string
+      - path: openacme.parameterHelp.criteria.rules
+        contains:
+          - Every criteria item must contain non-empty field, operator, and value.
+          - QPS Criteria fields are not GAV asset filter fields.
+      - path: openacme.parameterHelp.limit.full
+        contains:
+          - preferences.limitResults
+          - there is no continuation token
+      - path: openacme.examples
+        contains:
+          - CONTAINS
+          - Cloud
+      - path: openacme.errors
+        contains:
+          - bad_arguments means
+          - narrow criteria
+      - path: openacme.pagination.model
+        equals: qpsLimitResults
+      - path: openacme.pagination.limitArgs
+        contains:
+          - limit
+  - toolName: qualys_vmdr_host_detection_list
+    status: covered_current_batch
+    requiredCoverage:
+      - path: mcp.description
+        contains:
+          - GET /api/2.0/fo/asset/host/vm/detection/
+          - top-level status
+          - params.qids
+      - path: openacme.fullHelp
+        contains:
+          - host+QID detection evidence
+          - one returned host may contain multiple detection records
+      - path: openacme.selectWhen
+        contains:
+          - Retrieve host+QID detection evidence
+          - Build affected-host evidence
+      - path: openacme.doNotSelectWhen
+        contains:
+          - Do not use for CSAM/GAV asset inventory
+          - has not been resolved to QIDs
+          - Do not send params.status
+      - path: openacme.parameterHelp.status.full
+        contains:
+          - defaults to New,Active,Re-Opened
+          - do not put status
+      - path: openacme.parameterHelp.params.full
+        contains:
+          - qids
+          - qds_min
+          - detection_updated_since
+          - show_asset_id
+          - Qualys-native AND semantics
+      - path: openacme.parameterHelp.params.qids.full
+        contains:
+          - Use plural qids.
+          - Singular params.qid is rejected
+      - path: openacme.parameterHelp.params.qds_min.full
+        contains:
+          - detection-level risk
+          - show_qds=1
+      - path: openacme.parameterHelp.truncation_limit.full
+        contains:
+          - single returned host can still contain multiple detection records
+      - path: openacme.parameterHelp.max_pages.full
+        contains:
+          - FO warning URL pagination
+      - path: openacme.examples
+        contains:
+          - show_asset_id
+          - qids
+          - qds_min
+      - path: openacme.errors
+        contains:
+          - bad_arguments means
+          - params.qids
+          - reduce truncation_limit/max_pages
+      - path: openacme.pagination.model
+        equals: foWarningUrl
+      - path: openacme.pagination.limitArgs
+        contains:
+          - truncation_limit
+          - max_pages

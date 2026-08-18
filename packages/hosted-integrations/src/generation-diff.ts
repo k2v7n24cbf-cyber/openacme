@@ -2,16 +2,21 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { buildHostedIntegrationFocusedSourceView } from "./source-view.js";
 import {
+  HOSTED_INTEGRATION_MANIFEST_FILE,
+  HOSTED_TOOL_CONTRACT_FILE,
+} from "./catalog.js";
+import {
   FamilyManifestSchema,
   HostedIntegrationFamilyIdSchema,
   HostedIntegrationToolNameSchema,
+  HostedToolContractDocumentSchema,
+  hostedToolContractToToolSpecs,
   type FamilyManifest,
   type HostedIntegrationFamilyId,
   type HostedIntegrationToolName,
   type HostedIntegrationToolSpec,
 } from "./schemas.js";
 
-const MANIFEST_FILE = "family.yaml";
 const SENSITIVE_KEY_PATTERN =
   /(?:secret|token|password|passwd|pwd|credential|api[_-]?key|authorization)/i;
 const SENSITIVE_VALUE_PATTERN =
@@ -130,6 +135,8 @@ export async function buildHostedIntegrationGenerationDiff(input: {
 
   const manifests = parseManifests(input.base.files, input.compare.files);
   if (!manifests.ok) return manifests;
+  const toolContracts = parseToolContracts(input.base.files, input.compare.files);
+  if (!toolContracts.ok) return toolContracts;
 
   const mode = input.options?.mode ?? "summary";
   const base = sanitizeFiles(input.base.files);
@@ -139,6 +146,8 @@ export async function buildHostedIntegrationGenerationDiff(input: {
     compare: input.compare.files,
     baseManifest: manifests.baseManifest,
     compareManifest: manifests.compareManifest,
+    baseTools: toolContracts.baseTools,
+    compareTools: toolContracts.compareTools,
     pathFilter: input.options?.path,
   });
 
@@ -204,6 +213,7 @@ export async function buildHostedIntegrationGenerationDiff(input: {
     familyId: baseFamilyId,
     generationId: input.base.generationId,
     manifest: manifests.baseManifest,
+    tools: toolContracts.baseTools,
     entrypointPath: manifests.baseManifest.runtime.entrypoint,
     source: base[manifests.baseManifest.runtime.entrypoint]!,
     toolName,
@@ -216,6 +226,7 @@ export async function buildHostedIntegrationGenerationDiff(input: {
     familyId: baseFamilyId,
     generationId: input.compare.generationId,
     manifest: manifests.compareManifest,
+    tools: toolContracts.compareTools,
     entrypointPath: manifests.compareManifest.runtime.entrypoint,
     source: compare[manifests.compareManifest.runtime.entrypoint]!,
     toolName,
@@ -272,7 +283,10 @@ function parseManifests(
         message: string;
       };
     } {
-  if (!baseFiles[MANIFEST_FILE] || !compareFiles[MANIFEST_FILE]) {
+  if (
+    !baseFiles[HOSTED_INTEGRATION_MANIFEST_FILE] ||
+    !compareFiles[HOSTED_INTEGRATION_MANIFEST_FILE]
+  ) {
     return {
       ok: false,
       error: {
@@ -285,10 +299,63 @@ function parseManifests(
     return {
       ok: true,
       baseManifest: FamilyManifestSchema.parse(
-        parseYaml(baseFiles[MANIFEST_FILE]),
+        parseYaml(baseFiles[HOSTED_INTEGRATION_MANIFEST_FILE]),
       ),
       compareManifest: FamilyManifestSchema.parse(
-        parseYaml(compareFiles[MANIFEST_FILE]),
+        parseYaml(compareFiles[HOSTED_INTEGRATION_MANIFEST_FILE]),
+      ),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: {
+        code: "manifest_invalid",
+        message: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
+}
+
+function parseToolContracts(
+  baseFiles: Record<string, string>,
+  compareFiles: Record<string, string>,
+):
+  | {
+      ok: true;
+      baseTools: HostedIntegrationToolSpec[];
+      compareTools: HostedIntegrationToolSpec[];
+    }
+  | {
+      ok: false;
+      error: {
+        code: "manifest_missing" | "manifest_invalid";
+        message: string;
+      };
+    } {
+  if (
+    !baseFiles[HOSTED_TOOL_CONTRACT_FILE] ||
+    !compareFiles[HOSTED_TOOL_CONTRACT_FILE]
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "manifest_missing",
+        message: "generation diff requires tools.yaml in both generations",
+      },
+    };
+  }
+  try {
+    return {
+      ok: true,
+      baseTools: hostedToolContractToToolSpecs(
+        HostedToolContractDocumentSchema.parse(
+          parseYaml(baseFiles[HOSTED_TOOL_CONTRACT_FILE]),
+        ),
+      ),
+      compareTools: hostedToolContractToToolSpecs(
+        HostedToolContractDocumentSchema.parse(
+          parseYaml(compareFiles[HOSTED_TOOL_CONTRACT_FILE]),
+        ),
       ),
     };
   } catch (error) {
@@ -307,11 +374,13 @@ function buildSummary(args: {
   compare: Record<string, string>;
   baseManifest: FamilyManifest;
   compareManifest: FamilyManifest;
+  baseTools: HostedIntegrationToolSpec[];
+  compareTools: HostedIntegrationToolSpec[];
   pathFilter?: string;
 }): HostedIntegrationGenerationDiffSummary {
   return {
     changedFiles: buildFileChanges(args.base, args.compare, args.pathFilter),
-    changedTools: buildToolChanges(args.baseManifest, args.compareManifest),
+    changedTools: buildToolChanges(args.baseTools, args.compareTools),
     runtimeChanged:
       stableJson(args.baseManifest.runtime) !==
       stableJson(args.compareManifest.runtime),
@@ -322,13 +391,11 @@ function buildSummary(args: {
 }
 
 function buildToolChanges(
-  baseManifest: FamilyManifest,
-  compareManifest: FamilyManifest,
+  baseTools: HostedIntegrationToolSpec[],
+  compareTools: HostedIntegrationToolSpec[],
 ): HostedIntegrationToolDiffSummary[] {
-  const baseByName = new Map(baseManifest.tools.map((tool) => [tool.name, tool]));
-  const compareByName = new Map(
-    compareManifest.tools.map((tool) => [tool.name, tool]),
-  );
+  const baseByName = new Map(baseTools.map((tool) => [tool.name, tool]));
+  const compareByName = new Map(compareTools.map((tool) => [tool.name, tool]));
   const names = [...new Set([...baseByName.keys(), ...compareByName.keys()])].sort();
   const changes: HostedIntegrationToolDiffSummary[] = [];
   for (const name of names) {

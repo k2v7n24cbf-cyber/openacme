@@ -42,7 +42,44 @@ Classify the request before editing:
   Acme only for platform setup or workforce configuration that is outside the
   hosted tool management surface.
 - Work at the tool-family level. A family is the unit of source, shared helper
-  code, manifest, runtime settings, examples, generations, and workspace home.
+  code, runtime settings, hosted MCP tool contract, examples, generations, and
+  workspace home.
+- Treat `tools.yaml` as the source of truth for the hosted MCP surface. It owns
+  the official MCP tool fields, input/output schemas, selection guidance,
+  parameter help, examples, safety classification, and family-native handler
+  mapping. `family.yaml` owns family/runtime/config metadata only.
+- Keep large or shared provider vocabularies in family-local `references/`
+  files and reference them from `tools.yaml` parameter help. Do not duplicate a
+  filter field catalog, enum-like provider value list, or response-field
+  vocabulary into every tool `inputSchema`.
+- Do not invent complex provider API behavior. If auth semantics, endpoint
+  behavior, pagination, destructive side effects, response parsing, or public
+  output shape is not documented, imported, or safely observed, stop with
+  `EVIDENCE_REQUIRED` and name the missing source. Acceptable evidence is
+  imported integration source, official provider docs, provider-supplied
+  OpenAPI/SDK docs, or approved sanitized read-only debug output.
+- Complex provider client design is out of scope unless the source or contract
+  is imported/provided. Your default job is hosted surface mapping, wrappers,
+  validation, help, examples, small fixes, and harness troubleshooting.
+- When a complete hosted family package is provided, use package import/export
+  instead of replaying many individual draft patches. Package import still
+  creates or updates a draft only; it does not promote, grant access, or bypass
+  validation/readiness.
+- Keep agent-usability/live dogfood scenarios in the repository-owned scenario
+  manifest, not embedded in runner code. Unguided scenario prompts must not name
+  hosted tools, `hosted_tool_help`, remote MCP tools, legacy `managed_*` tool
+  names, or exact JSON argument shapes; analyzers own the required evidence.
+- Do not claim improved unguided model usability from chat memory, deterministic
+  analyzer fixtures, or unrecorded console output. A passing live scenario must
+  be persisted as an accepted artifact in
+  `docs/hosted-tools-live-evaluation-scenarios.yaml` under the scenario's
+  `acceptedArtifacts`, with a `runId` that matches the JSON artifact filename,
+  the artifact `path`, `status: pass`, `secretScan: pass`, and a concise
+  evidence summary.
+- For shared vocabulary, hosted help, or example-readiness changes, use
+  `docs/hosted-tools-vocabulary-acceptance-matrix.yaml` to choose the required
+  deterministic validation bundle. Live Qualys proof remains required only when
+  claiming real provider behavior or unguided model usability.
 - Keep native and hosted registry tool names separate. Family manifests, examples,
   debug runs, failure buckets, and all `hosted_tool_*` management-tool
   `tool_name` parameters use the family-native name such as `splunk_search`.
@@ -70,6 +107,10 @@ Use the management tools by intent:
 - Discover families/source: `hosted_tool_family_list`,
   `hosted_tool_source_read`, and tool-focused
   `hosted_tool_source_view`.
+- Move complete family packages: `hosted_tool_family_import` and
+  `hosted_tool_family_export`. Import creates or updates drafts from exact
+  package file sets. Export returns sanitized source packages and never includes
+  raw secrets, run directories, execution logs, or failure-bucket internals.
 - Create or prepare work: `hosted_tool_family_create`,
   `hosted_tool_lock_acquire`, `hosted_tool_lock_renew`,
   `hosted_tool_draft_create`.
@@ -109,11 +150,25 @@ Use the management tools by intent:
    targeted patch modes such as `replace_text` or `insert_after` with a unique
    source block. Use full-file replacement only for new files or intentionally
    small files. Keep runtime settings at the family level when they apply to
-   every tool.
+   every tool. Keep public tool schema/help/mapping changes in `tools.yaml`.
+   Put reusable parameter vocabularies in `references/` and link them from
+   `parameterHelp` with `vocabularyRef`; do not copy the same catalog into
+   multiple tools. Vocabulary files may be YAML or JSON.
+   Treat aliases as search synonyms only. Exact value checks must use real
+   provider values or documented `invalidAliases`; aliases are not accepted
+   exact provider values.
 5. Register or update examples with `hosted_tool_example_upsert`.
-   Promotion requires at least one safe example for every promoted tool.
-6. Run `hosted_tool_validate`, then run safe examples with
-   `hosted_tool_example_run`.
+   Promotion requires at least one safe runnable example for every promoted
+   tool, unless the tool genuinely requires a discovered provider id/ref before
+   invocation and therefore uses `discovery_required` contract evidence.
+   Use `discovery_required` only when the example documents a prerequisite
+   lookup, such as discovering a provider id or ref before a fetch/get call; it
+   is not a ready-to-send invocation payload and must not include placeholder
+   ids or refs as arguments.
+6. Run `hosted_tool_validate`, then run safe runnable examples with
+   `hosted_tool_example_run`. Do not run `discovery_required` examples; use
+   them to perform the prerequisite lookup and then create a real runnable
+   example only when a safe id/ref is available.
 7. Inspect publish readiness with `hosted_tool_readiness_get`. Promote
    only when validation, required examples, and publish readiness pass.
    Non-destructive changes can be promoted by the Tool Developer Agent;
@@ -124,15 +179,25 @@ Before promotion, check:
 
 - You still own the lock or can renew it.
 - The draft source is the intended family only; no unrelated family was edited.
-- Every new or changed tool has at least one safe example.
+- Every new or changed tool has at least one safe runnable example, or a
+  `discovery_required` example when a real provider id/ref must be discovered
+  first.
 - Any reproduced bug has a regression example.
 - `hosted_tool_validate` passed after the final patch.
-- Required safe examples passed after the final patch.
+- Required safe runnable examples passed after the final patch.
 - Publish readiness is `ready`, or the blocker is explicitly reported.
 - Tool classification is accurate: read, write, destructive, live, cached,
   sync, sync execution, async execution, approval mode.
 - Runtime settings are family-level unless a tool-specific override is
   intentional and documented in the manifest.
+- Complex filter/query/body parameters have full help, nested parameter help,
+  and vocabulary references when the valid values are catalog-backed.
+- Every tool has actionable `openacme.errors` guidance for autonomous recovery.
+  Tell the caller whether to fix input, update config/permissions, retry, or
+  stop for provider evidence.
+- Tools with page, limit, cursor, continuation, or truncation inputs have
+  `openacme.pagination` guidance that explains bounds, continuation, and
+  truncation behavior.
 - Large expected responses are allowed to spill to artifacts.
 - No source, example, log, artifact, or response includes raw secrets.
 
@@ -143,6 +208,10 @@ and safe to run in the hosted integration runtime.
 
 - Add a smoke example for each new tool.
 - Add a regression example before fixing a reproducible failure.
+- Use `discovery_required` when a tool cannot be safely invoked until another
+  tool discovers a real id/ref. Put the discovery tool and after-discovery
+  guidance in `expected`, keep `args` empty unless they are genuinely
+  ready-to-send, and never invent placeholder ids.
 - Include representative environment config metadata, but never include secret
   values.
 - Prefer deterministic assertions. When an external service is inherently

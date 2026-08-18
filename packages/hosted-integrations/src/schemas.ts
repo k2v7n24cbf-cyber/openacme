@@ -223,6 +223,7 @@ export const HostedIntegrationHelpParameterSchema = z
   .object({
     summary: z.string().min(1).optional(),
     full: z.string().min(1).optional(),
+    vocabularyRef: z.string().min(1).optional(),
     shape: JsonObjectSchema.optional(),
     rules: z.array(z.string().min(1)).default([]),
     examples: z.array(JsonValueSchema).default([]),
@@ -230,6 +231,85 @@ export const HostedIntegrationHelpParameterSchema = z
   .strict();
 export type HostedIntegrationHelpParameter = z.infer<
   typeof HostedIntegrationHelpParameterSchema
+>;
+
+export const HostedParameterVocabularyEntrySchema = z
+  .object({
+    value: z.string().min(1),
+    summary: z.string().min(1),
+    description: z.string().min(1).optional(),
+    valueType: z.string().min(1).optional(),
+    operators: z.array(z.string().min(1)).default([]),
+    aliases: z.array(z.string().min(1)).default([]),
+    examples: z.array(JsonValueSchema).default([]),
+    source: z.string().min(1).optional(),
+  })
+  .strict();
+export type HostedParameterVocabularyEntry = z.infer<
+  typeof HostedParameterVocabularyEntrySchema
+>;
+
+export const HostedParameterVocabularyInvalidAliasSchema = z
+  .object({
+    value: z.string().min(1),
+    reason: z.string().min(1),
+    use: z.string().min(1).optional(),
+    source: z.string().min(1).optional(),
+  })
+  .strict();
+export type HostedParameterVocabularyInvalidAlias = z.infer<
+  typeof HostedParameterVocabularyInvalidAliasSchema
+>;
+
+export const HostedParameterVocabularySchema = z
+  .object({
+    kind: z.literal("openacme.hostedParameterVocabulary"),
+    version: z.literal(1),
+    id: z.string().min(1),
+    familyId: HostedIntegrationFamilyIdSchema,
+    parameterPath: z.string().min(1),
+    entries: z.array(HostedParameterVocabularyEntrySchema).default([]),
+    invalidAliases: z
+      .array(HostedParameterVocabularyInvalidAliasSchema)
+      .default([]),
+  })
+  .strict()
+  .superRefine((vocabulary, ctx) => {
+    const values = new Set<string>();
+    for (const [index, entry] of vocabulary.entries.entries()) {
+      const normalized = normalizeVocabularyValue(entry.value);
+      if (values.has(normalized)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["entries", index, "value"],
+          message: `duplicate vocabulary entry ${entry.value}`,
+        });
+      }
+      values.add(normalized);
+    }
+
+    const invalidAliases = new Set<string>();
+    for (const [index, alias] of vocabulary.invalidAliases.entries()) {
+      const normalized = normalizeVocabularyValue(alias.value);
+      if (invalidAliases.has(normalized)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["invalidAliases", index, "value"],
+          message: `duplicate invalid vocabulary alias ${alias.value}`,
+        });
+      }
+      if (values.has(normalized)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["invalidAliases", index, "value"],
+          message: `invalid vocabulary alias ${alias.value} collides with a valid entry`,
+        });
+      }
+      invalidAliases.add(normalized);
+    }
+  });
+export type HostedParameterVocabulary = z.infer<
+  typeof HostedParameterVocabularySchema
 >;
 
 export const HostedIntegrationToolHelpSchema = z
@@ -249,6 +329,18 @@ export type HostedIntegrationToolHelp = z.infer<
   typeof HostedIntegrationToolHelpSchema
 >;
 
+export const HostedToolMcpAnnotationsSchema = z
+  .object({
+    readOnlyHint: z.boolean().optional(),
+    destructiveHint: z.boolean().optional(),
+    idempotentHint: z.boolean().optional(),
+    openWorldHint: z.boolean().optional(),
+  })
+  .strict();
+export type HostedToolMcpAnnotations = z.infer<
+  typeof HostedToolMcpAnnotationsSchema
+>;
+
 export const HostedIntegrationToolSpecSchema = z
   .object({
     name: HostedIntegrationToolNameSchema,
@@ -256,15 +348,130 @@ export const HostedIntegrationToolSpecSchema = z
     description: z.string().min(1),
     lifecycle: HostedIntegrationToolLifecycleSchema,
     inputSchema: JsonObjectSchema,
+    outputSchema: JsonObjectSchema.optional(),
+    mcpAnnotations: HostedToolMcpAnnotationsSchema.optional(),
     classification: HostedIntegrationToolClassificationSchema,
     cache: HostedIntegrationToolCacheSchema.optional(),
     runtime: HostedIntegrationRuntimeSettingsSchema.partial().optional(),
     help: HostedIntegrationToolHelpSchema.optional(),
+    errors: z.array(z.string().min(1)).default([]),
+    pagination: JsonObjectSchema.nullable().optional(),
   })
   .strict();
 export type HostedIntegrationToolSpec = z.infer<
   typeof HostedIntegrationToolSpecSchema
 >;
+
+export const HostedToolMcpSchema = z
+  .object({
+    name: z.string().min(1),
+    title: z.string().min(1),
+    description: z.string().min(1),
+    inputSchema: JsonObjectSchema,
+    outputSchema: JsonObjectSchema,
+    annotations: HostedToolMcpAnnotationsSchema,
+    _meta: JsonObjectSchema.optional(),
+  })
+  .strict();
+export type HostedToolMcp = z.infer<typeof HostedToolMcpSchema>;
+
+export const HostedToolOpenAcmeProviderRefSchema = z
+  .object({
+    path: z.string().min(1),
+    operationId: z.string().min(1).optional(),
+  })
+  .strict();
+export type HostedToolOpenAcmeProviderRef = z.infer<
+  typeof HostedToolOpenAcmeProviderRefSchema
+>;
+
+export const HostedToolOpenAcmeExtensionSchema = z
+  .object({
+    toolName: HostedIntegrationToolNameSchema,
+    function: z.string().regex(/^tool_[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/),
+    lifecycle: HostedIntegrationToolLifecycleSchema,
+    classification: HostedIntegrationToolClassificationSchema,
+    cache: HostedIntegrationToolCacheSchema.optional(),
+    fullHelp: z.string().min(1).optional(),
+    selectWhen: z.array(z.string().min(1)).default([]),
+    doNotSelectWhen: z.array(z.string().min(1)).default([]),
+    prerequisites: z.array(z.string().min(1)).default([]),
+    parameterHelp: z
+      .record(z.string().min(1), HostedIntegrationHelpParameterSchema)
+      .default({}),
+    examples: z.array(JsonValueSchema).default([]),
+    noExampleJustification: z.string().min(1).optional(),
+    errors: z.array(z.string().min(1)).default([]),
+    pagination: JsonObjectSchema.nullable().optional(),
+    providerRef: HostedToolOpenAcmeProviderRefSchema.optional(),
+  })
+  .strict();
+export type HostedToolOpenAcmeExtension = z.infer<
+  typeof HostedToolOpenAcmeExtensionSchema
+>;
+
+export const HostedToolContractToolSchema = z
+  .object({
+    mcp: HostedToolMcpSchema,
+    openacme: HostedToolOpenAcmeExtensionSchema,
+  })
+  .strict();
+export type HostedToolContractTool = z.infer<
+  typeof HostedToolContractToolSchema
+>;
+
+export const HostedToolContractDocumentSchema = z
+  .object({
+    kind: z.literal("openacme.hostedToolFamily"),
+    version: z.literal(1),
+    family: z
+      .object({
+        id: HostedIntegrationFamilyIdSchema,
+      })
+      .strict(),
+    tools: z.array(HostedToolContractToolSchema).min(1),
+  })
+  .strict();
+export type HostedToolContractDocument = z.infer<
+  typeof HostedToolContractDocumentSchema
+>;
+
+export function hostedToolContractToolToSpec(
+  tool: HostedToolContractTool,
+): HostedIntegrationToolSpec {
+  return HostedIntegrationToolSpecSchema.parse({
+    name: tool.openacme.toolName,
+    title: tool.mcp.title,
+    description: tool.mcp.description,
+    lifecycle: tool.openacme.lifecycle,
+    inputSchema: tool.mcp.inputSchema,
+    outputSchema: tool.mcp.outputSchema,
+    mcpAnnotations: tool.mcp.annotations,
+    classification: tool.openacme.classification,
+    cache: tool.openacme.cache,
+    errors: tool.openacme.errors,
+    pagination: tool.openacme.pagination,
+    help: {
+      summary: tool.mcp.description,
+      whenToUse: tool.openacme.selectWhen,
+      whenNotToUse: tool.openacme.doNotSelectWhen,
+      full: tool.openacme.fullHelp,
+      parameters: tool.openacme.parameterHelp,
+      examples: tool.openacme.examples,
+      noExampleJustification: tool.openacme.noExampleJustification,
+    },
+  });
+}
+
+export function hostedToolContractToToolSpecs(
+  contract: HostedToolContractDocument,
+): HostedIntegrationToolSpec[] {
+  return contract.tools.map(hostedToolContractToolToSpec);
+}
+
+function normalizeVocabularyValue(value: string): string {
+  return value.trim().toLowerCase();
+}
 
 export const FamilyManifestSchema = z
   .object({
@@ -274,7 +481,6 @@ export const FamilyManifestSchema = z
     runtime: HostedIntegrationRuntimeSettingsSchema,
     runtimeConfig: HostedIntegrationRuntimeConfigContractSchema.optional(),
     hookJustifications: HostedIntegrationHookJustificationsSchema,
-    tools: z.array(HostedIntegrationToolSpecSchema).min(1),
   })
   .strict();
 export type FamilyManifest = z.infer<typeof FamilyManifestSchema>;
@@ -332,7 +538,7 @@ export const HostedIntegrationGenerationSchema = z
     promotedBy: z.string().min(1),
     runtime: HostedIntegrationRuntimeSettingsSchema.optional(),
     runtimeConfig: HostedIntegrationRuntimeConfigContractSchema.optional(),
-    tools: z.array(HostedIntegrationToolSpecSchema).optional(),
+    tools: z.array(HostedIntegrationToolSpecSchema),
     dependencyResolution:
       HostedIntegrationDependencyResolutionSchema.optional(),
     provenance: z
@@ -451,6 +657,7 @@ export const HostedIntegrationExampleCategorySchema = z.enum([
   "live_safe",
   "regression",
   "mock_only",
+  "discovery_required",
   "destructive_requires_human",
 ]);
 export type HostedIntegrationExampleCategory = z.infer<
@@ -466,10 +673,49 @@ export const HostedIntegrationExampleSchema = z
     args: JsonObjectSchema,
     expected: JsonValueSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.category !== "discovery_required") return;
+    if (!isJsonRecord(value.expected)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["expected"],
+        message:
+          "discovery_required examples require expected.discovery_tool and a requires_discovered_* condition",
+      });
+      return;
+    }
+    if (
+      typeof value.expected.discovery_tool !== "string" ||
+      value.expected.discovery_tool.trim().length === 0
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["expected", "discovery_tool"],
+        message: "discovery_required examples require expected.discovery_tool",
+      });
+    }
+    const hasDiscoveryCondition = Object.keys(value.expected).some((key) =>
+      key.startsWith("requires_discovered_"),
+    );
+    if (!hasDiscoveryCondition) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["expected"],
+        message:
+          "discovery_required examples require a requires_discovered_* condition",
+      });
+    }
+  });
 export type HostedIntegrationExample = z.infer<
   typeof HostedIntegrationExampleSchema
 >;
+
+function isJsonRecord(value: JsonValue | undefined): value is {
+  [key: string]: JsonValue;
+} {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
 
 export const HostedIntegrationRunStatusSchema = z.enum([
   "running",

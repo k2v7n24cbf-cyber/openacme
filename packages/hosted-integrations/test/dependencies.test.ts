@@ -12,6 +12,10 @@ import {
   createFileHostedIntegrationGenerationStore,
   createFileHostedIntegrationLockStore,
 } from "../src/index.js";
+import {
+  splitLegacyFamilyFixture,
+  withSplitToolContractFiles,
+} from "./test-support/split-contract-fixtures.js";
 
 let dataDir: string;
 let nowMs = Date.parse("2026-08-12T10:00:00.000Z");
@@ -31,7 +35,9 @@ afterEach(async () => {
 
 describe("hosted integration Python dependency policy", () => {
   it("defaults families with no dependencies to an empty dependency set", () => {
-    const manifest = FamilyManifestSchema.parse(parseYaml(familyYaml()));
+    const manifest = FamilyManifestSchema.parse(
+      parseYaml(splitLegacyFamilyFixture(familyYaml()).familyYaml),
+    );
 
     expect(manifest.runtime.dependencies).toEqual([]);
   });
@@ -95,16 +101,26 @@ describe("hosted integration Python dependency policy", () => {
     const first = await store.promoteDraft(validPromotion(draftId));
     if (!first.ok) throw new Error(first.reason);
 
+    const split = splitLegacyFamilyFixture(
+      familyYaml({
+        dependencies: [{ name: "requests", version: "2.32.4" }],
+        allowedPackages: ["httpx", "requests"],
+      }),
+    );
     const write = await draftStore.writeDraftFile({
       draftId,
       lockId: "lock_1",
       path: "family.yaml",
-      content: familyYaml({
-        dependencies: [{ name: "requests", version: "2.32.4" }],
-        allowedPackages: ["httpx", "requests"],
-      }),
+      content: split.familyYaml,
     });
     if (!write.ok) throw new Error(write.reason);
+    const toolsWrite = await draftStore.writeDraftFile({
+      draftId,
+      lockId: "lock_1",
+      path: "tools.yaml",
+      content: split.toolsYaml,
+    });
+    if (!toolsWrite.ok) throw new Error(toolsWrite.reason);
     nowMs += 60_000;
     const second = await store.promoteDraft(validPromotion(draftId));
     if (!second.ok) throw new Error(second.reason);
@@ -117,7 +133,9 @@ describe("hosted integration Python dependency policy", () => {
   it("rejects dependency installation during runtime invocation", () => {
     expect(
       HostedIntegrationRuntimeSettingsSchema.safeParse({
-        ...FamilyManifestSchema.parse(parseYaml(familyYaml())).runtime,
+        ...FamilyManifestSchema.parse(
+          parseYaml(splitLegacyFamilyFixture(familyYaml()).familyYaml),
+        ).runtime,
         dependencyPolicy: {
           installDuringInvocation: true,
           allowedPackages: ["httpx"],
@@ -156,14 +174,14 @@ async function createDraftWithManifest(manifest: string) {
     familyId: "qualys",
     lockId: "lock_1",
     sourceRevisionId: "source_rev_1",
-    files: {
+    files: withSplitToolContractFiles({
       "family.yaml": manifest,
       "qualys.py": [
         "def tool_qualys_count_assets(args, context):",
         "    return {}",
         "",
       ].join("\n"),
-    },
+    }),
   });
   if (!created.ok) throw new Error(created.reason);
   return {
@@ -233,6 +251,9 @@ tools:
       idempotency: idempotent
       execution: sync
       approval: none
+    errors:
+      - bad_arguments means the dependency fixture input is unsupported; fix the request before retrying.
+      - tool_bug means the fixture implementation failed and should be repaired by the Tool Developer Agent.
     help:
       summary: Count Qualys assets.
       examples:

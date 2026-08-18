@@ -66,6 +66,10 @@ export interface ToolEntry {
   description: string;
   /** Zod schema for parameters */
   parameters: z.ZodType;
+  /** Optional JSON Schema for structured tool results. */
+  outputSchema?: Record<string, unknown>;
+  /** MCP tool annotations for safety and selection hints. */
+  annotations?: Record<string, unknown>;
   /** Handler function — takes parsed args, returns result string */
   handler: (args: Record<string, unknown>) => Promise<string>;
   /** Optional domain-specific classifier for observability-only tool
@@ -130,6 +134,8 @@ export interface ToolInfo {
   name: string;
   description: string;
   toolset: string;
+  outputSchema?: Record<string, unknown>;
+  annotations?: Record<string, unknown>;
   emoji?: string;
   source?: ToolSource;
   /** Always-on tool merged into every agent regardless of config; the agent

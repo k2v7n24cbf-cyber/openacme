@@ -18,20 +18,26 @@ import {
 import { resolveHostedIntegrationPythonDependencies } from "./dependencies.js";
 import {
   isNodeError,
+  listFilesUnderRoot,
+  readTextFileUnderRoot,
   resolveInsideRoot,
   safePathSegment,
 } from "./file-access.js";
 import {
+  HOSTED_INTEGRATION_MANIFEST_FILE,
+  HOSTED_TOOL_CONTRACT_FILE,
+} from "./catalog.js";
+import {
   FamilyManifestSchema,
   HostedIntegrationFamilyIdSchema,
   HostedIntegrationGenerationSchema,
+  HostedToolContractDocumentSchema,
+  hostedToolContractToToolSpecs,
   type HostedIntegrationFamilyId,
   type HostedIntegrationGeneration,
   type HostedIntegrationHumanApprovalRecord,
 } from "./schemas.js";
 import type { HostedIntegrationValidationResult } from "./validation.js";
-
-const MANIFEST_FILE = "family.yaml";
 
 const ActiveGenerationPointerSchema = z
   .object({
@@ -122,6 +128,10 @@ export interface CompleteHostedIntegrationInvocationRequest {
   leaseId: string;
 }
 
+export type ReadHostedIntegrationGenerationFilesResult =
+  | { ok: true; files: Record<string, string> }
+  | { ok: false; reason: "generation_not_found" };
+
 export interface ListHostedIntegrationGenerationsRequest {
   familyId?: HostedIntegrationFamilyId | string;
 }
@@ -136,6 +146,9 @@ export interface HostedIntegrationGenerationStore {
   getGeneration(
     generationId: string,
   ): Promise<HostedIntegrationGeneration | null>;
+  readGenerationFiles(
+    generationId: string,
+  ): Promise<ReadHostedIntegrationGenerationFilesResult>;
   getActiveGeneration(
     familyId: HostedIntegrationFamilyId | string,
   ): Promise<HostedIntegrationGeneration | null>;
@@ -246,9 +259,18 @@ class FileHostedIntegrationGenerationStore implements HostedIntegrationGeneratio
       }
 
       const manifest = await readManifestFromDraft(this.draftStore, draft.id);
-      const dependencyResolution = manifest
-        ? resolveHostedIntegrationPythonDependencies(manifest.runtime)
-        : null;
+      const toolContract = await readToolContractFromDraft(
+        this.draftStore,
+        draft.id,
+      );
+      if (!manifest || !toolContract) {
+        await rm(tmpRoot, { recursive: true, force: true });
+        return { ok: false, reason: "invalid_validation" };
+      }
+      const tools = hostedToolContractToToolSpecs(toolContract);
+      const dependencyResolution = resolveHostedIntegrationPythonDependencies(
+        manifest.runtime,
+      );
       if (dependencyResolution && !dependencyResolution.ok) {
         await rm(tmpRoot, { recursive: true, force: true });
         return { ok: false, reason: "invalid_validation" };
@@ -263,7 +285,7 @@ class FileHostedIntegrationGenerationStore implements HostedIntegrationGeneratio
         promotedBy: request.promotedBy,
         runtime: manifest?.runtime,
         runtimeConfig: manifest?.runtimeConfig,
-        tools: manifest?.tools,
+        tools,
         dependencyResolution: dependencyResolution?.dependencyResolution,
         provenance: buildHostedIntegrationGenerationProvenance({
           draftId: draft.id,
@@ -301,7 +323,7 @@ class FileHostedIntegrationGenerationStore implements HostedIntegrationGeneratio
         familyId: generation.familyId,
         generationId: generation.id,
         reason: "promote",
-        toolNames: manifest?.tools.map((tool) => tool.name) ?? [],
+        toolNames: tools.map((tool) => tool.name),
       });
       return { ok: true, generation };
     } catch (error) {
@@ -363,6 +385,31 @@ class FileHostedIntegrationGenerationStore implements HostedIntegrationGeneratio
       return status ? { ...generation, status: status.status } : generation;
     } catch (error) {
       if (isNodeError(error) && error.code === "ENOENT") return null;
+      throw error;
+    }
+  }
+
+  async readGenerationFiles(
+    generationId: string,
+  ): Promise<ReadHostedIntegrationGenerationFilesResult> {
+    const generation = await this.getGeneration(generationId);
+    if (!generation) return { ok: false, reason: "generation_not_found" };
+    const filesRoot = path.join(this.generationRoot(generation.id), "files");
+    try {
+      const entries = await listFilesUnderRoot(filesRoot);
+      const files: Record<string, string> = {};
+      for (const entry of entries) {
+        files[entry.path] = await readTextFileUnderRoot(
+          filesRoot,
+          entry.path,
+          "generation files root",
+        );
+      }
+      return { ok: true, files };
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") {
+        return { ok: false, reason: "generation_not_found" };
+      }
       throw error;
     }
   }
@@ -561,12 +608,14 @@ class FileHostedIntegrationGenerationStore implements HostedIntegrationGeneratio
     const manifestFile = await readFile(
       resolveInsideRoot(
         path.join(this.generationRoot(generationId), "files"),
-        MANIFEST_FILE,
+        HOSTED_TOOL_CONTRACT_FILE,
         "generation files root",
       ),
       "utf-8",
     );
-    return FamilyManifestSchema.parse(parseYaml(manifestFile)).tools.map(
+    return hostedToolContractToToolSpecs(
+      HostedToolContractDocumentSchema.parse(parseYaml(manifestFile)),
+    ).map(
       (tool) => tool.name,
     );
   }
@@ -603,8 +652,20 @@ async function readManifestFromDraft(
 ) {
   const manifestFile = await draftStore.readDraftFile({
     draftId,
-    path: MANIFEST_FILE,
+    path: HOSTED_INTEGRATION_MANIFEST_FILE,
   });
   if (!manifestFile.ok) return null;
   return FamilyManifestSchema.parse(parseYaml(manifestFile.content));
+}
+
+async function readToolContractFromDraft(
+  draftStore: HostedIntegrationDraftStore,
+  draftId: string,
+) {
+  const toolContractFile = await draftStore.readDraftFile({
+    draftId,
+    path: HOSTED_TOOL_CONTRACT_FILE,
+  });
+  if (!toolContractFile.ok) return null;
+  return HostedToolContractDocumentSchema.parse(parseYaml(toolContractFile.content));
 }

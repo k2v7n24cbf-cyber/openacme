@@ -17,11 +17,13 @@ import {
   FamilyManifestSchema,
   HostedIntegrationFamilyIdSchema,
   HostedIntegrationToolNameSchema,
+  HostedToolContractDocumentSchema,
   type HostedIntegrationDraft,
   type HostedIntegrationFamilyId,
   type HostedIntegrationFamilyLock,
   type HostedIntegrationToolName,
 } from "./schemas.js";
+import { buildHostedToolName } from "./naming.js";
 import { isNodeError, safePathSegment } from "./file-access.js";
 
 const PROPOSED_SOURCE_REVISION_ID = "proposed_initial";
@@ -45,6 +47,17 @@ export interface CreateHostedIntegrationProposedFamilyRequest {
   ttlMs: number;
 }
 
+export interface CreateHostedIntegrationProposedFamilyFromFilesRequest {
+  familyId: HostedIntegrationFamilyId | string;
+  name: string;
+  version: number;
+  toolNames: Array<HostedIntegrationToolName | string>;
+  files: Record<string, string>;
+  lockedBy: string;
+  ttlMs: number;
+  sourceRevisionId?: string;
+}
+
 export type CreateHostedIntegrationProposedFamilyResult =
   | {
       ok: true;
@@ -62,6 +75,9 @@ export interface HostedIntegrationProposedFamilyManager {
   ): Promise<HostedIntegrationProposedFamilySummary | null>;
   createProposedFamily(
     request: CreateHostedIntegrationProposedFamilyRequest,
+  ): Promise<CreateHostedIntegrationProposedFamilyResult>;
+  createProposedFamilyFromFiles(
+    request: CreateHostedIntegrationProposedFamilyFromFilesRequest,
   ): Promise<CreateHostedIntegrationProposedFamilyResult>;
 }
 
@@ -229,6 +245,70 @@ class FileHostedIntegrationProposedFamilyManager
     };
   }
 
+  async createProposedFamilyFromFiles(
+    request: CreateHostedIntegrationProposedFamilyFromFilesRequest,
+  ): Promise<CreateHostedIntegrationProposedFamilyResult> {
+    const familyId = HostedIntegrationFamilyIdSchema.parse(request.familyId);
+    assertNonEmpty("name", request.name);
+    assertNonEmpty("lockedBy", request.lockedBy);
+    assertPositiveTtl(request.ttlMs);
+    const toolNames = request.toolNames.map((toolName) =>
+      HostedIntegrationToolNameSchema.parse(toolName),
+    );
+    if (toolNames.length === 0) {
+      throw new Error("toolNames must contain at least one tool");
+    }
+    const sourceRevisionId =
+      request.sourceRevisionId ?? PROPOSED_SOURCE_REVISION_ID;
+
+    if (
+      (await this.catalog.getFamily(familyId)) ||
+      (await this.getProposedFamily(familyId))
+    ) {
+      return { ok: false, reason: "duplicate_family" };
+    }
+
+    const lockResult = await this.lockStore.acquireLock({
+      familyId,
+      lockedBy: request.lockedBy,
+      ttlMs: request.ttlMs,
+    });
+    if (!lockResult.ok) return { ok: false, reason: "lock_required" };
+
+    const draftResult = await this.draftStore.createDraftFromFiles({
+      familyId,
+      lockId: lockResult.lock.id,
+      sourceRevisionId,
+      files: request.files,
+    });
+    if (!draftResult.ok) {
+      await this.lockStore.releaseLock({
+        lockId: lockResult.lock.id,
+        lockedBy: request.lockedBy,
+      });
+      return { ok: false, reason: "lock_required" };
+    }
+
+    const family: HostedIntegrationProposedFamilySummary = {
+      id: familyId,
+      name: request.name,
+      version: request.version,
+      toolNames,
+      status: "proposed",
+      draftId: draftResult.draft.id,
+      lockId: lockResult.lock.id,
+      sourceRevisionId,
+    };
+    await this.writeProposedFamily(family);
+    return {
+      ok: true,
+      family,
+      lock: lockResult.lock,
+      draft: draftResult.draft,
+      sourceRevisionId,
+    };
+  }
+
   private async writeProposedFamily(
     family: HostedIntegrationProposedFamilySummary,
   ): Promise<void> {
@@ -282,27 +362,63 @@ function proposedFamilyFiles(input: {
       after_tool_call:
         "Initial proposed tool has no shared response normalization yet.",
     },
+  });
+  const toolContract = HostedToolContractDocumentSchema.parse({
+    kind: "openacme.hostedToolFamily",
+    version: 1,
+    family: { id: input.familyId },
     tools: [
       {
-        name: input.toolName,
-        title: input.name,
-        description: `Initial proposed ${input.name} hosted integration tool.`,
-        inputSchema: {
-          type: "object",
-          properties: {},
-          additionalProperties: false,
+        mcp: {
+          name: buildHostedToolName({
+            familyId: input.familyId,
+            toolName: input.toolName,
+          }),
+          title: input.name,
+          description: `Initial proposed ${input.name} hosted integration tool.`,
+          inputSchema: {
+            type: "object",
+            properties: {},
+            additionalProperties: false,
+          },
+          outputSchema: {
+            type: "object",
+            additionalProperties: true,
+          },
+          annotations: {
+            readOnlyHint: true,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+          },
         },
-        classification: {
-          operation: "read",
-          freshness: "live",
-          idempotency: "idempotent",
-          execution: "sync",
-          approval: "none",
-        },
-        help: {
-          summary: `Initial read-only ${input.name} hosted integration tool.`,
+        openacme: {
+          toolName: input.toolName,
+          function: `tool_${input.toolName}`,
+          lifecycle: "active",
+          classification: {
+            operation: "read",
+            freshness: "live",
+            idempotency: "idempotent",
+            execution: "sync",
+            approval: "none",
+          },
+          selectWhen: [
+            `Use for the initial ${input.name} hosted integration smoke behavior.`,
+          ],
+          doNotSelectWhen: [
+            "Do not use for provider-specific production behavior before implementation evidence exists.",
+          ],
+          prerequisites: [],
+          parameterHelp: {},
+          examples: [],
           noExampleJustification:
             "Initial proposed tool has no stable request example until implementation is completed.",
+          errors: [
+            "bad_arguments means the initial proposed tool input is unsupported; fix the request before retrying.",
+            "tool_bug means the proposed implementation is incomplete and should be repaired before promotion.",
+            "EVIDENCE_REQUIRED means provider behavior is not yet sourced; stop and gather official or imported evidence before implementing production behavior.",
+          ],
         },
       },
     ],
@@ -310,6 +426,7 @@ function proposedFamilyFiles(input: {
 
   return {
     "family.yaml": stringifyYaml(manifest),
+    "tools.yaml": stringifyYaml(toolContract),
     [`${input.familyId}.py`]: [
       `def tool_${input.toolName}(args, context):`,
       `    return {"ok": True, "tool": "${input.toolName}", "args": args}`,

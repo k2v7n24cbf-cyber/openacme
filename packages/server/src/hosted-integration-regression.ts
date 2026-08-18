@@ -6,7 +6,9 @@ import {
   FamilyManifestSchema,
   HostedIntegrationExampleSchema,
   HostedIntegrationPythonRuntime,
+  HostedToolContractDocumentSchema,
   JsonObjectSchema,
+  hostedToolContractToToolSpecs,
   resolveHostedIntegrationExecutionConfig,
   type HostedIntegrationFailureBucket,
   type HostedIntegrationService,
@@ -84,6 +86,11 @@ export async function validateHostedIntegrationRegressionClose(input: {
   const manifest = FamilyManifestSchema.parse(
     parseYaml(await readFile(path.join(filesRoot, "family.yaml"), "utf-8")),
   );
+  const tools = hostedToolContractToToolSpecs(
+    HostedToolContractDocumentSchema.parse(
+      parseYaml(await readFile(path.join(filesRoot, "tools.yaml"), "utf-8")),
+    ),
+  );
   const generationExamplesContent = await readOptionalTextFile(
     path.join(filesRoot, "examples.yaml"),
   );
@@ -102,7 +109,7 @@ export async function validateHostedIntegrationRegressionClose(input: {
   );
   if (!example) return { ok: false, code: "regression_example_not_found" };
 
-  const tool = manifest.tools.find(
+  const tool = tools.find(
     (candidate) => candidate.name === example.toolName,
   );
   if (!tool) return { ok: false, code: "tool_not_found" };

@@ -113,6 +113,7 @@ export interface BuildHostedIntegrationFocusedSourceViewInput {
   familyId: HostedIntegrationFamilyId | string;
   generationId: string;
   manifest: FamilyManifest;
+  tools: HostedIntegrationToolSpec[];
   entrypointPath: string;
   source: string;
   toolName: HostedIntegrationToolName | string;
@@ -233,7 +234,7 @@ export async function buildHostedIntegrationFocusedSourceView(
 ): Promise<HostedIntegrationFocusedSourceView> {
   const familyId = HostedIntegrationFamilyIdSchema.parse(input.familyId);
   const toolName = HostedIntegrationToolNameSchema.parse(input.toolName);
-  const tool = input.manifest.tools.find(
+  const tool = input.tools.find(
     (candidate) => candidate.name === toolName,
   );
   if (!tool || tool.lifecycle === "removed") {
@@ -253,7 +254,11 @@ export async function buildHostedIntegrationFocusedSourceView(
         fullSource: input.source,
         hooks: [],
         helpers: [],
-        collapsedToolHandlers: [],
+        collapsedToolHandlers: collapsedToolHandlers({
+          tools: input.tools,
+          selectedToolName: toolName,
+          functionByName: new Map(),
+        }),
       },
       diagnostics: [],
       limits: {
@@ -349,7 +354,7 @@ export async function buildHostedIntegrationFocusedSourceView(
       hooks,
       helpers,
       collapsedToolHandlers: collapsedToolHandlers({
-        manifest: input.manifest,
+        tools: input.tools,
         selectedToolName: toolName,
         functionByName,
       }),
@@ -569,11 +574,11 @@ function enforceSourceLimit(args: {
 }
 
 function collapsedToolHandlers(args: {
-  manifest: FamilyManifest;
+  tools: HostedIntegrationToolSpec[];
   selectedToolName: HostedIntegrationToolName;
   functionByName: Map<string, PythonFunctionAnalysis>;
 }): HostedIntegrationCollapsedToolHandler[] {
-  return args.manifest.tools
+  return args.tools
     .filter(
       (tool) =>
         tool.lifecycle !== "removed" && tool.name !== args.selectedToolName,

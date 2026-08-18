@@ -12,7 +12,7 @@ import {
 import {
   FIRST_LEGACY_INTEGRATION_HUB_REPLACEMENT_FAMILY,
   LEGACY_INTEGRATION_HUB_DEFENDER_ALERT_SOURCE_BACKED_FAMILY,
-  LEGACY_INTEGRATION_HUB_FIVE_READONLY_SOURCE_BACKED_FAMILY,
+  LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_SOURCE_BACKED_FAMILY,
   LEGACY_INTEGRATION_HUB_MDE_SOURCE_BACKED_FAMILY,
   LEGACY_INTEGRATION_HUB_MSGRAPH_SOURCE_BACKED_FAMILY,
   LEGACY_INTEGRATION_HUB_REPLACEMENT_SECURITY_FAMILIES,
@@ -212,7 +212,7 @@ export async function runHostedIntegrationLiveParity(
 
 export function defaultQualysLiveParityCases(): LiveParityToolCase[] {
   return liveParityCasesFromFixture(
-    LEGACY_INTEGRATION_HUB_FIVE_READONLY_SOURCE_BACKED_FAMILY,
+    LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_SOURCE_BACKED_FAMILY,
   ).map((testCase) => ({
     ...testCase,
     ...qualysLegacyArgumentOverrides(testCase.toolName, testCase.args),
@@ -771,7 +771,7 @@ function parityFixtureForFamily(
   familyId: string,
 ): LegacyIntegrationHubReplacementFamilyFixture {
   if (familyId === "qualys") {
-    return LEGACY_INTEGRATION_HUB_FIVE_READONLY_SOURCE_BACKED_FAMILY;
+    return LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_SOURCE_BACKED_FAMILY;
   }
   const fixture = LEGACY_INTEGRATION_HUB_REPLACEMENT_SECURITY_FAMILIES.find(
     (candidate) => candidate.familyId === familyId,

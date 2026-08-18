@@ -32,7 +32,7 @@
   ],
   "scripts": {
     "build": "tsc --build",
-    "check-types": "tsc --noEmit",
+    "check-types": "tsc --noEmit && pnpm run check-types:operator",
     "check-types:operator": "tsc --noEmit -p tsconfig.operator.json",
     "dev": "node scripts/dev.mjs",
     "start": "node dist/index.js",
@@ -41,7 +41,9 @@
     "test:e2e:langfuse": "vitest run --config vitest.langfuse-e2e.config.ts",
     "dogfood:hosted-tools:live": "tsx scripts/hosted-tools-live-acceptance.ts",
     "dogfood:hosted-tools:live:gate": "tsx scripts/hosted-tools-live-acceptance.ts",
+    "dogfood:hosted-tools:live:unguided-consumer": "OPENACME_LIVE_HOSTED_TOOLS_UNGUIDED_CONSUMER=1 OPENACME_LIVE_HOSTED_TOOLS_ONLY_UNGUIDED_CONSUMER=1 tsx scripts/hosted-tools-live-acceptance.ts",
     "dogfood:hosted-tools:live:unguided-management": "tsx scripts/hosted-tools-unguided-management.ts",
+    "dogfood:hosted-tools:accepted-artifacts:audit": "tsx scripts/hosted-tools-accepted-artifacts-audit.ts",
     "dogfood:hosted-integrations:real-llm": "tsx scripts/hosted-integrations-real-llm-dogfood.ts",
     "integration-hub:parity": "tsx scripts/integration-hub-parity.ts",
     "prepack": "rm -rf web && cp -r ../../apps/web/out web"

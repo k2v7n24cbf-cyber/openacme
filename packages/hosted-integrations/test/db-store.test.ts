@@ -1,5 +1,5 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -20,10 +20,18 @@ import {
   createDbHostedIntegrationSecretStore,
   createDbHostedIntegrationService,
   FamilyManifestSchema,
+  HostedToolContractDocumentSchema,
+  hostedToolContractToToolSpecs,
   createDbHostedIntegrationSourceFileStore,
   type HostedIntegrationExecutionLogEntry,
   type HostedIntegrationCatalog,
 } from "../src/index.js";
+import {
+  splitLegacyFamilyFixture,
+  withSplitToolContractFiles,
+  writeSplitFamilyFixture,
+} from "./test-support/split-contract-fixtures.js";
+import { parse as parseYaml } from "yaml";
 
 let dataDir: string;
 let db: ReturnType<typeof createDatabase>;
@@ -113,20 +121,31 @@ describe("DB-backed hosted integration stores", () => {
       source.replaceSourceFiles({
         familyId: "qualys",
         updatedBy: "agent:tool-developer",
-        files: {
+        files: withSplitToolContractFiles({
           "family.yaml": familyYaml("qualys"),
           "qualys.py": "def tool_qualys_tool(args, context):\n    return {}\n",
-        },
+        }),
       }),
     ).resolves.toEqual({ ok: true, sourceRevisionId: "source_rev_1" });
     await expect(source.listSourceFiles("qualys")).resolves.toEqual({
       ok: true,
       files: [
-        { path: "family.yaml", size: Buffer.byteLength(familyYaml("qualys")) },
+        {
+          path: "family.yaml",
+          size: Buffer.byteLength(
+            splitLegacyFamilyFixture(familyYaml("qualys")).familyYaml,
+          ),
+        },
         {
           path: "qualys.py",
           size: Buffer.byteLength(
             "def tool_qualys_tool(args, context):\n    return {}\n",
+          ),
+        },
+        {
+          path: "tools.yaml",
+          size: Buffer.byteLength(
+            splitLegacyFamilyFixture(familyYaml("qualys")).toolsYaml,
           ),
         },
       ],
@@ -177,7 +196,9 @@ describe("DB-backed hosted integration stores", () => {
         familyId: "qualys",
         updatedBy: "agent:tool-developer",
         files: {
-          "family.yaml": familyYaml("qualys"),
+          ...withSplitToolContractFiles({
+            "family.yaml": familyYaml("qualys"),
+          }),
           "qualys.py": "def tool_qualys_tool(args, context):\n    return {}\n",
         },
       }),
@@ -234,7 +255,9 @@ describe("DB-backed hosted integration stores", () => {
         familyId: "qualys",
         updatedBy: "agent:tool-developer",
         files: {
-          "family.yaml": familyYaml("qualys"),
+          ...withSplitToolContractFiles({
+            "family.yaml": familyYaml("qualys"),
+          }),
           "qualys.py": "def tool_qualys_tool(args, context):\n    return {}\n",
         },
       }),
@@ -293,7 +316,7 @@ describe("DB-backed hosted integration stores", () => {
     expect(tableCount("hosted_integration_environment_configs")).toBe(0);
     expect(tableCount("hosted_integration_secret_metadata")).toBe(0);
     expect(tableCount("hosted_integration_generations")).toBe(1);
-    expect(tableCount("hosted_integration_generation_files")).toBe(2);
+    expect(tableCount("hosted_integration_generation_files")).toBe(3);
     expect(tableCount("hosted_integration_active_generations")).toBe(0);
     expect(tableCount("hosted_integration_disablements")).toBe(0);
     expect(tableCount("hosted_integration_execution_logs")).toBe(1);
@@ -378,6 +401,33 @@ describe("DB-backed hosted integration stores", () => {
         path.join(dataDir, "hosted-integrations", "generations", "gen_2"),
       ),
     ).toBe(true);
+  });
+
+  it("refuses DB-backed promotion when tools.yaml is missing even if stale validation says ok", async () => {
+    ids = ["lock_1", "draft_1"];
+    const locks = lockStore();
+    const drafts = draftStore(locks);
+    const generations = generationStore(drafts);
+    await acquireLock(locks);
+    const draft = await drafts.createDraftFromFiles({
+      familyId: "qualys",
+      lockId: "lock_1",
+      sourceRevisionId: "source_rev_1",
+      files: {
+        "family.yaml": cleanFamilyYaml("qualys"),
+        "qualys.py": "def tool_qualys_tool(args, context):\n    return {}\n",
+      },
+    });
+    expect(draft).toMatchObject({ ok: true, draft: { id: "draft_1" } });
+
+    await expect(
+      generations.promoteDraft({
+        draftId: "draft_1",
+        promotedBy: "agent:tool-developer",
+        validation: { ok: true, diagnostics: [] },
+        sourceRevisionId: "source_rev_1",
+      }),
+    ).resolves.toEqual({ ok: false, reason: "invalid_validation" });
   });
 
   it("persists execution logs with finish metadata", async () => {
@@ -900,10 +950,10 @@ async function createDraftFromFiles(
     familyId: "qualys",
     lockId: "lock_1",
     sourceRevisionId: "source_rev_1",
-    files: {
+    files: withSplitToolContractFiles({
       "family.yaml": familyYaml("qualys"),
       "qualys.py": "def tool_qualys_tool(args, context):\n    return {}\n",
-    },
+    }),
   });
   expect(result).toMatchObject({ ok: true, draft: { id: expectedDraftId } });
 }
@@ -962,26 +1012,11 @@ function catalogWithFamily(familyId: string): HostedIntegrationCatalog {
         allowedPackages: [],
       },
     },
-    tools: [
-      {
-        name: `${familyId}_tool`,
-        title: `${familyId} tool`,
-        description: `${familyId} tool.`,
-        inputSchema: {
-          type: "object",
-          properties: {},
-          additionalProperties: false,
-        },
-        classification: {
-          operation: "read",
-          freshness: "live",
-          idempotency: "idempotent",
-          execution: "sync",
-          approval: "none",
-        },
-      },
-    ],
   });
+  const toolContract = HostedToolContractDocumentSchema.parse(
+    parseYaml(splitLegacyFamilyFixture(familyYaml(familyId)).toolsYaml),
+  );
+  const tools = hostedToolContractToToolSpecs(toolContract);
   return {
     async listFamilies() {
       return [
@@ -989,7 +1024,7 @@ function catalogWithFamily(familyId: string): HostedIntegrationCatalog {
           id: manifest.id,
           name: manifest.name,
           version: manifest.version,
-          toolNames: manifest.tools.map((tool) => tool.name),
+          toolNames: tools.map((tool) => tool.name),
           status: "active" as const,
         },
       ];
@@ -1001,10 +1036,12 @@ function catalogWithFamily(familyId: string): HostedIntegrationCatalog {
           id: manifest.id,
           name: manifest.name,
           version: manifest.version,
-          toolNames: manifest.tools.map((tool) => tool.name),
+          toolNames: tools.map((tool) => tool.name),
           status: "active" as const,
         },
         manifest,
+        toolContract,
+        tools,
       };
     },
     async getDiagnostics() {
@@ -1021,8 +1058,7 @@ async function writeCatalogFamily(familyId: string): Promise<void> {
     "families",
     familyId,
   );
-  await mkdir(familyDir, { recursive: true });
-  await writeFile(path.join(familyDir, "family.yaml"), familyYaml(familyId));
+  await writeSplitFamilyFixture(familyDir, familyYaml(familyId));
 }
 
 function familyYaml(familyId: string): string {
@@ -1056,5 +1092,26 @@ tools:
       idempotency: idempotent
       execution: sync
       approval: none
+`;
+}
+
+function cleanFamilyYaml(familyId: string): string {
+  return `
+id: ${familyId}
+name: ${familyId}
+version: 1
+runtime:
+  language: python
+  entrypoint: ${familyId}.py
+  defaultTimeoutMs: 30000
+  inlineResultTokenLimit: 8000
+  maxConcurrency: 1
+  runtimePolicy:
+    filesystem: run_dir_only
+    processEnv: tool_context_only
+    subprocess: denied
+    network: denied
+  dependencyPolicy:
+    installDuringInvocation: false
 `;
 }

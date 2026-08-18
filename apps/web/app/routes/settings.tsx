@@ -25,6 +25,9 @@ import {
   Plug,
   ChevronDown,
   ChevronRight,
+  Upload,
+  Download,
+  Copy,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -54,6 +57,8 @@ import {
   hostedIntegrationEditorSectionAccessibleLabel,
   buildHostedIntegrationEditorModel,
   buildHostedIntegrationExampleActionState,
+  buildHostedIntegrationPackageActionState,
+  buildHostedIntegrationPackagePreviewState,
   hostedIntegrationExampleActionAccessibleLabels,
   hostedIntegrationExampleEmptyStateText,
   hostedIntegrationExamplePayloadAccessibleLabel,
@@ -73,6 +78,7 @@ import {
   hostedIntegrationFailureBucketAccessibleLabel,
   hostedIntegrationFailureBucketHitLabel,
   hostedIntegrationLogScopeAccessibleLabel,
+  hostedIntegrationPackageActionAccessibleLabels,
   hostedIntegrationPublishAccessibleLabels,
   hostedIntegrationRefreshLogsAccessibleLabel,
   hostedIntegrationSecretActionAccessibleLabel,
@@ -193,6 +199,27 @@ interface HostedIntegrationExample {
   category: string;
   args: Record<string, unknown>;
   expected?: unknown;
+}
+
+interface HostedFamilyPackageDocument {
+  kind: string;
+  version: number;
+  metadata?: Record<string, unknown>;
+  files: Array<{ path: string; content: string }>;
+}
+
+type HostedPackageImportMode = "create" | "update";
+
+type HostedPackageExportSourceType =
+  | "active_generation"
+  | "draft"
+  | "current_source";
+
+interface HostedPackageValidationResult {
+  ok: boolean;
+  diagnostics: unknown[];
+  digest?: string;
+  files?: string[];
 }
 
 export type HostedEditorSection =
@@ -2737,6 +2764,15 @@ function HostedIntegrationDraftEditor({
     name: string;
     content: unknown;
   } | null>(null);
+  const [packagePanelOpen, setPackagePanelOpen] = useState(false);
+  const [packageImportMode, setPackageImportMode] =
+    useState<HostedPackageImportMode>("update");
+  const [packageImportJson, setPackageImportJson] = useState("");
+  const [packageExportJson, setPackageExportJson] = useState("");
+  const [packageOperationResult, setPackageOperationResult] =
+    useState<unknown>(null);
+  const [packageValidationResult, setPackageValidationResult] =
+    useState<HostedPackageValidationResult | null>(null);
   const [fileMode, setFileMode] = useState<"published" | "draft">("published");
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -2765,6 +2801,18 @@ function HostedIntegrationDraftEditor({
   const hasToolHelpExamples = helpDraft.examples.length > 0;
   const selectedDebugEnvironmentConfig = row.environmentConfigs.find(
     (scope) => scope.id === debugEnvironmentConfigId,
+  );
+  const packagePreview = useMemo(
+    () =>
+      buildHostedIntegrationPackagePreviewState({
+        packageJson: packageImportJson,
+        mode: packageImportMode,
+        currentFilePaths:
+          packageImportMode === "update"
+            ? (draft ? draftFiles : sourceFiles).map((file) => file.path)
+            : [],
+      }),
+    [packageImportJson, packageImportMode, draft, draftFiles, sourceFiles],
   );
   const debugRequiresEnvironmentConfig =
     hostedIntegrationRequiresEnvironmentConfig(row);
@@ -2850,6 +2898,12 @@ function HostedIntegrationDraftEditor({
     setExpandedRunId("");
     setExpandedFailureBucketId("");
     setArtifactPreview(null);
+    setPackagePanelOpen(false);
+    setPackageImportMode("update");
+    setPackageImportJson("");
+    setPackageExportJson("");
+    setPackageOperationResult(null);
+    setPackageValidationResult(null);
     setFileMode("published");
     setMessage(null);
     setError(null);
@@ -3525,6 +3579,128 @@ function HostedIntegrationDraftEditor({
     });
   }
 
+  async function importHostedPackage() {
+    if (!canManage) return;
+    if (packagePreview.status !== "ready") {
+      setError(packagePreview.error ?? "Package preview is not ready.");
+      return;
+    }
+    if (packageImportMode === "update" && (!lockOwnedByEditor || !draft)) {
+      setError("Lock this family before importing package updates.");
+      return;
+    }
+    let packageDocument: HostedFamilyPackageDocument;
+    try {
+      const parsed = JSON.parse(packageImportJson) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("package must be a JSON object");
+      }
+      packageDocument = parsed as HostedFamilyPackageDocument;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    await withBusy("package-import", async () => {
+      const body = await hostedApiJson<unknown>(
+        "/api/hosted-integrations/packages/import",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            actor: HOSTED_INTEGRATION_EDITOR_ACTOR,
+            mode: packageImportMode,
+            packageDocument,
+            targetFamilyId: packageImportMode === "update" ? row.id : undefined,
+            lockId:
+              packageImportMode === "update" && lock ? lock.id : undefined,
+          }),
+        },
+      );
+      setPackageOperationResult(body);
+      setPackageExportJson("");
+      setMessage(
+        packageImportMode === "create"
+          ? "Package imported as a new hosted family draft"
+          : "Package imported into pending changes",
+      );
+      if (packageImportMode === "update" && draft) {
+        await loadDraft(draft.id);
+        await loadSourceView(draft.id);
+      }
+      onRefresh();
+    });
+  }
+
+  async function validateHostedPackage() {
+    if (!canManage || packagePreview.status !== "ready") return;
+    let packageDocument: HostedFamilyPackageDocument;
+    try {
+      packageDocument = JSON.parse(packageImportJson) as HostedFamilyPackageDocument;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    await withBusy("package-validate", async () => {
+      const body = await hostedApiJson<HostedPackageValidationResult>(
+        "/api/hosted-integrations/packages/validate",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            actor: HOSTED_INTEGRATION_EDITOR_ACTOR,
+            packageDocument,
+            targetFamilyId: packageImportMode === "update" ? row.id : undefined,
+          }),
+        },
+      );
+      setPackageValidationResult(body);
+      setPackageOperationResult(body);
+      setMessage(
+        body.ok
+          ? `Package validation passed (${body.files?.length ?? 0} files)`
+          : "Package validation returned diagnostics",
+      );
+    });
+  }
+
+  async function exportHostedPackage(sourceType: HostedPackageExportSourceType) {
+    if (!canManage) return;
+    if (sourceType === "draft" && !draft) return;
+    await withBusy("package-export", async () => {
+      const body = await hostedApiJson<{
+        ok: true;
+        packageDocument: HostedFamilyPackageDocument;
+        digest: string;
+        exportedFiles: string[];
+      }>("/api/hosted-integrations/packages/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          actor: HOSTED_INTEGRATION_EDITOR_ACTOR,
+          source:
+            sourceType === "draft"
+              ? { type: "draft", draftId: draft?.id }
+              : { type: sourceType, familyId: row.id },
+          includeExamples: true,
+        }),
+      });
+      setPackageExportJson(JSON.stringify(body.packageDocument, null, 2));
+      setPackageOperationResult(body);
+      setMessage(
+        `Package exported (${body.exportedFiles.length} files, ${body.digest.slice(
+          0,
+          12,
+        )})`,
+      );
+    });
+  }
+
+  async function copyExportedPackage() {
+    if (!packageExportJson) return;
+    await navigator.clipboard.writeText(packageExportJson);
+    setMessage("Package JSON copied");
+  }
+
   useEffect(() => {
     if (!window.matchMedia("(max-width: 767px)").matches) return;
     const timeout = window.setTimeout(() => {
@@ -3694,6 +3870,22 @@ function HostedIntegrationDraftEditor({
       ? "editing"
       : `locked by ${lock.lockedBy}`
     : "read only";
+  const packageActionState = buildHostedIntegrationPackageActionState({
+    canManage,
+    familyId: row.id,
+    activeGenerationId: row.activeGeneration?.id,
+    draftId: draft?.id,
+    lock,
+    actorId: HOSTED_INTEGRATION_EDITOR_ACTOR.id,
+    busy: busy !== null,
+  });
+  const packageActionLabels = hostedIntegrationPackageActionAccessibleLabels(
+    row.name,
+  );
+  const canImportCurrentPackageMode =
+    packageImportMode === "create"
+      ? packageActionState.canImportCreate
+      : packageActionState.canImportUpdate;
 
   useEffect(() => {
     onEditSessionChange(row.id, lockOwnedByEditor);
@@ -3787,6 +3979,7 @@ function HostedIntegrationDraftEditor({
     canEdit,
     draftId: draft?.id,
     selectedExampleId: selectedExample?.id,
+    selectedExampleCategory: selectedExample?.category,
   });
   const exampleActionLabels =
     hostedIntegrationExampleActionAccessibleLabels(testExampleId);
@@ -3884,6 +4077,20 @@ function HostedIntegrationDraftEditor({
           )}
           <Button
             size="sm"
+            variant={packagePanelOpen ? "secondary" : "outline"}
+            aria-label={
+              packagePanelOpen
+                ? packageActionLabels.closePanel
+                : packageActionLabels.openPanel
+            }
+            disabled={busy !== null || !canManage}
+            onClick={() => setPackagePanelOpen((current) => !current)}
+          >
+            <Download className="mr-1.5 size-3.5" aria-hidden />
+            Package
+          </Button>
+          <Button
+            size="sm"
             variant={lockOwnedByEditor ? "outline" : "default"}
             aria-label={lockActionAccessibleLabel}
             disabled={lockActionDisabled}
@@ -3909,6 +4116,240 @@ function HostedIntegrationDraftEditor({
             Hosted integration management permission is required to edit, debug,
             diff, or publish this family.
           </p>
+        )}
+        {packagePanelOpen && (
+          <section className="grid gap-4 border-b border-paper-rule bg-paper-sunk px-3 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="label-faceplate text-ink-soft">Package</span>
+                <span
+                  className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint"
+                  title="Environment configs, secrets, run logs and failure buckets are not exported."
+                >
+                  contract files only
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  aria-label={packageActionLabels.exportActiveGeneration}
+                  disabled={!packageActionState.canExportActiveGeneration}
+                  onClick={() => void exportHostedPackage("active_generation")}
+                >
+                  <Download className="mr-1.5 size-3.5" aria-hidden />
+                  Current
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  aria-label={packageActionLabels.exportDraft}
+                  disabled={!packageActionState.canExportDraft}
+                  onClick={() => void exportHostedPackage("draft")}
+                >
+                  <Download className="mr-1.5 size-3.5" aria-hidden />
+                  Changes
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  aria-label={packageActionLabels.exportCurrentSource}
+                  disabled={!packageActionState.canExportCurrentSource}
+                  onClick={() => void exportHostedPackage("current_source")}
+                >
+                  <Download className="mr-1.5 size-3.5" aria-hidden />
+                  Source
+                </Button>
+              </div>
+            </div>
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+              <div className="grid min-w-0 content-start gap-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="inline-flex border border-paper-rule font-mono text-[10px] uppercase tracking-[0.08em]">
+                  {(
+                      [
+                        ["update", "Update"],
+                        ["create", "Create"],
+                      ] as Array<[HostedPackageImportMode, string]>
+                    ).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        aria-pressed={packageImportMode === value}
+                        disabled={busy !== null}
+                        onClick={() => {
+                          setPackageImportMode(value);
+                          setPackageValidationResult(null);
+                          setPackageOperationResult(null);
+                        }}
+                        className={cn(
+                          "border-r border-paper-rule px-2 py-1 last:border-r-0 disabled:text-ink-faint",
+                          packageImportMode === value
+                            ? "bg-ink text-paper"
+                            : "bg-paper text-ink-soft hover:bg-paper-sunk",
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    aria-label="Validate hosted family package before import"
+                    disabled={
+                      packagePreview.status !== "ready" ||
+                      !canImportCurrentPackageMode
+                    }
+                    onClick={() => void validateHostedPackage()}
+                  >
+                    Validate
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="default"
+                    aria-label={
+                      packageImportMode === "create"
+                        ? packageActionLabels.importCreate
+                        : packageActionLabels.importUpdate
+                    }
+                    disabled={
+                      !canImportCurrentPackageMode ||
+                      packagePreview.status !== "ready" ||
+                      packageValidationResult?.ok !== true
+                    }
+                    onClick={() => void importHostedPackage()}
+                  >
+                    <Upload className="mr-1.5 size-3.5" aria-hidden />
+                    Import
+                  </Button>
+                </div>
+                {packageImportMode === "update" &&
+                  packageActionState.updateBlockedReason && (
+                    <p className="text-[12px] leading-5 text-amber-900">
+                      {packageActionState.updateBlockedReason}
+                    </p>
+                  )}
+                <div className="grid gap-2 border-y border-paper-rule py-3 text-[12px] leading-5 text-ink-soft">
+                  {packagePreview.status === "empty" ? (
+                    <p>Paste a hosted family package to preview import impact.</p>
+                  ) : packagePreview.status === "invalid" ? (
+                    <p className="text-red-900">{packagePreview.error}</p>
+                  ) : (
+                    <>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink">
+                          {packagePreview.modeLabel}
+                        </span>
+                        <span>
+                          {packagePreview.familyName ??
+                            packagePreview.familyId ??
+                            "unknown family"}
+                        </span>
+                        <span>{packagePreview.toolNames.length} tools</span>
+                        <span>
+                          {packagePreview.fileCount} files
+                          {packageImportMode === "update" &&
+                            ` (${packagePreview.addedFileCount} new, ${packagePreview.removedFileCount} removed, ${packagePreview.retainedFileCount} retained)`}
+                        </span>
+                        <span>{packagePreview.exampleCount} examples</span>
+                        <span>
+                          {packagePreview.providerRefCount} provider refs
+                        </span>
+                        <span>{packagePreview.helpRefCount} help refs</span>
+                        <span
+                          className={cn(
+                            "font-mono text-[10px] uppercase tracking-[0.08em]",
+                            packageValidationResult?.ok
+                              ? "text-emerald-900"
+                              : packageValidationResult
+                                ? "text-amber-900"
+                                : "text-ink-faint",
+                          )}
+                        >
+                          {packageValidationResult?.ok
+                            ? "validated"
+                            : packageValidationResult
+                              ? "diagnostics"
+                              : "not validated"}
+                        </span>
+                      </div>
+                      {packagePreview.toolNames.length > 0 && (
+                        <p className="truncate font-mono text-[11px] text-ink-faint">
+                          {packagePreview.toolNames.join(", ")}
+                        </p>
+                      )}
+                      {packagePreview.destructiveToolNames.length > 0 && (
+                        <p className="text-red-900">
+                          Destructive tools:{" "}
+                          {packagePreview.destructiveToolNames.join(", ")}
+                        </p>
+                      )}
+                      {packageValidationResult &&
+                        packageValidationResult.diagnostics.length > 0 && (
+                          <p className="text-amber-900">
+                            {packageValidationResult.diagnostics.length} validation
+                            diagnostics. Open result details below for the raw
+                            diagnostic payload.
+                          </p>
+                        )}
+                    </>
+                  )}
+                </div>
+                <Textarea
+                  value={packageImportJson}
+                  onChange={(event) => {
+                    setPackageImportJson(event.target.value);
+                    setPackageValidationResult(null);
+                    setPackageOperationResult(null);
+                  }}
+                  spellCheck={false}
+                  aria-label={packageActionLabels.importPayload}
+                  placeholder='{"kind":"openacme.hostedFamilyPackage","version":1,"metadata":{...},"files":{...}}'
+                  className="min-h-[220px] resize-y border-paper-rule bg-paper font-mono text-[12px] leading-5"
+                />
+              </div>
+              <div className="grid min-w-0 content-start gap-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span className="label-faceplate text-ink-soft">Export</span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    aria-label={packageActionLabels.copyExport}
+                    disabled={!packageExportJson}
+                    onClick={() => void copyExportedPackage()}
+                  >
+                    <Copy className="mr-1.5 size-3.5" aria-hidden />
+                    Copy
+                  </Button>
+                </div>
+                <HostedCodeEditor
+                  label="Package JSON"
+                  textareaLabel={packageActionLabels.exportPayload}
+                  language="json"
+                  value={packageExportJson || "No package exported yet."}
+                  readOnly
+                  minHeightClassName="h-[min(42dvh,420px)] min-h-[220px]"
+                />
+              </div>
+            </div>
+            {packageOperationResult ? (
+              <details className="border-t border-paper-rule pt-3">
+                <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-[0.08em] text-ink-soft">
+                  Result details
+                </summary>
+                <pre className="mt-3 max-h-[260px] overflow-auto bg-paper px-3 py-2 font-mono text-[11px] leading-5 text-ink-soft">
+                  {jsonPreview(packageOperationResult)}
+                </pre>
+              </details>
+            ) : null}
+          </section>
         )}
 
         <div className="grid gap-4">

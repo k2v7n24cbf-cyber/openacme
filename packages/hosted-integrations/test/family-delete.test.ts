@@ -9,6 +9,7 @@ import {
   createFileHostedIntegrationGenerationStore,
   createFileHostedIntegrationLockStore,
 } from "../src/index.js";
+import { withSplitToolContractFiles } from "./test-support/split-contract-fixtures.js";
 
 let dataDir: string;
 
@@ -40,10 +41,10 @@ describe("hosted integration family deletion", () => {
       familyId: "qualys",
       lockId: "lock_1",
       sourceRevisionId: "source_rev_1",
-      files: {
+      files: withSplitToolContractFiles({
         "family.yaml": familyYaml(),
         "qualys.py": "def tool_qualys_count_assets(args, context):\n    return {'count': 1}\n",
-      },
+      }),
     });
     if (!draft.ok) throw new Error(`draft creation failed: ${draft.reason}`);
 

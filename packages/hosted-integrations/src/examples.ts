@@ -3,15 +3,21 @@ import { z } from "zod";
 import {
   FamilyManifestSchema,
   HostedIntegrationExampleSchema,
+  HostedToolContractDocumentSchema,
+  hostedToolContractToToolSpecs,
   type FamilyManifest,
   type HostedIntegrationExample,
+  type HostedIntegrationToolSpec,
   type JsonObject,
   type JsonValue,
 } from "./schemas.js";
 import type { HostedIntegrationDraftStore } from "./drafts.js";
+import {
+  HOSTED_INTEGRATION_MANIFEST_FILE,
+  HOSTED_TOOL_CONTRACT_FILE,
+} from "./catalog.js";
 
 const EXAMPLES_FILE = "examples.yaml";
-const MANIFEST_FILE = "family.yaml";
 
 const ExamplesDocumentSchema = z
   .object({
@@ -71,7 +77,9 @@ class FileHostedIntegrationExampleRegistry implements HostedIntegrationExampleRe
       return { ok: false, reason: "family_mismatch" };
     }
 
-    const tool = manifest.tools.find(
+    const tools = await this.readTools(request.draftId);
+    if (!tools) return { ok: false, reason: "not_found" };
+    const tool = tools.find(
       (candidate) => candidate.name === parsedExample.toolName,
     );
     if (!tool) return { ok: false, reason: "tool_not_found" };
@@ -83,13 +91,15 @@ class FileHostedIntegrationExampleRegistry implements HostedIntegrationExampleRe
       return { ok: false, reason: "destructive_example_requires_human" };
     }
 
-    const argsIssue = validateJsonSchemaValue(
-      tool.inputSchema,
-      parsedExample.args,
-      "$",
-    );
-    if (argsIssue) {
-      return { ok: false, reason: "invalid_args", message: argsIssue };
+    if (parsedExample.category !== "discovery_required") {
+      const argsIssue = validateJsonSchemaValue(
+        tool.inputSchema,
+        parsedExample.args,
+        "$",
+      );
+      if (argsIssue) {
+        return { ok: false, reason: "invalid_args", message: argsIssue };
+      }
     }
 
     const examples = await this.readExamples(request.draftId);
@@ -116,10 +126,24 @@ class FileHostedIntegrationExampleRegistry implements HostedIntegrationExampleRe
   private async readManifest(draftId: string): Promise<FamilyManifest | null> {
     const result = await this.draftStore.readDraftFile({
       draftId,
-      path: MANIFEST_FILE,
+      path: HOSTED_INTEGRATION_MANIFEST_FILE,
     });
     if (!result.ok) return null;
     return FamilyManifestSchema.parse(parseYaml(result.content));
+  }
+
+  private async readTools(
+    draftId: string,
+  ): Promise<HostedIntegrationToolSpec[] | null> {
+    const result = await this.draftStore.readDraftFile({
+      draftId,
+      path: HOSTED_TOOL_CONTRACT_FILE,
+    });
+    if (!result.ok) return null;
+    const contract = HostedToolContractDocumentSchema.parse(
+      parseYaml(result.content),
+    );
+    return hostedToolContractToToolSpecs(contract);
   }
 
   private async readExamples(

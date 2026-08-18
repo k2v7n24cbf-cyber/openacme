@@ -24,6 +24,30 @@ async function writeFamily(familyId: string, yaml: string): Promise<void> {
   );
   await mkdir(dir, { recursive: true });
   await writeFile(path.join(dir, "family.yaml"), yaml, "utf-8");
+  await writeFile(
+    path.join(dir, "tools.yaml"),
+    toolsYaml(
+      familyId,
+      familyId === "qualys" ? "Qualys" : "Splunk",
+      familyId === "qualys" ? "qualys_count_assets" : "splunk_search",
+    ),
+    "utf-8",
+  );
+}
+
+async function writeFamilyManifestOnly(
+  familyId: string,
+  yaml: string,
+): Promise<void> {
+  const dir = path.join(
+    dataDir,
+    "hosted-integrations",
+    "source",
+    "families",
+    familyId,
+  );
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, "family.yaml"), yaml, "utf-8");
 }
 
 function familyYaml(id: string, name: string, toolName: string): string {
@@ -45,22 +69,54 @@ runtime:
   dependencyPolicy:
     installDuringInvocation: false
     allowedPackages: []
-tools:
-  - name: ${toolName}
-    title: ${name} read
-    description: Read safe ${name} metadata.
-    inputSchema:
-      type: object
-      properties: {}
-      additionalProperties: false
-    classification:
-      operation: read
-      freshness: live
-      idempotency: idempotent
-      execution: sync
-      approval: none
 `;
 }
+
+function toolsYaml(id: string, name: string, toolName: string): string {
+  return `
+kind: openacme.hostedToolFamily
+version: 1
+family:
+  id: ${id}
+tools:
+  - mcp:
+      name: hosted_${id}__${toolName}
+      title: ${name} read
+      description: Read safe ${name} metadata.
+      inputSchema:
+        type: object
+        properties: {}
+        additionalProperties: false
+      outputSchema:
+        type: object
+        additionalProperties: true
+      annotations:
+        readOnlyHint: true
+        destructiveHint: false
+        idempotentHint: true
+        openWorldHint: true
+    openacme:
+      toolName: ${toolName}
+      function: tool_${toolName}
+      lifecycle: active
+      classification:
+        operation: read
+        freshness: live
+        idempotency: idempotent
+        execution: sync
+        approval: none
+      selectWhen:
+        - Need to read safe ${name} metadata.
+      doNotSelectWhen:
+        - Need to mutate ${name} state.
+      prerequisites: []
+      parameterHelp: {}
+      examples:
+        - {}
+      errors: []
+`;
+}
+
 
 describe("file-backed hosted integration catalog", () => {
   it("lists valid family manifests as stable sorted summaries", async () => {
@@ -124,6 +180,28 @@ describe("file-backed hosted integration catalog", () => {
       expect.objectContaining({
         familyId: "broken",
         severity: "error",
+      }),
+    ]);
+  });
+
+  it("requires tools.yaml before listing a family", async () => {
+    await writeFamily("qualys", familyYaml("qualys", "Qualys", "qualys_count_assets"));
+    await writeFamilyManifestOnly(
+      "splunk",
+      familyYaml("splunk", "Splunk", "splunk_search"),
+    );
+
+    const catalog = createFileHostedIntegrationCatalog({ dataDir });
+
+    await expect(catalog.listFamilies()).resolves.toEqual([
+      expect.objectContaining({ id: "qualys" }),
+    ]);
+    await expect(catalog.getFamily("splunk")).resolves.toBeNull();
+    await expect(catalog.getDiagnostics()).resolves.toEqual([
+      expect.objectContaining({
+        familyId: "splunk",
+        severity: "error",
+        message: expect.stringContaining("failed to read tools.yaml"),
       }),
     ]);
   });

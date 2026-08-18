@@ -15,16 +15,20 @@ import {
   createFileHostedIntegrationLockStore,
   createFileHostedIntegrationSecretStore,
   FamilyManifestSchema,
+  HostedToolContractDocumentSchema,
   buildHostedIntegrationFocusedSourceView,
+  buildHostedToolName,
+  hostedToolContractToToolSpecs,
   hostedIntegrationEnvironmentConfigId,
+  resolveHostedIntegrationToolHelp,
   type HostedIntegrationPolicyActor,
 } from "../src/index.js";
 import {
   EXPECTED_LEGACY_INTEGRATION_HUB_TOOL_NAMES,
   FIRST_LEGACY_INTEGRATION_HUB_REPLACEMENT_FAMILY,
-  LEGACY_INTEGRATION_HUB_FIVE_READONLY_SOURCE_BACKED_FAMILY,
-  LEGACY_INTEGRATION_HUB_FIVE_READONLY_SYNC_TOOL_NAMES,
-  LEGACY_INTEGRATION_HUB_FIVE_READONLY_TOOL_SYNC_FAMILY,
+  LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_SOURCE_BACKED_FAMILY,
+  LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_TOOL_NAMES,
+  LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_TOOL_SYNC_FAMILY,
   LEGACY_INTEGRATION_HUB_DEFENDER_ALERT_SOURCE_BACKED_FAMILY,
   LEGACY_INTEGRATION_HUB_INCIDENT_SOURCE,
   LEGACY_INTEGRATION_HUB_INVENTORY,
@@ -35,6 +39,7 @@ import {
   type LegacyIntegrationHubInventory,
   type LegacyIntegrationHubReplacementFamilyFixture,
 } from "../test-support/integration-hub/fixtures.js";
+import { withSplitToolContractFiles } from "./test-support/split-contract-fixtures.js";
 
 let dataDir: string;
 let nowMs = Date.parse("2026-08-12T10:00:00.000Z");
@@ -169,7 +174,7 @@ describe("legacy integration-hub first replacement family", () => {
     expect(generation.familyId).toBe(
       FIRST_LEGACY_INTEGRATION_HUB_REPLACEMENT_FAMILY.familyId,
     );
-    expect(generation.tools?.map((tool) => tool.name)).toEqual(
+    expect(generation.tools.map((tool) => tool.name)).toEqual(
       FIRST_LEGACY_INTEGRATION_HUB_REPLACEMENT_FAMILY.replacementToolNames,
     );
     expect(
@@ -198,7 +203,8 @@ describe("legacy integration-hub first replacement family", () => {
     const generation = await promoteDraft(draftId, validation);
     await seedSplunkConfig();
 
-    const example = FIRST_LEGACY_INTEGRATION_HUB_REPLACEMENT_FAMILY.examples[0]!;
+    const example =
+      FIRST_LEGACY_INTEGRATION_HUB_REPLACEMENT_FAMILY.examples[0]!;
     const result = await createGateway().invoke({
       actor: replacementActor,
       familyId: "splunk",
@@ -244,8 +250,7 @@ describe("legacy integration-hub first replacement family", () => {
       generationId: generation.id,
     });
 
-    if (!result.ok || result.replayed)
-      throw new Error("import invoke failed");
+    if (!result.ok || result.replayed) throw new Error("import invoke failed");
     expect(result.envelope).toMatchObject({
       ok: true,
       result_ref: {
@@ -273,11 +278,11 @@ describe("legacy integration-hub first replacement family", () => {
 });
 
 describe("legacy integration-hub replacement security families", () => {
-  it("syncs a five-tool read-only Qualys pilot as hosted tools", async () => {
-    const fixture = LEGACY_INTEGRATION_HUB_FIVE_READONLY_TOOL_SYNC_FAMILY;
+  it("syncs the current read-only Qualys pilot as hosted tools", async () => {
+    const fixture = LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_TOOL_SYNC_FAMILY;
     expect(fixture.familyId).toBe("qualys");
     expect(fixture.replacementToolNames).toEqual([
-      ...LEGACY_INTEGRATION_HUB_FIVE_READONLY_SYNC_TOOL_NAMES,
+      ...LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_TOOL_NAMES,
     ]);
     expect(fixture.hostedToolNames).toEqual(
       fixture.replacementToolNames.map(
@@ -303,7 +308,7 @@ describe("legacy integration-hub replacement security families", () => {
     expectNoValidationErrors(validation);
 
     const generation = await promoteDraft(draftId, validation, fixture);
-    expect(generation.tools?.map((tool) => tool.name)).toEqual(
+    expect(generation.tools.map((tool) => tool.name)).toEqual(
       fixture.replacementToolNames,
     );
 
@@ -343,20 +348,28 @@ describe("legacy integration-hub replacement security families", () => {
     }
   }, 30_000);
 
-  it("keeps the source-backed five-tool Qualys batch ready for blocking help quality", async () => {
-    const fixture = LEGACY_INTEGRATION_HUB_FIVE_READONLY_SOURCE_BACKED_FAMILY;
-    expect(fixture.sourceFiles["family.yaml"]).toContain(
-      "asset_last_updated is a hosted tool request parameter, not a filter field token",
+  it("keeps the source-backed current Qualys batch ready for blocking help quality", async () => {
+    const fixture = LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_SOURCE_BACKED_FAMILY;
+    const contractText = JSON.stringify(parseYaml(fixture.sourceFiles["tools.yaml"]));
+    expect(contractText).toContain("asset_last_updated");
+    expect(contractText).toContain("filter field token");
+    expect(
+      parseYaml(fixture.sourceFiles["family.yaml"]) as Record<string, unknown>,
+    ).not.toHaveProperty(
+      "tools",
     );
+    expect(fixture.sourceFiles).toHaveProperty("tools.yaml");
     expect(fixture.sourceFiles["family.yaml"]).not.toContain(
       "handlerDispatch: legacy_call_tool",
     );
-    for (const toolName of LEGACY_INTEGRATION_HUB_FIVE_READONLY_SYNC_TOOL_NAMES) {
+    for (const toolName of LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_TOOL_NAMES) {
       expect(fixture.sourceFiles["qualys.py"]).toContain(
         `def tool_${toolName}(args, context):`,
       );
     }
-    expect(fixture.sourceFiles["qualys.py"]).toContain("def authenticate(ctx):");
+    expect(fixture.sourceFiles["qualys.py"]).toContain(
+      "def authenticate(ctx):",
+    );
     expect(fixture.sourceFiles["qualys.py"]).toContain(
       "def before_tool_call(tool_name, args, ctx, auth):",
     );
@@ -383,16 +396,101 @@ describe("legacy integration-hub replacement security families", () => {
     expectNoValidationErrors(validation);
   });
 
+  it("keeps Qualys runtime auth, request, and error handling in the shared client", () => {
+    const source =
+      LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_SOURCE_BACKED_FAMILY.sourceFiles[
+        "qualys.py"
+      ]!;
+
+    expect(pythonFunctionSource(source, "authenticate")).toContain(
+      '"client": None',
+    );
+    expect(pythonFunctionSource(source, "_authenticated_client")).toContain(
+      'auth["client"] = QualysClient(auth["context"])',
+    );
+
+    for (const toolName of LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_TOOL_NAMES) {
+      const handler = pythonFunctionSource(source, `tool_${toolName}`);
+      expect(handler, toolName).toContain("_authenticated_client(context)");
+      expect(handler, toolName).not.toMatch(
+        /\b(urlopen|Request|_secret|_config|QUALYS_USERNAME|QUALYS_PASSWORD)\b/,
+      );
+    }
+
+    const clientSource = pythonClassSource(source, "QualysClient");
+    expect(clientSource).toContain("_secret(self.secrets");
+    expect(clientSource).toContain("_config(self.config");
+    expect(clientSource).toContain("def _request_bytes");
+    expect(clientSource).toContain("def _get_xml");
+    expect(clientSource).toContain("def get_asset");
+    expect(clientSource).toContain("/rest/2.0/get/am/asset");
+    expect(clientSource).toContain("def _post_gateway_asset_search");
+    expect(clientSource).toContain('QualysToolError("auth_failed"');
+    expect(clientSource).toContain('QualysToolError("rate_limited"');
+    expect(clientSource).toContain('QualysToolError("upstream_error"');
+    expect(clientSource).toContain('QualysToolError("connection_error"');
+  });
+
+  it("keeps Qualys runtime error categories visible in tool contract guidance", () => {
+    const sourceFiles =
+      LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_SOURCE_BACKED_FAMILY.sourceFiles;
+    const contract = HostedToolContractDocumentSchema.parse(
+      parseYaml(sourceFiles["tools.yaml"]),
+    );
+    const requiredRuntimeErrorCodes = [
+      "bad_arguments",
+      "auth_failed",
+      "rate_limited",
+      "upstream_error",
+      "connection_error",
+    ];
+
+    for (const tool of contract.tools) {
+      const errors = tool.openacme.errors.join("\n");
+      for (const code of requiredRuntimeErrorCodes) {
+        expect(errors, `${tool.openacme.toolName} ${code}`).toContain(code);
+      }
+    }
+  });
+
+  it("treats empty Qualys projection arrays as omitted optional arguments", () => {
+    const source =
+      LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_SOURCE_BACKED_FAMILY.sourceFiles[
+        "qualys.py"
+      ]!;
+
+    expect(pythonFunctionSource(source, "_optional_string_list")).toContain(
+      "return value or None",
+    );
+    expect(pythonFunctionSource(source, "tool_qualys_gav_asset_get")).toContain(
+      '_optional_string_list(args.get("include_fields"), "include_fields")',
+    );
+    expect(pythonFunctionSource(source, "tool_qualys_gav_asset_get")).toContain(
+      '_optional_string_list(args.get("exclude_fields"), "exclude_fields")',
+    );
+    expect(pythonFunctionSource(source, "_list_assets_from_args")).toContain(
+      '_optional_string_list(args.get("include_fields"), "include_fields")',
+    );
+    expect(pythonFunctionSource(source, "_list_assets_from_args")).toContain(
+      '_optional_string_list(args.get("exclude_fields"), "exclude_fields")',
+    );
+  });
+
   it("returns a focused source view for the replacement Qualys Cloud Agent count handler", async () => {
-    const fixture = LEGACY_INTEGRATION_HUB_FIVE_READONLY_SOURCE_BACKED_FAMILY;
+    const fixture = LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_SOURCE_BACKED_FAMILY;
+    const files = replacementSourceFiles(fixture);
     const manifest = FamilyManifestSchema.parse(
-      parseYaml(fixture.sourceFiles["family.yaml"]),
+      parseYaml(files["family.yaml"]),
+    );
+    const tools = hostedToolContractToToolSpecs(
+      HostedToolContractDocumentSchema.parse(parseYaml(files["tools.yaml"])),
     );
 
     const view = await buildHostedIntegrationFocusedSourceView({
       familyId: "qualys",
       generationId: "gen_qualys_format_test",
       manifest,
+      tools,
       entrypointPath: "qualys.py",
       source: fixture.sourceFiles["qualys.py"]!,
       toolName: "qualys_cloud_agent_hostasset_count",
@@ -429,23 +527,24 @@ describe("legacy integration-hub replacement security families", () => {
         ],
       },
     });
-    expect(view.source.selectedHandler?.source).toContain("_qagent_filter_body");
+    expect(view.source.selectedHandler?.source).toContain(
+      "_qagent_filter_body",
+    );
     expect(view.source.selectedHandler?.source).not.toContain("unknown tool");
     expect(
       view.source.collapsedToolHandlers.map((handler) => handler.toolName),
-    ).toEqual([
-      "qualys_gav_asset_count",
-      "qualys_gav_asset_search",
-      "qualys_cloud_agent_hostasset_search",
-      "qualys_vmdr_host_list",
-    ]);
-    expect(view.source.helpers.some((helper) => helper.name === "QualysClient")).toBe(
-      false,
+    ).toEqual(
+      LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_TOOL_NAMES.filter(
+        (toolName) => toolName !== "qualys_cloud_agent_hostasset_count",
+      ),
     );
+    expect(
+      view.source.helpers.some((helper) => helper.name === "QualysClient"),
+    ).toBe(false);
   });
 
-  it("rejects hosted request parameters when agents put them inside GAV filter fields", async () => {
-    const fixture = LEGACY_INTEGRATION_HUB_FIVE_READONLY_SOURCE_BACKED_FAMILY;
+  it("rejects invalid aliases when agents put them inside GAV filter fields", async () => {
+    const fixture = LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_SOURCE_BACKED_FAMILY;
 
     await seedReplacementSourceFamily(fixture);
     const { draftId, lockId } = await createReplacementDraft(fixture);
@@ -458,58 +557,356 @@ describe("legacy integration-hub replacement security families", () => {
     const generation = await promoteDraft(draftId, validation, fixture);
     await seedQualysConfig();
 
-    const result = await createGateway().invoke({
-      actor: replacementActor,
+    for (const [field, expectedGuidance] of [
+      ["asset_last_updated", "top-level asset_last_updated argument"],
+      ["assetName", "asset.name"],
+    ] as const) {
+      const result = await createGateway().invoke({
+        actor: replacementActor,
+        familyId: "qualys",
+        toolName: "qualys_cloud_agent_hostasset_count",
+        generationId: generation.id,
+        environment: "test_debug",
+        args: {
+          filter_body: {
+            filters: [
+              {
+                field,
+                operator: "GREATER",
+                value: "2026-07-14T00:00:00Z",
+              },
+            ],
+            operation: "AND",
+          },
+        },
+        hostedToolBindings: [
+          {
+            agentId: replacementActor.id,
+            familyId: "qualys",
+            toolName: "qualys_cloud_agent_hostasset_count",
+            allowedEnvironments: ["test_debug"],
+            defaultEnvironment: "test_debug",
+            generationPin: { type: "current" },
+            bindingKind: "agent",
+            updatedAt: "2026-08-14T10:00:00.000Z",
+            updatedBy: "human:operator",
+          },
+        ],
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          code: "bad_arguments",
+          message: expect.stringContaining(expectedGuidance),
+        },
+      });
+    }
+  });
+
+  it("projects Qualys GAV field vocabulary through hosted tool help", async () => {
+    const fixture = LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_SOURCE_BACKED_FAMILY;
+    const sourceFiles = replacementSourceFiles(fixture);
+    const toolContract = HostedToolContractDocumentSchema.parse(
+      parseYaml(sourceFiles["tools.yaml"]),
+    );
+    const gavVocabularyRefs = toolContract.tools
+      .filter((tool) =>
+        [
+          "qualys_gav_asset_count",
+          "qualys_gav_asset_search",
+          "qualys_cloud_agent_hostasset_count",
+          "qualys_cloud_agent_hostasset_search",
+        ].includes(tool.openacme.toolName),
+      )
+      .map(
+        (tool) =>
+          tool.openacme.parameterHelp["filter_body.filters.field"]
+            ?.vocabularyRef,
+      );
+    expect(new Set(gavVocabularyRefs)).toEqual(
+      new Set(["references/gav-filter-fields.json"]),
+    );
+    const gavVocabulary = JSON.parse(
+      sourceFiles["references/gav-filter-fields.json"] ?? "{}",
+    ) as { entries?: Array<{ value?: string }> };
+    const gavVocabularyValues = new Set(
+      (gavVocabulary.entries ?? [])
+        .map((entry) => entry.value)
+        .filter((value): value is string => typeof value === "string"),
+    );
+    for (const tool of toolContract.tools) {
+      const filterBody = tool.mcp.inputSchema.properties?.["filter_body"];
+      if (filterBody && typeof filterBody === "object") {
+        expect(filterBody).not.toHaveProperty("enum");
+      }
+      for (const enumValues of collectJsonSchemaEnums(tool.mcp.inputSchema)) {
+        expect(
+          enumValues.some(
+            (value) =>
+              typeof value === "string" && gavVocabularyValues.has(value),
+          ),
+          `${tool.openacme.toolName} duplicates GAV vocabulary values in inputSchema enum`,
+        ).toBe(false);
+      }
+    }
+
+    await seedReplacementSourceFamily(fixture);
+    const { draftId, lockId } = await createReplacementDraft(fixture);
+    await registerReplacementExamples(draftId, lockId, fixture);
+    const validation = await createFileHostedIntegrationDraftValidator({
+      draftStore: createDraftStore(fixture),
+      catalog: createFileHostedIntegrationCatalog({ dataDir }),
+      helpQualityMode: "error",
+    }).validateDraft(draftId);
+    expectNoValidationErrors(validation);
+    const generation = await promoteDraft(draftId, validation, fixture);
+    const hostedToolName = buildHostedToolName({
       familyId: "qualys",
       toolName: "qualys_cloud_agent_hostasset_count",
-      generationId: generation.id,
-      environment: "test_debug",
-      args: {
-        filter_body: {
-          filters: [
-            {
-              field: "asset_last_updated",
-              operator: "GREATER",
-              value: "2026-07-14T00:00:00Z",
-            },
-          ],
-          operation: "AND",
-        },
-      },
-      hostedToolBindings: [
-        {
-          agentId: replacementActor.id,
-          familyId: "qualys",
-          toolName: "qualys_cloud_agent_hostasset_count",
-          allowedEnvironments: ["test_debug"],
-          defaultEnvironment: "test_debug",
-          generationPin: { type: "current" },
-          bindingKind: "agent",
-          updatedAt: "2026-08-14T10:00:00.000Z",
-          updatedBy: "human:operator",
-        },
-      ],
+    });
+    const generations = createFileHostedIntegrationGenerationStore({
+      dataDir,
+      draftStore: createDraftStore(fixture),
+      now: () => new Date(nowMs),
+      createId: () => "unused",
     });
 
-    expect(result).toMatchObject({
-      ok: false,
-      error: {
-        code: "bad_arguments",
-        message: expect.stringContaining("top-level argument"),
+    const softwareQueryResult = await resolveHostedIntegrationToolHelp({
+      dataDir,
+      generations,
+      hostedToolName,
+      familyId: "qualys",
+      toolName: "qualys_cloud_agent_hostasset_count",
+      request: {
+        tool_detail: "summary",
+        include_examples: false,
+        parameters: [
+          {
+            name: "filter_body.filters.field",
+            detail: "summary",
+            include_examples: false,
+            query: "software",
+            limit: 10,
+          },
+        ],
       },
     });
+
+    expect(softwareQueryResult).toMatchObject({
+      ok: true,
+      help: {
+        generation_id: generation.id,
+        parameters: {
+          "filter_body.filters.field": {
+            vocabulary: {
+              id: "qualys-gav-filter-fields",
+              status: "ok",
+              matches: [
+                {
+                  value: "software.name",
+                  summary: "Installed software name filter field.",
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    for (const [query, expectedValue] of [
+      ["asset name", "asset.name"],
+      ["last check-in", "qualys.agent.lastCheckedInDate"],
+    ] as const) {
+      const result = await resolveHostedIntegrationToolHelp({
+        dataDir,
+        generations,
+        hostedToolName,
+        familyId: "qualys",
+        toolName: "qualys_cloud_agent_hostasset_count",
+        request: {
+          tool_detail: "summary",
+          include_examples: false,
+          parameters: [
+            {
+              name: "filter_body.filters.field",
+              detail: "summary",
+              include_examples: false,
+              query,
+              limit: 10,
+            },
+          ],
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        help: {
+          parameters: {
+            "filter_body.filters.field": {
+              vocabulary: {
+                status: "ok",
+                matches: expect.arrayContaining([
+                  expect.objectContaining({ value: expectedValue }),
+                ]),
+              },
+            },
+          },
+        },
+      });
+    }
+
+    const invalidAssetNameResult = await resolveHostedIntegrationToolHelp({
+      dataDir,
+      generations,
+      hostedToolName,
+      familyId: "qualys",
+      toolName: "qualys_cloud_agent_hostasset_count",
+      request: {
+        tool_detail: "summary",
+        include_examples: false,
+        parameters: [
+          {
+            name: "filter_body.filters.field",
+            detail: "summary",
+            include_examples: false,
+            value: "assetName",
+            limit: 10,
+          },
+        ],
+      },
+    });
+
+    expect(invalidAssetNameResult).toMatchObject({
+      ok: true,
+      help: {
+        parameters: {
+          "filter_body.filters.field": {
+            vocabulary: {
+              status: "invalid_alias",
+              invalid_alias: {
+                use: "asset.name",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const invalidAliasResult = await resolveHostedIntegrationToolHelp({
+      dataDir,
+      generations,
+      hostedToolName,
+      familyId: "qualys",
+      toolName: "qualys_cloud_agent_hostasset_count",
+      request: {
+        tool_detail: "summary",
+        include_examples: false,
+        parameters: [
+          {
+            name: "filter_body.filters.field",
+            detail: "summary",
+            include_examples: false,
+            value: "asset_last_updated",
+            limit: 10,
+          },
+        ],
+      },
+    });
+
+    expect(invalidAliasResult).toMatchObject({
+      ok: true,
+      help: {
+        parameters: {
+          "filter_body.filters.field": {
+            vocabulary: {
+              status: "invalid_alias",
+              invalid_alias: {
+                use: "top-level asset_last_updated argument",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const legacyLastCheckinResult = await resolveHostedIntegrationToolHelp({
+      dataDir,
+      generations,
+      hostedToolName,
+      familyId: "qualys",
+      toolName: "qualys_cloud_agent_hostasset_count",
+      request: {
+        tool_detail: "summary",
+        include_examples: false,
+        parameters: [
+          {
+            name: "filter_body.filters.field",
+            detail: "summary",
+            include_examples: false,
+            value: "agent.lastCheckedIn",
+            limit: 10,
+          },
+        ],
+      },
+    });
+
+    expect(legacyLastCheckinResult).toMatchObject({
+      ok: true,
+      help: {
+        parameters: {
+          "filter_body.filters.field": {
+            vocabulary: {
+              status: "invalid_alias",
+              invalid_alias: {
+                use: "qualys.agent.lastCheckedInDate",
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("rejects mock or local Qualys endpoints for the live Qualys gate", () => {
+    withProcessEnv(
+      {
+        QUALYS_VM_URL: "http://localhost:8080",
+        QUALYS_USERNAME: "user",
+        QUALYS_PASSWORD: "password",
+      },
+      () => {
+        expect(() => readLiveQualysConfig()).toThrow(
+          /real Qualys HTTPS endpoint/,
+        );
+      },
+    );
+
+    withProcessEnv(
+      {
+        QUALYS_VM_URL: "https://qualysapi.qualys.example",
+        QUALYS_GATEWAY_URL: "https://mock-qualys-gateway.internal",
+        QUALYS_USERNAME: "user",
+        QUALYS_PASSWORD: "password",
+      },
+      () => {
+        expect(() => readLiveQualysConfig()).toThrow(
+          /real Qualys HTTPS endpoint/,
+        );
+      },
+    );
   });
 
   const liveQualysTest =
     process.env.OPENACME_LIVE_QUALYS === "1" ? it : it.skip;
 
   liveQualysTest(
-    "ports the five-tool Qualys pilot through live Qualys APIs",
+    "ports the current Qualys pilot through live Qualys APIs",
     async () => {
       const liveConfig = readLiveQualysConfig();
-      const fixture = LEGACY_INTEGRATION_HUB_FIVE_READONLY_SOURCE_BACKED_FAMILY;
+      const fixture = LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_SOURCE_BACKED_FAMILY;
       expect(fixture.replacementToolNames).toEqual([
-        ...LEGACY_INTEGRATION_HUB_FIVE_READONLY_SYNC_TOOL_NAMES,
+        ...LEGACY_INTEGRATION_HUB_CURRENT_PROMOTED_READONLY_TOOL_NAMES,
       ]);
       expect(fixture.sourceFiles["qualys.py"]).toContain("class QualysClient");
       expect(fixture.sourceFiles["qualys.py"]).toContain(
@@ -635,7 +1032,7 @@ describe("legacy integration-hub replacement security families", () => {
 
       expectNoValidationErrors(validation);
       const generation = await promoteDraft(draftId, validation, fixture);
-      expect(generation.tools?.map((tool) => tool.name)).toEqual(
+      expect(generation.tools.map((tool) => tool.name)).toEqual(
         fixture.replacementToolNames,
       );
       expect(fixture.hostedToolNames).toEqual(
@@ -678,7 +1075,7 @@ describe("legacy integration-hub replacement security families", () => {
     for (const fixture of LEGACY_INTEGRATION_HUB_REPLACEMENT_SECURITY_FAMILIES) {
       const family = await catalog.getFamily(fixture.familyId);
       expect(family).not.toBeNull();
-      for (const tool of family!.manifest.tools) {
+      for (const tool of family!.tools) {
         const inventoryTool = LEGACY_INTEGRATION_HUB_INVENTORY.tools.find(
           (entry) =>
             entry.familyId === fixture.familyId &&
@@ -714,9 +1111,7 @@ describe("legacy integration-hub replacement security families", () => {
     expect(fixture.sourceFiles["msgraph.py"]).toContain(
       "def tool_msgraph_get(args, context):",
     );
-    expect(fixture.sourceFiles["msgraph.py"]).toContain(
-      "graph.microsoft.com",
-    );
+    expect(fixture.sourceFiles["msgraph.py"]).toContain("graph.microsoft.com");
     expect(fixture.sourceFiles["msgraph.py"]).toContain("MSGRAPH_TENANT_ID");
     expect(fixture.sourceFiles["msgraph.py"]).toContain("MSGRAPH_CLIENT_ID");
     expect(fixture.sourceFiles["msgraph.py"]).toContain(
@@ -729,11 +1124,9 @@ describe("legacy integration-hub replacement security families", () => {
       "def call_tool(name, args, context):",
     );
 
-    const manifest = FamilyManifestSchema.parse(
-      parseYaml(fixture.sourceFiles["family.yaml"]),
-    );
-    expect(manifest.tools).toHaveLength(1);
-    expect(manifest.tools[0]).toMatchObject({
+    const [tool] = replacementTools(fixture);
+    expect(replacementTools(fixture)).toHaveLength(1);
+    expect(tool).toMatchObject({
       name: "msgraph_get",
       inputSchema: {
         type: "object",
@@ -814,11 +1207,9 @@ describe("legacy integration-hub replacement security families", () => {
       "def call_tool(name, args, context):",
     );
 
-    const manifest = FamilyManifestSchema.parse(
-      parseYaml(fixture.sourceFiles["family.yaml"]),
-    );
-    expect(manifest.tools).toHaveLength(1);
-    expect(manifest.tools[0]).toMatchObject({
+    const [tool] = replacementTools(fixture);
+    expect(replacementTools(fixture)).toHaveLength(1);
+    expect(tool).toMatchObject({
       name: "mde_get",
       inputSchema: {
         type: "object",
@@ -911,11 +1302,9 @@ describe("legacy integration-hub replacement security families", () => {
       "def call_tool(name, args, context):",
     );
 
-    const manifest = FamilyManifestSchema.parse(
-      parseYaml(fixture.sourceFiles["family.yaml"]),
-    );
-    expect(manifest.tools).toHaveLength(1);
-    expect(manifest.tools[0]).toMatchObject({
+    const [tool] = replacementTools(fixture);
+    expect(replacementTools(fixture)).toHaveLength(1);
+    expect(tool).toMatchObject({
       name: "defender_alert_get",
       inputSchema: {
         type: "object",
@@ -979,6 +1368,37 @@ const replacementActor: HostedIntegrationPolicyActor = {
   roles: ["agent"],
 };
 
+function replacementSourceFiles(
+  fixture: LegacyIntegrationHubReplacementFamilyFixture,
+): Record<string, string> {
+  return withSplitToolContractFiles(fixture.sourceFiles);
+}
+
+function replacementTools(
+  fixture: LegacyIntegrationHubReplacementFamilyFixture,
+) {
+  const files = replacementSourceFiles(fixture);
+  return hostedToolContractToToolSpecs(
+    HostedToolContractDocumentSchema.parse(parseYaml(files["tools.yaml"])),
+  );
+}
+
+function pythonFunctionSource(source: string, functionName: string): string {
+  return pythonBlockSource(source, `def ${functionName}(`);
+}
+
+function pythonClassSource(source: string, className: string): string {
+  return pythonBlockSource(source, `class ${className}:`);
+}
+
+function pythonBlockSource(source: string, startMarker: string): string {
+  const start = source.indexOf(startMarker);
+  expect(start, startMarker).toBeGreaterThanOrEqual(0);
+  const remainder = source.slice(start);
+  const next = remainder.slice(1).search(/\n(?:def|class) \w+/);
+  return next === -1 ? remainder : remainder.slice(0, next + 1);
+}
+
 async function seedReplacementSourceFamily(
   fixture = FIRST_LEGACY_INTEGRATION_HUB_REPLACEMENT_FAMILY,
 ): Promise<void> {
@@ -991,8 +1411,12 @@ async function seedReplacementSourceFamily(
   );
   await mkdir(sourceDir, { recursive: true });
   await Promise.all(
-    Object.entries(fixture.sourceFiles).map(([filePath, content]) =>
-      writeFile(path.join(sourceDir, filePath), content, "utf-8"),
+    Object.entries(replacementSourceFiles(fixture)).map(
+      async ([filePath, content]) => {
+        const absolutePath = path.join(sourceDir, filePath);
+        await mkdir(path.dirname(absolutePath), { recursive: true });
+        await writeFile(absolutePath, content, "utf-8");
+      },
     ),
   );
 }
@@ -1017,7 +1441,7 @@ async function createReplacementDraft(
     familyId: fixture.familyId,
     lockId,
     sourceRevisionId: "source_rev_import_1",
-    files: fixture.sourceFiles,
+    files: replacementSourceFiles(fixture),
   });
   if (!created.ok) throw new Error(created.reason);
   return { draftId: created.draft.id, lockId };
@@ -1219,6 +1643,8 @@ function readLiveQualysConfig(): LiveQualysConfig {
       "OPENACME_LIVE_QUALYS=1 requires QUALYS_VM_URL, QUALYS_USERNAME, and QUALYS_PASSWORD; QUALYS_GATEWAY_URL is optional.",
     );
   }
+  assertLiveQualysEndpoint(vmUrl, "QUALYS_VM_URL");
+  if (gatewayUrl) assertLiveQualysEndpoint(gatewayUrl, "QUALYS_GATEWAY_URL");
   return {
     config: {
       QUALYS_VM_URL: vmUrl,
@@ -1233,6 +1659,46 @@ function readLiveQualysConfig(): LiveQualysConfig {
       QUALYS_PASSWORD: password,
     },
   };
+}
+
+function assertLiveQualysEndpoint(value: string, key: string): void {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${key} must be a real Qualys HTTPS endpoint URL.`);
+  }
+  const host = url.hostname.toLowerCase();
+  const isLocal =
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host.startsWith("127.");
+  if (url.protocol !== "https:" || isLocal || host.includes("mock")) {
+    throw new Error(`${key} must be a real Qualys HTTPS endpoint URL.`);
+  }
+}
+
+function withProcessEnv(
+  values: Record<string, string | undefined>,
+  callback: () => void,
+): void {
+  const previous = new Map(
+    Object.keys(values).map((key) => [key, process.env[key]]),
+  );
+  try {
+    for (const [key, value] of Object.entries(values)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    callback();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 }
 
 async function seedLiveQualysConfig(
@@ -1364,8 +1830,20 @@ function expectNoValidationErrors(validation: {
   ok: boolean;
   diagnostics: Array<{ severity: string }>;
 }): void {
+  expect(
+    validation.diagnostics.filter((item) => item.severity === "error"),
+  ).toEqual([]);
   expect(validation.ok).toBe(true);
-  expect(validation.diagnostics.filter((item) => item.severity === "error")).toEqual(
-    [],
-  );
+}
+
+function collectJsonSchemaEnums(value: unknown): unknown[][] {
+  if (!value || typeof value !== "object") return [];
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => collectJsonSchemaEnums(item));
+  }
+  const record = value as Record<string, unknown>;
+  return [
+    ...(Array.isArray(record.enum) ? [record.enum] : []),
+    ...Object.values(record).flatMap((item) => collectJsonSchemaEnums(item)),
+  ];
 }

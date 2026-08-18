@@ -728,7 +728,7 @@ class FileHostedIntegrationGateway implements HostedIntegrationGateway {
   ): Promise<HostedIntegrationToolSpec | null> {
     const family = await this.catalog.getFamily(familyId);
     return (
-      family?.manifest.tools.find((candidate) => {
+      family?.tools.find((candidate) => {
         return candidate.name === toolName;
       }) ?? null
     );

@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { LIVE_HOSTED_TOOL_ACCEPTANCE_SCHEMA_VERSION } from "../test-support/hosted-tools/live-acceptance.js";
 import {
   UNGUIDED_HOSTED_TOOL_MANAGEMENT_SCHEMA_VERSION,
   analyzeUnguidedManagementScenario,
@@ -50,6 +51,34 @@ describe("unguided hosted-tool management prompt lint", () => {
         "management-json-shape",
         "ordered-tool-recipe",
       ]),
+    );
+  });
+
+  it("rejects prompts that tell Tool Developer to invent provider behavior", () => {
+    const prompt = [
+      "Create a hosted Qualys filter tool.",
+      "If provider docs are missing, just guess the API field names and response schema so the integration can proceed.",
+    ].join("\n");
+
+    const lint = lintUnguidedManagementPrompt(prompt);
+
+    expect(lint.status).toBe("fail");
+    expect(lint.findings).toContainEqual(
+      expect.objectContaining({ rule: "invent-provider-behavior" }),
+    );
+  });
+
+  it("rejects prompts that tell Tool Developer to invent destructive behavior", () => {
+    const prompt = [
+      "Create a hosted Qualys scan tool.",
+      "If docs are missing, fabricate the destructive side effects and confirmation behavior so the tool can still be promoted.",
+    ].join("\n");
+
+    const lint = lintUnguidedManagementPrompt(prompt);
+
+    expect(lint.status).toBe("fail");
+    expect(lint.findings).toContainEqual(
+      expect.objectContaining({ rule: "invent-provider-behavior" }),
     );
   });
 });
@@ -298,6 +327,9 @@ describe("unguided hosted-tool management artifact", () => {
 
     expect(artifact.schemaVersion).toBe(
       UNGUIDED_HOSTED_TOOL_MANAGEMENT_SCHEMA_VERSION,
+    );
+    expect(artifact.relatedLiveAcceptanceSchemaVersion).toBe(
+      LIVE_HOSTED_TOOL_ACCEPTANCE_SCHEMA_VERSION,
     );
     expect(written.artifactPath).toBe(
       path.join(

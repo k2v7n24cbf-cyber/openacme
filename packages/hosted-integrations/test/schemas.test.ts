@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   FamilyManifestSchema,
+  HostedToolContractDocumentSchema,
+  HostedParameterVocabularySchema,
+  hostedToolContractToToolSpecs,
+  HostedIntegrationGenerationSchema,
   HostedIntegrationIdempotencyRecordSchema,
   HostedIntegrationRuntimeSettingsSchema,
   type FamilyManifest,
@@ -30,24 +34,55 @@ const minimalManifest = {
       allowedPackages: ["httpx"],
     },
   },
+} as const;
+
+const minimalToolContract = {
+  kind: "openacme.hostedToolFamily",
+  version: 1,
+  family: { id: "qualys" },
   tools: [
     {
-      name: "qualys_count_assets",
-      title: "Count assets",
-      description: "Count assets matching a safe query.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          query: { type: "string" },
+      mcp: {
+        name: "hosted_qualys__qualys_count_assets",
+        title: "Count assets",
+        description: "Count assets matching a safe query.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+          },
+          additionalProperties: false,
         },
-        additionalProperties: false,
+        outputSchema: {
+          type: "object",
+          additionalProperties: true,
+        },
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: true,
+        },
       },
-      classification: {
-        operation: "read",
-        freshness: "live",
-        idempotency: "idempotent",
-        execution: "sync",
-        approval: "none",
+      openacme: {
+        toolName: "qualys_count_assets",
+        function: "tool_qualys_count_assets",
+        lifecycle: "active",
+        classification: {
+          operation: "read",
+          freshness: "live",
+          idempotency: "idempotent",
+          execution: "sync",
+          approval: "none",
+        },
+        selectWhen: ["Need to count matching Qualys assets."],
+        doNotSelectWhen: ["Need to list matching Qualys assets."],
+        prerequisites: [],
+        parameterHelp: {
+          query: { summary: "Qualys asset query string." },
+        },
+        examples: [{ query: "hostname:web" }],
+        errors: [],
       },
     },
   ],
@@ -59,10 +94,77 @@ describe("hosted integration schemas", () => {
 
     expect(parsed.id).toBe("qualys");
     expect(parsed.runtime.language).toBe("python");
-    expect(parsed.tools[0]?.classification.operation).toBe("read");
 
     const typed: FamilyManifest = parsed;
-    expect(typed.tools[0]?.name).toBe("qualys_count_assets");
+    expect(typed.runtime.entrypoint).toBe("qualys.py");
+  });
+
+  it("accepts a minimal hosted MCP tool contract document", () => {
+    const parsed = HostedToolContractDocumentSchema.parse(minimalToolContract);
+
+    expect(parsed.tools[0]?.mcp.name).toBe(
+      "hosted_qualys__qualys_count_assets",
+    );
+    expect(hostedToolContractToToolSpecs(parsed)[0]).toMatchObject({
+      name: "qualys_count_assets",
+      outputSchema: { type: "object", additionalProperties: true },
+      classification: { operation: "read" },
+    });
+  });
+
+  it("accepts shared parameter vocabulary references under OpenAcme help", () => {
+    const parsed = HostedToolContractDocumentSchema.parse({
+      ...minimalToolContract,
+      tools: [
+        {
+          ...minimalToolContract.tools[0],
+          openacme: {
+            ...minimalToolContract.tools[0].openacme,
+            parameterHelp: {
+              "query.filters.field": {
+                summary: "Allowed Qualys GAV field token.",
+                vocabularyRef: "references/gav-filter-fields.yaml",
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    expect(
+      parsed.tools[0]?.openacme.parameterHelp["query.filters.field"]
+        ?.vocabularyRef,
+    ).toBe("references/gav-filter-fields.yaml");
+  });
+
+  it("rejects duplicate and colliding vocabulary values", () => {
+    const parsed = HostedParameterVocabularySchema.safeParse({
+      kind: "openacme.hostedParameterVocabulary",
+      version: 1,
+      id: "qualys-gav-filter-fields",
+      familyId: "qualys",
+      parameterPath: "filter_body.filters.field",
+      entries: [
+        { value: "asset.name", summary: "Asset name." },
+        { value: "ASSET.NAME", summary: "Duplicate asset name." },
+      ],
+      invalidAliases: [
+        {
+          value: "asset.name",
+          reason: "This collides with a supported value.",
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues.map((issue) => issue.message)).toEqual(
+        expect.arrayContaining([
+          "duplicate vocabulary entry ASSET.NAME",
+          "invalid vocabulary alias asset.name collides with a valid entry",
+        ]),
+      );
+    }
   });
 
   it("rejects invalid family ids", () => {
@@ -75,20 +177,39 @@ describe("hosted integration schemas", () => {
   });
 
   it("rejects invalid tool names", () => {
-    const parsed = FamilyManifestSchema.safeParse({
-      ...minimalManifest,
-      tools: [{ ...minimalManifest.tools[0], name: "count-assets" }],
+    const parsed = HostedToolContractDocumentSchema.safeParse({
+      ...minimalToolContract,
+      tools: [
+        {
+          ...minimalToolContract.tools[0],
+          openacme: {
+            ...minimalToolContract.tools[0].openacme,
+            toolName: "count-assets",
+          },
+        },
+      ],
     });
 
     expect(parsed.success).toBe(false);
   });
 
-  it("rejects tools without classification metadata", () => {
-    const { classification: _classification, ...toolWithoutClassification } =
-      minimalManifest.tools[0];
+  it("rejects old-style tool ownership in family manifests", () => {
     const parsed = FamilyManifestSchema.safeParse({
       ...minimalManifest,
-      tools: [toolWithoutClassification],
+      tools: [],
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
+  it("requires promoted generations to carry derived tool metadata", () => {
+    const parsed = HostedIntegrationGenerationSchema.safeParse({
+      id: "gen_missing_tools",
+      familyId: "qualys",
+      sourceRevisionId: "src_123",
+      status: "active",
+      promotedAt: "2026-08-12T00:00:00.000Z",
+      promotedBy: "agent:tool-developer",
     });
 
     expect(parsed.success).toBe(false);
@@ -127,6 +248,9 @@ describe("hosted integration schemas", () => {
       status: "active",
       promotedAt: "2026-08-12T00:00:00.000Z",
       promotedBy: "agent:tool-developer",
+      tools: hostedToolContractToToolSpecs(
+        HostedToolContractDocumentSchema.parse(minimalToolContract),
+      ),
     };
     const run: HostedIntegrationRun = {
       id: "run_123",

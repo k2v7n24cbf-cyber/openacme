@@ -7,6 +7,7 @@ import {
   createFileHostedIntegrationGenerationStore,
   createFileHostedIntegrationLockStore,
 } from "../src/index.js";
+import { withSplitToolContractFiles } from "./test-support/split-contract-fixtures.js";
 
 let dataDir: string;
 let nowMs = Date.parse("2026-08-12T10:00:00.000Z");
@@ -53,8 +54,39 @@ async function createDraft(
     familyId,
     lockId: "lock_1",
     sourceRevisionId,
-    files: {
+    files: withSplitToolContractFiles({
       "family.yaml": familyYaml(familyId),
+      [`${familyId}.py`]: "def run():\n    return {'ok': True}\n",
+    }),
+  });
+  if (!result.ok) throw new Error(`draft creation failed: ${result.reason}`);
+  return result.draft.id;
+}
+
+async function createDraftWithoutToolContract(
+  familyId = "qualys",
+): Promise<string> {
+  const lockStore = createFileHostedIntegrationLockStore({
+    dataDir,
+    now: () => new Date(nowMs),
+    createId: () => "lock_1",
+  });
+  await lockStore.acquireLock({
+    familyId,
+    lockedBy: "agent:tool-developer",
+    ttlMs: 60_000,
+  });
+  const result = await createFileHostedIntegrationDraftStore({
+    dataDir,
+    lockStore,
+    now: () => new Date(nowMs),
+    createId: () => "draft_1",
+  }).createDraftFromFiles({
+    familyId,
+    lockId: "lock_1",
+    sourceRevisionId: "source_rev_1",
+    files: {
+      "family.yaml": cleanFamilyYaml(familyId),
       [`${familyId}.py`]: "def run():\n    return {'ok': True}\n",
     },
   });
@@ -138,6 +170,18 @@ describe("hosted integration generation artifact store", () => {
     });
   });
 
+  it("refuses promotion when tools.yaml is missing even if stale validation says ok", async () => {
+    const draftId = await createDraftWithoutToolContract();
+
+    await expect(
+      generationStore().promoteDraft({
+        draftId,
+        promotedBy: "agent:tool-developer",
+        validation: { ok: true, diagnostics: [] },
+      }),
+    ).resolves.toEqual({ ok: false, reason: "invalid_validation" });
+  });
+
   it("changes the active generation pointer atomically on promotion", async () => {
     const draftId = await createDraft();
     const store = generationStore();
@@ -216,6 +260,27 @@ describe("hosted integration generation artifact store", () => {
     });
   });
 });
+
+function cleanFamilyYaml(familyId: string): string {
+  return `
+id: ${familyId}
+name: ${familyId}
+version: 1
+runtime:
+  language: python
+  entrypoint: ${familyId}.py
+  defaultTimeoutMs: 30000
+  inlineResultTokenLimit: 8000
+  maxConcurrency: 1
+  runtimePolicy:
+    filesystem: run_dir_only
+    processEnv: tool_context_only
+    subprocess: denied
+    network: denied
+  dependencyPolicy:
+    installDuringInvocation: false
+`;
+}
 
 function familyYaml(familyId: string): string {
   return `

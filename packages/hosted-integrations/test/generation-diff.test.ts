@@ -3,6 +3,7 @@ import {
   buildHostedIntegrationGenerationDiff,
   type HostedIntegrationGenerationDiffSnapshot,
 } from "../src/index.js";
+import { withSplitToolContractFiles } from "./test-support/split-contract-fixtures.js";
 
 describe("hosted integration generation diff", () => {
   it("rejects generations from different families", async () => {
@@ -58,12 +59,13 @@ describe("hosted integration generation diff", () => {
             { path: "family.yaml", changeType: "modified" },
             { path: "help/count.md", changeType: "added" },
             { path: "qualys.py", changeType: "modified" },
+            { path: "tools.yaml", changeType: "modified" },
           ],
           changedTools: [
             {
               name: "qualys_count_assets",
               changeType: "modified",
-              changedFields: ["description"],
+              changedFields: ["description", "help"],
             },
           ],
           runtimeChanged: true,
@@ -206,12 +208,13 @@ function snapshot(
   return {
     generationId: overrides.generationId ?? "gen_base",
     familyId: overrides.familyId ?? "qualys",
-    files:
+    files: withSplitToolContractFiles(
       overrides.files ??
       {
         "family.yaml": familyYaml({ countDescription: "Count assets." }),
         "qualys.py": source({ countBody: "return {'count': 1}" }),
       },
+    ),
   };
 }
 

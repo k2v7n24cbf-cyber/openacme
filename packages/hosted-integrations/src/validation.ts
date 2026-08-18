@@ -1,20 +1,29 @@
 import { spawn } from "node:child_process";
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, parseDocument } from "yaml";
 import { z } from "zod";
+import {
+  HOSTED_INTEGRATION_MANIFEST_FILE,
+  HOSTED_TOOL_CONTRACT_FILE,
+  type HostedIntegrationCatalog,
+} from "./catalog.js";
+import { buildHostedToolName } from "./naming.js";
 import {
   FamilyManifestSchema,
   HostedIntegrationExampleSchema,
+  HostedParameterVocabularySchema,
+  HostedToolContractDocumentSchema,
+  hostedToolContractToToolSpecs,
   type FamilyManifest,
   type HostedIntegrationExample,
   type HostedIntegrationToolSpec,
+  type HostedToolContractDocument,
+  type HostedToolContractTool,
 } from "./schemas.js";
-import type { HostedIntegrationCatalog } from "./catalog.js";
 import { resolveHostedIntegrationCachePath } from "./cache.js";
 import { resolveHostedIntegrationPythonDependencies } from "./dependencies.js";
 import type { HostedIntegrationDraftStore } from "./drafts.js";
 import { isHostedIntegrationHelpFileReference } from "./help.js";
 
-const MANIFEST_FILE = "family.yaml";
 const EXAMPLES_FILE = "examples.yaml";
 const PYTHON_BIN =
   process.env["OPENACME_PYTHON"] ?? process.env["PYTHON"] ?? "python3";
@@ -56,7 +65,10 @@ except BaseException:
 
 const STANDARD_PYTHON_HOOKS = [
   { name: "authenticate", positionalArgs: ["ctx"] },
-  { name: "before_tool_call", positionalArgs: ["tool_name", "args", "ctx", "auth"] },
+  {
+    name: "before_tool_call",
+    positionalArgs: ["tool_name", "args", "ctx", "auth"],
+  },
   {
     name: "after_tool_call",
     positionalArgs: ["tool_name", "args", "ctx", "result", "auth"],
@@ -122,6 +134,8 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
 
     const manifest = await this.readManifest(draftId, diagnostics);
     if (!manifest) return resultFromDiagnostics(diagnostics);
+    const toolContract = await this.readToolContract(draftId, diagnostics);
+    if (!toolContract) return resultFromDiagnostics(diagnostics);
 
     if (manifest.id !== draft.familyId) {
       diagnostics.push(
@@ -132,9 +146,20 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
         ),
       );
     }
+    if (toolContract.family.id !== manifest.id) {
+      diagnostics.push(
+        errorDiagnostic(
+          "tool_contract_family_mismatch",
+          "$.family.id",
+          `${HOSTED_TOOL_CONTRACT_FILE} family ${toolContract.family.id} does not match manifest ${manifest.id}`,
+        ),
+      );
+    }
 
-    this.validateUniqueToolNames(manifest, diagnostics);
-    this.validateCacheContract(manifest, diagnostics);
+    this.validateToolContract(toolContract, diagnostics);
+    const tools = hostedToolContractToToolSpecs(toolContract);
+    this.validateUniqueToolNames(tools, diagnostics);
+    this.validateCacheContract(tools, diagnostics);
     const entrypoint = await this.validateRequiredFiles(
       draftId,
       manifest,
@@ -143,15 +168,23 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
     if (entrypoint) {
       await this.validatePythonHandlerContract(
         manifest,
+        tools,
         entrypoint,
         diagnostics,
       );
     }
-    await this.validateHelpReferences(draftId, manifest, diagnostics);
+    await this.validateHelpReferences(draftId, tools, diagnostics);
+    await this.validateVocabularyReferences(draftId, toolContract, diagnostics);
+    await this.validateProviderReferences(draftId, toolContract, diagnostics);
     this.validateDependencyPolicy(manifest, diagnostics);
-    await this.validateBreakingToolRemoval(manifest, diagnostics);
-    const examples = await this.validateExamples(draftId, manifest, diagnostics);
-    this.validateHelpQuality(manifest, examples, diagnostics);
+    await this.validateBreakingToolRemoval(manifest, tools, diagnostics);
+    const examples = await this.validateExamples(
+      draftId,
+      manifest,
+      tools,
+      diagnostics,
+    );
+    this.validateHelpQuality(tools, examples, diagnostics);
 
     return resultFromDiagnostics(diagnostics);
   }
@@ -162,30 +195,26 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
   ): Promise<FamilyManifest | null> {
     const manifestFile = await this.draftStore.readDraftFile({
       draftId,
-      path: MANIFEST_FILE,
+      path: HOSTED_INTEGRATION_MANIFEST_FILE,
     });
     if (!manifestFile.ok) {
       diagnostics.push(
         errorDiagnostic(
           "required_file_missing",
-          `$.files.${MANIFEST_FILE}`,
-          "family.yaml is required",
+          `$.files.${HOSTED_INTEGRATION_MANIFEST_FILE}`,
+          `${HOSTED_INTEGRATION_MANIFEST_FILE} is required`,
         ),
       );
       return null;
     }
 
-    let parsedYaml: unknown;
-    try {
-      parsedYaml = parseYaml(manifestFile.content);
-    } catch (error) {
-      diagnostics.push(
-        errorDiagnostic(
-          "manifest_yaml_invalid",
-          "$",
-          error instanceof Error ? error.message : String(error),
-        ),
-      );
+    const parsedYaml = parseStrictYaml(
+      manifestFile.content,
+      "manifest_yaml_invalid",
+      "$",
+      diagnostics,
+    );
+    if (parsedYaml === null) {
       return null;
     }
 
@@ -199,12 +228,122 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
     return parsedManifest.data;
   }
 
+  private async readToolContract(
+    draftId: string,
+    diagnostics: HostedIntegrationValidationDiagnostic[],
+  ): Promise<HostedToolContractDocument | null> {
+    const toolContractFile = await this.draftStore.readDraftFile({
+      draftId,
+      path: HOSTED_TOOL_CONTRACT_FILE,
+    });
+    if (!toolContractFile.ok) {
+      diagnostics.push(
+        errorDiagnostic(
+          "required_file_missing",
+          `$.files.${HOSTED_TOOL_CONTRACT_FILE}`,
+          `${HOSTED_TOOL_CONTRACT_FILE} is required`,
+        ),
+      );
+      return null;
+    }
+
+    const parsedYaml = parseStrictYaml(
+      toolContractFile.content,
+      "tool_contract_yaml_invalid",
+      "$",
+      diagnostics,
+    );
+    if (parsedYaml === null) {
+      return null;
+    }
+    const parsedToolContract =
+      HostedToolContractDocumentSchema.safeParse(parsedYaml);
+    if (!parsedToolContract.success) {
+      diagnostics.push(
+        ...zodDiagnostics("tool_contract_invalid", parsedToolContract.error),
+      );
+      return null;
+    }
+    return parsedToolContract.data;
+  }
+
+  private validateToolContract(
+    contract: HostedToolContractDocument,
+    diagnostics: HostedIntegrationValidationDiagnostic[],
+  ): void {
+    contract.tools.forEach((tool, index) => {
+      const expectedHostedName = buildHostedToolName({
+        familyId: contract.family.id,
+        toolName: tool.openacme.toolName,
+      });
+      if (tool.mcp.name !== expectedHostedName) {
+        diagnostics.push(
+          errorDiagnostic(
+            "mcp_name_mismatch",
+            `$.tools.${index}.mcp.name`,
+            `mcp.name must be ${expectedHostedName}`,
+          ),
+        );
+      }
+      const expectedFunction = `tool_${tool.openacme.toolName}`;
+      if (tool.openacme.function !== expectedFunction) {
+        diagnostics.push(
+          errorDiagnostic(
+            "tool_function_mismatch",
+            `$.tools.${index}.openacme.function`,
+            `openacme.function must be ${expectedFunction}`,
+          ),
+        );
+      }
+      this.validateMcpAnnotations(tool, index, diagnostics);
+    });
+  }
+
+  private validateMcpAnnotations(
+    tool: HostedToolContractTool,
+    index: number,
+    diagnostics: HostedIntegrationValidationDiagnostic[],
+  ): void {
+    const operation = tool.openacme.classification.operation;
+    const annotations = tool.mcp.annotations;
+    if (operation === "read" && annotations.readOnlyHint !== true) {
+      diagnostics.push(
+        errorDiagnostic(
+          "mcp_annotation_read_only_mismatch",
+          `$.tools.${index}.mcp.annotations.readOnlyHint`,
+          `read tool ${tool.openacme.toolName} requires readOnlyHint: true`,
+        ),
+      );
+    }
+    if (operation === "destructive" && annotations.destructiveHint !== true) {
+      diagnostics.push(
+        errorDiagnostic(
+          "mcp_annotation_destructive_mismatch",
+          `$.tools.${index}.mcp.annotations.destructiveHint`,
+          `destructive tool ${tool.openacme.toolName} requires destructiveHint: true`,
+        ),
+      );
+    }
+    if (
+      tool.openacme.classification.idempotency === "idempotent" &&
+      annotations.idempotentHint !== true
+    ) {
+      diagnostics.push(
+        errorDiagnostic(
+          "mcp_annotation_idempotency_mismatch",
+          `$.tools.${index}.mcp.annotations.idempotentHint`,
+          `idempotent tool ${tool.openacme.toolName} requires idempotentHint: true`,
+        ),
+      );
+    }
+  }
+
   private validateUniqueToolNames(
-    manifest: FamilyManifest,
+    tools: HostedIntegrationToolSpec[],
     diagnostics: HostedIntegrationValidationDiagnostic[],
   ): void {
     const seen = new Set<string>();
-    manifest.tools.forEach((tool, index) => {
+    tools.forEach((tool, index) => {
       if (seen.has(tool.name)) {
         diagnostics.push(
           errorDiagnostic(
@@ -242,6 +381,7 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
 
   private async validatePythonHandlerContract(
     manifest: FamilyManifest,
+    tools: HostedIntegrationToolSpec[],
     source: string,
     diagnostics: HostedIntegrationValidationDiagnostic[],
   ): Promise<void> {
@@ -260,7 +400,7 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
     const functions = new Map(
       analysis.functions.map((entry) => [entry.name, entry]),
     );
-    const activeTools = manifest.tools
+    const activeTools = tools
       .map((tool, index) => ({ tool, index }))
       .filter(({ tool }) => tool.lifecycle !== "removed");
     for (const { tool, index } of activeTools) {
@@ -326,10 +466,10 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
 
   private async validateHelpReferences(
     draftId: string,
-    manifest: FamilyManifest,
+    tools: HostedIntegrationToolSpec[],
     diagnostics: HostedIntegrationValidationDiagnostic[],
   ): Promise<void> {
-    for (const [toolIndex, tool] of manifest.tools.entries()) {
+    for (const [toolIndex, tool] of tools.entries()) {
       const refs: Array<{ path: string; value: string }> = [];
       if (tool.help?.full) {
         refs.push({
@@ -375,6 +515,99 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
     }
   }
 
+  private async validateVocabularyReferences(
+    draftId: string,
+    contract: HostedToolContractDocument,
+    diagnostics: HostedIntegrationValidationDiagnostic[],
+  ): Promise<void> {
+    for (const [toolIndex, tool] of contract.tools.entries()) {
+      for (const [parameterName, parameter] of Object.entries(
+        tool.openacme.parameterHelp,
+      )) {
+        const vocabularyRef = parameter.vocabularyRef;
+        if (!vocabularyRef) continue;
+        const diagnosticPath = `$.tools.${toolIndex}.openacme.parameterHelp.${parameterName}.vocabularyRef`;
+        if (!isHostedIntegrationVocabularyReference(vocabularyRef)) {
+          diagnostics.push(
+            errorDiagnostic(
+              "vocabulary_ref_invalid",
+              diagnosticPath,
+              `vocabulary reference ${vocabularyRef} must be a references/*.yaml, references/*.yml, or references/*.json file`,
+            ),
+          );
+          continue;
+        }
+        if (isUnsafeHelpReference(vocabularyRef)) {
+          diagnostics.push(
+            errorDiagnostic(
+              "vocabulary_ref_invalid",
+              diagnosticPath,
+              `vocabulary reference ${vocabularyRef} must stay inside family reference files`,
+            ),
+          );
+          continue;
+        }
+        const read = await this.draftStore.readDraftFile({
+          draftId,
+          path: vocabularyRef,
+        });
+        if (!read.ok) {
+          diagnostics.push(
+            errorDiagnostic(
+              "vocabulary_ref_missing",
+              diagnosticPath,
+              `vocabulary reference ${vocabularyRef} is missing`,
+            ),
+          );
+          continue;
+        }
+        let parsed: unknown;
+        try {
+          parsed = parseYaml(read.content);
+        } catch (error) {
+          diagnostics.push(
+            errorDiagnostic(
+              "vocabulary_ref_invalid",
+              diagnosticPath,
+              error instanceof Error ? error.message : String(error),
+            ),
+          );
+          continue;
+        }
+        const vocabulary = HostedParameterVocabularySchema.safeParse(parsed);
+        if (!vocabulary.success) {
+          diagnostics.push(
+            ...zodDiagnostics("vocabulary_ref_invalid", vocabulary.error).map(
+              (diagnostic) => ({
+                ...diagnostic,
+                path: `${diagnosticPath}${diagnostic.path === "$" ? "" : diagnostic.path.slice(1)}`,
+              }),
+            ),
+          );
+          continue;
+        }
+        if (vocabulary.data.familyId !== contract.family.id) {
+          diagnostics.push(
+            errorDiagnostic(
+              "vocabulary_family_mismatch",
+              diagnosticPath,
+              `vocabulary family ${vocabulary.data.familyId} does not match contract family ${contract.family.id}`,
+            ),
+          );
+        }
+        if (vocabulary.data.parameterPath !== parameterName) {
+          diagnostics.push(
+            errorDiagnostic(
+              "vocabulary_parameter_path_mismatch",
+              diagnosticPath,
+              `vocabulary parameterPath ${vocabulary.data.parameterPath} does not match parameter help path ${parameterName}`,
+            ),
+          );
+        }
+      }
+    }
+  }
+
   private validateDependencyPolicy(
     manifest: FamilyManifest,
     diagnostics: HostedIntegrationValidationDiagnostic[],
@@ -385,11 +618,35 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
     if (!resolved.ok) diagnostics.push(...resolved.diagnostics);
   }
 
+  private async validateProviderReferences(
+    draftId: string,
+    contract: HostedToolContractDocument,
+    diagnostics: HostedIntegrationValidationDiagnostic[],
+  ): Promise<void> {
+    for (const [toolIndex, tool] of contract.tools.entries()) {
+      const providerRef = tool.openacme.providerRef;
+      if (!providerRef) continue;
+      const read = await this.draftStore.readDraftFile({
+        draftId,
+        path: providerRef.path,
+      });
+      if (!read.ok) {
+        diagnostics.push(
+          errorDiagnostic(
+            "provider_ref_missing",
+            `$.tools.${toolIndex}.openacme.providerRef.path`,
+            `provider reference ${providerRef.path} is missing`,
+          ),
+        );
+      }
+    }
+  }
+
   private validateCacheContract(
-    manifest: FamilyManifest,
+    tools: HostedIntegrationToolSpec[],
     diagnostics: HostedIntegrationValidationDiagnostic[],
   ): void {
-    manifest.tools.forEach((tool, index) => {
+    tools.forEach((tool, index) => {
       const path = `$.tools.${index}.cache`;
       const freshness = tool.classification.freshness;
       if (freshness === "live" && tool.cache) {
@@ -430,13 +687,14 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
 
   private async validateBreakingToolRemoval(
     manifest: FamilyManifest,
+    tools: HostedIntegrationToolSpec[],
     diagnostics: HostedIntegrationValidationDiagnostic[],
   ): Promise<void> {
     const source = await this.catalog.getFamily(manifest.id);
     if (!source) return;
 
-    const nextToolNames = new Set(manifest.tools.map((tool) => tool.name));
-    for (const sourceTool of source.manifest.tools) {
+    const nextToolNames = new Set(tools.map((tool) => tool.name));
+    for (const sourceTool of source.tools) {
       if (sourceTool.lifecycle === "removed") continue;
       if (nextToolNames.has(sourceTool.name)) continue;
       diagnostics.push(
@@ -452,6 +710,7 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
   private async validateExamples(
     draftId: string,
     manifest: FamilyManifest,
+    tools: HostedIntegrationToolSpec[],
     diagnostics: HostedIntegrationValidationDiagnostic[],
   ): Promise<HostedIntegrationExample[]> {
     const examplesFile = await this.draftStore.readDraftFile({
@@ -462,8 +721,15 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
 
     let parsedExamples: z.infer<typeof ExamplesDocumentSchema>;
     try {
+      const parsedYaml = parseStrictYaml(
+        examplesFile.content,
+        "examples_invalid",
+        "$.examples",
+        diagnostics,
+      );
+      if (parsedYaml === null) return [];
       parsedExamples = ExamplesDocumentSchema.parse(
-        parseYaml(examplesFile.content),
+        parsedYaml,
       );
     } catch (error) {
       diagnostics.push(
@@ -476,7 +742,7 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
       return [];
     }
 
-    const tools = new Map(manifest.tools.map((tool) => [tool.name, tool]));
+    const toolsByName = new Map(tools.map((tool) => [tool.name, tool]));
     parsedExamples.examples.forEach((example, index) => {
       if (example.familyId !== manifest.id) {
         diagnostics.push(
@@ -487,7 +753,7 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
           ),
         );
       }
-      const tool = tools.get(example.toolName);
+      const tool = toolsByName.get(example.toolName);
       if (!tool) {
         diagnostics.push(
           errorDiagnostic(
@@ -513,7 +779,7 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
   }
 
   private validateHelpQuality(
-    manifest: FamilyManifest,
+    tools: HostedIntegrationToolSpec[],
     examples: HostedIntegrationExample[],
     diagnostics: HostedIntegrationValidationDiagnostic[],
   ): void {
@@ -524,7 +790,7 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
       examplesByTool.set(example.toolName, existing);
     }
 
-    manifest.tools.forEach((tool, toolIndex) => {
+    tools.forEach((tool, toolIndex) => {
       if (tool.lifecycle === "removed") return;
       const toolPath = `$.tools.${toolIndex}`;
       this.requireHelpField(
@@ -534,6 +800,24 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
         `${toolPath}.help.summary`,
         `tool ${tool.name} requires help.summary for autonomous use`,
       );
+      if ((tool.errors?.length ?? 0) === 0) {
+        diagnostics.push(
+          this.helpQualityDiagnostic(
+            "help_errors_missing",
+            `${toolPath}.openacme.errors`,
+            `tool ${tool.name} requires actionable error guidance for autonomous recovery`,
+          ),
+        );
+      }
+      if (requiresPaginationContract(tool) && !tool.pagination) {
+        diagnostics.push(
+          this.helpQualityDiagnostic(
+            "help_pagination_missing",
+            `${toolPath}.openacme.pagination`,
+            `tool ${tool.name} has pagination or truncation inputs and requires pagination guidance`,
+          ),
+        );
+      }
 
       const publicParameters = publicInputParameters(tool);
       const publicParameterRoots = new Set(publicParameters);
@@ -565,14 +849,32 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
             `${toolPath}.help.parameters.${parameterName}.full`,
             `complex parameter ${parameterName} requires full help`,
           );
+          if (requiresNestedVocabularyHelp(parameterName, tool)) {
+            const nestedFieldHelp =
+              tool.help?.parameters[`${parameterName}.filters.field`];
+            if (!nestedFieldHelp?.summary || !nestedFieldHelp.vocabularyRef) {
+              diagnostics.push(
+                this.helpQualityDiagnostic(
+                  "help_parameter_vocabulary_missing",
+                  `${toolPath}.help.parameters.${parameterName}.filters.field`,
+                  `complex filter parameter ${parameterName} requires nested field help with a vocabularyRef`,
+                ),
+              );
+            }
+          }
         }
       }
 
       const hasToolExample = (tool.help?.examples?.length ?? 0) > 0;
-      const hasRegisteredExample = (examplesByTool.get(tool.name)?.length ?? 0) > 0;
+      const hasRegisteredExample =
+        (examplesByTool.get(tool.name)?.length ?? 0) > 0;
       const hasNoExampleJustification =
         (tool.help?.noExampleJustification?.trim().length ?? 0) > 0;
-      if (!hasToolExample && !hasRegisteredExample && !hasNoExampleJustification) {
+      if (
+        !hasToolExample &&
+        !hasRegisteredExample &&
+        !hasNoExampleJustification
+      ) {
         diagnostics.push(
           this.helpQualityDiagnostic(
             "help_example_missing",
@@ -633,9 +935,39 @@ class FileHostedIntegrationDraftValidator implements HostedIntegrationDraftValid
   }
 }
 
+function parseStrictYaml(
+  content: string,
+  code: string,
+  path: string,
+  diagnostics: HostedIntegrationValidationDiagnostic[],
+): unknown | null {
+  try {
+    const document = parseDocument(content, { uniqueKeys: true });
+    const errors = document.errors.map((error) => error.message);
+    if (errors.length > 0) {
+      diagnostics.push(errorDiagnostic(code, path, errors.join("; ")));
+      return null;
+    }
+    return document.toJSON();
+  } catch (error) {
+    diagnostics.push(
+      errorDiagnostic(
+        code,
+        path,
+        error instanceof Error ? error.message : String(error),
+      ),
+    );
+    return null;
+  }
+}
+
 function publicInputParameters(tool: HostedIntegrationToolSpec): string[] {
   const properties = tool.inputSchema.properties;
-  if (!properties || typeof properties !== "object" || Array.isArray(properties)) {
+  if (
+    !properties ||
+    typeof properties !== "object" ||
+    Array.isArray(properties)
+  ) {
     return [];
   }
   return Object.keys(properties);
@@ -674,6 +1006,64 @@ function isComplexParameter(
     Array.isArray(typedSchema.enum) ||
     typeof typedSchema.$ref === "string"
   );
+}
+
+function requiresNestedVocabularyHelp(
+  parameterName: string,
+  tool: HostedIntegrationToolSpec,
+): boolean {
+  const properties = tool.inputSchema.properties;
+  const schema =
+    properties && typeof properties === "object" && !Array.isArray(properties)
+      ? (properties as Record<string, unknown>)[parameterName]
+      : undefined;
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    return false;
+  }
+  const typedSchema = schema as Record<string, unknown>;
+  if (parameterName === "filter_body" || parameterName.endsWith("_filter_body")) {
+    return typedSchema.type === "object" || typedSchema.type === "array";
+  }
+  return schemaHasFiltersFieldCatalog(typedSchema);
+}
+
+function schemaHasFiltersFieldCatalog(schema: Record<string, unknown>): boolean {
+  const properties = schema.properties;
+  if (!properties || typeof properties !== "object" || Array.isArray(properties)) {
+    return false;
+  }
+  const filters = (properties as Record<string, unknown>).filters;
+  if (!filters || typeof filters !== "object" || Array.isArray(filters)) {
+    return false;
+  }
+  const filterSchema = filters as Record<string, unknown>;
+  const itemSchema =
+    filterSchema.items &&
+    typeof filterSchema.items === "object" &&
+    !Array.isArray(filterSchema.items)
+      ? (filterSchema.items as Record<string, unknown>)
+      : filterSchema;
+  const filterProperties = itemSchema.properties;
+  return (
+    !!filterProperties &&
+    typeof filterProperties === "object" &&
+    !Array.isArray(filterProperties) &&
+    typeof (filterProperties as Record<string, unknown>).field === "object"
+  );
+}
+
+function requiresPaginationContract(tool: HostedIntegrationToolSpec): boolean {
+  return publicInputParameters(tool).some((parameterName) => {
+    const lowerName = parameterName.toLowerCase();
+    return (
+      lowerName.includes("page") ||
+      lowerName.includes("cursor") ||
+      lowerName.includes("continuation") ||
+      lowerName.includes("truncation") ||
+      lowerName === "limit" ||
+      lowerName.endsWith("_limit")
+    );
+  });
 }
 
 interface PythonEntrypointFunction {
@@ -746,7 +1136,8 @@ function analyzePythonEntrypoint(
         resolve({
           ok: false,
           code: "python_source_analysis_failed",
-          message: stderr || `Python analyzer exited with code ${code ?? "unknown"}`,
+          message:
+            stderr || `Python analyzer exited with code ${code ?? "unknown"}`,
         });
         return;
       }
@@ -820,6 +1211,12 @@ function isUnsafeHelpReference(value: string): boolean {
     value.startsWith("/") ||
     value.includes("\\") ||
     value.split("/").some((segment) => segment === "." || segment === "..")
+  );
+}
+
+function isHostedIntegrationVocabularyReference(value: string): boolean {
+  return /^references\/[A-Za-z0-9][A-Za-z0-9_./-]*\.(?:ya?ml|json)$/.test(
+    value,
   );
 }
 

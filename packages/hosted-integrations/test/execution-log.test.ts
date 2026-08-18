@@ -12,6 +12,10 @@ import {
   type HostedIntegrationPolicyActor,
   type HostedIntegrationPythonRuntime,
 } from "../src/index.js";
+import {
+  withSplitToolContractFiles,
+  writeSplitFamilyFixture,
+} from "./test-support/split-contract-fixtures.js";
 
 let dataDir: string;
 let generationCounter = 0;
@@ -212,8 +216,7 @@ async function seedSourceFamily(): Promise<void> {
     "families",
     "qualys",
   );
-  await mkdir(sourceDir, { recursive: true });
-  await writeFile(path.join(sourceDir, "family.yaml"), familyYaml(), "utf-8");
+  await writeSplitFamilyFixture(sourceDir, familyYaml());
   await writeFile(path.join(sourceDir, "qualys.py"), "def run(): pass\n");
 }
 
@@ -238,10 +241,10 @@ async function seedPromotedGeneration() {
     familyId: "qualys",
     lockId: "lock_1",
     sourceRevisionId: "source_rev_1",
-    files: {
+    files: withSplitToolContractFiles({
       "family.yaml": familyYaml(),
       "qualys.py": "def run(): pass\n",
-    },
+    }),
   });
   if (!draft.ok) throw new Error(draft.reason);
   const promoted = await createFileHostedIntegrationGenerationStore({

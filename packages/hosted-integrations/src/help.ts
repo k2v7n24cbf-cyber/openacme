@@ -8,23 +8,27 @@ import {
   safePathSegment,
 } from "./file-access.js";
 import {
-  FamilyManifestSchema,
   HostedIntegrationExampleSchema,
   HostedIntegrationFamilyIdSchema,
   HostedIntegrationToolNameSchema,
+  HostedParameterVocabularySchema,
+  HostedToolContractDocumentSchema,
+  hostedToolContractToToolSpecs,
   JsonObjectSchema,
   JsonValueSchema,
-  type FamilyManifest,
   type HostedIntegrationExample,
   type HostedIntegrationGeneration,
   type HostedIntegrationToolHelp,
   type HostedIntegrationToolName,
   type HostedIntegrationToolSpec,
+  type HostedParameterVocabulary,
+  type HostedParameterVocabularyEntry,
+  type HostedParameterVocabularyInvalidAlias,
   type JsonObject,
   type JsonValue,
 } from "./schemas.js";
+import { HOSTED_TOOL_CONTRACT_FILE } from "./catalog.js";
 
-const MANIFEST_FILE = "family.yaml";
 const EXAMPLES_FILE = "examples.yaml";
 const HELP_FILE_PATTERN =
   /^(?:help\/)?[A-Za-z0-9][A-Za-z0-9_./-]*\.(?:md|txt|json)$/;
@@ -56,6 +60,27 @@ export const HostedIntegrationParameterHelpRequestSchema = z
       .boolean()
       .default(false)
       .describe("Whether to include examples attached to this parameter."),
+    query: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Search the parameter vocabulary when this parameter references one.",
+      ),
+    value: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Check an exact parameter vocabulary value or known invalid alias. If query is also supplied, query wins and this value is reported as ignored guidance.",
+      ),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(50)
+      .default(10)
+      .describe("Maximum vocabulary matches to return for query requests."),
   })
   .strict();
 export type HostedIntegrationParameterHelpRequest = z.infer<
@@ -98,6 +123,55 @@ export const HostedIntegrationResolvedParameterHelpSchema = z
     shape: JsonObjectSchema.optional(),
     rules: z.array(z.string()).default([]),
     examples: z.array(JsonValueSchema).default([]),
+    vocabulary: z
+      .object({
+        id: z.string().optional(),
+        parameter_path: z.string().optional(),
+        entry_count: z.number().int().nonnegative().optional(),
+        invalid_alias_count: z.number().int().nonnegative().optional(),
+        query: z.string().optional(),
+        value: z.string().optional(),
+        ignored_value: z.string().optional(),
+        status: z
+          .enum([
+            "ok",
+            "not_found",
+            "no_vocabulary",
+            "invalid_alias",
+            "ambiguous_vocabulary",
+          ])
+          .optional(),
+        truncated: z.boolean().optional(),
+        warnings: z.array(z.string()).default([]),
+        candidate_parameter_paths: z.array(z.string()).optional(),
+        matches: z
+          .array(
+            z
+              .object({
+                value: z.string(),
+                summary: z.string(),
+                description: z.string().optional(),
+                valueType: z.string().optional(),
+                operators: z.array(z.string()).default([]),
+                aliases: z.array(z.string()).default([]),
+                examples: z.array(JsonValueSchema).default([]),
+                source: z.string().optional(),
+              })
+              .strict(),
+          )
+          .default([]),
+        invalid_alias: z
+          .object({
+            value: z.string(),
+            reason: z.string(),
+            use: z.string().optional(),
+            source: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type HostedIntegrationResolvedParameterHelp = z.infer<
@@ -116,6 +190,8 @@ export const HostedIntegrationResolvedToolHelpSchema = z
         full: z.string().optional(),
         when_to_use: z.array(z.string()).default([]),
         when_not_to_use: z.array(z.string()).default([]),
+        errors: z.array(z.string()).default([]),
+        pagination: JsonObjectSchema.nullable().optional(),
         no_example_justification: z.string().optional(),
       })
       .strict(),
@@ -198,17 +274,19 @@ export async function resolveHostedIntegrationToolHelp(
   }
 
   const filesRoot = generationFilesRoot(input.dataDir, generation.id);
-  const manifest = await readGenerationManifest(filesRoot);
-  if (manifest.id !== familyId) {
+  const toolContract = await readGenerationToolContract(filesRoot);
+  if (toolContract.family.id !== familyId) {
     return {
       ok: false,
       error: {
         code: "family_not_found",
-        message: "generation manifest does not match requested family",
+        message: "generation tool contract does not match requested family",
       },
     };
   }
-  const tool = manifest.tools.find((candidate) => candidate.name === toolName);
+  const tool = hostedToolContractToToolSpecs(toolContract).find(
+    (candidate) => candidate.name === toolName,
+  );
   if (!tool || tool.lifecycle === "removed") {
     return {
       ok: false,
@@ -263,14 +341,18 @@ export function generationFilesRoot(
   );
 }
 
-async function readGenerationManifest(
+async function readGenerationToolContract(
   filesRoot: string,
-): Promise<FamilyManifest> {
+): Promise<z.infer<typeof HostedToolContractDocumentSchema>> {
   const raw = await readFile(
-    resolveInsideRoot(filesRoot, MANIFEST_FILE, "generation files root"),
+    resolveInsideRoot(
+      filesRoot,
+      HOSTED_TOOL_CONTRACT_FILE,
+      "generation files root",
+    ),
     "utf-8",
   );
-  return FamilyManifestSchema.parse(parseYaml(raw));
+  return HostedToolContractDocumentSchema.parse(parseYaml(raw));
 }
 
 const ExamplesDocumentSchema = z
@@ -310,6 +392,8 @@ async function resolveToolHelp(
     summary: help?.summary ?? tool.description,
     when_to_use: help?.whenToUse ?? [],
     when_not_to_use: help?.whenNotToUse ?? [],
+    errors: tool.errors ?? [],
+    ...(tool.pagination !== undefined ? { pagination: tool.pagination } : {}),
     ...(help?.noExampleJustification
       ? { no_example_justification: help.noExampleJustification }
       : {}),
@@ -332,18 +416,22 @@ async function resolveParameterHelp(
   includeToolExamples: boolean,
 ): Promise<Record<string, HostedIntegrationResolvedParameterHelp>> {
   const explicit = tool.help?.parameters ?? {};
-  const selected =
+  const selected: HostedIntegrationParameterHelpRequest[] =
     requested ??
     Object.keys(explicit).map((name) => ({
       name,
       detail: toolDetail === "full" ? ("full" as const) : ("summary" as const),
       include_examples: includeToolExamples,
+      limit: 10,
     }));
   const result: Record<string, HostedIntegrationResolvedParameterHelp> = {};
   for (const parameter of selected) {
     const metadata =
       explicit[parameter.name] ??
       uniqueParameterSuffixMatch(explicit, parameter.name);
+    const nestedVocabularyMatch = metadata?.vocabularyRef
+      ? null
+      : nestedVocabularyParameterMatch(explicit, parameter.name);
     const shape =
       metadata?.shape ?? schemaShapeForPath(tool.inputSchema, parameter.name);
     const summary =
@@ -360,10 +448,243 @@ async function resolveParameterHelp(
         ? await resolveHelpText(filesRoot, metadata.full)
         : fallbackFullParameterHelp(parameter.name, shape);
     }
+    const vocabulary =
+      nestedVocabularyMatch?.type === "ambiguous" && (parameter.query || parameter.value)
+        ? ambiguousVocabularyHelp(parameter, nestedVocabularyMatch.names)
+        : await resolveVocabularyHelp(
+            filesRoot,
+            metadata?.vocabularyRef ??
+              (nestedVocabularyMatch?.type === "single"
+                ? nestedVocabularyMatch.metadata.vocabularyRef
+                : undefined),
+            parameter,
+            nestedVocabularyMatch?.type === "single"
+              ? nestedVocabularyMatch.name
+              : undefined,
+          );
+    if (vocabulary) entry.vocabulary = vocabulary;
     result[parameter.name] =
       HostedIntegrationResolvedParameterHelpSchema.parse(entry);
   }
   return result;
+}
+
+async function resolveVocabularyHelp(
+  filesRoot: string,
+  vocabularyRef: string | undefined,
+  parameter: HostedIntegrationParameterHelpRequest,
+  inferredFromParameter?: string,
+): Promise<HostedIntegrationResolvedParameterHelp["vocabulary"] | undefined> {
+  const warnings = vocabularyRequestWarnings(parameter, inferredFromParameter);
+  if (!vocabularyRef) {
+    if (!parameter.query && !parameter.value) return undefined;
+    return {
+      query: parameter.query,
+      ...(parameter.query
+        ? { ignored_value: parameter.value }
+        : { value: parameter.value }),
+      status: "no_vocabulary",
+      warnings,
+      matches: [],
+    };
+  }
+
+  const vocabulary = await readVocabulary(filesRoot, vocabularyRef);
+  const base = {
+    id: vocabulary.id,
+    parameter_path: vocabulary.parameterPath,
+    entry_count: vocabulary.entries.length,
+    invalid_alias_count: vocabulary.invalidAliases.length,
+  };
+
+  if (parameter.value) {
+    if (parameter.query) {
+      return searchVocabulary(vocabulary, base, parameter, warnings);
+    }
+    const normalizedValue = normalizeVocabularySearchValue(parameter.value);
+    const match = vocabulary.entries.find(
+      (entry) =>
+        normalizeVocabularySearchValue(entry.value) === normalizedValue,
+    );
+    if (match) {
+      return {
+        ...base,
+        value: parameter.value,
+        status: "ok",
+        warnings,
+        matches: [vocabularyEntryPayload(match)],
+      };
+    }
+    const invalidAlias = vocabulary.invalidAliases.find(
+      (alias) =>
+        normalizeVocabularySearchValue(alias.value) === normalizedValue,
+    );
+    if (invalidAlias) {
+      return {
+        ...base,
+        value: parameter.value,
+        status: "invalid_alias",
+        warnings,
+        matches: [],
+        invalid_alias: vocabularyInvalidAliasPayload(invalidAlias),
+      };
+    }
+    return {
+      ...base,
+      value: parameter.value,
+      status: "not_found",
+      warnings,
+      matches: [],
+    };
+  }
+
+  if (parameter.query) {
+    return searchVocabulary(vocabulary, base, parameter, warnings);
+  }
+
+  return { ...base, status: "ok", warnings, matches: [] };
+}
+
+function searchVocabulary(
+  vocabulary: HostedParameterVocabulary,
+  base: {
+    id: string;
+    parameter_path: string;
+    entry_count: number;
+    invalid_alias_count: number;
+  },
+  parameter: HostedIntegrationParameterHelpRequest,
+  warnings: string[],
+): HostedIntegrationResolvedParameterHelp["vocabulary"] {
+  const query = normalizeVocabularySearchValue(parameter.query ?? "");
+  const matches = vocabulary.entries.filter((entry) =>
+    vocabularyEntrySearchText(entry).includes(query),
+  );
+  const selected = matches.slice(0, parameter.limit);
+  return {
+    ...base,
+    query: parameter.query,
+    ...(parameter.value ? { ignored_value: parameter.value } : {}),
+    status: selected.length > 0 ? "ok" : "not_found",
+    truncated: matches.length > selected.length,
+    warnings,
+    matches: selected.map(vocabularyEntryPayload),
+  };
+}
+
+function vocabularyRequestWarnings(
+  parameter: HostedIntegrationParameterHelpRequest,
+  inferredFromParameter: string | undefined,
+): string[] {
+  const warnings: string[] = [];
+  if (parameter.query && parameter.value) {
+    warnings.push(
+      "query and value were both supplied; query was used and value was ignored.",
+    );
+  }
+  if (inferredFromParameter) {
+    warnings.push(
+      `vocabulary lookup was inferred from ${inferredFromParameter}; request that parameter path directly for precise help.`,
+    );
+  }
+  return warnings;
+}
+
+function ambiguousVocabularyHelp(
+  parameter: HostedIntegrationParameterHelpRequest,
+  candidateParameterPaths: string[],
+): HostedIntegrationResolvedParameterHelp["vocabulary"] {
+  return {
+    query: parameter.query,
+    ...(parameter.query
+      ? { ignored_value: parameter.value }
+      : { value: parameter.value }),
+    status: "ambiguous_vocabulary",
+    candidate_parameter_paths: candidateParameterPaths,
+    warnings: [
+      ...vocabularyRequestWarnings(parameter, undefined),
+      `vocabulary lookup for ${parameter.name} is ambiguous; request one precise parameter path.`,
+    ],
+    matches: [],
+  };
+}
+
+async function readVocabulary(
+  filesRoot: string,
+  vocabularyRef: string,
+): Promise<HostedParameterVocabulary> {
+  let value: string;
+  try {
+    value = await readTextFileUnderRoot(
+      filesRoot,
+      vocabularyRef,
+      "generation references root",
+    );
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      throw new HostedIntegrationHelpFileError(
+        "help_file_not_found",
+        `vocabulary file ${vocabularyRef} was not found`,
+      );
+    }
+    throw new HostedIntegrationHelpFileError(
+      "help_file_invalid",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+
+  try {
+    return HostedParameterVocabularySchema.parse(parseYaml(value));
+  } catch (error) {
+    throw new HostedIntegrationHelpFileError(
+      "help_file_invalid",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
+function vocabularyEntryPayload(entry: HostedParameterVocabularyEntry) {
+  return {
+    value: entry.value,
+    summary: entry.summary,
+    ...(entry.description ? { description: entry.description } : {}),
+    ...(entry.valueType ? { valueType: entry.valueType } : {}),
+    operators: entry.operators,
+    aliases: entry.aliases,
+    examples: entry.examples,
+    ...(entry.source ? { source: entry.source } : {}),
+  };
+}
+
+function vocabularyInvalidAliasPayload(
+  alias: HostedParameterVocabularyInvalidAlias,
+) {
+  return {
+    value: alias.value,
+    reason: alias.reason,
+    ...(alias.use ? { use: alias.use } : {}),
+    ...(alias.source ? { source: alias.source } : {}),
+  };
+}
+
+function vocabularyEntrySearchText(
+  entry: HostedParameterVocabularyEntry,
+): string {
+  return [
+    entry.value,
+    entry.summary,
+    entry.description,
+    entry.valueType,
+    entry.source,
+    ...entry.aliases,
+  ]
+    .filter((value): value is string => typeof value === "string")
+    .map(normalizeVocabularySearchValue)
+    .join("\n");
+}
+
+function normalizeVocabularySearchValue(value: string): string {
+  return value.trim().toLowerCase();
 }
 
 function uniqueParameterSuffixMatch(
@@ -376,6 +697,38 @@ function uniqueParameterSuffixMatch(
     name.endsWith(suffix),
   );
   return matches.length === 1 ? matches[0]![1] : undefined;
+}
+
+function nestedVocabularyParameterMatch(
+  explicit: Record<string, HostedIntegrationToolHelp["parameters"][string]>,
+  requestedName: string,
+):
+  | {
+      type: "single";
+      name: string;
+      metadata: HostedIntegrationToolHelp["parameters"][string] & {
+        vocabularyRef: string;
+      };
+    }
+  | { type: "ambiguous"; names: string[] }
+  | null {
+  const prefix = `${requestedName}.`;
+  const matches = Object.entries(explicit).filter(
+    ([name, metadata]) =>
+      name.startsWith(prefix) && typeof metadata.vocabularyRef === "string",
+  );
+  if (matches.length === 0) return null;
+  if (matches.length > 1) {
+    return { type: "ambiguous", names: matches.map(([name]) => name) };
+  }
+  const [name, metadata] = matches[0]!;
+  return {
+    type: "single",
+    name,
+    metadata: metadata as HostedIntegrationToolHelp["parameters"][string] & {
+      vocabularyRef: string;
+    },
+  };
 }
 
 async function resolveHelpText(

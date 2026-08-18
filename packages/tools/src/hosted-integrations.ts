@@ -13,6 +13,8 @@ export interface HostedIntegrationRegistryTool {
   name: string;
   description: string;
   parameters: z.ZodType;
+  outputSchema?: Record<string, unknown>;
+  annotations?: Record<string, unknown>;
 }
 
 export interface HostedIntegrationRegistrySnapshot {
@@ -151,6 +153,8 @@ export class HostedIntegrationToolRegistryAdapter {
       toolset: HOSTED_INTEGRATION_TOOLSET,
       description: tool.description,
       parameters: tool.parameters,
+      outputSchema: tool.outputSchema,
+      annotations: tool.annotations,
       parallelSafe: false,
       source: {
         kind: "hosted_integration",

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -8,6 +8,7 @@ import {
   createFileHostedIntegrationLockStore,
   createFileHostedIntegrationSourceFileStore,
 } from "../src/index.js";
+import { writeSplitFamilyFixture } from "./test-support/split-contract-fixtures.js";
 
 let dataDir: string;
 
@@ -118,8 +119,7 @@ async function writeSourceFamily(entrypoint: string): Promise<void> {
     "families",
     "qualys",
   );
-  await mkdir(sourceDir, { recursive: true });
-  await writeFile(path.join(sourceDir, "family.yaml"), familyYaml(), "utf-8");
+  await writeSplitFamilyFixture(sourceDir, familyYaml());
   await writeFile(path.join(sourceDir, "qualys.py"), entrypoint, "utf-8");
 }
 

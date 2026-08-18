@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -8,6 +8,7 @@ import {
   createFileHostedIntegrationDraftValidator,
   createFileHostedIntegrationProposedFamilyManager,
 } from "../src/index.js";
+import { writeSplitFamilyFixture } from "./test-support/split-contract-fixtures.js";
 
 let dataDir: string;
 const now = new Date("2026-08-12T10:00:00.000Z");
@@ -28,9 +29,8 @@ async function writeSourceFamily(familyId: string): Promise<void> {
     "families",
     familyId,
   );
-  await mkdir(dir, { recursive: true });
-  await writeFile(
-    path.join(dir, "family.yaml"),
+  await writeSplitFamilyFixture(
+    dir,
     `
 id: ${familyId}
 name: Existing
@@ -62,7 +62,6 @@ tools:
       execution: sync
       approval: none
 `,
-    "utf-8",
   );
 }
 
@@ -126,7 +125,13 @@ describe("hosted integration proposed family manager", () => {
       draftStore.readDraftFile({ draftId: "draft_1", path: "family.yaml" }),
     ).resolves.toMatchObject({
       ok: true,
-      content: expect.stringContaining("name: github_search"),
+      content: expect.not.stringContaining("github_search"),
+    });
+    await expect(
+      draftStore.readDraftFile({ draftId: "draft_1", path: "tools.yaml" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      content: expect.stringContaining("toolName: github_search"),
     });
     await expect(
       createFileHostedIntegrationDraftValidator({

@@ -1,4 +1,5 @@
 import type { HostedIntegrationEnvironmentConfig } from "./hosted-integration-agent-settings";
+import { parse as parseYaml } from "yaml";
 
 export interface HostedIntegrationFamilySummary {
   id: string;
@@ -827,6 +828,309 @@ export interface HostedIntegrationCodeActionState {
   canEditSourceFile: boolean;
 }
 
+export interface HostedIntegrationPackageActionState {
+  importCreateTarget: HostedIntegrationLifecycleTargetDescriptor<"hosted_package_import_create"> | null;
+  importUpdateTarget: HostedIntegrationLifecycleTargetDescriptor<"hosted_package_import_update"> | null;
+  exportActiveGenerationTarget: HostedIntegrationLifecycleTargetDescriptor<"hosted_package_export_active_generation"> | null;
+  exportDraftTarget: HostedIntegrationLifecycleTargetDescriptor<"hosted_package_export_draft"> | null;
+  exportCurrentSourceTarget: HostedIntegrationLifecycleTargetDescriptor<"hosted_package_export_current_source"> | null;
+  canImportCreate: boolean;
+  canImportUpdate: boolean;
+  canExportActiveGeneration: boolean;
+  canExportDraft: boolean;
+  canExportCurrentSource: boolean;
+  updateBlockedReason: string | null;
+}
+
+export function buildHostedIntegrationPackageActionState(input: {
+  canManage: boolean;
+  familyId: string | null | undefined;
+  activeGenerationId: string | null | undefined;
+  draftId: string | null | undefined;
+  lock: HostedIntegrationFamilyLock | null;
+  actorId: string;
+  busy: boolean;
+}): HostedIntegrationPackageActionState {
+  const familyId = input.familyId?.trim();
+  const activeGenerationId = input.activeGenerationId?.trim();
+  const draftId = input.draftId?.trim();
+  const lockOwnedByCurrentHuman = input.lock?.lockedBy === input.actorId;
+  const readyForManagedAction = input.canManage && !input.busy;
+  const importCreateTarget = readyForManagedAction
+    ? {
+        kind: "hosted_package_import_create" as const,
+        id: "new-family",
+        ownedByCurrentHuman: true,
+        ready: true,
+      }
+    : null;
+  const importUpdateTarget =
+    readyForManagedAction && familyId && draftId && lockOwnedByCurrentHuman
+      ? {
+          kind: "hosted_package_import_update" as const,
+          id: `${familyId}:${draftId}`,
+          ownedByCurrentHuman: true,
+          ready: true,
+        }
+      : null;
+  const exportActiveGenerationTarget =
+    readyForManagedAction && familyId && activeGenerationId
+      ? {
+          kind: "hosted_package_export_active_generation" as const,
+          id: activeGenerationId,
+          ownedByCurrentHuman: true,
+          ready: true,
+        }
+      : null;
+  const exportDraftTarget =
+    readyForManagedAction && draftId && lockOwnedByCurrentHuman
+      ? {
+          kind: "hosted_package_export_draft" as const,
+          id: draftId,
+          ownedByCurrentHuman: true,
+          ready: true,
+        }
+      : null;
+  const exportCurrentSourceTarget =
+    readyForManagedAction && familyId
+      ? {
+          kind: "hosted_package_export_current_source" as const,
+          id: familyId,
+          ownedByCurrentHuman: true,
+          ready: true,
+        }
+      : null;
+  let updateBlockedReason: string | null = null;
+  if (!input.canManage) {
+    updateBlockedReason = "Hosted tool management permission is required.";
+  } else if (!lockOwnedByCurrentHuman) {
+    updateBlockedReason = input.lock
+      ? "Unlock is held by another editor."
+      : "Lock for editing before importing over this family.";
+  } else if (!draftId) {
+    updateBlockedReason = "No editable draft is available for this lock.";
+  }
+  return {
+    importCreateTarget,
+    importUpdateTarget,
+    exportActiveGenerationTarget,
+    exportDraftTarget,
+    exportCurrentSourceTarget,
+    canImportCreate: Boolean(importCreateTarget),
+    canImportUpdate: Boolean(importUpdateTarget),
+    canExportActiveGeneration: Boolean(exportActiveGenerationTarget),
+    canExportDraft: Boolean(exportDraftTarget),
+    canExportCurrentSource: Boolean(exportCurrentSourceTarget),
+    updateBlockedReason,
+  };
+}
+
+export function hostedIntegrationPackageActionAccessibleLabels(
+  familyName: string | null | undefined,
+): {
+  openPanel: string;
+  closePanel: string;
+  importCreate: string;
+  importUpdate: string;
+  exportActiveGeneration: string;
+  exportDraft: string;
+  exportCurrentSource: string;
+  copyExport: string;
+  importPayload: string;
+  exportPayload: string;
+} {
+  const target = familyName?.trim() || "selected family";
+  return {
+    openPanel: `Show package import and export for ${target}`,
+    closePanel: `Hide package import and export for ${target}`,
+    importCreate: "Import package as a new hosted tool family",
+    importUpdate: `Import package into ${target} pending changes`,
+    exportActiveGeneration: `Export current version package for ${target}`,
+    exportDraft: `Export pending changes package for ${target}`,
+    exportCurrentSource: `Export source package for ${target}`,
+    copyExport: `Copy exported package for ${target}`,
+    importPayload: "Hosted family package JSON to import",
+    exportPayload: `Exported hosted family package JSON for ${target}`,
+  };
+}
+
+export interface HostedIntegrationPackagePreviewState {
+  status: "empty" | "invalid" | "ready";
+  error: string | null;
+  modeLabel: "Create" | "Update";
+  familyId: string | null;
+  familyName: string | null;
+  toolNames: string[];
+  fileCount: number;
+  addedFileCount: number;
+  removedFileCount: number;
+  retainedFileCount: number;
+  exampleCount: number;
+  providerRefCount: number;
+  helpRefCount: number;
+  destructiveToolNames: string[];
+}
+
+export function buildHostedIntegrationPackagePreviewState(input: {
+  packageJson: string;
+  mode: "create" | "update";
+  currentFilePaths?: string[];
+}): HostedIntegrationPackagePreviewState {
+  const modeLabel = input.mode === "create" ? "Create" : "Update";
+  if (input.packageJson.trim().length === 0) {
+    return emptyHostedIntegrationPackagePreview(modeLabel);
+  }
+  try {
+    const packageDocument = JSON.parse(input.packageJson) as unknown;
+    if (!packageDocument || typeof packageDocument !== "object") {
+      throw new Error("package must be a JSON object");
+    }
+    const filesValue = (packageDocument as { files?: unknown }).files;
+    if (!Array.isArray(filesValue)) {
+      throw new Error("package files must be an array");
+    }
+    const files = filesValue
+      .map((file): { path: string; content: string } | null => {
+        if (!file || typeof file !== "object") return null;
+        const path = (file as { path?: unknown }).path;
+        const content = (file as { content?: unknown }).content;
+        return typeof path === "string" && typeof content === "string"
+          ? { path, content }
+          : null;
+      })
+      .filter((file): file is { path: string; content: string } =>
+        Boolean(file),
+      );
+    if (files.length !== filesValue.length) {
+      throw new Error("package files must include string path and content");
+    }
+    const filesByPath = new Map(files.map((file) => [file.path, file.content]));
+    const familyYaml = parsePackageYaml(filesByPath.get("family.yaml"));
+    const toolsYaml = parsePackageYaml(filesByPath.get("tools.yaml"));
+    const examplesYaml = parsePackageYaml(filesByPath.get("examples.yaml"));
+    const toolEntries = Array.isArray(objectField(toolsYaml, "tools"))
+      ? (objectField(toolsYaml, "tools") as unknown[])
+      : [];
+    const toolNames = toolEntries
+      .map((tool) => objectField(objectField(tool, "openacme"), "toolName"))
+      .filter((toolName): toolName is string => typeof toolName === "string")
+      .sort((left, right) => left.localeCompare(right));
+    const destructiveToolNames = toolEntries
+      .filter(
+        (tool) =>
+          objectField(
+            objectField(objectField(tool, "openacme"), "classification"),
+            "operation",
+          ) === "destructive",
+      )
+      .map((tool) => objectField(objectField(tool, "openacme"), "toolName"))
+      .filter((toolName): toolName is string => typeof toolName === "string")
+      .sort((left, right) => left.localeCompare(right));
+    const providerRefCount = toolEntries.filter((tool) =>
+      Boolean(objectField(objectField(tool, "openacme"), "providerRef")),
+    ).length;
+    const helpRefCount = countPackageHelpRefs(toolEntries);
+    const exampleEntries = Array.isArray(objectField(examplesYaml, "examples"))
+      ? (objectField(examplesYaml, "examples") as unknown[])
+      : [];
+    const currentFilePaths = new Set(input.currentFilePaths ?? []);
+    const packageFilePaths = new Set(files.map((file) => file.path));
+    const retainedFileCount = [...packageFilePaths].filter((filePath) =>
+      currentFilePaths.has(filePath),
+    ).length;
+    const addedFileCount = [...packageFilePaths].filter(
+      (filePath) => !currentFilePaths.has(filePath),
+    ).length;
+    const removedFileCount =
+      currentFilePaths.size === 0
+        ? 0
+        : [...currentFilePaths].filter((filePath) => !packageFilePaths.has(filePath))
+            .length;
+    return {
+      status: "ready",
+      error: null,
+      modeLabel,
+      familyId:
+        stringFieldFromObject(familyYaml, "id") ??
+        stringFieldFromObject(objectField(toolsYaml, "family"), "id"),
+      familyName: stringFieldFromObject(familyYaml, "name"),
+      toolNames,
+      fileCount: files.length,
+      addedFileCount,
+      removedFileCount,
+      retainedFileCount,
+      exampleCount: exampleEntries.length,
+      providerRefCount,
+      helpRefCount,
+      destructiveToolNames,
+    };
+  } catch (error) {
+    return {
+      ...emptyHostedIntegrationPackagePreview(modeLabel),
+      status: "invalid",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function emptyHostedIntegrationPackagePreview(
+  modeLabel: "Create" | "Update",
+): HostedIntegrationPackagePreviewState {
+  return {
+    status: "empty",
+    error: null,
+    modeLabel,
+    familyId: null,
+    familyName: null,
+    toolNames: [],
+    fileCount: 0,
+    addedFileCount: 0,
+    removedFileCount: 0,
+    retainedFileCount: 0,
+    exampleCount: 0,
+    providerRefCount: 0,
+    helpRefCount: 0,
+    destructiveToolNames: [],
+  };
+}
+
+function parsePackageYaml(content: string | undefined): unknown {
+  if (!content) return null;
+  return parseYaml(content);
+}
+
+function objectField(value: unknown, field: string): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return (value as Record<string, unknown>)[field];
+}
+
+function stringFieldFromObject(
+  value: unknown,
+  field: string,
+): string | null {
+  const fieldValue = objectField(value, field);
+  return typeof fieldValue === "string" ? fieldValue : null;
+}
+
+function countPackageHelpRefs(toolEntries: unknown[]): number {
+  let count = 0;
+  for (const tool of toolEntries) {
+    const openacme = objectField(tool, "openacme");
+    if (typeof objectField(openacme, "fullHelp") === "string") count += 1;
+    const parameterHelp = objectField(openacme, "parameterHelp");
+    if (
+      parameterHelp &&
+      typeof parameterHelp === "object" &&
+      !Array.isArray(parameterHelp)
+    ) {
+      for (const help of Object.values(parameterHelp)) {
+        if (typeof objectField(help, "full") === "string") count += 1;
+      }
+    }
+  }
+  return count;
+}
+
 export function buildHostedIntegrationCodeActionState(input: {
   canEdit: boolean;
   draftId: string | null | undefined;
@@ -1489,9 +1793,11 @@ export function buildHostedIntegrationExampleActionState(input: {
   canEdit: boolean;
   draftId: string | null | undefined;
   selectedExampleId: string | null | undefined;
+  selectedExampleCategory?: string | null | undefined;
 }): HostedIntegrationExampleActionState {
   const draftId = input.draftId?.trim();
   const selectedExampleId = input.selectedExampleId?.trim();
+  const selectedExampleCategory = input.selectedExampleCategory?.trim();
   const saveTarget =
     input.canEdit && draftId
       ? {
@@ -1502,7 +1808,9 @@ export function buildHostedIntegrationExampleActionState(input: {
         }
       : null;
   const runTarget =
-    saveTarget && selectedExampleId
+    saveTarget &&
+    selectedExampleId &&
+    selectedExampleCategory !== "discovery_required"
       ? {
           kind: "test_example" as const,
           id: selectedExampleId,

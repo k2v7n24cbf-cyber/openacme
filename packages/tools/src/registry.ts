@@ -340,6 +340,8 @@ export class ToolRegistry {
         name: entry.name,
         description: entry.description,
         toolset: entry.toolset,
+        outputSchema: entry.outputSchema,
+        annotations: entry.annotations,
         emoji: entry.emoji,
         source: entry.source,
         system: SYSTEM_TOOL_SET.has(entry.name) || undefined,
@@ -422,6 +424,8 @@ export class ToolRegistry {
       const toolDef: Record<string, unknown> = {
         description: entry.description,
         inputSchema: entry.parameters,
+        ...(entry.outputSchema ? { outputSchema: entry.outputSchema } : {}),
+        ...(entry.annotations ? { annotations: entry.annotations } : {}),
         execute: async (
           args: Record<string, unknown>,
           opts: { toolCallId?: string } = {}

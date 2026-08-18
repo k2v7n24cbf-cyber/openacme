@@ -224,6 +224,11 @@ export function lintUnguidedManagementPrompt(prompt: string): UnguidedPromptLint
       pattern:
         /(?:^|\n)\s*1[.)].*(?:\n|\r\n)\s*2[.)].*(?:hosted|tool|lock|draft|validate|promote|debug|bucket)/is,
     },
+    {
+      rule: "invent-provider-behavior",
+      pattern:
+        /\b(?:invent|guess|assume|make up|fabricate)\b.{0,140}\b(?:provider|api|endpoint|parameter|field|pagination|response|schema|semantics|destructive|side effects?|confirmation behavior)\b/i,
+    },
   ];
 
   for (const check of checks) {

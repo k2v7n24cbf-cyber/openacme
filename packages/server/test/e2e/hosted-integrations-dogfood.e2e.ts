@@ -107,6 +107,20 @@ describe("hosted integrations agent dogfood (e2e)", () => {
     await expect(
       chatTool(
         "tool-developer",
+        "patch the dogfood hosted tool MCP contract",
+        "hosted_tool_draft_patch",
+        {
+          draft_id: draftId,
+          lock_id: lockId,
+          path: "tools.yaml",
+          content: toolsYaml(),
+        },
+      ),
+    ).resolves.toMatchObject({ ok: true });
+
+    await expect(
+      chatTool(
+        "tool-developer",
         "patch the dogfood python runtime",
         "hosted_tool_draft_patch",
         {
@@ -124,25 +138,27 @@ describe("hosted integrations agent dogfood (e2e)", () => {
       { id: "large_smoke", toolName: largeTool, args: { repeat: 80 } },
       { id: "flaky_smoke", toolName: flakyTool, args: { mode: "ok" } },
     ]) {
-      await expect(
-        chatTool(
-          "tool-developer",
-          `register ${example.id}`,
-          "hosted_tool_example_upsert",
-          {
-            draft_id: draftId,
-            lock_id: lockId,
-            example: {
-              id: example.id,
-              familyId,
-              toolName: example.toolName,
-              category: "live_safe",
-              args: example.args,
-              expected: {},
-            },
+      const upserted = await chatTool(
+        "tool-developer",
+        `register ${example.id}`,
+        "hosted_tool_example_upsert",
+        {
+          draft_id: draftId,
+          lock_id: lockId,
+          example: {
+            id: example.id,
+            familyId,
+            toolName: example.toolName,
+            category: "live_safe",
+            args: example.args,
+            expected: {},
           },
-        ),
-      ).resolves.toMatchObject({ ok: true });
+        },
+      );
+      expect(
+        upserted,
+        `failed to register ${example.id}: ${JSON.stringify(upserted)}`,
+      ).toMatchObject({ ok: true });
     }
 
     await expect(
@@ -785,76 +801,146 @@ function familyYaml(): string {
     "runtimeConfig:",
     "  requiredConfigKeys: []",
     "  requiredSecretKeys: []",
+    "",
+  ].join("\n");
+}
+
+function toolsYaml(): string {
+  return [
+    "kind: openacme.hostedToolFamily",
+    "version: 1",
+    "family:",
+    `  id: ${familyId}`,
     "tools:",
-    toolYaml(
+    contractToolYaml(
       echoTool,
       "Dogfood Echo",
       "Echoes text for dogfood acceptance.",
       "text",
       "string",
+      [
+        "        required: [echo]",
+        "        properties:",
+        "          echo:",
+        "            type: string",
+        "        additionalProperties: false",
+      ],
     ),
-    toolYaml(
+    contractToolYaml(
       sumTool,
       "Dogfood Sum",
       "Sums numbers for dogfood acceptance.",
       "values",
       "array",
+      [
+        "        required: [sum, count]",
+        "        properties:",
+        "          sum:",
+        "            type: number",
+        "          count:",
+        "            type: number",
+        "        additionalProperties: false",
+      ],
     ),
-    toolYaml(
+    contractToolYaml(
       largeTool,
       "Dogfood Large",
       "Returns a large payload to verify artifacts.",
       "repeat",
-      "number",
+      "integer",
+      [
+        "        required: [payload]",
+        "        properties:",
+        "          payload:",
+        "            type: string",
+        "        additionalProperties: false",
+      ],
     ),
-    toolYaml(
+    contractToolYaml(
       flakyTool,
       "Dogfood Flaky",
       "Fails on demand so repair flow can be tested.",
       "mode",
       "string",
+      [
+        "        properties:",
+        "          mode:",
+        "            type: string",
+        "          recovered:",
+        "            type: boolean",
+        "        additionalProperties: false",
+      ],
     ),
     "",
   ].join("\n");
 }
 
-function toolYaml(
+function contractToolYaml(
   name: string,
   title: string,
   description: string,
   required: string,
   type: string,
+  outputSchemaLines: string[],
 ): string {
   const lines = [
-    `  - name: ${name}`,
-    `    title: ${title}`,
-    `    description: ${description}`,
-    "    lifecycle: active",
-    "    inputSchema:",
-    "      type: object",
-    `      required: [${required}]`,
-    "      properties:",
-    `        ${required}:`,
-    `          type: ${type}`,
-    "      additionalProperties: false",
-    "    classification:",
-    "      operation: read",
-    "      freshness: live",
-    "      idempotency: idempotent",
-    "      execution: sync",
-    "      approval: none",
-    "    help:",
-    `      summary: ${description}`,
-    "      parameters:",
+    "  - mcp:",
+    `      name: ${hostedToolName(name)}`,
+    `      title: ${title}`,
+    `      description: ${description}`,
+    "      inputSchema:",
+    "        type: object",
+    `        required: [${required}]`,
+    "        properties:",
+    `          ${required}:`,
+    `            type: ${type}`,
+    "        additionalProperties: false",
+    "      outputSchema:",
+    "        type: object",
+    ...outputSchemaLines,
+    "      annotations:",
+    "        readOnlyHint: true",
+    "        destructiveHint: false",
+    "        idempotentHint: true",
+    "        openWorldHint: false",
+    "    openacme:",
+    `      toolName: ${name}`,
+    `      function: tool_${name}`,
+    "      lifecycle: active",
+    "      classification:",
+    "        operation: read",
+    "        freshness: live",
+    "        idempotency: idempotent",
+    "        execution: sync",
+    "        approval: none",
+    "      selectWhen:",
+    `        - ${description}`,
+    "      doNotSelectWhen:",
+    "        - Need provider data, external network access, or a mutating operation.",
+    "      prerequisites: []",
+    "      parameterHelp:",
     `        ${required}:`,
     `          summary: ${description}`,
+    ...parameterFullHelpYaml(required, type),
+    "      examples:",
+    `        - ${exampleYaml(required, type)}`,
+    "      errors: []",
   ];
-  if (type === "array") {
-    lines.push(
-      `          full: Provide ${required} as an array of integers or floating point numbers; non-numeric values are rejected.`,
-    );
-  }
   return lines.join("\n");
+}
+
+function parameterFullHelpYaml(required: string, type: string): string[] {
+  if (type !== "array") return [];
+  return [
+    `          full: Provide ${required} as an array of integers or floating point numbers; non-numeric values are rejected.`,
+  ];
+}
+
+function exampleYaml(required: string, type: string): string {
+  if (type === "array") return `${required}: [4, 5, 6]`;
+  if (type === "integer") return `${required}: 80`;
+  if (required === "mode") return `${required}: ok`;
+  return `${required}: agent-made`;
 }
 
 function toolsPython(repaired: boolean): string {

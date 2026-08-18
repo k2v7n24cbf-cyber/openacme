@@ -4,10 +4,10 @@ import {
   HostedIntegrationParameterHelpRequestSchema,
   HostedIntegrationToolHelpRequestSchema,
   parseHostedToolName,
+  sanitizeHostedToolControlPlaneResult,
 } from "@openacme/hosted-integrations";
 import { registry } from "../registry.js";
 import { getCurrentAgentId } from "../session-context.js";
-import { sanitizeHostedToolControlPlaneResult } from "./hosted-integration-redaction.js";
 
 export const HOSTED_TOOL_HELP_TOOL_NAME = "hosted_tool_help";
 

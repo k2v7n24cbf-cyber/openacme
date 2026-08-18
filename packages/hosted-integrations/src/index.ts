@@ -448,6 +448,10 @@ export {
   type WriteHostedIntegrationHumanSecretsResult,
 } from "./secrets.js";
 export {
+  sanitizeHostedToolControlPlaneResult,
+  sanitizeHostedToolControlPlaneString,
+} from "./redaction.js";
+export {
   createAgentSettingsHostedToolBinding,
   evaluateHostedIntegrationPolicy,
   resolveHostedIntegrationBindingEnvironment,

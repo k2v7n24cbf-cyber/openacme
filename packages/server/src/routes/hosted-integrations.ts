@@ -33,6 +33,7 @@ import {
   resolveHostedIntegrationExecutionConfig,
   resolveRuntimeConfigContractReadiness,
   resolveHostedIntegrationToolHelp,
+  sanitizeHostedToolControlPlaneString,
   type FamilyManifest,
   type HostedIntegrationDraft,
   type HostedIntegrationExample,
@@ -52,9 +53,6 @@ import { validateHostedIntegrationRegressionClose } from "../hosted-integration-
 
 const DEFAULT_LOCK_TTL_MS = 30 * 60 * 1000;
 const HOSTED_TOOL_HELP_TOOL_NAME = "hosted_tool_help";
-const REDACTED = "[REDACTED]";
-const SENSITIVE_ROUTE_ERROR_PATTERN =
-  /(?:bearer\s+[a-z0-9._~+/-]+|raw-token[^\s'",\\\]}]*|super-secret[^\s'",\\\]}]*)/gi;
 
 export interface HostedIntegrationRouteOptions {
   authStore?: AuthStore;
@@ -2120,7 +2118,7 @@ function invalidRequest(c: Context, error: unknown) {
 }
 
 function sanitizeRouteErrorMessage(message: string): string {
-  return message.replace(SENSITIVE_ROUTE_ERROR_PATTERN, REDACTED);
+  return sanitizeHostedToolControlPlaneString(message);
 }
 
 function isInvalidRequestError(error: unknown): error is Error {

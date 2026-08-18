@@ -1571,6 +1571,7 @@ describe("hosted integrations invocation routes", () => {
           {
             name: "filter_body",
             "raw-token-route-leak": "super-secret-route-leak",
+            api_key: "plain-route-secret",
           },
         ],
       }),
@@ -1578,9 +1579,11 @@ describe("hosted integrations invocation routes", () => {
     expect(res.status).toBe(400);
     const invalidHelpBody = await res.json();
     expect(JSON.stringify(invalidHelpBody)).not.toContain("raw-token-route-leak");
+    expect(JSON.stringify(invalidHelpBody)).not.toContain("api_key");
     expect(JSON.stringify(invalidHelpBody)).not.toContain(
       "super-secret-route-leak",
     );
+    expect(JSON.stringify(invalidHelpBody)).not.toContain("plain-route-secret");
     expect(invalidHelpBody).toMatchObject({
       error: expect.stringContaining("[REDACTED]"),
     });

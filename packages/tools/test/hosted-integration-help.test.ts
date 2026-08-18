@@ -202,7 +202,7 @@ describe("hosted tool help", () => {
       error: {
         code: "runtime_error",
         message:
-          "help backend returned Authorization: [REDACTED] and [REDACTED]",
+          "help backend returned [REDACTED]: [REDACTED] and [REDACTED]",
       },
     });
   });

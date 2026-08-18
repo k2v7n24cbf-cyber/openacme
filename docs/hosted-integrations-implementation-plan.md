@@ -13471,3 +13471,45 @@ Evidence:
 - Path guard:
   `pnpm --filter @openacme/server test -- hosted-integrations-routes.test.ts -t "manages family locks"`
   passed and proves unsafe source-file path fragments stay out of the response.
+
+### Slice 37.4: Shared Hosted Redaction Choke Point
+
+Status: implemented.
+
+Goal:
+
+- Keep hosted management tools, hosted help, and hosted HTTP invalid-request
+  responses on one shared control-plane redaction helper so key/value leak
+  behavior does not drift between surfaces.
+
+TDD:
+
+- Package-level redaction preserves response shape while redacting sensitive
+  object values and token-like strings.
+- Package-level string redaction catches sensitive field names embedded in
+  validation error strings, including `api_key`.
+- Hosted help route validation rejects malformed parameter help requests
+  without returning token-like unknown keys, `api_key`, or secret-like values.
+- Existing management/help thrown-error redaction remains green after removing
+  the tools-local sanitizer.
+
+Implementation:
+
+- `packages/hosted-integrations/src/redaction.ts` now owns
+  `sanitizeHostedToolControlPlaneResult` and
+  `sanitizeHostedToolControlPlaneString`.
+- `packages/server/src/routes/hosted-integrations.ts` uses the shared string
+  sanitizer for `invalidRequest` responses.
+- `packages/tools/src/builtins/hosted-integration-help.ts` and
+  `packages/tools/src/builtins/hosted-integration-management.ts` import the
+  package-level helper instead of a tools-local copy.
+- The tools-local `hosted-integration-redaction.ts` copy was removed.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/server test -- hosted-integrations-routes.test.ts -t "returns hosted tool help only"`
+  failed because the malformed request response still contained `api_key`.
+- Green focused validation after shared helper build:
+  `pnpm --filter @openacme/hosted-integrations build && pnpm --filter @openacme/server test -- hosted-integrations-routes.test.ts -t "returns hosted tool help only" && pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts -t "thrown help errors" && pnpm --filter @openacme/tools test -- hosted-integration-management.test.ts -t "secret-shaped"`
+  passed.

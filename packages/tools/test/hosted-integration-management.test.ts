@@ -348,7 +348,7 @@ describe("hosted integration management tools", () => {
       ok: false,
       error: {
         code: "runtime_error",
-        message: "provider returned Authorization: [REDACTED] and [REDACTED]",
+        message: "provider returned [REDACTED]: [REDACTED] and [REDACTED]",
       },
     });
   });

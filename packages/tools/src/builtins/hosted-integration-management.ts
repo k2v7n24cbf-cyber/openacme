@@ -2,10 +2,10 @@ import { z } from "zod";
 import {
   HostedFamilyPackageDocumentSchema,
   parseHostedToolName,
+  sanitizeHostedToolControlPlaneResult,
 } from "@openacme/hosted-integrations";
 import { registry } from "../registry.js";
 import { getCurrentAgentId } from "../session-context.js";
-import { sanitizeHostedToolControlPlaneResult } from "./hosted-integration-redaction.js";
 
 export const HOSTED_TOOL_MANAGEMENT_TOOL_NAMES = [
   "hosted_tool_family_list",

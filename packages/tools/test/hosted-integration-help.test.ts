@@ -178,6 +178,35 @@ describe("hosted tool help", () => {
     });
   });
 
+  it("redacts secret-shaped values from thrown help errors", async () => {
+    bindHostedToolHelp({
+      invoke: async () => {
+        throw new Error(
+          "help backend returned Authorization: Bearer raw-token-123 and super-secret-value",
+        );
+      },
+    });
+
+    const result = await runHelpTool(
+      {
+        tool_name: "hosted_qualys__qualys_cloud_agent_hostasset_count",
+        tool_detail: "full",
+      },
+      "analyst",
+    );
+
+    expect(JSON.stringify(result)).not.toContain("raw-token-123");
+    expect(JSON.stringify(result)).not.toContain("super-secret-value");
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "runtime_error",
+        message:
+          "help backend returned Authorization: [REDACTED] and [REDACTED]",
+      },
+    });
+  });
+
   it("rejects names outside the hosted invocation namespace", async () => {
     bindHostedToolHelp({
       invoke: async () => ({ ok: true }),

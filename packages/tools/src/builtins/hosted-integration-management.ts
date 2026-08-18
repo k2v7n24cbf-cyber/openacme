@@ -5,6 +5,7 @@ import {
 } from "@openacme/hosted-integrations";
 import { registry } from "../registry.js";
 import { getCurrentAgentId } from "../session-context.js";
+import { sanitizeHostedToolControlPlaneResult } from "./hosted-integration-redaction.js";
 
 export const HOSTED_TOOL_MANAGEMENT_TOOL_NAMES = [
   "hosted_tool_family_list",
@@ -529,39 +530,15 @@ async function invokeManagementTool(
       operation: toolName,
       params: args,
     });
-    return JSON.stringify(sanitizeManagementResult(result));
+    return JSON.stringify(sanitizeHostedToolControlPlaneResult(result));
   } catch (error) {
     const rawMessage = error instanceof Error ? error.message : String(error);
     return JSON.stringify({
       ok: false,
       error: {
         code: "runtime_error",
-        message: sanitizeManagementResult(rawMessage),
+        message: sanitizeHostedToolControlPlaneResult(rawMessage),
       },
     });
   }
-}
-
-const REDACTED = "[REDACTED]";
-const SENSITIVE_KEY_PATTERN =
-  /(?:secret|token|password|passwd|pwd|credential|api[_-]?key|authorization)/i;
-const SENSITIVE_VALUE_PATTERN =
-  /(?:bearer\s+[a-z0-9._~+/-]+|raw-token|super-secret[^\s",}]*)/gi;
-
-function sanitizeManagementResult(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sanitizeManagementResult);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, child]) => [
-        key,
-        SENSITIVE_KEY_PATTERN.test(key)
-          ? REDACTED
-          : sanitizeManagementResult(child),
-      ]),
-    );
-  }
-  if (typeof value === "string") {
-    return value.replace(SENSITIVE_VALUE_PATTERN, REDACTED);
-  }
-  return value;
 }

@@ -7,6 +7,7 @@ import {
 } from "@openacme/hosted-integrations";
 import { registry } from "../registry.js";
 import { getCurrentAgentId } from "../session-context.js";
+import { sanitizeHostedToolControlPlaneResult } from "./hosted-integration-redaction.js";
 
 export const HOSTED_TOOL_HELP_TOOL_NAME = "hosted_tool_help";
 
@@ -100,11 +101,12 @@ async function invokeHostedToolHelp(
     });
     return JSON.stringify(result);
   } catch (error) {
+    const rawMessage = error instanceof Error ? error.message : String(error);
     return JSON.stringify({
       ok: false,
       error: {
         code: "runtime_error",
-        message: error instanceof Error ? error.message : String(error),
+        message: sanitizeHostedToolControlPlaneResult(rawMessage),
       },
     });
   }

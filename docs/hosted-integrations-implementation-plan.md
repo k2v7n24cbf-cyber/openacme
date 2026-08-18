@@ -13385,3 +13385,46 @@ Evidence:
 - Green focused validation:
   `pnpm --filter @openacme/tools test -- hosted-integration-management.test.ts -t "thrown errors"`
   passed after the catch-path sanitizer change.
+
+### Slice 37.2: Help-Tool Exception Redaction
+
+Status: implemented.
+
+Goal:
+
+- Keep `hosted_tool_help` inside the same response choke point when its
+  control-plane binding throws instead of returning normal help content.
+
+TDD:
+
+- A thrown help binding error containing authorization/token-like text returns
+  `runtime_error` with a redacted message.
+- The serialized help-tool result never contains raw thrown secret-shaped
+  fragments.
+- Management-tool exception redaction remains green after sharing the
+  sanitizer.
+
+Implementation:
+
+- `packages/tools/src/builtins/hosted-integration-redaction.ts` now owns the
+  shared hosted control-plane redaction helper for management and help built-ins.
+- `packages/tools/src/builtins/hosted-integration-help.ts` sanitizes thrown
+  error messages before serializing `runtime_error`.
+- `packages/tools/src/builtins/hosted-integration-management.ts` uses the shared
+  helper so the two hosted support/control-plane tools do not drift.
+- `packages/tools/test/hosted-integration-help.test.ts` adds a regression that
+  throws bearer/raw-token and `super-secret` fragments and proves the help tool
+  response only returns `[REDACTED]`.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts -t "thrown help errors"`
+  failed because the raw `raw-token-123` fragment was serialized in the
+  help-tool error response.
+- Green focused validation:
+  `pnpm --filter @openacme/tools test -- hosted-integration-help.test.ts -t "thrown help errors"`
+  passed after the catch-path sanitizer change.
+- Regression guard:
+  `pnpm --filter @openacme/tools test -- hosted-integration-management.test.ts -t "thrown errors"`
+  passed with management redaction using the same shared helper.

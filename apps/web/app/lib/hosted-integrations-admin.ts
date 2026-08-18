@@ -90,8 +90,8 @@ export interface HostedIntegrationFamilyDetail {
       entrypoint?: string;
     };
     runtimeConfig?: HostedIntegrationRuntimeConfigContract;
-    tools: HostedIntegrationToolSpec[];
   };
+  tools: HostedIntegrationToolSpec[];
 }
 
 export function buildHostedIntegrationAgentBindingMatrix(input: {
@@ -1509,7 +1509,7 @@ export function buildHostedIntegrationsAdminRows(input: {
           (generation) =>
             generation.familyId === family.id && generation.status === "active",
         ) ?? null,
-      tools: detail?.manifest.tools ?? [],
+      tools: detail?.tools ?? [],
       runtimeConfig: detail?.manifest.runtimeConfig,
       environmentConfigs: input.environmentConfigs
         .filter((scope) => scope.familyId === family.id)

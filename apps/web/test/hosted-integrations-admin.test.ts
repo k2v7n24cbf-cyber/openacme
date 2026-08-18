@@ -173,22 +173,22 @@ describe("hosted integrations admin view model", () => {
             id: "qualys",
             name: "Qualys",
             version: 2,
-            tools: [
-              {
-                name: "qualys_count_assets",
-                title: "Count assets",
-                description: "Count assets.",
-                lifecycle: "active",
-                classification: {
-                  operation: "read",
-                  freshness: "live",
-                  idempotency: "idempotent",
-                  execution: "sync",
-                  approval: "none",
-                },
-              },
-            ],
           },
+          tools: [
+            {
+              name: "qualys_count_assets",
+              title: "Count assets",
+              description: "Count assets.",
+              lifecycle: "active",
+              classification: {
+                operation: "read",
+                freshness: "live",
+                idempotency: "idempotent",
+                execution: "sync",
+                approval: "none",
+              },
+            },
+          ],
         },
       ],
       generations: [
@@ -270,6 +270,9 @@ describe("hosted integrations admin view model", () => {
     expect(rows[0]?.failureBuckets.map((bucket) => bucket.id)).toEqual([
       "bucket_open",
       "bucket_closed",
+    ]);
+    expect(rows[0]?.tools.map((tool) => tool.name)).toEqual([
+      "qualys_count_assets",
     ]);
     expect(JSON.stringify(rows)).not.toContain("secret-value");
   });
@@ -360,37 +363,37 @@ describe("hosted integrations admin view model", () => {
             id: "qualys",
             name: "Qualys",
             version: 2,
-            tools: [
-              {
-                name: "qualys_count_assets",
-                title: "Count assets",
-                description: "Count assets.",
-                lifecycle: "active",
-                inputSchema: { type: "object" },
-                help: { summary: "Count help." },
-                classification: {
-                  operation: "read",
-                  freshness: "live",
-                  idempotency: "idempotent",
-                  execution: "sync",
-                  approval: "none",
-                },
-              },
-              {
-                name: "qualys_search_assets",
-                title: "Search assets",
-                description: "Search assets.",
-                lifecycle: "active",
-                classification: {
-                  operation: "read",
-                  freshness: "live",
-                  idempotency: "idempotent",
-                  execution: "sync",
-                  approval: "none",
-                },
-              },
-            ],
           },
+          tools: [
+            {
+              name: "qualys_count_assets",
+              title: "Count assets",
+              description: "Count assets.",
+              lifecycle: "active",
+              inputSchema: { type: "object" },
+              help: { summary: "Count help." },
+              classification: {
+                operation: "read",
+                freshness: "live",
+                idempotency: "idempotent",
+                execution: "sync",
+                approval: "none",
+              },
+            },
+            {
+              name: "qualys_search_assets",
+              title: "Search assets",
+              description: "Search assets.",
+              lifecycle: "active",
+              classification: {
+                operation: "read",
+                freshness: "live",
+                idempotency: "idempotent",
+                execution: "sync",
+                approval: "none",
+              },
+            },
+          ],
         },
       ],
       generations: [],

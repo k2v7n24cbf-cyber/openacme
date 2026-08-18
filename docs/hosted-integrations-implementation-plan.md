@@ -9610,6 +9610,11 @@ Evidence:
   both tool info and Vercel tool projection while not directly exposing
   OpenAcme-only `errors` or `pagination` metadata. Those richer fields remain
   available through `hosted_tool_help`.
+- `apps/web/app/lib/hosted-integrations-admin.ts` now builds Hosted Tools admin
+  rows from API detail `tools` derived from `tools.yaml`, not
+  `manifest.tools`. `apps/web/test/hosted-integrations-admin.test.ts` guards
+  the split detail shape so human-native tool navigation does not silently go
+  empty when `family.yaml` correctly has no active tool ownership.
 
 Slice 29.3:
 

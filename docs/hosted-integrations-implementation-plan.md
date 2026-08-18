@@ -21,8 +21,9 @@ This plan implements the architecture in
 
 The current implementation contract is Milestone 18 and later, especially
 Milestones 20, 21, 22, 29, 30, the Qualys-specific Milestone 31 current-pilot
-migration gate, the shared-vocabulary Milestones 32-35, and the Milestone 36
-acceptance hardening gate. Earlier milestones remain
+migration gate, the shared-vocabulary Milestones 32-35, the Milestone 36
+acceptance hardening gate, and Milestone 37 production hardening. Earlier
+milestones remain
 historical evidence only where they use superseded terms such as migration
 fixtures, config scopes, or view-level cutover.
 
@@ -7760,7 +7761,8 @@ have since accepted the current Hosted Tools concept gate, unguided management
 evaluation, contract/source-of-truth split, import/export lifecycle, current
 Qualys read-only pilot, shared vocabulary, help usability, and deterministic
 acceptance matrix. Do not reopen those milestones as the next implementation
-order.
+order. Milestone 37 is the current production-hardening packet for bounded
+issues found by parity, dogfood, and code audit.
 
 Recommended future order:
 
@@ -13325,3 +13327,61 @@ Milestone 36 Acceptance:
   `secretScan: pass`, and concise evidence. They must also record the live
   artifact path, scenario ids, and capability-level result classification in
   this plan.
+
+## Milestone 37: Hosted Tools Production Hardening
+
+Status: in progress.
+
+Goal:
+
+- Close bounded production-hardening issues found by parity, dogfood, and code
+  audit without reopening accepted baseline milestones or broadening the Qualys
+  provider surface without evidence.
+
+Non-goals:
+
+- No new Qualys migration batch without moving inventory rows out of
+  `blocked_evidence_required` with endpoint/request/response/pagination/auth/
+  safety/help/live proof.
+- No new integration-hub runtime import, compatibility alias, or alternate MCP
+  authorization surface.
+- No broad redesign of Tool Developer workflow, Agent Settings, or hosted
+  package format.
+
+### Slice 37.1: Management-Tool Exception Redaction
+
+Status: implemented.
+
+Goal:
+
+- Keep `hosted_tool_*` management tools inside the same response choke point
+  when the control-plane binding throws instead of returning a normal result.
+
+TDD:
+
+- Normal management-tool responses continue to redact secret-shaped keys and
+  values.
+- A thrown management binding error containing authorization/token-like text
+  returns `runtime_error` with a redacted message.
+- The serialized tool result never contains the raw thrown secret-shaped
+  fragments.
+
+Implementation:
+
+- `packages/tools/src/builtins/hosted-integration-management.ts` now sanitizes
+  thrown error messages with the same management-result sanitizer used for
+  successful responses before serializing `runtime_error`.
+- `packages/tools/test/hosted-integration-management.test.ts` adds a
+  regression that throws a message containing bearer/raw-token and
+  `super-secret` fragments and proves the management tool response only returns
+  `[REDACTED]`.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/tools test -- hosted-integration-management.test.ts -t "thrown errors"`
+  failed because the raw `raw-token-123` fragment was serialized in the
+  management-tool error response.
+- Green focused validation:
+  `pnpm --filter @openacme/tools test -- hosted-integration-management.test.ts -t "thrown errors"`
+  passed after the catch-path sanitizer change.

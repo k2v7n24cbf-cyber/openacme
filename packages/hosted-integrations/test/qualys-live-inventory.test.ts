@@ -1766,9 +1766,17 @@ describe("Qualys live hosted migration inventory", () => {
     expect(planText).toContain(
       "Status: implemented for the original Qualys vocabulary-discovery dogfood",
     );
-    expect(planText).not.toContain("Status: in progress.");
+    expect(sectionText(planText, "Milestone 31")).not.toContain(
+      "Status: in progress.",
+    );
     expect(planText).toContain(
       "Status: accepted for the current 18-tool read-only pilot. Broader Qualys",
+    );
+    expect(planText).toContain(
+      "## Milestone 37: Hosted Tools Production Hardening",
+    );
+    expect(sectionText(planText, "Milestone 37")).toContain(
+      "Status: in progress.",
     );
     expect(planText).toContain("broader Qualys");
     expect(planText).toContain("Status: accepted for the current 18-tool read-only pilot");
@@ -2139,6 +2147,14 @@ function parameterHelpPathValue(
 function coverageString(value: unknown): string {
   if (typeof value === "string") return value;
   return JSON.stringify(value);
+}
+
+function sectionText(markdown: string, heading: string): string {
+  const marker = `## ${heading}`;
+  const start = markdown.indexOf(marker);
+  if (start < 0) return "";
+  const next = markdown.indexOf("\n## ", start + marker.length);
+  return next < 0 ? markdown.slice(start) : markdown.slice(start, next);
 }
 
 function gavFilterFieldsFromArgs(args: unknown): string[] {

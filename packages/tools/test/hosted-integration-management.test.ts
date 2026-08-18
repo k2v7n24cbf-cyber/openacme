@@ -327,6 +327,32 @@ describe("hosted integration management tools", () => {
     });
   });
 
+  it("redacts secret-shaped values from management tool thrown errors", async () => {
+    bindHostedToolManagement({
+      invoke: async () => {
+        throw new Error(
+          "provider returned Authorization: Bearer raw-token-123 and super-secret-value",
+        );
+      },
+    });
+
+    const result = await runTool(
+      "hosted_tool_environment_config_get",
+      { family_id: "qualys", environment: "prod" },
+      "tool-developer",
+    );
+
+    expect(JSON.stringify(result)).not.toContain("raw-token-123");
+    expect(JSON.stringify(result)).not.toContain("super-secret-value");
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "runtime_error",
+        message: "provider returned Authorization: [REDACTED] and [REDACTED]",
+      },
+    });
+  });
+
   it("delegates readiness inspection through the control-plane port", async () => {
     const calls: HostedToolManagementRequest[] = [];
     bindHostedToolManagement({

@@ -531,11 +531,12 @@ async function invokeManagementTool(
     });
     return JSON.stringify(sanitizeManagementResult(result));
   } catch (error) {
+    const rawMessage = error instanceof Error ? error.message : String(error);
     return JSON.stringify({
       ok: false,
       error: {
         code: "runtime_error",
-        message: error instanceof Error ? error.message : String(error),
+        message: sanitizeManagementResult(rawMessage),
       },
     });
   }

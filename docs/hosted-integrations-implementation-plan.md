@@ -12940,6 +12940,9 @@ Evidence:
 - The same legacy-surface guard now also covers the real-LLM dogfood script so
   hosted tool variables do not drift back to legacy `managed*Tool` naming while
   exercising the Hosted Tools lifecycle.
+- The legacy-surface guard also locks hosted lifecycle ownership wording to
+  Tool Developer in the hosted development skill and managed-agent template,
+  while leaving unrelated platform reference examples alone.
 - `docs/hosted-integrations-architecture.md` now defines the naming boundary:
   `Hosted Tools` is the product and human-facing feature name, while
   `hosted integration` remains the internal package/API/storage/runtime layer.

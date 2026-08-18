@@ -139,6 +139,22 @@ describe("hosted integrations legacy surface cleanup", () => {
     expect(template).toContain("must not be run directly");
   });
 
+  it("keeps hosted lifecycle ownership on Tool Developer instead of generic engineering personas", () => {
+    const skill = readActiveSurface(
+      "packages/skills/builtin/hosted-integrations-development/SKILL.md",
+    );
+    const template = readActiveSurface(
+      "packages/agent-catalog/templates/tool-developer/AGENT.md",
+    );
+
+    expect(skill).toContain("Tool Developer");
+    expect(template).toContain("Tool Developer");
+    for (const content of [skill, template]) {
+      expect(content).not.toMatch(/\b[Ss]oftware [Ee]ngineer\b/);
+      expect(content).not.toMatch(/\bgeneric engineering maintainer\b/i);
+    }
+  });
+
   it("teaches shared vocabulary references instead of per-tool enum duplication", () => {
     const skill = readActiveSurface(
       "packages/skills/builtin/hosted-integrations-development/SKILL.md",

@@ -52,6 +52,9 @@ import { validateHostedIntegrationRegressionClose } from "../hosted-integration-
 
 const DEFAULT_LOCK_TTL_MS = 30 * 60 * 1000;
 const HOSTED_TOOL_HELP_TOOL_NAME = "hosted_tool_help";
+const REDACTED = "[REDACTED]";
+const SENSITIVE_ROUTE_ERROR_PATTERN =
+  /(?:bearer\s+[a-z0-9._~+/-]+|raw-token[^\s'",\\\]}]*|super-secret[^\s'",\\\]}]*)/gi;
 
 export interface HostedIntegrationRouteOptions {
   authStore?: AuthStore;
@@ -2111,9 +2114,13 @@ function relPathFromWildcard(c: Context, prefix: string): string | null {
 
 function invalidRequest(c: Context, error: unknown) {
   if (isInvalidRequestError(error)) {
-    return c.json({ error: error.message }, 400);
+    return c.json({ error: sanitizeRouteErrorMessage(error.message) }, 400);
   }
   throw error;
+}
+
+function sanitizeRouteErrorMessage(message: string): string {
+  return message.replace(SENSITIVE_ROUTE_ERROR_PATTERN, REDACTED);
 }
 
 function isInvalidRequestError(error: unknown): error is Error {

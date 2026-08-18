@@ -761,6 +761,16 @@ describe("hosted integrations draft control plane routes", () => {
     );
     expect(res.status).toBe(400);
 
+    res = await req(
+      "/api/hosted-integrations/families/qualys/source/files/..%2Fraw-token-route-leak",
+    );
+    expect(res.status).toBe(400);
+    const unsafePathBody = await res.json();
+    expect(JSON.stringify(unsafePathBody)).not.toContain("raw-token-route-leak");
+    expect(unsafePathBody).toEqual({
+      error: "path escapes source root",
+    });
+
     res = await req(`/api/hosted-integrations/locks/${lockId}/renew`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -1549,6 +1559,30 @@ describe("hosted integrations invocation routes", () => {
           },
         },
       },
+    });
+
+    res = await req("/api/hosted-integrations/help", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actor: { id: "analyst", kind: "agent", roles: ["agent"] },
+        tool_name: "hosted_qualys__qualys_count_assets",
+        parameters: [
+          {
+            name: "filter_body",
+            "raw-token-route-leak": "super-secret-route-leak",
+          },
+        ],
+      }),
+    });
+    expect(res.status).toBe(400);
+    const invalidHelpBody = await res.json();
+    expect(JSON.stringify(invalidHelpBody)).not.toContain("raw-token-route-leak");
+    expect(JSON.stringify(invalidHelpBody)).not.toContain(
+      "super-secret-route-leak",
+    );
+    expect(invalidHelpBody).toMatchObject({
+      error: expect.stringContaining("[REDACTED]"),
     });
 
     await manager.createAgent(

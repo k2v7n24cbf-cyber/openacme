@@ -13428,3 +13428,46 @@ Evidence:
 - Regression guard:
   `pnpm --filter @openacme/tools test -- hosted-integration-management.test.ts -t "thrown errors"`
   passed with management redaction using the same shared helper.
+
+### Slice 37.3: Hosted Route Invalid-Request Redaction
+
+Status: implemented.
+
+Goal:
+
+- Keep hosted integration HTTP/API invalid-request responses from echoing
+  secret-shaped request fragments when schema or path validation fails.
+
+TDD:
+
+- Hosted help route validation rejects malformed parameter help requests without
+  returning raw token-like unknown keys or values from Zod errors.
+- Source-file path traversal responses remain generic and do not echo the
+  unsafe requested path.
+- Existing hosted route behavior remains unchanged for ordinary valid and
+  policy-denied help requests.
+
+Implementation:
+
+- `packages/server/src/routes/hosted-integrations.ts` now sanitizes messages
+  returned by the hosted route `invalidRequest` helper before serializing HTTP
+  400 responses.
+- `packages/server/test/hosted-integrations-routes.test.ts` adds a regression
+  where a malformed help request includes `raw-token-*` and `super-secret-*`
+  fragments in an unknown parameter key/value and proves the response only
+  contains `[REDACTED]`.
+- The existing source-files path-safety route test now also asserts that unsafe
+  token-shaped path fragments are not echoed.
+
+Evidence:
+
+- Red test first:
+  `pnpm --filter @openacme/server test -- hosted-integrations-routes.test.ts -t "returns hosted tool help only"`
+  failed because the Zod `unrecognized_keys` response serialized
+  `raw-token-route-leak`.
+- Green focused validation:
+  `pnpm --filter @openacme/server test -- hosted-integrations-routes.test.ts -t "returns hosted tool help only"`
+  passed after route invalid-request message sanitization.
+- Path guard:
+  `pnpm --filter @openacme/server test -- hosted-integrations-routes.test.ts -t "manages family locks"`
+  passed and proves unsafe source-file path fragments stay out of the response.

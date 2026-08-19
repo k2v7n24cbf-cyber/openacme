@@ -28,6 +28,7 @@ import {
 } from "./catalog.js";
 import {
   hostedIntegrationEnvironmentConfigId,
+  type HostedIntegrationEnvironmentConfigFamilyResolver,
   type HostedIntegrationEnvironmentConfigStore,
   type UpsertHostedIntegrationEnvironmentConfigRequest,
   type UpsertHostedIntegrationEnvironmentConfigResult,
@@ -210,6 +211,7 @@ export function createDbHostedIntegrationDraftStore(
 export function createDbHostedIntegrationEnvironmentConfigStore(
   options: DbHostedIntegrationStoreOptions & {
     catalog: HostedIntegrationCatalog;
+    familyExists?: HostedIntegrationEnvironmentConfigFamilyResolver;
   },
 ): HostedIntegrationEnvironmentConfigStore {
   return new DbHostedIntegrationEnvironmentConfigStore(options);
@@ -742,15 +744,18 @@ class DbHostedIntegrationDraftStore implements HostedIntegrationDraftStore {
 class DbHostedIntegrationEnvironmentConfigStore implements HostedIntegrationEnvironmentConfigStore {
   private readonly db: HostedIntegrationSqlDatabase;
   private readonly catalog: HostedIntegrationCatalog;
+  private readonly familyExists?: HostedIntegrationEnvironmentConfigFamilyResolver;
   private readonly now: () => Date;
 
   constructor(
     options: DbHostedIntegrationStoreOptions & {
       catalog: HostedIntegrationCatalog;
+      familyExists?: HostedIntegrationEnvironmentConfigFamilyResolver;
     },
   ) {
     this.db = options.db;
     this.catalog = options.catalog;
+    this.familyExists = options.familyExists;
     this.now = options.now ?? (() => new Date());
   }
 
@@ -811,7 +816,7 @@ class DbHostedIntegrationEnvironmentConfigStore implements HostedIntegrationEnvi
     }
     assertNonEmpty("updatedBy", request.updatedBy);
 
-    if (!(await this.catalog.getFamily(familyId))) {
+    if (!(await this.hasConfigurableFamily(familyId))) {
       return { ok: false, reason: "family_not_found" };
     }
 
@@ -851,6 +856,13 @@ class DbHostedIntegrationEnvironmentConfigStore implements HostedIntegrationEnvi
         environmentConfig.updatedBy,
       );
     return { ok: true, environmentConfig };
+  }
+
+  private async hasConfigurableFamily(
+    familyId: HostedIntegrationFamilyId,
+  ): Promise<boolean> {
+    if (this.familyExists) return this.familyExists(familyId);
+    return (await this.catalog.getFamily(familyId)) !== null;
   }
 }
 

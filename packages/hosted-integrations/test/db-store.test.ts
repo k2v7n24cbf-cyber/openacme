@@ -569,6 +569,38 @@ describe("DB-backed hosted integration stores", () => {
     });
   });
 
+  it("persists environment configs for proposed families before promotion", async () => {
+    const environmentConfigs = createDbHostedIntegrationEnvironmentConfigStore({
+      db,
+      dataDir,
+      catalog: catalogWithFamily("active_family"),
+      familyExists: async (familyId) => familyId === "qualys",
+      now,
+    });
+
+    await expect(
+      environmentConfigs.upsertEnvironmentConfig({
+        familyId: "qualys",
+        environment: "prod",
+        config: { QUALYS_BASE_URL: "https://qualys.example" },
+        secrets: { QUALYS_API_KEY: { configured: true } },
+        updatedBy: "human:alen",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      environmentConfig: { id: "qualys-prod", revision: 1 },
+    });
+
+    await expect(
+      environmentConfigs.upsertEnvironmentConfig({
+        familyId: "missing",
+        environment: "prod",
+        config: {},
+        updatedBy: "human:alen",
+      }),
+    ).resolves.toEqual({ ok: false, reason: "family_not_found" });
+  });
+
   it("persists canonical environment configs and supports DB-backed secret metadata", async () => {
     const environmentConfigs = createDbHostedIntegrationEnvironmentConfigStore({
       db,

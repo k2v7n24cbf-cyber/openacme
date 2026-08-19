@@ -110,6 +110,7 @@ export {
   hostedIntegrationEnvironmentConfigId,
   type FileHostedIntegrationEnvironmentConfigStoreOptions,
   type HostedIntegrationEnvironmentConfigStore,
+  type HostedIntegrationEnvironmentConfigFamilyResolver,
   type UpsertHostedIntegrationEnvironmentConfigRequest,
   type UpsertHostedIntegrationEnvironmentConfigResult,
 } from "./environment-configs.js";

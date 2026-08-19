@@ -19,8 +19,13 @@ import {
 export interface FileHostedIntegrationEnvironmentConfigStoreOptions {
   dataDir: string;
   catalog?: HostedIntegrationCatalog;
+  familyExists?: HostedIntegrationEnvironmentConfigFamilyResolver;
   now?: () => Date;
 }
+
+export type HostedIntegrationEnvironmentConfigFamilyResolver = (
+  familyId: HostedIntegrationFamilyId,
+) => Promise<boolean>;
 
 export interface UpsertHostedIntegrationEnvironmentConfigRequest {
   familyId: HostedIntegrationFamilyId | string;
@@ -63,6 +68,7 @@ export function createFileHostedIntegrationEnvironmentConfigStore(
   return new FileHostedIntegrationEnvironmentConfigStore({
     dataDir: options.dataDir,
     catalog: options.catalog ?? createFileHostedIntegrationCatalog(options),
+    familyExists: options.familyExists,
     now: options.now ?? (() => new Date()),
   });
 }
@@ -72,11 +78,13 @@ class FileHostedIntegrationEnvironmentConfigStore
 {
   private readonly environmentConfigsDir: string;
   private readonly catalog: HostedIntegrationCatalog;
+  private readonly familyExists?: HostedIntegrationEnvironmentConfigFamilyResolver;
   private readonly now: () => Date;
 
   constructor(parts: {
     dataDir: string;
     catalog: HostedIntegrationCatalog;
+    familyExists?: HostedIntegrationEnvironmentConfigFamilyResolver;
     now: () => Date;
   }) {
     this.environmentConfigsDir = path.join(
@@ -85,6 +93,7 @@ class FileHostedIntegrationEnvironmentConfigStore
       "environment-configs",
     );
     this.catalog = parts.catalog;
+    this.familyExists = parts.familyExists;
     this.now = parts.now;
   }
 
@@ -146,7 +155,7 @@ class FileHostedIntegrationEnvironmentConfigStore
     }
     assertNonEmpty("updatedBy", request.updatedBy);
 
-    if (!(await this.catalog.getFamily(familyId))) {
+    if (!(await this.hasConfigurableFamily(familyId))) {
       return { ok: false, reason: "family_not_found" };
     }
 
@@ -205,6 +214,13 @@ class FileHostedIntegrationEnvironmentConfigStore
         hostedIntegrationEnvironmentConfigId(familyId, environment),
       )}.json`,
     );
+  }
+
+  private async hasConfigurableFamily(
+    familyId: HostedIntegrationFamilyId,
+  ): Promise<boolean> {
+    if (this.familyExists) return this.familyExists(familyId);
+    return (await this.catalog.getFamily(familyId)) !== null;
   }
 }
 

@@ -699,6 +699,76 @@ describe("hosted integrations proposed family routes", () => {
     await expect(runtime.hostedIntegrationService.generations.listGenerations())
       .resolves.toEqual([]);
   });
+
+  it("allows environment config setup for imported proposed families before promotion", async () => {
+    const packageDocument = {
+      kind: "openacme.hostedFamilyPackage",
+      version: 1,
+      metadata: { familyId: "qualys" },
+      files: Object.entries(
+        withSplitToolContractFiles({
+          "family.yaml": familyYamlWithRuntimeConfigContract({
+            requiredConfigKeys: ["QUALYS_BASE_URL"],
+            requiredSecretKeys: ["QUALYS_PASSWORD"],
+          }),
+          "qualys.py": hostedPackagePythonSource("qualys_count_assets"),
+        }),
+      ).map(([filePath, content]) => ({ path: filePath, content })),
+    };
+
+    let res = await req("/api/hosted-integrations/packages/import", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actor: toolDeveloperActor(),
+        mode: "create",
+        packageDocument,
+        ttlMs: 60_000,
+      }),
+    });
+    expect(res.status).toBe(201);
+    const imported = (await res.json()) as {
+      draft: { id: string };
+      lock: { id: string };
+    };
+
+    res = await req("/api/hosted-integrations/environment-configs/qualys/prod", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        config: { QUALYS_BASE_URL: "https://qualys.example" },
+        secrets: { QUALYS_PASSWORD: { configured: true } },
+        updatedBy: "human:test",
+      }),
+    });
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      environmentConfig: {
+        id: "qualys-prod",
+        familyId: "qualys",
+        environment: "prod",
+      },
+    });
+
+    await upsertSmokeExample(imported.draft.id, imported.lock.id);
+
+    res = await req(
+      `/api/hosted-integrations/drafts/${imported.draft.id}/promote`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          actor: toolDeveloperActor(),
+          lockId: imported.lock.id,
+        }),
+      },
+    );
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      generation: { familyId: "qualys", status: "active" },
+    });
+  });
 });
 
 describe("hosted integrations draft control plane routes", () => {

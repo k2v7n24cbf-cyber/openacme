@@ -178,6 +178,9 @@ export function createFileHostedIntegrationService(
   const environmentConfigs = createFileHostedIntegrationEnvironmentConfigStore({
     ...options,
     catalog,
+    familyExists: async (familyId) =>
+      (await catalog.getFamily(familyId)) !== null ||
+      (await proposedFamilies.getProposedFamily(familyId)) !== null,
   });
   const secrets = createFileHostedIntegrationSecretStore(options);
   const approvals = createFileHostedIntegrationApprovalStore(options);
@@ -266,6 +269,9 @@ export function createDbHostedIntegrationService(
   const environmentConfigs = createDbHostedIntegrationEnvironmentConfigStore({
     ...options,
     catalog,
+    familyExists: async (familyId) =>
+      (await catalog.getFamily(familyId)) !== null ||
+      (await proposedFamilies.getProposedFamily(familyId)) !== null,
   });
   const secrets = createDbHostedIntegrationSecretStore(options);
   const approvals = createDbHostedIntegrationApprovalStore(options);

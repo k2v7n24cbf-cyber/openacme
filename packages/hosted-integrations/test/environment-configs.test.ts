@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createFileHostedIntegrationCatalog,
   createFileHostedIntegrationEnvironmentConfigStore,
+  type HostedIntegrationEnvironmentConfigFamilyResolver,
 } from "../src/index.js";
 import { writeSplitFamilyFixture } from "./test-support/split-contract-fixtures.js";
 
@@ -64,10 +65,13 @@ tools:
   );
 }
 
-function store() {
+function store(input?: {
+  familyExists?: HostedIntegrationEnvironmentConfigFamilyResolver;
+}) {
   return createFileHostedIntegrationEnvironmentConfigStore({
     dataDir,
     catalog: createFileHostedIntegrationCatalog({ dataDir }),
+    familyExists: input?.familyExists,
     now: () => new Date(nowMs),
   });
 }
@@ -121,6 +125,39 @@ describe("hosted integration environment config store", () => {
     await expect(environmentConfigs.listEnvironmentConfigs()).resolves.toHaveLength(
       1,
     );
+  });
+
+  it("allows config preparation for a proposed family before promotion", async () => {
+    const environmentConfigs = store({
+      familyExists: async (familyId) => familyId === "qualys",
+    });
+
+    await expect(
+      environmentConfigs.upsertEnvironmentConfig({
+        familyId: "qualys",
+        environment: "prod",
+        config: { QUALYS_BASE_URL: "https://qualys.example" },
+        secrets: { QUALYS_TOKEN: { configured: true } },
+        updatedBy: "human:alen",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      environmentConfig: {
+        id: "qualys-prod",
+        familyId: "qualys",
+        environment: "prod",
+        revision: 1,
+      },
+    });
+
+    await expect(
+      environmentConfigs.upsertEnvironmentConfig({
+        familyId: "missing",
+        environment: "prod",
+        config: {},
+        updatedBy: "human:alen",
+      }),
+    ).resolves.toEqual({ ok: false, reason: "family_not_found" });
   });
 
   it("accepts only prod and test_debug environments", async () => {

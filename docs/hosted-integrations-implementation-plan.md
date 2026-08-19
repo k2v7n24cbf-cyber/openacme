@@ -5560,6 +5560,9 @@ Goal:
   stores.
 - Make `PUT /environment-configs/:familyId/:environment` idempotently create or
   update only the canonical environment config for that identity.
+- The family identity is configurable when it exists either as an active hosted
+  family or as an imported/proposed family under an edit lock. This lets package
+  import flows prepare `prod` and `test_debug` config before first promotion.
 - Rename the active control-plane surface from config scopes to environment
   configs. Any remaining config-scope names are internal historical migration
   details, not user-facing product vocabulary.
@@ -5578,6 +5581,8 @@ TDD:
   `parity` is rejected with a normalized validation error
 - `PUT /environment-configs/:familyId/:environment` creates the canonical record
   when missing and updates that same canonical record when present
+- `PUT /environment-configs/:familyId/:environment` accepts imported/proposed
+  families before first promotion and still rejects unknown family ids
 - attempts to create a second record for the same `familyId + environment`
   through any store/API path fail with a normalized validation/conflict error
 - read APIs return sanitized environment config metadata and never return secret
@@ -6110,6 +6115,9 @@ Contract:
 - If `prod` exists but required keys are missing, GA publish fails with
   `production_config_incomplete` and returns sanitized missing key names only.
 - Publish never creates or mutates environment configs or secret values.
+- Package import followed by pre-promotion environment setup is the supported
+  first-publish lifecycle: import proposed family, configure environments, verify
+  publish readiness, then promote.
 - Non-GA/internal-only generations are not introduced in this slice. Any
   internal-only publishing mode requires a later explicit product contract.
 
@@ -6131,6 +6139,8 @@ TDD:
   not declare whether runtime config/secrets are required
 - GA publish succeeds without any environment config only for a family that
   explicitly declares an empty runtime config contract
+- imported proposed family can receive a canonical `prod` environment config
+  before first promotion, and that config satisfies GA publish readiness
 - publish failure responses include sanitized missing key names and never include
   secret values
 - Hosted Tools Publish lane shows production readiness blockers before showing

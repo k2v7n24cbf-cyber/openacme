@@ -23,9 +23,11 @@ import {
 } from "./settings";
 
 const HOSTED_TOOL_TABS = [
+  "overview",
   "code",
   "help",
   "config",
+  "vocabularies",
   "agents",
   "files",
   "test",
@@ -180,7 +182,7 @@ function HostedToolsPage() {
 
   function updateHostedToolViewState(patch: {
     familyId?: string;
-    toolName?: string;
+    toolName?: string | null;
     editorSection?: HostedEditorSection;
     helpSection?: HostedHelpSection;
   }) {
@@ -189,7 +191,10 @@ function HostedToolsPage() {
       search: (current) => ({
         ...current,
         family: patch.familyId ?? current.family,
-        tool: patch.toolName ?? current.tool,
+        tool:
+          patch.toolName === null
+            ? undefined
+            : (patch.toolName ?? current.tool),
         tab: patch.editorSection ?? current.tab,
         help: patch.helpSection ?? current.help,
       }),

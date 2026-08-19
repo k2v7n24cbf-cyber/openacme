@@ -1,0 +1,216 @@
+version: 1
+kind: hosted-integration-remaining-integration-hub-package-inventory
+scope: Milestone 44 external package inventory for remaining non-Qualys integration-hub replacement surfaces.
+statusVocabulary:
+  - source_backed_ready
+  - draft_only
+  - evidence_required
+  - no_hosted_equivalent
+globalRules:
+  - Local production OpenAcme data directories and services are out of scope for this milestone.
+  - Integration-hub runtime code and MCP definitions are evidence only and must not be modified, deleted, imported into product runtime, or treated as deployable hosted package source.
+  - Provider/operator skill files for Microsoft Defender, Qualys, Splunk, Microsoft Graph, and integration-hub must not be modified by this milestone.
+  - Historical mde and defender-alert integration-hub surfaces merge into target hosted family microsoft_defender.
+  - Microsoft Defender uses Advanced Hunting/KQL as the default discovery/search/event surface.
+  - Microsoft Defender REST tools are allowed only for detail, bridge, or relationship capabilities that KQL cannot fetch well.
+  - Microsoft Defender must not expose a generic mde_get, mde_request, mde_api_get, arbitrary path, arbitrary url, or arbitrary endpoint hosted GA tool.
+  - Unknown provider endpoint, authentication, permission, pagination, response, destructive, result-size, or parameter behavior must stop with EVIDENCE_REQUIRED before promotion.
+canonicalSources:
+  - sourceId: m44-plan
+    path: docs/hosted-integrations-implementation-plan.md#milestone-44-external-packages-for-remaining-integration-hub-families
+    role: milestone_scope_boundary_slice_goal_tdd
+  - sourceId: hosted-architecture
+    path: docs/hosted-integrations-architecture.md#hosted-family-package-boundary
+    role: package_boundary_and_microsoft_defender_kql_first_policy
+  - sourceId: integration-hub-fixtures
+    path: packages/hosted-integrations/test-support/integration-hub/fixtures.ts
+    role: historical_fixture_and_parity_evidence_only
+  - sourceId: integration-hub-live-parity
+    path: packages/server/test-support/integration-hub/live-parity.ts
+    role: historical_live_parity_case_evidence_only
+  - sourceId: integration-hub-parity-env
+    path: packages/server/scripts/integration-hub-parity.ts
+    role: historical_live_parity_environment_contract_evidence_only
+families:
+  - familyId: msgraph
+    familyName: Microsoft Graph
+    packageStatus: source_backed_ready
+    packageRoot: ../openacme-hosted-tools-msgraph
+    targetHostedNamespace: hosted_msgraph
+    configKeys:
+      - MSGRAPH_TENANT_ID
+      - MSGRAPH_CLIENT_ID
+      - MSGRAPH_TIMEOUT_SECONDS
+      - MSGRAPH_MAX_PAGES
+      - MSGRAPH_API_VERSION
+    secretRefs:
+      - MSGRAPH_CLIENT_SECRET
+    notes:
+      - Generic Graph GET is a deliberate exception; this package remains separate from Microsoft Defender.
+  - familyId: microsoft_defender
+    familyName: Microsoft Defender
+    packageStatus: source_backed_ready
+    packageRoot: ../openacme-hosted-tools-microsoft-defender
+    targetHostedNamespace: hosted_microsoft_defender
+    configKeys:
+      - MICROSOFT_DEFENDER_TENANT_ID
+      - MICROSOFT_DEFENDER_CLIENT_ID
+      - MICROSOFT_DEFENDER_TIMEOUT_SECONDS
+      - MICROSOFT_DEFENDER_MAX_PAGES
+    secretRefs:
+      - MICROSOFT_DEFENDER_CLIENT_SECRET
+    notes:
+      - Historical mde and defender-alert surfaces merge here.
+      - Initial REST tools are detail/bridge only; Advanced Hunting/KQL is the search and event surface.
+  - familyId: splunk
+    familyName: Splunk
+    packageStatus: evidence_required
+    packageRoot: ../openacme-hosted-tools-splunk
+    targetHostedNamespace: hosted_splunk
+    configKeys:
+      - SPLUNK_BASE_URL
+    secretRefs:
+      - SPLUNK_TOKEN
+    notes:
+      - Current fixture behavior is not sufficient for GA; real Splunk search client behavior and live evidence are required.
+tools:
+  - legacyMcpToolName: mcp_integration-hub__msgraph_get
+    legacyToolName: msgraph_get
+    historicalFamilyId: msgraph
+    targetFamilyId: msgraph
+    hostedToolName: msgraph_get
+    hostedMcpName: hosted_msgraph__msgraph_get
+    status: source_backed_ready
+    packageRoot: ../openacme-hosted-tools-msgraph
+    sourceReferences:
+      - integration-hub-fixtures
+      - integration-hub-live-parity
+      - integration-hub-parity-env
+    evidenceRequired: []
+    kqlPolicy: not_applicable
+    safety: read_only_live
+    notes:
+      - Separate from Microsoft Defender because this is a Graph read surface, not a Defender operational surface.
+  - legacyMcpToolName: mcp_integration-hub__mde_get
+    legacyToolName: mde_get
+    historicalFamilyId: mde
+    targetFamilyId: microsoft_defender
+    hostedToolName: null
+    hostedMcpName: null
+    status: no_hosted_equivalent
+    packageRoot: ../openacme-hosted-tools-microsoft-defender
+    sourceReferences:
+      - integration-hub-fixtures
+      - integration-hub-live-parity
+      - integration-hub-parity-env
+    evidenceRequired: []
+    kqlPolicy: generic_mde_get_rejected
+    safety: not_promotable_generic_wrapper
+    notes:
+      - Historical generic MDE GET evidence may inform specific tools only.
+      - Do not create hosted_microsoft_defender__mde_get or any arbitrary path/url/endpoint wrapper.
+  - legacyMcpToolName: mcp_integration-hub__mde_get
+    legacyToolName: mde_get
+    historicalFamilyId: mde
+    targetFamilyId: microsoft_defender
+    hostedToolName: mde_get_machine
+    hostedMcpName: hosted_microsoft_defender__mde_get_machine
+    status: source_backed_ready
+    packageRoot: ../openacme-hosted-tools-microsoft-defender
+    sourceReferences:
+      - integration-hub-fixtures
+      - integration-hub-live-parity
+      - integration-hub-parity-env
+    evidenceRequired:
+      - Live read-only smoke with a safe known machine id or explicit skipped diagnostic when no identifier is available.
+    kqlPolicy: allowed_only_after_kql_identifies_machine_id
+    safety: read_only_live_detail
+    notes:
+      - This is not a replacement for machine search/list. Use Advanced Hunting/KQL for discovery.
+  - legacyMcpToolName: mcp_integration-hub__mde_get
+    legacyToolName: mde_get
+    historicalFamilyId: mde
+    targetFamilyId: microsoft_defender
+    hostedToolName: mde_get_alert
+    hostedMcpName: hosted_microsoft_defender__mde_get_alert
+    status: source_backed_ready
+    packageRoot: ../openacme-hosted-tools-microsoft-defender
+    sourceReferences:
+      - integration-hub-fixtures
+      - integration-hub-live-parity
+      - integration-hub-parity-env
+    evidenceRequired:
+      - Live read-only smoke with a safe known alert id or explicit skipped diagnostic when no identifier is available.
+    kqlPolicy: allowed_only_after_kql_identifies_alert_id
+    safety: read_only_live_detail
+    notes:
+      - This is not a replacement for alert search/list. Use Advanced Hunting/KQL for discovery.
+  - legacyMcpToolName: mcp_integration-hub__msgraph_run_hunting_query
+    legacyToolName: msgraph_run_hunting_query
+    historicalFamilyId: msgraph
+    targetFamilyId: microsoft_defender
+    hostedToolName: mde_run_advanced_hunting_query
+    hostedMcpName: hosted_microsoft_defender__mde_run_advanced_hunting_query
+    status: source_backed_ready
+    packageRoot: ../openacme-hosted-tools-microsoft-defender
+    sourceReferences:
+      - m44-plan
+      - hosted-architecture
+    evidenceRequired:
+      - Live bounded no-mock smoke or explicit skipped diagnostic when credentials or permissions are unavailable.
+    kqlPolicy: primary_defender_discovery_search_event_surface
+    safety: read_only_live_query
+    notes:
+      - HTTP POST is acceptable only for the dedicated bounded Advanced Hunting read-query capability.
+      - This must not be implemented as a generic POST wrapper.
+  - legacyMcpToolName: mcp_integration-hub__defender_alert_get
+    legacyToolName: defender_alert_get
+    historicalFamilyId: defender-alert
+    targetFamilyId: microsoft_defender
+    hostedToolName: defender_alert_get
+    hostedMcpName: hosted_microsoft_defender__defender_alert_get
+    status: source_backed_ready
+    packageRoot: ../openacme-hosted-tools-microsoft-defender
+    sourceReferences:
+      - integration-hub-fixtures
+      - integration-hub-live-parity
+      - integration-hub-parity-env
+    evidenceRequired: []
+    kqlPolicy: graph_mde_alert_bridge_detail_not_search
+    safety: read_only_live_bridge
+    notes:
+      - Fetches one known Graph alert id and returns source-specific Graph/MDE payloads without mutation or interpretation.
+  - legacyMcpToolName: mcp_integration-hub__splunk_search
+    legacyToolName: splunk_search
+    historicalFamilyId: splunk
+    targetFamilyId: splunk
+    hostedToolName: splunk_search
+    hostedMcpName: hosted_splunk__splunk_search
+    status: evidence_required
+    packageRoot: ../openacme-hosted-tools-splunk
+    sourceReferences:
+      - integration-hub-fixtures
+      - integration-hub-live-parity
+      - integration-hub-parity-env
+    evidenceRequired:
+      - Real Splunk search client implementation, auth behavior, search request shape, pagination/result truncation behavior, error model, and live read-only smoke.
+    kqlPolicy: not_applicable
+    safety: read_only_live_search
+    notes:
+      - Fixture-only rows are not enough for GA promotion.
+excludedOperations:
+  - name: hosted_microsoft_defender__mde_get
+    status: no_hosted_equivalent
+    reason: Generic MDE path wrapper is forbidden; split into specific KQL-first detail tools.
+  - name: hosted_microsoft_defender__mde_list_alerts
+    status: no_hosted_equivalent
+    reason: Broad alert list/search duplicates Advanced Hunting/KQL.
+  - name: hosted_microsoft_defender__mde_list_machines
+    status: no_hosted_equivalent
+    reason: Broad machine list/search duplicates Advanced Hunting/KQL.
+  - name: hosted_microsoft_defender__mde_list_machine_logon_users
+    status: no_hosted_equivalent
+    reason: Logon/user activity is available through Advanced Hunting DeviceLogonEvents.
+  - name: microsoft_defender_mutating_operations
+    status: no_hosted_equivalent
+    reason: Alert update, indicators, machine actions, isolation, scan, remediation, tagging, and other write/destructive operations are out of initial GA.

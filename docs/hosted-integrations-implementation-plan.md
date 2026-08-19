@@ -22,13 +22,13 @@ This plan implements the architecture in
 The current implementation contract is Milestone 18 and later, especially
 Milestones 20, 21, 22, 29, 30, the Qualys-specific Milestone 31 current-pilot
 migration gate, the shared-vocabulary Milestones 32-35, the Milestone 36
-acceptance hardening gate, and Milestone 37 production hardening. Earlier
-milestones remain
+acceptance hardening gate, Milestone 37 production hardening, and the external
+hosted family package contract in Milestones 38-44. Earlier milestones remain
 historical evidence only where they use superseded terms such as migration
-fixtures, config scopes, or view-level cutover.
-Milestones 27-36
-have since accepted the current Hosted Tools concept gate. Do not reopen those milestones as the next implementation
-order; continue with explicitly new milestones for new corrections.
+fixtures, config scopes, or view-level cutover. Milestones 27-36 have since
+accepted the current Hosted Tools concept gate. Do not reopen those milestones
+as the next implementation order; continue with explicitly new milestones for
+new corrections.
 
 - Hosted integration product lifecycle states are source, draft, validation,
   example, generation, environment config, binding, invocation, debug run,
@@ -11541,7 +11541,7 @@ Evidence:
   `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_mutating_refusal_provider_diag_20260818083607.json`.
   The artifact failed only with
   `provider_response_missing: assistant outcome text was unavailable for
-  non-call scenario analysis`, while `availableToolNames` remained empty and no
+non-call scenario analysis`, while `availableToolNames` remained empty and no
   hosted business tool was granted or called.
 - Clean rerun
   `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_mutating_refusal_retry_20260818112047.json`
@@ -12286,7 +12286,7 @@ Evidence:
 
 - The current Qualys source-backed package includes
   `references/gav-filter-fields.json` with `kind:
-  openacme.hostedParameterVocabulary`, family `qualys`, parameter path
+openacme.hostedParameterVocabulary`, family `qualys`, parameter path
   `filter_body.filters.field`, and the required GAV field entries and invalid
   aliases.
 - GAV asset count/search and Cloud Agent hostasset count/search all reference
@@ -12414,7 +12414,7 @@ generalized and hardened by Milestone 36.
 - Rerun passed after hosted-only MCP isolation:
   `~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/unguided_consumer_m35_vocab_isolated_20260818022820.json`.
   Evidence: `live-qualys-unguided-analyst` had `mcpDisabled:
-  ["integration-hub"]`, called `hosted_tool_help`, then invoked
+["integration-hub"]`, called `hosted_tool_help`, then invoked
   `hosted_qualys__qualys_gav_asset_count` with
   `filter_body.filters[].field = qualys.agent.lastCheckedInDate`. No
   `mcp_integration-hub__*` or `managed_*` tool call was present in the passing
@@ -13542,7 +13542,7 @@ Milestone 37 Acceptance:
 
 ## Milestone 38: External Hosted Family Package Contract
 
-Status: planned.
+Status: in progress.
 
 Goal:
 
@@ -13952,3 +13952,987 @@ TDD:
   contract that `tools.yaml` exposes self-contained help, parameter guidance,
   runtime validation boundaries, examples, and no integration-hub runtime
   imports.
+
+## Milestone 44: External Packages For Remaining Integration-Hub Families
+
+Status: implemented and verified on 2026-08-19. Real provider pass remains
+credential/permission/test-identifier gated; missing live prerequisites produce
+explicit `skipped` diagnostics rather than false pass.
+
+Boundary:
+
+- Use only the isolated hosted-integrations development worktree and local test
+  environment. Do not read from, write to, seed, drain, promote, delete, or
+  restart the user's local production OpenAcme data directory or services for
+  this milestone.
+- Do not reopen Qualys Milestones 31, 39, 40, 41, 42, or 43.
+- Do not delete, rename, or modify integration-hub runtime code or
+  integration-hub MCP definitions. Historical integration-hub material is
+  evidence, fixture, and parity input only.
+- Do not modify provider/operator skills for Microsoft Defender, Qualys,
+  Splunk, Microsoft Graph, or integration-hub as part of this milestone.
+  Hosted tool help may reference existing skills as operating guidance, but it
+  must not rewrite them or copy their full methodology.
+- Do not port provider-family implementations into
+  `packages/hosted-integrations/src`, `packages/tools`, server routes, or any
+  bundled platform runtime directory.
+- Do not treat `packages/hosted-integrations/test-support/integration-hub/*` as
+  deployable source. It is evidence, fixture, and parity input only.
+- Do not create a bundled migration package. Each target provider-domain
+  package is an independent external hosted family package with its own source
+  root, tests, package artifact, import lifecycle, config/secrets, and live
+  parity decision. Historical integration-hub family splits do not have to be
+  preserved when one target package is cleaner; `mde` and `defender-alert`
+  merge into `microsoft_defender`.
+- Do not promote a package whose implementation is only a fixture/mock
+  replacement. It may exist as a draft package, but GA requires real provider
+  behavior evidence.
+- Legacy remote MCP tools remain `mcp_integration-hub__<tool>`. Hosted tools
+  remain `hosted_<family>__<tool>`. No compatibility alias or automatic rewrite
+  is allowed.
+
+Goal:
+
+- Convert the non-Qualys integration-hub replacement surfaces into independent
+  target external hosted family packages that can be validated, imported,
+  configured, promoted, and live-parity tested through the existing Hosted
+  Tools package API and runtime.
+
+Scope:
+
+| Family               | Legacy MCP tool                                                                           | Hosted tool                                                 | Package status target                                                                                                        |
+| -------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `msgraph`            | `mcp_integration-hub__msgraph_get`                                                        | `hosted_msgraph__msgraph_get`                               | source-backed read-only package                                                                                              |
+| `microsoft_defender` | `mcp_integration-hub__mde_get` historical generic GET evidence                            | No generic hosted equivalent                                | split into specific source-backed Defender tools                                                                             |
+| `microsoft_defender` | `mcp_integration-hub__mde_get` for one machine evidence                                   | `hosted_microsoft_defender__mde_get_machine`                | source-backed read-only detail package; live smoke requires a safe known machine id or explicit skipped diagnostic           |
+| `microsoft_defender` | `mcp_integration-hub__msgraph_run_hunting_query` if present in the legacy/operator source | `hosted_microsoft_defender__mde_run_advanced_hunting_query` | source-backed read-only hunting package addition; live smoke requires credentials/permissions or explicit skipped diagnostic |
+| `microsoft_defender` | `mcp_integration-hub__defender_alert_get`                                                 | `hosted_microsoft_defender__defender_alert_get`             | source-backed read-only package                                                                                              |
+| `splunk`             | `mcp_integration-hub__splunk_search`                                                      | `hosted_splunk__splunk_search`                              | evidence-required until real Splunk implementation is proven                                                                 |
+
+Canonical evidence inputs:
+
+- `packages/hosted-integrations/test-support/integration-hub/fixtures.ts`
+  records historical family ids, config keys, secret refs, legacy MCP names,
+  hosted names, and source-backed sample implementations.
+- `packages/server/test-support/integration-hub/live-parity.ts` records the
+  supported live parity families and default parity cases.
+- `packages/server/scripts/integration-hub-parity.ts` records the environment
+  variables needed to run live parity for `splunk`, `msgraph`, and the
+  merged `microsoft_defender` package.
+- Historical integration-hub material is allowed only as evidence or regression
+  input; it must never be imported by platform runtime code.
+
+### Slice 44.1: Remaining-Family Package Inventory
+
+Status: implemented and verified on 2026-08-19.
+
+Goal:
+
+- Freeze the exact migration inventory for `splunk`, `msgraph`, and
+  `microsoft_defender` before creating package repositories or artifacts.
+
+Deliverables:
+
+- Add a focused inventory document for remaining integration-hub families that
+  lists each family id, package repository/artifact location, legacy MCP name,
+  hosted tool name, config keys, secret refs, source-backed status, live parity
+  case, and promotion status.
+- Mark `splunk` as `EVIDENCE_REQUIRED` unless a real Splunk search client,
+  request shape, auth behavior, pagination/result truncation behavior, and
+  error model are supplied or verified.
+- Record that `msgraph` is a small read-only generic Graph GET package. This is
+  a deliberate exception for Microsoft Graph. The merged `microsoft_defender`
+  package must not expose a generic MDE GET/path wrapper; historical `mde_get`
+  evidence is used only for specific detail or relationship tools that KQL
+  cannot cover well, such as `mde_get_alert`, `mde_get_machine`,
+  `defender_alert_get`, and
+  `mde_run_advanced_hunting_query`.
+- Record `mde_run_advanced_hunting_query` as a Microsoft Defender family
+  capability, not an MS Graph package capability. Although the provider
+  operation is HTTP POST, its hosted classification is read-only query
+  execution when constrained to the Advanced Hunting endpoint and bounded by
+  query/result/time limits.
+
+TDD:
+
+- Deterministic inventory test proves every active hosted migration row maps to
+  exactly one hosted canonical name. Historical generic rows with no hosted GA
+  equivalent must be explicit `no_hosted_equivalent` rows with a reason, not
+  silent omissions.
+- Deterministic boundary test or repository lint proves this milestone does not
+  change integration-hub runtime source, integration-hub MCP definitions, or
+  provider/operator skill files.
+- Deterministic inventory test proves historical `mde` and `defender-alert`
+  tools map to the single hosted family id `microsoft_defender`, and no active
+  inventory row creates separate `mde` or `defender-alert` package roots.
+- Test proves every family has an explicit external package status:
+  `source_backed_ready`, `draft_only`, or `evidence_required`.
+- Test proves no remaining-family inventory row points to
+  `packages/hosted-integrations/src` as deployable provider source.
+- Test proves no active hosted tool named `hosted_microsoft_defender__mde_get`
+  or equivalent generic MDE path wrapper is planned or generated.
+
+Verification:
+
+- Added `docs/hosted-integrations-remaining-integration-hub-packages.yaml` as
+  the durable M44 remaining-family inventory source of truth.
+- Added deterministic
+  `packages/hosted-integrations/test/m44-remaining-package-inventory.test.ts`
+  coverage for package statuses, the `microsoft_defender` merge invariant,
+  explicit `no_hosted_equivalent` treatment for generic `mde_get`, KQL-first
+  Microsoft Defender exclusions, source-boundary package roots, and durable
+  documentation of local-prod/integration-hub/skill boundaries.
+- Verified with:
+  `pnpm --dir packages/hosted-integrations test m44-remaining-package-inventory.test.ts`
+- Verified with:
+  `pnpm --dir packages/hosted-integrations test integration-hub-replacement.test.ts packages.test.ts m44-remaining-package-inventory.test.ts`
+- Verified with:
+  `pnpm --dir packages/hosted-integrations run check-types`
+- No local production data directory, integration-hub runtime source, or
+  provider/operator skill file was changed for this slice.
+
+### Slice 44.2: External Package Bootstrap Per Family
+
+Status: implemented and verified on 2026-08-19.
+
+Goal:
+
+- Create or prepare external package roots for each family without adding
+  provider runtime code to the OpenAcme platform repository.
+
+Deliverables:
+
+- `msgraph` external package root with `family.yaml`, `tools.yaml`,
+  `msgraph.py`, examples, package metadata, local build/validate script, and
+  source-boundary notes.
+- `microsoft_defender` external package root with `family.yaml`, `tools.yaml`,
+  shared Microsoft Defender auth/client code, specific tools such as
+  `mde_get_alert`, `mde_get_machine`, `defender_alert_get`, and
+  `mde_run_advanced_hunting_query`, examples, package metadata, local
+  build/validate script, and source-boundary notes. These initial Microsoft
+  Defender tools are source-backed from official/imported evidence and remain
+  subject to live smoke diagnostics in Slice 44.4; additional endpoint-specific
+  tools must stay `EVIDENCE_REQUIRED` until endpoint, request, permissions,
+  result shape, limits, timeout, truncation, and error behavior are verified.
+- `splunk` external package root only if the package clearly remains
+  draft/evidence-required until real Splunk client behavior is implemented.
+
+TDD:
+
+- Each external package local test validates required files, package paths,
+  secret-shaped content, `family.yaml`, `tools.yaml`, handler mapping, and
+  examples.
+- Generated package artifact validates through
+  `validateHostedFamilyPackage(..., { targetFamilyId })`.
+- Platform guard tests can validate an external package when the corresponding
+  package-root env var is set or when the documented sibling package root
+  exists.
+- Guard test fails if a generated package contains fixture-only dispatch,
+  `integration-hub` runtime imports, or mock-provider claims in a
+  GA/source-backed package.
+- Guard test fails if Microsoft Defender package artifacts split shared
+  Defender auth/client code into separate `mde` and `defender-alert` hosted
+  package roots.
+- Guard test fails if Microsoft Defender package artifacts expose a generic
+  `mde_get`, `mde_request`, `mde_api_get`, arbitrary `path`, or arbitrary URL
+  wrapper as a GA hosted tool.
+
+Verification:
+
+- Created separate sibling git repositories:
+  `/Users/alenbohcelyan/Documents/AIProjects/openacme-hosted-tools-msgraph`,
+  `/Users/alenbohcelyan/Documents/AIProjects/openacme-hosted-tools-microsoft-defender`,
+  and `/Users/alenbohcelyan/Documents/AIProjects/openacme-hosted-tools-splunk`.
+- `msgraph` package contains `family.yaml`, `tools.yaml`, `msgraph.py`,
+  `examples.yaml`, source-boundary notes, build/validate scripts, and a built
+  `dist/msgraph.hosted-family-package.json`.
+- `microsoft_defender` package contains `family.yaml`, `tools.yaml`,
+  `microsoft_defender.py`, `examples.yaml`, source/evidence references,
+  build/validate scripts, and a built
+  `dist/microsoft_defender.hosted-family-package.json`. It intentionally
+  exposes no generic `mde_get`, `path`, `url`, or `endpoint` wrapper. The
+  initial source-backed surface is limited to `defender_alert_get`,
+  `mde_get_alert`, `mde_get_machine`, and
+  `mde_run_advanced_hunting_query`; broader list/search, logon-user, export,
+  and mutating operations remain out of GA.
+- `splunk` package contains a draft/evidence-required `splunk_search`
+  contract, source/evidence references, build/validate scripts, and a built
+  `dist/splunk.hosted-family-package.json`. It is not GA/source-backed until
+  real Splunk behavior is sourced.
+- Updated hosted family id validation to accept underscore-separated
+  provider-domain ids such as `microsoft_defender`, while preserving existing
+  hyphenated ids.
+- Verified external package local validators with:
+  `npm test` in each sibling package root.
+- Verified platform package validation with:
+  `pnpm --dir packages/hosted-integrations test m44-remaining-package-inventory.test.ts naming.test.ts schemas.test.ts`
+- Verified broader hosted package compatibility with:
+  `pnpm --dir packages/hosted-integrations test packages.test.ts integration-hub-replacement.test.ts m44-remaining-package-inventory.test.ts naming.test.ts schemas.test.ts`
+- Verified types with:
+  `pnpm --dir packages/hosted-integrations run check-types`
+- No local production data directory, integration-hub runtime source, or
+  provider/operator skill file was changed for this slice.
+
+### Slice 44.2D: Microsoft Defender Specific Read Tools
+
+Status: implemented and deterministically verified on 2026-08-19; live smoke
+remains in Slice 44.4.
+
+Goal:
+
+- Replace the historical generic MDE GET wrapper with specific Microsoft
+  Defender read tools that each have stable input schemas, output schemas,
+  selection guidance, examples, errors, and live evidence. Advanced
+  Hunting/KQL is the default Microsoft Defender discovery/search surface; REST
+  tools exist only for details, relationships, and provider objects that KQL
+  cannot fetch well.
+
+Initial tool contract targets:
+
+- `hosted_microsoft_defender__mde_get_alert`
+  - Handler: `tool_mde_get_alert(args, context)`
+  - Purpose: retrieve one Defender for Endpoint alert by alert id when a
+    precise alert id is already known or was discovered through KQL.
+  - Inputs: required `alert_id` string.
+- `hosted_microsoft_defender__mde_get_machine`
+  - Handler: `tool_mde_get_machine(args, context)`
+  - Purpose: retrieve one Defender for Endpoint machine by the provider's
+    verified machine id when KQL already identified the entity.
+  - Inputs: required `machine_id` string.
+- `hosted_microsoft_defender__defender_alert_get`
+  - Handler: `tool_defender_alert_get(args, context)`
+  - Purpose: retrieve one Microsoft Defender/Graph alert by the verified Graph
+    alert id and return source-specific payloads without mutation.
+
+Candidate read-only detail or relationship tools after initial GA, each
+requiring source and live evidence before promotion and a short explanation of
+why KQL is insufficient:
+
+- `mde_get_alert_machine`: retrieve the machine related to one alert.
+- `mde_get_alert_user`: retrieve the user related to one alert.
+- `mde_list_alert_files`: retrieve files related to one alert.
+- `mde_list_alert_ips`: retrieve IPs related to one alert.
+- `mde_get_recommendation`: retrieve one Threat and Vulnerability Management
+  recommendation by id if the detailed payload is not available through KQL.
+- `mde_get_software` or more specific software/vulnerability detail tools only
+  after the exact provider endpoint, identifier semantics, permissions, paging,
+  and response contracts are documented and KQL cannot provide the needed
+  detail.
+- `mde_get_exposure_score_by_machine_group`: exposure score read when score
+  permissions and response shape are verified.
+
+Explicitly out of initial GA:
+
+- REST list/search tools that duplicate Advanced Hunting/KQL, including broad
+  alert search and machine search/list flows.
+- REST logon-user list tools that duplicate Advanced Hunting tables such as
+  `DeviceLogonEvents`.
+- Mutating alert update, indicator create/delete, machine action, isolation,
+  antivirus scan, remediation action, tagging, or any other write/destructive
+  operation.
+- Export APIs that create large asynchronous datasets until async job,
+  artifact, pagination, and cost behavior are designed.
+
+Boundary:
+
+- Do not expose `path`, arbitrary URL, or generic endpoint selector inputs on
+  Microsoft Defender GA tools.
+- Do not add REST list/search tools for data that can be fetched through
+  Advanced Hunting/KQL with a bounded query.
+- Do not automatically mirror every MDE endpoint. Add another specific tool
+  only when the agent capability is useful, endpoint behavior is evidenced, and
+  KQL cannot cover the needed detail.
+- Shared Microsoft Defender auth, token acquisition, request execution,
+  pagination, error normalization, redaction, and truncation live in common
+  package code.
+- If a specific endpoint's request/response/permission behavior is unknown,
+  mark that tool or parameter `EVIDENCE_REQUIRED` instead of guessing.
+
+TDD:
+
+- Contract validation rejects any Microsoft Defender hosted tool whose public
+  input schema contains `path`, `url`, `endpoint`, or another arbitrary route
+  selector unless the tool is explicitly marked draft/evidence-only and not GA.
+- Contract validation proves each specific tool maps to
+  `tool_<toolName>(args, context)` and uses
+  `hosted_microsoft_defender__<toolName>`.
+- Help tests prove each specific tool explains when to use it, when not to use
+  it, required identifiers, why Advanced Hunting/KQL is not the right primary
+  surface for that detail, supported filters or lack of filters, pagination or
+  truncation, permission errors, and safe examples.
+- Runtime tests prove handlers call only their allowlisted endpoint templates
+  and reject unsupported parameters before provider calls.
+- Deterministic lint rejects Microsoft Defender REST tools that present
+  themselves as discovery/search/list alternatives to KQL unless the tool is
+  explicitly justified as a non-KQL detail or relationship capability.
+- Live smoke uses bounded read-only calls when credentials and identifiers are
+  available; missing credentials or missing test identifiers produce explicit
+  skipped diagnostics.
+
+Verification:
+
+- Implemented the Microsoft Defender package surface in the external sibling
+  package root
+  `/Users/alenbohcelyan/Documents/AIProjects/openacme-hosted-tools-microsoft-defender`.
+- The generated package artifact exposes `defender_alert_get`,
+  `mde_get_alert`, and `mde_get_machine` as specific read/detail capabilities
+  and does not expose a generic `mde_get`, `mde_request`, `mde_api_get`,
+  arbitrary `path`, arbitrary `url`, or arbitrary `endpoint` input.
+- The package-local validator and the platform M44 inventory test verify
+  handler mapping, package validation, official-source references,
+  KQL-first exclusions, and source-boundary constraints.
+- Verified with:
+  `npm test` in
+  `/Users/alenbohcelyan/Documents/AIProjects/openacme-hosted-tools-microsoft-defender`
+- Verified with:
+  `pnpm --dir packages/hosted-integrations test m44-remaining-package-inventory.test.ts naming.test.ts schemas.test.ts`
+- No local production data directory, integration-hub runtime source, or
+  provider/operator skill file was changed for this slice.
+
+### Slice 44.2H: Microsoft Defender Advanced Hunting Read Tool
+
+Status: implemented and deterministically verified on 2026-08-19; live smoke
+remains in Slice 44.4.
+
+Goal:
+
+- Add a dedicated Microsoft Defender family tool for bounded, read-only
+  Advanced Hunting query execution without opening a generic Microsoft Graph or
+  MDE POST wrapper.
+
+Tool contract target:
+
+- Family: `microsoft_defender`
+- Tool: `mde_run_advanced_hunting_query`
+- Hosted name: `hosted_microsoft_defender__mde_run_advanced_hunting_query`
+- Handler: `tool_mde_run_advanced_hunting_query(args, context)`
+- Classification: `operation: read`, `freshness: live`,
+  `idempotency: idempotent`, `execution: sync` unless live evidence proves it
+  needs async, `approval: none` or a later sensitive-read policy if required.
+
+Input contract target:
+
+- `query`: required KQL string.
+- `max_rows`: optional bounded integer with a conservative default and hard
+  maximum.
+- `timeout_seconds`: optional bounded timeout not exceeding the family runtime
+  timeout.
+- `result_mode`: optional inline/artifact preference when large result sets are
+  expected.
+- Optional time-window argument only if the provider endpoint/query semantics
+  can be enforced deterministically; otherwise the help must strongly require
+  a bounded time predicate in the query and examples must show it.
+
+Boundary:
+
+- Do not add a generic POST tool.
+- Do not put this under the `msgraph` package even if historical operator
+  naming used `msgraph_run_hunting_query`; the capability is Microsoft
+  Defender Advanced Hunting.
+- Do not migrate the production Microsoft Defender threat-hunting expert skill
+  into hosted tool help or modify that skill as part of this slice. The skill
+  remains the operational reasoning layer for evidence planning, table
+  selection, KQL validation, result interpretation, and custom-detection
+  judgement.
+- Do not promote if official/imported evidence for endpoint path, auth scope,
+  permissions, request body, response structure, limits, rate-limit behavior,
+  and error model is missing.
+- Do not claim query safety that is not deterministically enforced.
+- Hosted tool help must be a strong interface contract, not a full hunting
+  methodology copy. It should explain tool selection, input shape, required
+  bounding, endpoint behavior, output/artifact behavior, errors, permission
+  prerequisites, and safe examples. It may tell agents to use the existing
+  Microsoft Defender threat-hunting expert skill for non-trivial hunt planning
+  and KQL review.
+
+TDD:
+
+- Contract validation proves the tool is under family `microsoft_defender` and
+  uses hosted name
+  `hosted_microsoft_defender__mde_run_advanced_hunting_query`.
+- Schema validation rejects missing/empty `query`, invalid `max_rows`, invalid
+  `timeout_seconds`, and unsupported root properties.
+- Help tests prove the tool explains when to use Advanced Hunting, when not to
+  use it, examples with bounded time filters, result limits, truncation,
+  permission errors, and rate-limit recovery.
+- Help tests prove the hosted package does not copy the full threat-hunting
+  skill corpus into `tools.yaml` or package references, while still giving a
+  fresh agent enough interface guidance to call the tool safely.
+- Runtime tests prove the implementation calls only the allowed Advanced
+  Hunting endpoint, never accepts arbitrary URLs, and never exposes a generic
+  POST path.
+- Result tests prove large results use artifact fallback or truncation metadata
+  instead of oversized inline responses.
+- Live smoke is no-mock and bounded when MDE credentials and permissions are
+  available; missing credentials or missing hunting permissions produce
+  explicit skipped/permission diagnostics, not a false pass.
+
+Verification:
+
+- Implemented `hosted_microsoft_defender__mde_run_advanced_hunting_query` in
+  the external Microsoft Defender package as a dedicated Advanced Hunting
+  read-query capability under the `microsoft_defender` family.
+- The package contract uses `query`, `max_rows`, `timeout_seconds`, and
+  `result_mode` inputs only; it does not expose a generic POST/path wrapper.
+- The implementation allowlists the Advanced Hunting endpoint and enforces
+  bounded KQL shape before provider calls.
+- The package references official Microsoft Learn evidence for the Advanced
+  Hunting endpoint, permissions, request body, response limits, and
+  `DeviceLogonEvents` table behavior.
+- Verified with:
+  `npm test` in
+  `/Users/alenbohcelyan/Documents/AIProjects/openacme-hosted-tools-microsoft-defender`
+- Verified with:
+  `pnpm --dir packages/hosted-integrations test m44-remaining-package-inventory.test.ts`
+- No local production data directory, integration-hub runtime source, or
+  provider/operator skill file was changed for this slice.
+
+### Slice 44.3: Product Import And Promotion
+
+Status: deterministically service-verified on 2026-08-19; route/UI smoke and
+live provider smoke remain in later slices.
+
+Goal:
+
+- Prove each source-backed package can move through the real Hosted Tools
+  product lifecycle instead of test-only fixture seeding.
+
+Deliverables:
+
+- Validate package through the package validation API/service.
+- Import package into a draft in the isolated hosted-integrations test
+  environment.
+- Promote only after deterministic validation, examples, readiness, and
+  environment config checks pass.
+- Configure `test_debug` and `prod` environment metadata without exposing
+  secret values.
+- Export the promoted generation and prove import/export round trip preserves
+  package semantics.
+
+TDD:
+
+- Import/create and import/update tests cover each source-backed family.
+- Product-lifecycle tests use the isolated hosted-integrations test data
+  directory only; they must fail fast if configured to use the local production
+  OpenAcme data directory.
+- Export round-trip test preserves `family.yaml`, `tools.yaml`, Python source,
+  examples, references, package metadata, and digest semantics.
+- Agent settings tests show hosted access uses family-level config selection
+  and does not require remote MCP grants.
+- Registry tests prove `hosted_<family>__<tool>` appears only after hosted
+  import/promotion and remains independent from `mcp_integration-hub__<tool>`.
+
+Verification:
+
+- The M44 inventory test imports, promotes, and exports the `msgraph` and
+  `microsoft_defender` source-backed external packages through
+  `createFileHostedIntegrationService` in an isolated temporary data directory.
+- The test fails if the source-backed package set drifts from `msgraph` and
+  `microsoft_defender`, while keeping `splunk` explicitly
+  `evidence_required`.
+- Export verification preserves package files and digest semantics for the
+  imported external package artifact.
+- Verified with:
+  `pnpm --dir packages/hosted-integrations test m44-remaining-package-inventory.test.ts`
+- No local production data directory, integration-hub runtime source, or
+  provider/operator skill file was changed for this slice.
+
+### Slice 44.4: Live Parity And Agent Usability
+
+Status: implemented for deterministic hosted-only Microsoft Defender live
+parity support and skipped-live diagnostics on 2026-08-19. Real provider pass
+still depends on credentials, permissions, and safe test identifiers.
+
+Goal:
+
+- Verify source-backed packages work against real provider APIs where
+  credentials are available and remain clear when credentials or evidence are
+  missing.
+
+Deliverables:
+
+- Update or extend the family-scoped live parity runner so `msgraph` and
+  `microsoft_defender` can be run when credentials are available.
+- Run Splunk live parity only after replacing fixture behavior with a real
+  read-only Splunk implementation and evidence.
+- Add or update no-mock, bounded, read-only smoke scenarios that use the hosted
+  tool surface, not integration-hub.
+- Capture skipped-live diagnostics as explicit evidence, not as pass/fail
+  ambiguity.
+
+TDD:
+
+- Live parity result must be `pass`, `fail`, or `skipped` with diagnostics; a
+  missing credential cannot be reported as pass.
+- Provider HTTP/API errors are surfaced as actionable hosted execution errors
+  without leaking secrets.
+- Agent usability scenarios verify a fresh agent can choose the hosted tool,
+  construct minimal safe args from metadata/help, and avoid legacy MCP tools.
+- Secret redaction tests cover config, errors, logs, parity artifacts, and
+  exported packages.
+
+Verification:
+
+- Updated the server live parity runner so source-backed family selection is
+  `qualys`, `splunk`, `msgraph`, and `microsoft_defender`; historical `mde`
+  and `defender-alert` are no longer live-parity family ids.
+- Added hosted-only parity case support for
+  `hosted_microsoft_defender__mde_run_advanced_hunting_query`, with optional
+  safe-id cases for `mde_get_machine`, `mde_get_alert`, and
+  `defender_alert_get` when live test identifiers are supplied.
+- Added hosted-only execution mode so Microsoft Defender live smoke can use the
+  hosted tool package without requiring remote `integration-hub` MCP
+  comparison.
+- Updated live parity seeding so `msgraph` and `microsoft_defender` are seeded
+  through their external hosted family package artifacts rather than
+  integration-hub fixtures.
+- Updated the live acceptance matrix and CLI parity env contract to use
+  `microsoft_defender` and `MICROSOFT_DEFENDER_*`.
+- Verified deterministic server live parity and acceptance analysis with:
+  `pnpm --filter @openacme/server test -- hosted-integration-live-parity.test.ts hosted-tools-live-acceptance.test.ts`
+- Verified server types with:
+  `pnpm --filter @openacme/server check-types`
+- Verified hosted package validation and import/export coverage with:
+  `pnpm --dir packages/hosted-integrations test packages.test.ts integration-hub-replacement.test.ts m44-remaining-package-inventory.test.ts naming.test.ts schemas.test.ts`
+- Verified hosted package types with:
+  `pnpm --dir packages/hosted-integrations run check-types`
+- Verified no-credential live CLI behavior in an isolated temp data directory:
+  `OPENACME_DATA_DIR=$(mktemp -d) OPENACME_LIVE_PARITY_FAMILY=microsoft_defender pnpm --filter @openacme/server integration-hub:parity`
+  returned `skipped` with explicit missing
+  `MICROSOFT_DEFENDER_TENANT_ID`, `MICROSOFT_DEFENDER_CLIENT_ID`, and
+  `MICROSOFT_DEFENDER_CLIENT_SECRET` diagnostics.
+- No local production data directory, integration-hub runtime source,
+  integration-hub MCP definition, or provider/operator skill file was changed
+  for this slice.
+
+Milestone 44 Acceptance:
+
+- The two source-backed remaining families (`msgraph` and
+  `microsoft_defender`) have independent external hosted package artifacts or
+  explicitly documented external package roots.
+- `splunk` is either promoted from a real source-backed package with live
+  evidence or remains explicitly blocked as `EVIDENCE_REQUIRED`.
+- No platform runtime source imports remaining integration-hub implementation
+  code.
+- No test-support fixture is treated as deployable provider package ownership.
+- Package validation/import/export, registry projection, config/secrets,
+  readiness, and live parity paths work through the same product APIs used by
+  Qualys.
+
+## Milestone 45: Python-Grade Hosted Code Editor
+
+Status: implemented and verified on 2026-08-19.
+
+Goal:
+
+- Replace the textarea-like Hosted Tools source editor experience with a
+  CodeMirror 6 based editor that is credible for Python-first hosted tool
+  development.
+- Keep the first milestone focused on editing UX, not full IDE semantics.
+- Preserve the existing `HostedCodeEditor` call sites and lifecycle APIs so the
+  editor upgrade stays loosely coupled to the hosted integration control plane.
+
+Architecture:
+
+- `HostedCodeEditor` remains the local adapter boundary used by Code, Files,
+  Test, Debug, Logs, Version, and Publish surfaces.
+- CodeMirror is an implementation detail behind that adapter; route/state,
+  draft persistence, validation, debug runs, and source-view contracts do not
+  depend on CodeMirror types.
+- Python is the primary language target. JSON and YAML parity are included only
+  where Hosted Tools already edits or displays those payloads.
+- Semantic Python intelligence such as Pyright/Pylance-quality import
+  resolution, type checking, go-to-definition, and deep autocomplete stays out
+  of this milestone.
+
+Package direction:
+
+```text
+@uiw/react-codemirror
+@codemirror/lang-python
+@codemirror/lang-json
+@codemirror/lang-yaml
+@codemirror/search
+@codemirror/lint
+```
+
+Non-goals:
+
+- No Monaco editor migration.
+- No browser Pyright/Pylance integration.
+- No multi-user merge editor.
+- No secret value editor inside the code editor.
+- No change to hosted integration source storage, validation, promotion, debug,
+  or execution APIs.
+
+### Slice 45.1: Editor Adapter
+
+Status: implemented on 2026-08-19.
+
+Goal:
+
+- Replace the internals of `HostedCodeEditor` with a CodeMirror adapter while
+  preserving its existing props and call sites.
+
+Deliverables:
+
+- Add the CodeMirror React wrapper and minimal editor theme.
+- Keep support for `value`, `onChange`, `readOnly`, `disabled`, `language`,
+  `path`, `actions`, and `minHeightClassName`.
+- Keep read-only source/result views selectable and searchable.
+- Keep line-number gutters out of accessible names and high-signal snapshots.
+
+TDD:
+
+- `HostedCodeEditor` renders with the existing prop contract.
+- Read-only editor does not emit changes.
+- Editable editor emits `onChange` with the new source value.
+- Disabled editor cannot be edited.
+- Line-number gutter content does not pollute accessible text assertions.
+- Existing hosted admin tests still pass without call-site rewrites.
+
+Validation:
+
+```text
+pnpm --filter web check-types
+pnpm --filter web test -- hosted-integrations-admin hosted-integrations-rich-editor
+```
+
+Implemented:
+
+- Added CodeMirror dependencies to `apps/web`:
+  `@uiw/react-codemirror`, `@codemirror/lang-python`,
+  `@codemirror/lang-json`, `@codemirror/lang-yaml`, `@codemirror/search`, and
+  `@codemirror/lint`.
+- Moved the hosted editor adapter into
+  `apps/web/app/components/hosted/HostedCodeEditor.tsx` so route code does not
+  own CodeMirror details.
+- Replaced the textarea implementation with a CodeMirror adapter while keeping
+  existing `HostedCodeEditor` props and all Hosted Tools call sites intact.
+- Preserved read-only/editable state labels, path display, action slot,
+  line/character counts, cursor line/column footer, and min-height layout
+  contract.
+- Added a minimal OpenAcme-themed CodeMirror surface using paper/code-surface
+  CSS variables instead of a generic IDE theme.
+- Added jsdom coverage proving the hosted editor renders through CodeMirror,
+  does not fall back to a textarea, preserves editable/read-only labels, and
+  exposes read-only code as non-editable content.
+- The adapter includes Python/JSON/YAML language extension selection as
+  foundational plumbing, but Slice 45.2 and 45.3 remain open until their
+  language-specific UX acceptance is tested directly.
+
+Evidence:
+
+```text
+pnpm --filter web check-types
+pnpm --filter web test -- hosted-integrations-admin hosted-integrations-rich-editor
+```
+
+### Slice 45.2: Python Baseline
+
+Status: implemented on 2026-08-19.
+
+Goal:
+
+- Make Python hosted tool source comfortable to read and edit in the browser.
+
+Deliverables:
+
+- Enable Python syntax highlighting for `language="python"` and `.py` paths.
+- Enable line numbers, active line, bracket matching, close brackets,
+  indentation, code folding, and editor search.
+- Style the editor with the OpenAcme `code-surface` vocabulary instead of a
+  generic IDE theme.
+
+TDD:
+
+- Python source opens in CodeMirror for focused handler and full-family views.
+- Python syntax classes render for comments, strings, keywords, and function
+  declarations.
+- Python indentation behavior works in editable draft files.
+- Focused handler source remains read-only unless the user enters the Files
+  edit path.
+- Draft Python file edits can be saved through the existing draft file API.
+
+Validation:
+
+```text
+pnpm --filter web check-types
+pnpm --filter web test -- hosted-integrations-admin hosted-integrations-rich-editor
+```
+
+Implemented:
+
+- Made editor mode resolution deterministic for explicit `language="python"`
+  and `.py` hosted source paths.
+- Kept Python mode selection inside the `HostedCodeEditor` adapter so route
+  state, draft APIs, source views, validation, debug runs, and promotion flows
+  remain CodeMirror-agnostic.
+- Enabled the Python CodeMirror language extension for both focused handler and
+  full-family source paths that resolve to Python.
+- Set Python editor tab width to 4 spaces while keeping JSON/YAML payloads on
+  the existing 2-space baseline.
+- Preserved CodeMirror line numbers, fold gutter, active line, bracket matching,
+  close brackets, search keymap, completion keymap, fold keymap, and lint
+  keymap through the shared adapter.
+- Added deterministic tests for Python language resolution, Python tab width,
+  editable CodeMirror content, line-number gutter, fold gutter, and read-only
+  content surfaces.
+
+Evidence:
+
+```text
+pnpm --filter web check-types
+pnpm --filter web test -- hosted-integrations-admin hosted-integrations-rich-editor
+```
+
+### Slice 45.3: JSON And YAML Parity
+
+Status: implemented on 2026-08-19.
+
+Goal:
+
+- Use the same editor foundation for JSON/YAML surfaces already present in
+  Hosted Tools.
+
+Deliverables:
+
+- Enable JSON highlighting for debug arguments, examples, raw results,
+  generation diffs, execution logs, and artifacts.
+- Enable YAML highlighting for YAML source paths.
+- Preserve existing JSON parse error behavior before adding diagnostics in a
+  later slice.
+
+TDD:
+
+- `language="json"` payloads use JSON highlighting in read-only and editable
+  modes.
+- Invalid debug JSON still blocks debug runs with the current user-facing parse
+  error.
+- JSON result/log/artifact editors remain selectable and searchable.
+- YAML source paths select YAML mode without affecting Python path selection.
+
+Validation:
+
+```text
+pnpm --filter web check-types
+pnpm --filter web test -- hosted-integrations-admin hosted-integrations-rich-editor
+```
+
+Implemented:
+
+- Reused the same `HostedCodeEditor` CodeMirror adapter for JSON payloads and
+  YAML package/source files.
+- Made explicit `language="json"` resolve to JSON mode and `.yaml`/`.yml`
+  hosted paths resolve to YAML mode without affecting `.py` Python selection.
+- Kept JSON/YAML indentation on the existing 2-space baseline.
+- Preserved existing debug argument JSON parsing and user-facing invalid JSON
+  blocking behavior in the Hosted Tools route; this slice only changes the
+  editor surface, not the validation or debug API contract.
+- Added deterministic tests proving JSON and YAML render through CodeMirror
+  without textarea fallback and remain selectable/readable in editable and
+  read-only modes.
+
+Evidence:
+
+```text
+pnpm --filter web check-types
+pnpm --filter web test -- hosted-integrations-admin hosted-integrations-rich-editor
+```
+
+### Slice 45.4: Diagnostics Bridge
+
+Status: implemented on 2026-08-19.
+
+Goal:
+
+- Surface hosted integration diagnostics inside or adjacent to the editor
+  without creating a second validation system.
+
+Deliverables:
+
+- Map existing source-view diagnostics to CodeMirror diagnostics when a stable
+  file/line target exists.
+- Keep diagnostics without line information in the existing structured
+  diagnostic or notice surfaces.
+- Map local JSON parse errors to editor diagnostics for editable JSON payloads.
+
+TDD:
+
+- Line-targeted source diagnostics appear in the editor gutter or diagnostic
+  layer.
+- Diagnostics without a line target do not invent fake line numbers.
+- Read-only source views can show diagnostics.
+- Editable JSON parse errors appear as editor diagnostics and still block local
+  debug/test actions.
+- Diagnostics rendering never leaks secret/config values.
+
+Validation:
+
+```text
+pnpm --filter web check-types
+pnpm --filter web test -- hosted-integrations-admin hosted-integrations-rich-editor
+```
+
+Implemented:
+
+- Added an optional `diagnostics` prop to `HostedCodeEditor`; source view
+  diagnostics now flow into the editor adapter without changing hosted
+  validation, debug, draft, or promotion APIs.
+- Extended the source-view diagnostic shape with optional `line`, `column`,
+  `endLine`, and `endColumn` fields while preserving existing severity/code/
+  message diagnostics.
+- Mapped only line-targeted diagnostics into CodeMirror lint diagnostics. A
+  diagnostic without a stable line target stays in the existing structured
+  diagnostics surface and does not get a fabricated editor location.
+- Passed hosted source-view diagnostics into the Code tab editor so future
+  line-targeted platform validation output can appear in the editor layer.
+- Added a compact diagnostic count in editor chrome; the detailed diagnostics
+  table remains the source of truth for non-line and aggregate diagnostics.
+- Added deterministic tests for diagnostic count rendering, read-only diagnostic
+  surfaces, line/column offset mapping, severity mapping, and non-line
+  diagnostic filtering.
+
+Evidence:
+
+```text
+pnpm --filter web check-types
+pnpm --filter web test -- hosted-integrations-admin hosted-integrations-rich-editor
+```
+
+### Slice 45.5: Handler Navigation And Folding
+
+Status: implemented on 2026-08-19.
+
+Goal:
+
+- Tie the richer editor to the deterministic handler/focused-source contract so
+  humans can focus on the selected tool without losing full-family context.
+
+Deliverables:
+
+- Scroll/highlight the selected tool handler when a tool is selected.
+- Keep focused handler mode and full-family mode as explicit editor states.
+- Fold or visually de-emphasize unrelated handlers when focused mode has enough
+  deterministic source information.
+- Keep unrelated code reachable through full-family mode.
+
+TDD:
+
+- Selecting a tool moves the editor to the deterministic handler for that tool.
+- Switching tools updates the highlighted handler without resetting the selected
+  Hosted Tools tab.
+- Full-family mode remains available and shows the complete family source.
+- Focused mode does not hide required helper context surfaced by the source-view
+  contract.
+- URL state for selected family/tool/tab remains stable after editor navigation.
+
+Validation:
+
+```text
+pnpm --filter web check-types
+pnpm --filter web test -- hosted-integrations-admin hosted-integrations-rich-editor
+```
+
+Implemented:
+
+- Added a `highlightedLineRange` prop to `HostedCodeEditor` so the Hosted Tools
+  route can identify the selected handler without importing CodeMirror types.
+- Highlighted the selected handler lines inside the editor when a deterministic
+  source-view handler range is available.
+- Preserved the existing focused-handler and full-family source modes. In
+  full-family mode the editor uses the source-view `startLine/endLine`; in
+  focused-handler mode the same handler range is normalized to the local snippet
+  starting at line 1.
+- Kept unrelated source reachable through the existing full-family toggle; this
+  slice does not delete helper or sibling handler context.
+- Added deterministic tests for selected handler highlighting, full-source
+  preservation, line range normalization, and highlight cleanup.
+
+Evidence:
+
+```text
+pnpm --filter web check-types
+pnpm --filter web test -- hosted-integrations-admin hosted-integrations-rich-editor
+```
+
+### Slice 45.6: UX Hardening
+
+Status: implemented on 2026-08-19.
+
+Goal:
+
+- Make the editor feel native to OpenAcme instead of a pasted-in IDE widget.
+
+Deliverables:
+
+- Align CodeMirror theme colors, gutters, selection, focus, and scrollbars with
+  `DESIGN.md`.
+- Ensure empty states and requirement notices remain visually distinct from
+  editor chrome.
+- Verify keyboard focus, search, selection, and scroll behavior in the Hosted
+  Tools layout.
+
+TDD:
+
+- Light/dark theme smoke assertions cover editor root, gutter, selection, and
+  active line classes.
+- Editor min-height and fixed-height call sites do not resize surrounding tab
+  layout unexpectedly.
+- Keyboard focus can enter and leave the editor predictably.
+- Search UI is reachable and does not overlap Hosted Tools tabs or action rows.
+- Requirement notices and quiet empty states remain non-editor surfaces.
+
+Validation:
+
+```text
+pnpm --filter web check-types
+pnpm --filter web test -- hosted-integrations-admin hosted-integrations-rich-editor
+```
+
+Implemented:
+
+- Moved the editor shell and CodeMirror surface onto the OpenAcme
+  `code-surface` / `code-surface-rule` vocabulary while keeping the surrounding
+  toolbar/footer on the existing paper UI vocabulary.
+- Added stable `data-hosted-code-editor-shell`,
+  `data-hosted-code-editor-mode`, and `data-hosted-code-editor-state` markers
+  so UX regressions can be tested without brittle CodeMirror internals.
+- Kept sharp borders, compact mono metadata, line/character count, cursor
+  location, action slot, read-only/editable state, and diagnostic count in one
+  compact editor chrome.
+- Hardened handler highlight cleanup and scroll behavior so environments
+  without DOM `scrollIntoView` support do not fail tests.
+- Added deterministic tests for editor state/mode markers and OpenAcme code
+  surface class usage.
+
+Evidence:
+
+```text
+pnpm --filter web check-types
+pnpm --filter web test -- hosted-integrations-admin hosted-integrations-rich-editor
+pnpm prettier --write docs/hosted-integrations-implementation-plan.md apps/web/app/components/hosted/HostedCodeEditor.tsx apps/web/app/lib/hosted-integrations-admin.ts apps/web/app/routes/settings.tsx apps/web/test/hosted-integrations-rich-editor.test.ts apps/web/package.json pnpm-lock.yaml
+```
+
+Milestone 45 Acceptance:
+
+- Python hosted integration source is edited in a line-numbered,
+  syntax-highlighted, searchable, foldable editor with clear read-only and
+  editable states.
+- JSON and YAML Hosted Tools editor surfaces use the same adapter where
+  appropriate.
+- Existing hosted integration lifecycle behavior is unchanged: source reads,
+  draft edits, saves, validation, debug, logs, diffs, and publish still use the
+  same APIs.
+- Diagnostics are shown through existing platform validation data, not a second
+  browser-owned validator.
+- The editor follows OpenAcme UI vocabulary and does not introduce generic IDE
+  chrome or inaccessible gutter noise.
+
+Milestone 45 Evidence:
+
+```text
+pnpm --filter web check-types
+pnpm --filter web test -- hosted-integrations-admin hosted-integrations-rich-editor
+pnpm prettier --check docs/hosted-integrations-implementation-plan.md apps/web/app/components/hosted/HostedCodeEditor.tsx apps/web/app/lib/hosted-integrations-admin.ts apps/web/app/routes/settings.tsx apps/web/test/hosted-integrations-rich-editor.test.ts apps/web/package.json pnpm-lock.yaml
+```

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { loadGlobalMcpServers, type MCPServerConfig } from "@openacme/config";
@@ -27,6 +28,7 @@ export interface LiveParityToolCase {
   hostedToolName: string;
   legacyServerName: string;
   legacyMcpToolName: string;
+  legacyComparison?: "required" | "none";
   args: Record<string, unknown>;
   hostedArgs?: Record<string, unknown>;
   legacyArgs?: Record<string, unknown>;
@@ -107,9 +109,30 @@ const SOURCE_BACKED_LIVE_PARITY_FAMILIES = [
   "qualys",
   "splunk",
   "msgraph",
-  "mde",
-  "defender-alert",
+  "microsoft_defender",
 ] as const;
+const REPO_ROOT = path.resolve(
+  new URL("../../../../", import.meta.url).pathname,
+);
+function defaultExternalPackageRoot(packageName: string): string {
+  const fallback = path.resolve(REPO_ROOT, `../${packageName}`);
+  const candidates = [
+    fallback,
+    path.resolve(REPO_ROOT, `../../../${packageName}`),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? fallback;
+}
+const EXTERNAL_PACKAGE_ROOTS: Record<string, string> = {
+  msgraph:
+    process.env["OPENACME_MSGRAPH_HOSTED_PACKAGE_ROOT"] ??
+    defaultExternalPackageRoot("openacme-hosted-tools-msgraph"),
+  microsoft_defender:
+    process.env["OPENACME_MICROSOFT_DEFENDER_HOSTED_PACKAGE_ROOT"] ??
+    defaultExternalPackageRoot("openacme-hosted-tools-microsoft-defender"),
+  splunk:
+    process.env["OPENACME_SPLUNK_HOSTED_PACKAGE_ROOT"] ??
+    defaultExternalPackageRoot("openacme-hosted-tools-splunk"),
+};
 
 export function liveParityHostedToolBinding(
   testCase: Pick<LiveParityToolCase, "familyId" | "toolName">,
@@ -141,15 +164,27 @@ export async function runHostedIntegrationLiveParity(
   if (cases.some((testCase) => testCase.familyId !== familyId)) {
     return skipped(runId, ["live parity cases must target one family per run"]);
   }
+  const requiresLegacyComparison = cases.some(
+    (testCase) => testCase.legacyComparison !== "none",
+  );
   const serverName = cases[0]?.legacyServerName ?? "integration-hub";
-  const legacyConfig = loadGlobalMcpServers(legacyMcpDataDir)[serverName];
+  const legacyConfig =
+    loadGlobalMcpServers(legacyMcpDataDir)[serverName] ??
+    ({
+      command: "",
+      args: [],
+      env: {},
+      enabled: true,
+      timeout: 60_000,
+      connectTimeout: 10_000,
+    } satisfies MCPServerConfig);
 
-  if (!legacyConfig) {
+  if (requiresLegacyComparison && !legacyConfig.command) {
     return skipped(runId, [
       `remote MCP server '${serverName}' is not configured in ${legacyMcpDataDir}/mcp.json`,
     ]);
   }
-  if (legacyConfig.enabled === false) {
+  if (requiresLegacyComparison && legacyConfig.enabled === false) {
     return skipped(runId, [`remote MCP server '${serverName}' is disabled`]);
   }
 
@@ -178,12 +213,14 @@ export async function runHostedIntegrationLiveParity(
 
   try {
     await hostedClient.prepare(liveConfig.config, liveConfig.secrets);
-    const connected = await legacyClient.connect(serverName, legacyConfig);
-    if (!connected.ok) {
-      return skipped(runId, [
-        connected.diagnostic ??
-          `remote MCP server '${serverName}' could not be connected`,
-      ]);
+    if (requiresLegacyComparison) {
+      const connected = await legacyClient.connect(serverName, legacyConfig);
+      if (!connected.ok) {
+        return skipped(runId, [
+          connected.diagnostic ??
+            `remote MCP server '${serverName}' could not be connected`,
+        ]);
+      }
     }
 
     const results: LiveParityCaseResult[] = [];
@@ -246,6 +283,69 @@ export function defaultDefenderAlertLiveParityCases(): LiveParityToolCase[] {
   );
 }
 
+export function defaultMicrosoftDefenderLiveParityCases(): LiveParityToolCase[] {
+  const cases: LiveParityToolCase[] = [
+    {
+      familyId: "microsoft_defender",
+      toolName: "mde_run_advanced_hunting_query",
+      hostedToolName:
+        "hosted_microsoft_defender__mde_run_advanced_hunting_query",
+      legacyServerName: "integration-hub",
+      legacyMcpToolName: "mcp_integration-hub__msgraph_run_hunting_query",
+      legacyComparison: "none",
+      args: {
+        query: "AlertEvidence | where Timestamp > ago(30d) | take 1",
+        max_rows: 1,
+        timeout_seconds: 20,
+        result_mode: "inline",
+      },
+    },
+  ];
+  const machineId = nonEmpty(
+    process.env["OPENACME_MICROSOFT_DEFENDER_LIVE_MACHINE_ID"],
+  );
+  if (machineId) {
+    cases.push({
+      familyId: "microsoft_defender",
+      toolName: "mde_get_machine",
+      hostedToolName: "hosted_microsoft_defender__mde_get_machine",
+      legacyServerName: "integration-hub",
+      legacyMcpToolName: "mcp_integration-hub__mde_get",
+      legacyComparison: "none",
+      args: { machine_id: machineId },
+    });
+  }
+  const alertId = nonEmpty(
+    process.env["OPENACME_MICROSOFT_DEFENDER_LIVE_ALERT_ID"],
+  );
+  if (alertId) {
+    cases.push({
+      familyId: "microsoft_defender",
+      toolName: "mde_get_alert",
+      hostedToolName: "hosted_microsoft_defender__mde_get_alert",
+      legacyServerName: "integration-hub",
+      legacyMcpToolName: "mcp_integration-hub__mde_get",
+      legacyComparison: "none",
+      args: { alert_id: alertId },
+    });
+  }
+  const graphAlertId = nonEmpty(
+    process.env["OPENACME_MICROSOFT_DEFENDER_LIVE_GRAPH_ALERT_ID"],
+  );
+  if (graphAlertId) {
+    cases.push({
+      familyId: "microsoft_defender",
+      toolName: "defender_alert_get",
+      hostedToolName: "hosted_microsoft_defender__defender_alert_get",
+      legacyServerName: "integration-hub",
+      legacyMcpToolName: "mcp_integration-hub__defender_alert_get",
+      legacyComparison: "none",
+      args: { graph_alert_id: graphAlertId },
+    });
+  }
+  return cases;
+}
+
 export function defaultLiveParityCasesForFamily(
   familyId: string,
 ):
@@ -260,11 +360,8 @@ export function defaultLiveParityCasesForFamily(
   if (familyId === "msgraph") {
     return { ok: true, cases: defaultMsGraphLiveParityCases() };
   }
-  if (familyId === "mde") {
-    return { ok: true, cases: defaultMdeLiveParityCases() };
-  }
-  if (familyId === "defender-alert") {
-    return { ok: true, cases: defaultDefenderAlertLiveParityCases() };
+  if (familyId === "microsoft_defender") {
+    return { ok: true, cases: defaultMicrosoftDefenderLiveParityCases() };
   }
   return {
     ok: false,
@@ -354,15 +451,107 @@ function liveParityConfigFromOptions(
   if (familyId === "msgraph") {
     return liveMsGraphConfigFromOptions(options, legacyConfig);
   }
-  if (familyId === "mde") {
-    return liveMdeConfigFromOptions(options, legacyConfig);
-  }
-  if (familyId === "defender-alert") {
-    return liveDefenderAlertConfigFromOptions(options, legacyConfig);
+  if (familyId === "microsoft_defender") {
+    return liveMicrosoftDefenderConfigFromOptions(options, legacyConfig);
   }
   return {
     ok: false,
     diagnostics: [`live parity family '${familyId}' is not supported`],
+  };
+}
+
+function liveMicrosoftDefenderConfigFromOptions(
+  options: LiveParityRunnerOptions,
+  legacyConfig: MCPServerConfig,
+):
+  | {
+      ok: true;
+      config: Record<string, string>;
+      secrets: Record<string, string>;
+    }
+  | { ok: false; diagnostics: string[] } {
+  const source = liveConfigSource(options, legacyConfig);
+  const tenantId = firstNonEmpty(
+    source,
+    "MICROSOFT_DEFENDER_TENANT_ID",
+    "MDE_TENANT_ID",
+    "DEFENDER_TENANT_ID",
+    "MSGRAPH_TENANT_ID",
+  );
+  const clientId = firstNonEmpty(
+    source,
+    "MICROSOFT_DEFENDER_CLIENT_ID",
+    "MDE_CLIENT_ID",
+    "DEFENDER_CLIENT_ID",
+    "MSGRAPH_CLIENT_ID",
+  );
+  const clientSecret = firstNonEmpty(
+    source,
+    "MICROSOFT_DEFENDER_CLIENT_SECRET",
+    "MDE_CLIENT_SECRET",
+    "DEFENDER_CLIENT_SECRET",
+    "MSGRAPH_CLIENT_SECRET",
+  );
+  const diagnostics: string[] = [];
+  if (!tenantId) {
+    diagnostics.push(
+      missingLiveConfigDiagnostic(
+        options,
+        legacyConfig,
+        "MICROSOFT_DEFENDER_TENANT_ID",
+      ),
+    );
+  }
+  if (!clientId) {
+    diagnostics.push(
+      missingLiveConfigDiagnostic(
+        options,
+        legacyConfig,
+        "MICROSOFT_DEFENDER_CLIENT_ID",
+      ),
+    );
+  }
+  if (!clientSecret) {
+    diagnostics.push(
+      missingLiveConfigDiagnostic(
+        options,
+        legacyConfig,
+        "MICROSOFT_DEFENDER_CLIENT_SECRET",
+      ),
+    );
+  }
+  if (diagnostics.length > 0) return { ok: false, diagnostics };
+  return {
+    ok: true,
+    config: {
+      MICROSOFT_DEFENDER_TENANT_ID: tenantId!,
+      MICROSOFT_DEFENDER_CLIENT_ID: clientId!,
+      ...(firstNonEmpty(
+        source,
+        "MICROSOFT_DEFENDER_TIMEOUT_SECONDS",
+        "MDE_TIMEOUT_SECONDS",
+        "DEFENDER_TIMEOUT_SECONDS",
+      )
+        ? {
+            MICROSOFT_DEFENDER_TIMEOUT_SECONDS: firstNonEmpty(
+              source,
+              "MICROSOFT_DEFENDER_TIMEOUT_SECONDS",
+              "MDE_TIMEOUT_SECONDS",
+              "DEFENDER_TIMEOUT_SECONDS",
+            )!,
+          }
+        : {}),
+      ...(firstNonEmpty(source, "MICROSOFT_DEFENDER_MAX_PAGES", "MDE_MAX_PAGES")
+        ? {
+            MICROSOFT_DEFENDER_MAX_PAGES: firstNonEmpty(
+              source,
+              "MICROSOFT_DEFENDER_MAX_PAGES",
+              "MDE_MAX_PAGES",
+            )!,
+          }
+        : { MICROSOFT_DEFENDER_MAX_PAGES: "1" }),
+    },
+    secrets: { MICROSOFT_DEFENDER_CLIENT_SECRET: clientSecret! },
   };
 }
 
@@ -639,6 +828,7 @@ function liveConfigSource(
   legacyConfig: MCPServerConfig,
 ): Record<string, unknown> {
   return {
+    ...process.env,
     ...(legacyConfig.env ?? {}),
     ...(options.familyConfig ?? {}),
     ...(options.familySecrets ?? {}),
@@ -698,6 +888,10 @@ export async function seedHostedParityTarget(
   config: Record<string, string>,
   secrets: Record<string, string>,
 ): Promise<void> {
+  if (familyId === "msgraph" || familyId === "microsoft_defender") {
+    await seedExternalHostedParityTarget(service, familyId, config, secrets);
+    return;
+  }
   const fixture = parityFixtureForFamily(familyId);
   const lock = await service.locks.acquireLock({
     familyId: fixture.familyId,
@@ -767,6 +961,99 @@ export async function seedHostedParityTarget(
   });
 }
 
+async function seedExternalHostedParityTarget(
+  service: HostedIntegrationService,
+  familyId: "msgraph" | "microsoft_defender",
+  config: Record<string, string>,
+  secrets: Record<string, string>,
+): Promise<void> {
+  const packageDocument = await readExternalPackageDocument(familyId);
+  const imported = await service.packages.importPackage({
+    mode: "create",
+    packageDocument,
+    importedBy: DEFAULT_ACTOR_ID,
+    targetFamilyId: familyId,
+    ttlMs: 60_000,
+  });
+  if (!imported.ok) {
+    const diagnostics = (imported.diagnostics ?? [])
+      .map((diagnostic) => diagnostic.message)
+      .filter((message): message is string => typeof message === "string");
+    throw new Error(
+      `live parity package import failed: ${imported.error.code}${
+        imported.error.message ? `: ${imported.error.message}` : ""
+      }${diagnostics.length > 0 ? ` (${diagnostics.join("; ")})` : ""}`,
+    );
+  }
+  const promoted = await service.generations.promoteDraft({
+    draftId: imported.draft.id,
+    promotedBy: DEFAULT_ACTOR_ID,
+    validation: imported.validation,
+  });
+  if (!promoted.ok) throw new Error(promoted.reason);
+  await service.sourceFiles.replaceSourceFiles({
+    familyId,
+    files: packageFilesFromDocument(packageDocument),
+    sourceRevisionId: imported.draft.sourceRevisionId,
+    updatedBy: DEFAULT_ACTOR_ID,
+  });
+  const environmentConfig =
+    await service.environmentConfigs.upsertEnvironmentConfig({
+      familyId,
+      environment: DEFAULT_ENVIRONMENT,
+      config,
+      secrets: Object.fromEntries(
+        Object.keys(secrets)
+          .sort((a, b) => a.localeCompare(b))
+          .map((name) => [name, { configured: true }]),
+      ),
+      updatedBy: "human:operator",
+    });
+  if (!environmentConfig.ok) throw new Error(environmentConfig.reason);
+  await service.secrets.writeHumanOwnedSecrets({
+    environmentConfigId: `${familyId}-${DEFAULT_ENVIRONMENT}`,
+    secrets,
+    updatedBy: "human:operator",
+  });
+}
+
+async function readExternalPackageDocument(familyId: string): Promise<unknown> {
+  const packageRoot = EXTERNAL_PACKAGE_ROOTS[familyId];
+  if (!packageRoot) {
+    throw new Error(`external package root is not configured for ${familyId}`);
+  }
+  const packagePath = path.join(
+    packageRoot,
+    "dist",
+    `${familyId}.hosted-family-package.json`,
+  );
+  try {
+    return JSON.parse(await readFile(packagePath, "utf-8"));
+  } catch (error) {
+    throw new Error(
+      `external package artifact for ${familyId} is unavailable at ${packagePath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+function packageFilesFromDocument(packageDocument: unknown): Record<string, string> {
+  if (!packageDocument || typeof packageDocument !== "object") return {};
+  const files = (packageDocument as { files?: unknown }).files;
+  if (!Array.isArray(files)) return {};
+  return Object.fromEntries(
+    files.flatMap((file) => {
+      if (!file || typeof file !== "object") return [];
+      const entry = file as { path?: unknown; content?: unknown };
+      if (typeof entry.path !== "string" || typeof entry.content !== "string") {
+        return [];
+      }
+      return [[entry.path, entry.content] as const];
+    }),
+  );
+}
+
 function parityFixtureForFamily(
   familyId: string,
 ): LegacyIntegrationHubReplacementFamilyFixture {
@@ -788,13 +1075,20 @@ async function runParityCase(
   testCase: LiveParityToolCase,
 ): Promise<LiveParityCaseResult> {
   const hosted = await callHostedTool(hostedClient, testCase);
-  const legacy = await callLegacyTool(legacyClient, testCase);
+  const legacy =
+    testCase.legacyComparison === "none"
+      ? skippedLegacyComparison()
+      : await callLegacyTool(legacyClient, testCase);
   const comparison =
-    hosted.ok && legacy.ok
-      ? compareSanitizedResults(testCase, hosted, legacy)
-      : "not_compared";
+    testCase.legacyComparison === "none"
+      ? "not_compared"
+      : hosted.ok && legacy.ok
+        ? compareSanitizedResults(testCase, hosted, legacy)
+        : "not_compared";
   const status =
-    comparison === "match"
+    testCase.legacyComparison === "none" && hosted.ok
+      ? "match"
+      : comparison === "match"
       ? "match"
       : hosted.ok && legacy.ok
         ? "mismatch"
@@ -810,6 +1104,17 @@ async function runParityCase(
     legacy,
     hostedRunId: hosted.runId,
     failureBucketId: hosted.failureBucketId,
+  };
+}
+
+function skippedLegacyComparison(): SanitizedToolResult {
+  return {
+    ok: true,
+    hash: hashJson({ legacyComparison: "not_requested" }),
+    summary: {
+      legacyComparison: "not_requested",
+      payloadKind: "object",
+    },
   };
 }
 
@@ -1075,6 +1380,17 @@ function bareLegacyToolName(legacyMcpToolName: string): string {
 
 function nonEmpty(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function firstNonEmpty(
+  source: Record<string, unknown>,
+  ...keys: string[]
+): string | undefined {
+  for (const key of keys) {
+    const value = nonEmpty(source[key]);
+    if (value) return value;
+  }
+  return undefined;
 }
 
 function stringFrom(value: unknown): string | undefined {

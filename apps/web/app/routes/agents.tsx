@@ -78,13 +78,15 @@ import {
   agentSettingsCatalogTools,
   buildAgentSettingsHostedIntegrationBinding,
   groupAgentSettingsTools,
-  hostedIntegrationNativeToolName,
   hostedIntegrationEnvironmentConfigsForTool,
   hostedIntegrationToolRequiresEnvironmentConfig,
   isHostedIntegrationTool,
+  preferredHostedIntegrationFamilyEnvironment,
   removeHostedIntegrationBinding,
   sameHostedIntegrationBindings,
+  selectedHostedIntegrationFamilyAccessRows,
   selectedHostedIntegrationBindings,
+  updateHostedIntegrationFamilyDefaultEnvironment,
   upsertHostedIntegrationBinding,
   type AgentHostedIntegrationBinding,
   type HostedIntegrationEnvironmentConfig,
@@ -1291,16 +1293,24 @@ function AgentsPage() {
                             selected={formData.tools}
                             bindings={formData.hostedIntegrationBindings}
                             hostedEnvironmentConfigs={hostedEnvironmentConfigs}
-                            onDefaultScopeChange={(tool, environment) =>
+                            onFamilyEnvironmentChange={(
+                              familyId,
+                              environment,
+                            ) =>
                               setFormData((prev) => ({
                                 ...prev,
                                 hostedIntegrationBindings:
-                                  updateHostedIntegrationDefaultScope({
-                                    bindings: prev.hostedIntegrationBindings,
-                                    tool,
-                                    environment,
-                                    hostedEnvironmentConfigs,
-                                  }),
+                                  updateHostedIntegrationFamilyDefaultEnvironment(
+                                    {
+                                      bindings: prev.hostedIntegrationBindings,
+                                      tools,
+                                      selectedTools: prev.tools,
+                                      familyId,
+                                      environment,
+                                      environmentConfigs:
+                                        hostedEnvironmentConfigs,
+                                    },
+                                  ),
                               }))
                             }
                           />
@@ -2730,6 +2740,23 @@ function toggleToolSelection(input: {
   const binding = buildAgentSettingsHostedIntegrationBinding({
     tool: input.tool,
     environmentConfigs: input.hostedEnvironmentConfigs,
+    defaultEnvironment: preferredHostedIntegrationFamilyEnvironment({
+      bindings: input.hostedIntegrationBindings,
+      familyId: input.tool.source?.familyId ?? "",
+      allowedEnvironments: (hostedIntegrationToolRequiresEnvironmentConfig(
+        input.tool,
+      )
+        ? [
+            ...new Set(
+              hostedIntegrationEnvironmentConfigsForTool(
+                input.tool,
+                input.hostedEnvironmentConfigs,
+              ).map((scope) => scope.environment),
+            ),
+          ]
+        : (["prod", "test_debug"] as Array<"prod" | "test_debug">)
+      ).sort(),
+    }),
   });
   if (!binding) {
     return {
@@ -2775,107 +2802,101 @@ function setToolGroupSelection(input: {
   return { selected, hostedIntegrationBindings };
 }
 
-function updateHostedIntegrationDefaultScope(input: {
-  bindings: AgentHostedIntegrationBinding[];
-  tool: ToolInfo;
-  environment: "prod" | "test_debug";
-  hostedEnvironmentConfigs: HostedIntegrationEnvironmentConfig[];
-}): AgentHostedIntegrationBinding[] {
-  const binding = buildAgentSettingsHostedIntegrationBinding({
-    tool: input.tool,
-    environmentConfigs: input.hostedEnvironmentConfigs,
-    defaultEnvironment: input.environment,
-  });
-  if (!binding) return input.bindings;
-  return upsertHostedIntegrationBinding(input.bindings, binding);
-}
-
 function HostedIntegrationBindingsEditor({
   tools,
   selected,
   bindings,
   hostedEnvironmentConfigs,
-  onDefaultScopeChange,
+  onFamilyEnvironmentChange,
 }: {
   tools: ToolInfo[];
   selected: string[];
   bindings: AgentHostedIntegrationBinding[];
   hostedEnvironmentConfigs: HostedIntegrationEnvironmentConfig[];
-  onDefaultScopeChange: (
-    tool: ToolInfo,
+  onFamilyEnvironmentChange: (
+    familyId: string,
     environment: "prod" | "test_debug",
   ) => void;
 }) {
-  const selectedHostedTools = tools.filter(
-    (tool) => selected.includes(tool.name) && isHostedIntegrationTool(tool),
-  );
-  if (selectedHostedTools.length === 0) return null;
+  const familyRows = selectedHostedIntegrationFamilyAccessRows({
+    tools,
+    selectedTools: selected,
+    bindings,
+    environmentConfigs: hostedEnvironmentConfigs,
+  });
+  if (familyRows.length === 0) return null;
 
   return (
     <div className="grid gap-3 border-t border-paper-rule pt-4">
       <div className="flex items-center justify-between">
         <Label>Hosted tool access</Label>
         <span className="font-mono text-[11px] tabular-nums text-ink-soft">
-          {selectedHostedTools.length}
+          {familyRows.length} families
         </span>
       </div>
       <div className="grid gap-px">
-        {selectedHostedTools.map((tool) => {
-          const scopes = hostedIntegrationEnvironmentConfigsForTool(
-            tool,
-            hostedEnvironmentConfigs,
-          );
-          const binding = bindings.find(
-            (candidate) =>
-              candidate.familyId === tool.source?.familyId &&
-              candidate.toolName === hostedIntegrationNativeToolName(tool),
-          );
-          const value =
-            binding?.defaultEnvironment ?? scopes[0]?.environment ?? "";
+        {familyRows.map((row) => {
+          const value = row.defaultEnvironment ?? "";
           return (
             <div
-              key={tool.name}
+              key={row.familyId}
               className="grid gap-3 border border-paper-rule bg-paper px-3 py-3 md:grid-cols-[minmax(0,1fr)_minmax(220px,320px)]"
             >
               <div className="min-w-0">
                 <div
                   className="line-clamp-2 break-all font-mono text-[12px] leading-5 text-ink"
-                  title={tool.name}
+                  title={row.toolNames.join(", ")}
                 >
-                  {tool.name}
+                  {row.familyName}
                 </div>
-                <div className="mt-1 text-[11px] text-ink-faint">
-                  {tool.source?.familyName ?? tool.source?.familyId}
+                <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                  {row.tools.length} allowed tools
                 </div>
+                <p className="mt-2 line-clamp-2 break-all text-[11px] leading-5 text-ink-soft">
+                  {row.toolNames.join(", ")}
+                </p>
+                {row.mixedDefaultEnvironments && (
+                  <p className="mt-2 text-[11px] leading-5 text-amber-900">
+                    Mixed saved environments; changing this selector normalizes
+                    every selected {row.familyName} tool.
+                  </p>
+                )}
               </div>
-              <div className="grid gap-1">
-                <Label className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                  Environment
-                </Label>
-                <Select
-                  value={value}
-                  onValueChange={(environment) =>
-                    onDefaultScopeChange(
-                      tool,
-                      environment as "prod" | "test_debug",
-                    )
-                  }
-                >
-                  <SelectTrigger aria-label={`${tool.name} environment`}>
-                    <SelectValue placeholder="Select environment" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {scopes.map((scope) => (
-                      <SelectItem
-                        key={`${scope.familyId}:${scope.environment}:${scope.revision}`}
-                        value={scope.environment}
-                      >
-                        {scope.environment} · {scope.id} · rev {scope.revision}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+              {row.requiresEnvironmentConfig ? (
+                <div className="grid gap-1">
+                  <Label className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                    Family environment
+                  </Label>
+                  <Select
+                    value={value}
+                    onValueChange={(environment) =>
+                      onFamilyEnvironmentChange(
+                        row.familyId,
+                        environment as "prod" | "test_debug",
+                      )
+                    }
+                  >
+                    <SelectTrigger aria-label={`${row.familyName} environment`}>
+                      <SelectValue placeholder="Select environment" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {row.environmentConfigs.map((scope) => (
+                        <SelectItem
+                          key={`${scope.familyId}:${scope.environment}:${scope.revision}`}
+                          value={scope.environment}
+                        >
+                          {scope.environment} · {scope.id} · rev{" "}
+                          {scope.revision}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : (
+                <div className="self-center font-mono text-[11px] uppercase tracking-[0.08em] text-ink-faint">
+                  Config-free
+                </div>
+              )}
             </div>
           );
         })}
@@ -2994,13 +3015,15 @@ function AgentToolsTab({
             selected={selected}
             bindings={hostedIntegrationBindings}
             hostedEnvironmentConfigs={hostedEnvironmentConfigs}
-            onDefaultScopeChange={(tool, environment) =>
+            onFamilyEnvironmentChange={(familyId, environment) =>
               setHostedIntegrationBindings((prev) =>
-                updateHostedIntegrationDefaultScope({
+                updateHostedIntegrationFamilyDefaultEnvironment({
                   bindings: prev,
-                  tool,
+                  tools: allTools,
+                  selectedTools: selected,
+                  familyId,
                   environment,
-                  hostedEnvironmentConfigs,
+                  environmentConfigs: hostedEnvironmentConfigs,
                 }),
               )
             }

@@ -65,12 +65,27 @@ Classify the request before editing:
   instead of replaying many individual draft patches. Package import still
   creates or updates a draft only; it does not promote, grant access, or bypass
   validation/readiness.
+- Use the product control plane for import/export work: the
+  `hosted_tool_family_import` and `hosted_tool_family_export` management tools
+  when acting as Tool Developer, or the matching HTTP APIs when operating the
+  platform directly. Do not bypass policy, request validation, or lifecycle
+  routes by calling internal service constructors such as
+  `createFileHostedIntegrationService` except inside repository tests or
+  narrowly scoped developer diagnostics where the caller explicitly asks for
+  service-level inspection.
 - Treat deployable provider-family packages as external source repositories or
   package artifacts. Do not move provider-family runtime source into OpenAcme
   platform code directories such as `packages/hosted-integrations/families/`,
   and do not treat platform test-support fixtures as canonical deployable
   source. Test-support and historical integration-hub code are evidence or
   validation inputs only.
+- Current external package examples are:
+  `openacme-hosted-tools-qualys`, `openacme-hosted-tools-msgraph`,
+  `openacme-hosted-tools-microsoft-defender`, and
+  `openacme-hosted-tools-splunk`. Microsoft Defender uses the single hosted
+  family id `microsoft_defender`; do not recreate historical `mde` or
+  `defender-alert` hosted families. Splunk remains evidence-required unless a
+  real source-backed package with live behavior evidence is supplied.
 - Keep agent-usability/live dogfood scenarios in the repository-owned scenario
   manifest, not embedded in runner code. Unguided scenario prompts must not name
   hosted tools, `hosted_tool_help`, remote MCP tools, legacy `managed_*` tool

@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const HostedIntegrationFamilyIdSchema = z
   .string()
-  .regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/);
+  .regex(/^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$/);
 export type HostedIntegrationFamilyId = z.infer<
   typeof HostedIntegrationFamilyIdSchema
 >;

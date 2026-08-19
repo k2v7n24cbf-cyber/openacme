@@ -176,6 +176,16 @@ describe("hosted integration schemas", () => {
     expect(parsed.success).toBe(false);
   });
 
+  it("accepts underscored provider-domain family ids", () => {
+    const parsed = FamilyManifestSchema.safeParse({
+      ...minimalManifest,
+      id: "microsoft_defender",
+      name: "Microsoft Defender",
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
   it("rejects invalid tool names", () => {
     const parsed = HostedToolContractDocumentSchema.safeParse({
       ...minimalToolContract,

@@ -129,6 +129,7 @@ import { LoadingHairline } from "@/app/components/ui/loading-hairline";
 import { SectionEyebrow } from "@/app/components/ui/section-eyebrow";
 import { Badge } from "@/app/components/ui/badge";
 import { EmptyState } from "@/app/components/ui/empty-state";
+import { HostedCodeEditor } from "@/app/components/hosted/HostedCodeEditor";
 import { cn } from "@/app/lib/utils";
 import {
   GoogleIcon,
@@ -223,9 +224,11 @@ interface HostedPackageValidationResult {
 }
 
 export type HostedEditorSection =
+  | "overview"
   | "code"
   | "help"
   | "config"
+  | "vocabularies"
   | "agents"
   | "files"
   | "test"
@@ -2282,7 +2285,7 @@ export function HostedIntegrationsSettingsTab({
   };
   onViewStateChange?: (patch: {
     familyId?: string;
-    toolName?: string;
+    toolName?: string | null;
     editorSection?: HostedEditorSection;
     helpSection?: HostedHelpSection;
   }) => void;
@@ -2305,9 +2308,7 @@ export function HostedIntegrationsSettingsTab({
   const editorRow =
     rows.find((row) => row.id === editorFamilyId) ?? rows[0] ?? null;
   const selectedToolName = editorRow
-    ? (selectedToolByFamily[editorRow.id] ??
-      editorRow.tools.find((tool) => tool.lifecycle !== "removed")?.name ??
-      "")
+    ? (selectedToolByFamily[editorRow.id] ?? "")
     : "";
   const totalToolCount = rows.reduce(
     (total, row) => total + row.tools.length,
@@ -2337,7 +2338,20 @@ export function HostedIntegrationsSettingsTab({
   useEffect(() => {
     const familyId = viewState?.familyId;
     const toolName = viewState?.toolName;
-    if (!familyId || !toolName) return;
+    if (!familyId) return;
+    if (!toolName) {
+      setSelectedToolByFamily((current) => {
+        if (!(familyId in current)) return current;
+        const next = { ...current };
+        delete next[familyId];
+        return next;
+      });
+      setExpandedFamilyIds((current) => ({
+        ...current,
+        [familyId]: true,
+      }));
+      return;
+    }
     setSelectedToolByFamily((current) =>
       current[familyId] === toolName
         ? current
@@ -2401,15 +2415,21 @@ export function HostedIntegrationsSettingsTab({
       return;
     }
     shouldScrollEditorRef.current = true;
+    const nextSection = toolOnlyHostedSection(editorSection)
+      ? "overview"
+      : editorSection;
     setEditorFamilyId(familyId);
+    setSelectedToolByFamily((current) => {
+      const next = { ...current };
+      delete next[familyId];
+      return next;
+    });
+    setEditorSection(nextSection);
     setExpandedFamilyIds((current) => ({ ...current, [familyId]: true }));
-    const row = rows.find((family) => family.id === familyId);
     onViewStateChange?.({
       familyId,
-      toolName:
-        selectedToolByFamily[familyId] ??
-        row?.tools.find((tool) => tool.lifecycle !== "removed")?.name,
-      editorSection,
+      toolName: null,
+      editorSection: nextSection,
     });
     if (editorRow?.id === familyId) {
       window.requestAnimationFrame(() => {
@@ -2432,18 +2452,24 @@ export function HostedIntegrationsSettingsTab({
       toast.info("Unlock the current family before opening another family.");
       return;
     }
+    const nextSection = toolOnlyHostedSection(editorSection)
+      ? "overview"
+      : editorSection;
     setEditorFamilyId(familyId);
+    setSelectedToolByFamily((current) => {
+      const next = { ...current };
+      delete next[familyId];
+      return next;
+    });
+    setEditorSection(nextSection);
     setExpandedFamilyIds((current) => ({
       ...current,
       [familyId]: !(current[familyId] ?? editorRow?.id === familyId),
     }));
-    const row = rows.find((family) => family.id === familyId);
     onViewStateChange?.({
       familyId,
-      toolName:
-        selectedToolByFamily[familyId] ??
-        row?.tools.find((tool) => tool.lifecycle !== "removed")?.name,
-      editorSection,
+      toolName: null,
+      editorSection: nextSection,
     });
   }
 
@@ -2458,16 +2484,20 @@ export function HostedIntegrationsSettingsTab({
       return;
     }
     shouldScrollEditorRef.current = true;
+    const nextSection = familyOnlyHostedSection(editorSection)
+      ? "code"
+      : editorSection;
     setEditorFamilyId(familyId);
     setSelectedToolByFamily((current) => ({
       ...current,
       [familyId]: toolName,
     }));
+    setEditorSection(nextSection);
     setExpandedFamilyIds((current) => ({ ...current, [familyId]: true }));
     onViewStateChange?.({
       familyId,
       toolName,
-      editorSection,
+      editorSection: nextSection,
     });
   }
 
@@ -2774,6 +2804,16 @@ function HostedIntegrationDraftEditor({
   const [packageValidationResult, setPackageValidationResult] =
     useState<HostedPackageValidationResult | null>(null);
   const [fileMode, setFileMode] = useState<"published" | "draft">("published");
+  const [selectedVocabularyRef, setSelectedVocabularyRef] = useState("");
+  const [vocabularyContent, setVocabularyContent] = useState("");
+  const [vocabularyQuery, setVocabularyQuery] = useState("");
+  const [expandedVocabularyRefs, setExpandedVocabularyRefs] = useState<
+    Record<string, boolean>
+  >({});
+  const [expandedVocabularySections, setExpandedVocabularySections] = useState<
+    Record<string, boolean>
+  >({});
+  const [vocabularyError, setVocabularyError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -3021,11 +3061,26 @@ function HostedIntegrationDraftEditor({
   }
 
   async function readSourceFile(pathValue: string) {
-    const body = await hostedApiJson<{ content: string }>(
-      `/api/hosted-integrations/families/${encodeURIComponent(row.id)}/source/files/${encodeHostedPath(pathValue)}`,
-    );
+    const body = await readSourceFileContent(pathValue);
     setSourcePath(pathValue);
     setSourceContent(body.content);
+  }
+
+  async function readSourceFileContent(pathValue: string) {
+    return hostedApiJson<{ content: string }>(
+      `/api/hosted-integrations/families/${encodeURIComponent(row.id)}/source/files/${encodeHostedPath(pathValue)}`,
+    );
+  }
+
+  async function openSourceFile(pathValue: string) {
+    if (draft && draftFiles.some((file) => file.path === pathValue)) {
+      setFileMode("draft");
+      await readDraftFile(draft.id, pathValue);
+    } else {
+      setFileMode("published");
+      await readSourceFile(pathValue);
+    }
+    onEditorSectionChange("files");
   }
 
   async function loadPublishedExamples() {
@@ -3635,7 +3690,9 @@ function HostedIntegrationDraftEditor({
     if (!canManage || packagePreview.status !== "ready") return;
     let packageDocument: HostedFamilyPackageDocument;
     try {
-      packageDocument = JSON.parse(packageImportJson) as HostedFamilyPackageDocument;
+      packageDocument = JSON.parse(
+        packageImportJson,
+      ) as HostedFamilyPackageDocument;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       return;
@@ -3663,7 +3720,9 @@ function HostedIntegrationDraftEditor({
     });
   }
 
-  async function exportHostedPackage(sourceType: HostedPackageExportSourceType) {
+  async function exportHostedPackage(
+    sourceType: HostedPackageExportSourceType,
+  ) {
     if (!canManage) return;
     if (sourceType === "draft" && !draft) return;
     await withBusy("package-export", async () => {
@@ -3909,25 +3968,41 @@ function HostedIntegrationDraftEditor({
     busy: busy !== null,
     promotionNeedsHumanApproval,
   });
-  const editorSections: Array<[HostedEditorSection, string]> = [
-    ["code", "Code"],
-    ["help", "Help"],
-    ["config", "Config"],
-    ["agents", "Agents"],
-    ["files", "Files"],
-    ["test", "Test"],
-    ["debug", "Debug"],
-    ["version", "Version"],
-    ["logs", "Logs"],
-    ...(row.failureBuckets.length > 0
-      ? ([["failures", "Failures"]] as Array<[HostedEditorSection, string]>)
-      : []),
-    ...(publishActionState.showLane
-      ? ([["publish", publishViewState.tabLabel]] as Array<
-          [HostedEditorSection, string]
-        >)
-      : []),
-  ];
+  const familyMode = !selectedToolName;
+  const editorSections = useMemo<Array<[HostedEditorSection, string]>>(() => {
+    const base: Array<[HostedEditorSection, string]> = familyMode
+      ? [
+          ["overview", "Overview"],
+          ["config", "Config"],
+          ["vocabularies", "Vocabularies"],
+          ["files", "Files"],
+          ["version", "Version"],
+          ["logs", "Logs"],
+        ]
+      : [
+          ["code", "Code"],
+          ["help", "Help"],
+          ["test", "Test"],
+          ["debug", "Debug"],
+          ["files", "Files"],
+          ["logs", "Logs"],
+        ];
+    if (row.failureBuckets.length > 0) base.push(["failures", "Failures"]);
+    if (publishActionState.showLane) {
+      base.push(["publish", publishViewState.tabLabel]);
+    }
+    return base;
+  }, [
+    familyMode,
+    publishActionState.showLane,
+    publishViewState.tabLabel,
+    row.failureBuckets.length,
+  ]);
+
+  useEffect(() => {
+    if (editorSections.some(([section]) => section === editorSection)) return;
+    onEditorSectionChange(familyMode ? "overview" : "code");
+  }, [editorSection, editorSections, familyMode, onEditorSectionChange]);
 
   useEffect(() => {
     const tabList = editorTabListRef.current;
@@ -4034,20 +4109,121 @@ function HostedIntegrationDraftEditor({
   });
   const schemaPropertyRows = hostedInputSchemaRows(editorModel.inputSchema);
   const sourceViewDiagnostics = sourceView?.diagnostics ?? [];
+  const selectedSourceHandler = sourceView?.source.selectedHandler;
+  const selectedSourceHandlerLineRange = selectedSourceHandler
+    ? {
+        startLine: fullFamilyMode ? selectedSourceHandler.startLine : 1,
+        endLine: fullFamilyMode
+          ? selectedSourceHandler.endLine
+          : selectedSourceHandler.endLine - selectedSourceHandler.startLine + 1,
+      }
+    : undefined;
   const sourceViewDiagnosticRows = hostedSourceViewDiagnosticRows(
     sourceViewDiagnostics,
   );
   const helpParameterGroups = hostedHelpParameterGroups(helpDraft.parameters);
+  const vocabularyRefs = useMemo(
+    () => hostedVocabularyReferences(row.tools),
+    [row.tools],
+  );
+  const selectedVocabulary =
+    vocabularyRefs.find((ref) => ref.ref === selectedVocabularyRef) ??
+    vocabularyRefs[0] ??
+    null;
+  const parsedVocabulary = useMemo(
+    () => parseHostedVocabularyContent(vocabularyContent),
+    [vocabularyContent],
+  );
+  const matchedVocabularyEntries = useMemo(
+    () =>
+      filterHostedVocabularyEntries(parsedVocabulary.entries, vocabularyQuery),
+    [parsedVocabulary.entries, vocabularyQuery],
+  );
+  const vocabularySectionGroups = useMemo(
+    () => groupedHostedVocabularyEntries(matchedVocabularyEntries),
+    [matchedVocabularyEntries],
+  );
+  const selectedVocabularyExpanded = selectedVocabulary
+    ? (expandedVocabularyRefs[selectedVocabulary.ref] ?? true)
+    : false;
+
+  useEffect(() => {
+    setSelectedVocabularyRef((current) =>
+      vocabularyRefs.some((ref) => ref.ref === current)
+        ? current
+        : (vocabularyRefs[0]?.ref ?? ""),
+    );
+  }, [vocabularyRefs]);
+
+  useEffect(() => {
+    setExpandedVocabularyRefs((current) => {
+      const defaultRef = selectedVocabularyRef || vocabularyRefs[0]?.ref;
+      const next: Record<string, boolean> = {};
+      for (const ref of vocabularyRefs) {
+        next[ref.ref] = current[ref.ref] ?? ref.ref === defaultRef;
+      }
+      const currentKeys = Object.keys(current);
+      const nextKeys = Object.keys(next);
+      const unchanged =
+        currentKeys.length === nextKeys.length &&
+        nextKeys.every((key) => current[key] === next[key]);
+      return unchanged ? current : next;
+    });
+  }, [selectedVocabularyRef, vocabularyRefs]);
+
+  useEffect(() => {
+    if (editorSection !== "vocabularies" || !selectedVocabulary?.ref) return;
+    setVocabularyQuery("");
+    setExpandedVocabularySections({});
+    setVocabularyError(null);
+    void readSourceFileContent(selectedVocabulary.ref)
+      .then((body) => setVocabularyContent(body.content))
+      .catch((error) => {
+        setVocabularyContent("");
+        setVocabularyError(
+          error instanceof Error ? error.message : String(error),
+        );
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorSection, selectedVocabulary?.ref, row.id]);
+
+  useEffect(() => {
+    setExpandedVocabularySections((current) => {
+      const next: Record<string, boolean> = {};
+      for (const group of vocabularySectionGroups) {
+        next[group.section] = current[group.section] ?? false;
+      }
+      if (
+        vocabularySectionGroups.length > 0 &&
+        (Object.keys(current).length === 0 || vocabularyQuery.trim())
+      ) {
+        next[vocabularySectionGroups[0]!.section] = true;
+      }
+      return next;
+    });
+  }, [vocabularyQuery, vocabularySectionGroups]);
+
+  function toggleVocabularySection(section: string) {
+    setExpandedVocabularySections((current) => {
+      const shouldExpand = !(current[section] ?? false);
+      const next: Record<string, boolean> = {};
+      for (const group of vocabularySectionGroups) {
+        next[group.section] = group.section === section ? shouldExpand : false;
+      }
+      return next;
+    });
+  }
 
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-paper-rule px-4 py-3 md:px-5">
         <div className="min-w-0">
           <div className="truncate font-mono text-[12px] text-ink">
-            {selectedTool?.name ?? selectedToolName}
+            {familyMode ? row.name : (selectedTool?.name ?? selectedToolName)}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
             <span>v{row.version}</span>
+            {familyMode ? <span>{row.tools.length} tools</span> : null}
             <span
               title={
                 row.activeGeneration
@@ -4169,7 +4345,7 @@ function HostedIntegrationDraftEditor({
               <div className="grid min-w-0 content-start gap-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="inline-flex border border-paper-rule font-mono text-[10px] uppercase tracking-[0.08em]">
-                  {(
+                    {(
                       [
                         ["update", "Update"],
                         ["create", "Create"],
@@ -4237,7 +4413,9 @@ function HostedIntegrationDraftEditor({
                   )}
                 <div className="grid gap-2 border-y border-paper-rule py-3 text-[12px] leading-5 text-ink-soft">
                   {packagePreview.status === "empty" ? (
-                    <p>Paste a hosted family package to preview import impact.</p>
+                    <p>
+                      Paste a hosted family package to preview import impact.
+                    </p>
                   ) : packagePreview.status === "invalid" ? (
                     <p className="text-red-900">{packagePreview.error}</p>
                   ) : (
@@ -4293,9 +4471,9 @@ function HostedIntegrationDraftEditor({
                       {packageValidationResult &&
                         packageValidationResult.diagnostics.length > 0 && (
                           <p className="text-amber-900">
-                            {packageValidationResult.diagnostics.length} validation
-                            diagnostics. Open result details below for the raw
-                            diagnostic payload.
+                            {packageValidationResult.diagnostics.length}{" "}
+                            validation diagnostics. Open result details below
+                            for the raw diagnostic payload.
                           </p>
                         )}
                     </>
@@ -4382,7 +4560,9 @@ function HostedIntegrationDraftEditor({
                 aria-pressed={editorSection === value}
                 aria-label={hostedIntegrationEditorSectionAccessibleLabel({
                   sectionLabel: label,
-                  toolName: editorModel.selectedToolName,
+                  toolName: familyMode
+                    ? row.name
+                    : editorModel.selectedToolName,
                 })}
                 className={`relative shrink-0 px-3 py-2 font-mono text-[11px] uppercase tracking-[0.08em] transition-colors ${
                   editorSection === value
@@ -4430,6 +4610,363 @@ function HostedIntegrationDraftEditor({
             </div>
           )}
 
+          {editorSection === "overview" && (
+            <section className="grid gap-4 pt-3">
+              <div className="grid gap-4 lg:grid-cols-3">
+                <div className="border-y border-paper-rule py-3">
+                  <SectionEyebrow rule={false}>Family</SectionEyebrow>
+                  <div className="mt-2 font-mono text-[12px] text-ink">
+                    {row.id}
+                  </div>
+                  <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                    {row.activeGeneration ? "active" : "idle"} · v{row.version}
+                  </div>
+                </div>
+                <div className="border-y border-paper-rule py-3">
+                  <SectionEyebrow rule={false}>Surface</SectionEyebrow>
+                  <div className="mt-2 font-mono text-[12px] text-ink">
+                    {
+                      row.tools.filter((tool) => tool.lifecycle !== "removed")
+                        .length
+                    }{" "}
+                    visible tools
+                  </div>
+                  <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                    {vocabularyRefs.length} vocabularies
+                  </div>
+                </div>
+                <div className="border-y border-paper-rule py-3">
+                  <SectionEyebrow rule={false}>Runtime Config</SectionEyebrow>
+                  <div className="mt-2 font-mono text-[12px] text-ink">
+                    {row.runtimeConfig?.requiredConfigKeys?.length ?? 0} config
+                    · {row.runtimeConfig?.requiredSecretKeys?.length ?? 0}{" "}
+                    secret
+                  </div>
+                  <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                    {row.environmentConfigs.length} environments
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-2 border-t border-paper-rule">
+                {row.tools
+                  .filter((tool) => tool.lifecycle !== "removed")
+                  .map((tool) => (
+                    <div
+                      key={tool.name}
+                      className="grid gap-2 border-b border-paper-rule/60 py-2 md:grid-cols-[minmax(14rem,0.45fr)_minmax(0,1fr)]"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate font-mono text-[12px] text-ink">
+                          {tool.name}
+                        </div>
+                        <div className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                          {tool.classification.operation} · {tool.lifecycle}
+                        </div>
+                      </div>
+                      <p className="min-w-0 text-[12px] leading-5 text-ink-soft">
+                        {tool.description}
+                      </p>
+                    </div>
+                  ))}
+              </div>
+            </section>
+          )}
+
+          {editorSection === "vocabularies" && (
+            <section className="grid min-w-0 gap-4 pt-3">
+              {vocabularyRefs.length > 1 ? (
+                <div className="flex min-w-0 flex-wrap gap-2 border-y border-paper-rule py-2">
+                  {vocabularyRefs.map((vocabulary) => {
+                    const isSelected =
+                      selectedVocabulary?.ref === vocabulary.ref;
+                    return (
+                      <button
+                        key={vocabulary.ref}
+                        type="button"
+                        onClick={() => {
+                          setSelectedVocabularyRef(vocabulary.ref);
+                          setExpandedVocabularyRefs((current) => ({
+                            ...current,
+                            [vocabulary.ref]: true,
+                          }));
+                        }}
+                        aria-current={isSelected ? "page" : undefined}
+                        className={cn(
+                          "min-w-0 border border-paper-rule px-2 py-1 text-left font-mono text-[11px]",
+                          isSelected
+                            ? "bg-ink text-paper"
+                            : "bg-paper text-ink-soft hover:bg-paper-sunk hover:text-ink",
+                        )}
+                      >
+                        <span className="block max-w-[18rem] truncate">
+                          {vocabulary.ref}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+              <div className="grid min-w-0 content-start gap-3">
+                {selectedVocabulary ? (
+                  <>
+                    <div className="border-y border-paper-rule">
+                      <div className="flex flex-wrap items-start justify-between gap-3 py-3">
+                        <button
+                          type="button"
+                          aria-expanded={selectedVocabularyExpanded}
+                          onClick={() =>
+                            setExpandedVocabularyRefs((current) => ({
+                              ...current,
+                              [selectedVocabulary.ref]:
+                                !selectedVocabularyExpanded,
+                            }))
+                          }
+                          className="flex min-w-0 items-start gap-2 text-left"
+                        >
+                          {selectedVocabularyExpanded ? (
+                            <ChevronDown
+                              className="mt-4 size-4 shrink-0 text-ink-faint"
+                              aria-hidden
+                            />
+                          ) : (
+                            <ChevronRight
+                              className="mt-4 size-4 shrink-0 text-ink-faint"
+                              aria-hidden
+                            />
+                          )}
+                          <span className="min-w-0">
+                            <span className="label-faceplate text-ink-soft">
+                              Vocabulary
+                            </span>
+                            <span className="mt-1 block truncate font-mono text-[12px] text-ink">
+                              {selectedVocabulary.ref}
+                            </span>
+                            <span className="mt-0.5 block font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                              {parsedVocabulary.entries.length} entries ·{" "}
+                              {vocabularySectionGroups.length} sections
+                            </span>
+                          </span>
+                        </button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={busy !== null}
+                          onClick={() =>
+                            void openSourceFile(selectedVocabulary.ref)
+                          }
+                        >
+                          Open file
+                        </Button>
+                      </div>
+                      {!selectedVocabularyExpanded ? (
+                        <p className="border-t border-paper-rule/60 py-3 text-[12px] text-ink-soft">
+                          Vocabulary collapsed. Open the file to edit it or
+                          expand to inspect sections.
+                        </p>
+                      ) : null}
+                    </div>
+                    {selectedVocabularyExpanded ? (
+                      <>
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <div className="min-w-0">
+                            <SectionEyebrow rule={false}>Tools</SectionEyebrow>
+                            <p className="mt-2 text-[12px] leading-5 text-ink-soft">
+                              {selectedVocabulary.toolNames.join(", ")}
+                            </p>
+                          </div>
+                          <div className="min-w-0">
+                            <SectionEyebrow rule={false}>
+                              Parameters
+                            </SectionEyebrow>
+                            <p className="mt-2 text-[12px] leading-5 text-ink-soft">
+                              {selectedVocabulary.parameterNames.join(", ")}
+                            </p>
+                          </div>
+                        </div>
+                        {vocabularyError ? (
+                          <p className="border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-900">
+                            {vocabularyError}
+                          </p>
+                        ) : null}
+                        <div className="grid gap-4 border-y border-paper-rule py-3">
+                          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(14rem,20rem)] lg:items-end">
+                            <div className="min-w-0">
+                              <SectionEyebrow rule={false}>
+                                Vocabulary details
+                              </SectionEyebrow>
+                              <p className="mt-2 text-[12px] leading-5 text-ink-soft">
+                                {parsedVocabulary.purpose ||
+                                  "No purpose documented."}
+                              </p>
+                              <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                                <span>
+                                  {parsedVocabulary.entries.length} entries
+                                </span>
+                                {parsedVocabulary.sourceLabel ? (
+                                  <span>{parsedVocabulary.sourceLabel}</span>
+                                ) : null}
+                                {parsedVocabulary.parameterPath ? (
+                                  <span>{parsedVocabulary.parameterPath}</span>
+                                ) : null}
+                              </div>
+                            </div>
+                            <div className="grid gap-1">
+                              <Label
+                                htmlFor="hosted-vocabulary-search"
+                                className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint"
+                              >
+                                Search
+                              </Label>
+                              <Input
+                                id="hosted-vocabulary-search"
+                                value={vocabularyQuery}
+                                onChange={(event) =>
+                                  setVocabularyQuery(event.target.value)
+                                }
+                                placeholder="field, enum, section, example"
+                                className="font-mono text-[12px]"
+                              />
+                            </div>
+                          </div>
+
+                          {parsedVocabulary.parseError ? (
+                            <p className="border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
+                              {parsedVocabulary.parseError}. Open the source
+                              file to inspect or repair it.
+                            </p>
+                          ) : matchedVocabularyEntries.length === 0 ? (
+                            <p className="border-t border-paper-rule px-3 py-4 text-[12px] text-ink-soft">
+                              No vocabulary entries match this search.
+                            </p>
+                          ) : (
+                            <div className="grid border-t border-paper-rule">
+                              {vocabularySectionGroups.map((group) => {
+                                const expanded =
+                                  expandedVocabularySections[group.section] ??
+                                  false;
+                                const visibleEntries = group.entries.slice(
+                                  0,
+                                  80,
+                                );
+                                return (
+                                  <section
+                                    key={group.section}
+                                    className="border-b border-paper-rule/70"
+                                  >
+                                    <button
+                                      type="button"
+                                      aria-expanded={expanded}
+                                      onClick={() =>
+                                        toggleVocabularySection(group.section)
+                                      }
+                                      className="flex w-full items-center justify-between gap-3 py-3 text-left"
+                                    >
+                                      <div className="min-w-0">
+                                        <div className="truncate font-mono text-[12px] text-ink">
+                                          {group.section}
+                                        </div>
+                                        <div className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                                          {group.entries.length} fields
+                                        </div>
+                                      </div>
+                                      {expanded ? (
+                                        <ChevronDown
+                                          className="size-4 shrink-0 text-ink-faint"
+                                          aria-hidden
+                                        />
+                                      ) : (
+                                        <ChevronRight
+                                          className="size-4 shrink-0 text-ink-faint"
+                                          aria-hidden
+                                        />
+                                      )}
+                                    </button>
+                                    {expanded ? (
+                                      <div className="grid border-t border-paper-rule/60">
+                                        <div className="grid grid-cols-[minmax(12rem,0.45fr)_minmax(0,1fr)] gap-3 border-b border-paper-rule/60 py-2 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                                          <span>Field</span>
+                                          <span>Details</span>
+                                        </div>
+                                        {visibleEntries.map((entry) => (
+                                          <div
+                                            key={entry.value}
+                                            className="grid gap-2 border-b border-paper-rule/40 py-3 last:border-b-0 md:grid-cols-[minmax(12rem,0.45fr)_minmax(0,1fr)]"
+                                          >
+                                            <div className="min-w-0">
+                                              <div className="break-all font-mono text-[12px] text-ink">
+                                                {entry.value}
+                                              </div>
+                                              <div className="mt-1 flex flex-wrap gap-1.5">
+                                                {entry.valueTypes.map(
+                                                  (type) => (
+                                                    <Badge
+                                                      key={type}
+                                                      variant="secondary"
+                                                      className="font-mono text-[10px]"
+                                                    >
+                                                      {type}
+                                                    </Badge>
+                                                  ),
+                                                )}
+                                              </div>
+                                            </div>
+                                            <div className="min-w-0 text-[12px] leading-5 text-ink-soft">
+                                              <p>
+                                                {entry.summary ||
+                                                  "No summary documented."}
+                                              </p>
+                                              {entry.enumValues.length > 0 ? (
+                                                <p className="mt-1">
+                                                  <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                                                    Values
+                                                  </span>{" "}
+                                                  {entry.enumValues.join(", ")}
+                                                </p>
+                                              ) : null}
+                                              {entry.examples.length > 0 ? (
+                                                <p className="mt-1">
+                                                  <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                                                    Examples
+                                                  </span>{" "}
+                                                  {entry.examples
+                                                    .slice(0, 3)
+                                                    .join(" · ")}
+                                                </p>
+                                              ) : null}
+                                            </div>
+                                          </div>
+                                        ))}
+                                        {visibleEntries.length <
+                                        group.entries.length ? (
+                                          <p className="px-3 py-2 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                                            Showing {visibleEntries.length} of{" "}
+                                            {group.entries.length} fields in
+                                            this section. Refine search to
+                                            narrow the list.
+                                          </p>
+                                        ) : null}
+                                      </div>
+                                    ) : null}
+                                  </section>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </>
+                    ) : null}
+                  </>
+                ) : (
+                  <EmptyState icon={FileText} className="py-10">
+                    No vocabulary selected.
+                  </EmptyState>
+                )}
+              </div>
+            </section>
+          )}
+
           {editorSection === "code" && (
             <section className="grid min-w-0 gap-3">
               {editorModel.helpSummary && (
@@ -4442,6 +4979,8 @@ function HostedIntegrationDraftEditor({
                 textareaLabel={codeActionLabels.handlerSource}
                 path={editorModel.selectedHandlerName ?? undefined}
                 language="python"
+                diagnostics={sourceViewDiagnostics}
+                highlightedLineRange={selectedSourceHandlerLineRange}
                 readOnly
                 minHeightClassName="h-[min(58dvh,680px)] min-h-[320px]"
                 actions={
@@ -6797,106 +7336,6 @@ function formatTimestamp(value: string): string {
   return date.toLocaleString();
 }
 
-function HostedCodeEditor({
-  value,
-  onChange,
-  label,
-  textareaLabel,
-  path,
-  language,
-  actions,
-  readOnly = false,
-  disabled = false,
-  minHeightClassName = "min-h-[420px]",
-}: {
-  value: string;
-  onChange?: (value: string) => void;
-  label: string;
-  textareaLabel?: string;
-  path?: string;
-  language: string;
-  actions?: React.ReactNode;
-  readOnly?: boolean;
-  disabled?: boolean;
-  minHeightClassName?: string;
-}) {
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const [cursor, setCursor] = useState({ line: 1, column: 1 });
-  const lineCount = Math.max(1, value.split("\n").length);
-
-  function updateCursor() {
-    const el = textareaRef.current;
-    if (!el) return;
-    const beforeCursor = el.value.slice(0, el.selectionStart);
-    const lines = beforeCursor.split("\n");
-    setCursor({
-      line: lines.length,
-      column: (lines[lines.length - 1]?.length ?? 0) + 1,
-    });
-  }
-
-  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key !== "Tab" || readOnly || disabled || !onChange) return;
-    event.preventDefault();
-    const el = event.currentTarget;
-    const start = el.selectionStart;
-    const end = el.selectionEnd;
-    const next = `${value.slice(0, start)}  ${value.slice(end)}`;
-    onChange(next);
-    window.requestAnimationFrame(() => {
-      el.selectionStart = start + 2;
-      el.selectionEnd = start + 2;
-      updateCursor();
-    });
-  }
-
-  return (
-    <div className="min-w-0 overflow-hidden border border-paper-rule bg-paper">
-      <div className="flex min-h-9 items-center justify-between gap-3 border-b border-paper-rule bg-paper-sunk px-3 py-2">
-        <div className="min-w-0">
-          <div className="label-faceplate text-ink-soft">{label}</div>
-          {path && (
-            <div className="mt-0.5 truncate font-mono text-[11px] text-ink-faint">
-              {path}
-            </div>
-          )}
-        </div>
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-3">
-          {actions}
-          <div className="flex items-center gap-3 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint tabular-nums">
-            <span>{language}</span>
-            <span>{readOnly || disabled ? "read only" : "editable"}</span>
-          </div>
-        </div>
-      </div>
-      <div className={cn("flex min-h-0 overflow-hidden", minHeightClassName)}>
-        <textarea
-          ref={textareaRef}
-          value={value}
-          readOnly={readOnly}
-          disabled={disabled}
-          spellCheck={false}
-          onChange={(event) => onChange?.(event.target.value)}
-          onKeyDown={handleKeyDown}
-          onClick={updateCursor}
-          onKeyUp={updateCursor}
-          onSelect={updateCursor}
-          aria-label={textareaLabel ?? label}
-          className="min-w-0 flex-1 resize-none border-0 bg-paper px-3 py-3 font-mono text-[12px] leading-5 text-ink outline-none selection:bg-plot-red/20 disabled:cursor-not-allowed disabled:text-ink-faint"
-        />
-      </div>
-      <div className="flex items-center justify-between gap-3 border-t border-paper-rule bg-paper-sunk px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint tabular-nums">
-        <span>
-          {lineCount} lines · {value.length} chars
-        </span>
-        <span>
-          ln {cursor.line}, col {cursor.column}
-        </span>
-      </div>
-    </div>
-  );
-}
-
 function languageForHostedPath(pathValue: string): string {
   const lower = pathValue.toLowerCase();
   if (lower.endsWith(".py")) return "python";
@@ -7046,6 +7485,220 @@ function inputSchemaPropertyNames(
     return [];
   }
   return Object.keys(properties);
+}
+
+function toolOnlyHostedSection(section: HostedEditorSection): boolean {
+  return (
+    section === "code" ||
+    section === "help" ||
+    section === "test" ||
+    section === "debug"
+  );
+}
+
+function familyOnlyHostedSection(section: HostedEditorSection): boolean {
+  return (
+    section === "overview" ||
+    section === "config" ||
+    section === "vocabularies" ||
+    section === "version"
+  );
+}
+
+interface HostedVocabularyReferenceRow {
+  ref: string;
+  toolNames: string[];
+  parameterNames: string[];
+}
+
+interface HostedVocabularyEntryView {
+  value: string;
+  summary: string;
+  section: string;
+  valueTypes: string[];
+  enumValues: string[];
+  examples: string[];
+}
+
+interface HostedVocabularyView {
+  purpose: string;
+  parameterPath: string;
+  sourceLabel: string;
+  entries: HostedVocabularyEntryView[];
+  parseError: string | null;
+}
+
+interface HostedVocabularySectionGroup {
+  section: string;
+  entries: HostedVocabularyEntryView[];
+}
+
+function hostedVocabularyReferences(
+  tools: HostedIntegrationToolSpec[],
+): HostedVocabularyReferenceRow[] {
+  const refs = new Map<
+    string,
+    { toolNames: Set<string>; parameterNames: Set<string> }
+  >();
+  for (const tool of tools) {
+    const parameters = tool.help?.parameters ?? {};
+    for (const [parameterName, parameterHelp] of Object.entries(parameters)) {
+      for (const ref of collectVocabularyRefs(parameterHelp)) {
+        const row = refs.get(ref) ?? {
+          toolNames: new Set<string>(),
+          parameterNames: new Set<string>(),
+        };
+        row.toolNames.add(tool.name);
+        row.parameterNames.add(parameterName);
+        refs.set(ref, row);
+      }
+    }
+  }
+  return [...refs.entries()]
+    .map(([ref, row]) => ({
+      ref,
+      toolNames: [...row.toolNames].sort((left, right) =>
+        left.localeCompare(right),
+      ),
+      parameterNames: [...row.parameterNames].sort((left, right) =>
+        left.localeCompare(right),
+      ),
+    }))
+    .sort((left, right) => left.ref.localeCompare(right.ref));
+}
+
+function collectVocabularyRefs(value: unknown): string[] {
+  if (!value || typeof value !== "object") return [];
+  if (Array.isArray(value)) return value.flatMap(collectVocabularyRefs);
+  const object = value as Record<string, unknown>;
+  const current =
+    typeof object.vocabularyRef === "string" &&
+    object.vocabularyRef.trim().length > 0
+      ? [object.vocabularyRef.trim()]
+      : [];
+  return [
+    ...current,
+    ...Object.entries(object)
+      .filter(([key]) => key !== "vocabularyRef")
+      .flatMap(([, child]) => collectVocabularyRefs(child)),
+  ];
+}
+
+function parseHostedVocabularyContent(content: string): HostedVocabularyView {
+  if (!content.trim()) {
+    return {
+      purpose: "",
+      parameterPath: "",
+      sourceLabel: "",
+      entries: [],
+      parseError: null,
+    };
+  }
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Vocabulary root must be an object");
+    }
+    const root = parsed as Record<string, unknown>;
+    const source = objectValue(root.source);
+    const sourceLabel = source
+      ? [
+          stringValue(source.kind),
+          stringValue(source.artifact),
+          typeof source.entryCount === "number"
+            ? `${source.entryCount} source entries`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      : "";
+    const entries = Array.isArray(root.entries)
+      ? root.entries
+          .map(vocabularyEntryView)
+          .filter((entry): entry is HostedVocabularyEntryView => entry !== null)
+      : [];
+    return {
+      purpose: stringValue(root.purpose),
+      parameterPath: stringValue(root.parameterPath),
+      sourceLabel,
+      entries,
+      parseError: null,
+    };
+  } catch (error) {
+    return {
+      purpose: "",
+      parameterPath: "",
+      sourceLabel: "",
+      entries: [],
+      parseError: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function vocabularyEntryView(value: unknown): HostedVocabularyEntryView | null {
+  const object = objectValue(value);
+  if (!object) return null;
+  const field = stringValue(object.value);
+  if (!field) return null;
+  return {
+    value: field,
+    summary: stringValue(object.summary),
+    section: stringValue(object.section),
+    valueTypes: stringArrayValue(object.valueTypes),
+    enumValues: stringArrayValue(object.enumValues),
+    examples: stringArrayValue(object.examples),
+  };
+}
+
+function filterHostedVocabularyEntries(
+  entries: HostedVocabularyEntryView[],
+  query: string,
+): HostedVocabularyEntryView[] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return entries;
+  return entries.filter((entry) =>
+    [
+      entry.value,
+      entry.summary,
+      entry.section,
+      ...entry.valueTypes,
+      ...entry.enumValues,
+      ...entry.examples,
+    ]
+      .join(" ")
+      .toLowerCase()
+      .includes(normalized),
+  );
+}
+
+function groupedHostedVocabularyEntries(
+  entries: HostedVocabularyEntryView[],
+): HostedVocabularySectionGroup[] {
+  const groups = new Map<string, HostedVocabularyEntryView[]>();
+  for (const entry of entries) {
+    const section = entry.section || "Uncategorized";
+    const list = groups.get(section) ?? [];
+    list.push(entry);
+    groups.set(section, list);
+  }
+  return [...groups.entries()]
+    .map(([section, list]) => ({
+      section,
+      entries: [...list].sort((left, right) =>
+        left.value.localeCompare(right.value),
+      ),
+    }))
+    .sort((left, right) => left.section.localeCompare(right.section));
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function stringArrayValue(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 }
 
 function hostedInputSchemaRows(

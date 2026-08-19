@@ -7,7 +7,10 @@ import {
   hostedIntegrationEnvironmentConfigsForTool,
   hostedIntegrationToolRequiresEnvironmentConfig,
   isHostedIntegrationTool,
+  preferredHostedIntegrationFamilyEnvironment,
+  selectedHostedIntegrationFamilyAccessRows,
   selectedHostedIntegrationBindings,
+  updateHostedIntegrationFamilyDefaultEnvironment,
   type AgentHostedIntegrationBinding,
   type HostedIntegrationEnvironmentConfig,
 } from "@/app/lib/hosted-integration-agent-settings";
@@ -22,6 +25,19 @@ const hostedTool: ToolInfo = {
     familyId: "qualys",
     familyName: "Qualys",
     toolName: "qualys_count_assets",
+    generationId: "gen_1",
+  },
+};
+
+const hostedSearchTool: ToolInfo = {
+  name: "hosted_qualys__qualys_search_assets",
+  description: "Search assets.",
+  toolset: "hosted-integrations",
+  source: {
+    kind: "hosted_integration",
+    familyId: "qualys",
+    familyName: "Qualys",
+    toolName: "qualys_search_assets",
     generationId: "gen_1",
   },
 };
@@ -238,5 +254,120 @@ describe("hosted integration agent settings helpers", () => {
         [builtinTool, hostedTool],
       ),
     ).toEqual([bindings[0]]);
+  });
+
+  it("groups selected hosted tools by family for environment selection", () => {
+    const rows = selectedHostedIntegrationFamilyAccessRows({
+      tools: [hostedTool, hostedSearchTool, configlessHostedTool],
+      selectedTools: [
+        "hosted_qualys__qualys_count_assets",
+        "hosted_qualys__qualys_search_assets",
+        "hosted_math-magic__get_random_number",
+      ],
+      bindings: [
+        {
+          familyId: "qualys",
+          toolName: "qualys_count_assets",
+          allowedEnvironments: ["prod", "test_debug"],
+          defaultEnvironment: "prod",
+          generationPin: { type: "current" },
+          bindingKind: "agent",
+          updatedAt: "2026-08-14T10:00:00.000Z",
+          updatedBy: "human:alen",
+        },
+        {
+          familyId: "qualys",
+          toolName: "qualys_search_assets",
+          allowedEnvironments: ["prod", "test_debug"],
+          defaultEnvironment: "test_debug",
+          generationPin: { type: "current" },
+          bindingKind: "agent",
+          updatedAt: "2026-08-14T10:00:00.000Z",
+          updatedBy: "human:alen",
+        },
+      ],
+      environmentConfigs,
+    });
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        familyId: "math-magic",
+        requiresEnvironmentConfig: false,
+        toolNames: ["hosted_math-magic__get_random_number"],
+        mixedDefaultEnvironments: false,
+      }),
+      expect.objectContaining({
+        familyId: "qualys",
+        requiresEnvironmentConfig: true,
+        toolNames: [
+          "hosted_qualys__qualys_count_assets",
+          "hosted_qualys__qualys_search_assets",
+        ],
+        allowedEnvironments: ["prod", "test_debug"],
+        defaultEnvironment: "prod",
+        mixedDefaultEnvironments: true,
+      }),
+    ]);
+  });
+
+  it("updates every selected hosted tool binding when a family environment changes", () => {
+    const bindings: AgentHostedIntegrationBinding[] = [
+      {
+        familyId: "qualys",
+        toolName: "qualys_count_assets",
+        allowedEnvironments: ["prod", "test_debug"],
+        defaultEnvironment: "prod",
+        generationPin: { type: "current" },
+        bindingKind: "agent",
+        updatedAt: "2026-08-14T10:00:00.000Z",
+        updatedBy: "human:alen",
+      },
+    ];
+
+    expect(
+      updateHostedIntegrationFamilyDefaultEnvironment({
+        bindings,
+        tools: [hostedTool, hostedSearchTool],
+        selectedTools: [
+          "hosted_qualys__qualys_count_assets",
+          "hosted_qualys__qualys_search_assets",
+        ],
+        familyId: "qualys",
+        environment: "test_debug",
+        environmentConfigs,
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        familyId: "qualys",
+        toolName: "qualys_count_assets",
+        defaultEnvironment: "test_debug",
+      }),
+      expect.objectContaining({
+        familyId: "qualys",
+        toolName: "qualys_search_assets",
+        defaultEnvironment: "test_debug",
+      }),
+    ]);
+  });
+
+  it("prefers the existing family environment when another tool is added", () => {
+    expect(
+      preferredHostedIntegrationFamilyEnvironment({
+        familyId: "qualys",
+        allowedEnvironments: ["prod", "test_debug"],
+        bindings: [
+          {
+            familyId: "qualys",
+            toolName: "qualys_count_assets",
+            allowedEnvironments: ["prod", "test_debug"],
+            defaultEnvironment: "test_debug",
+            generationPin: { type: "current" },
+            bindingKind: "agent",
+            updatedAt: "2026-08-14T10:00:00.000Z",
+            updatedBy: "human:alen",
+          },
+        ],
+      }),
+    ).toBe("test_debug");
   });
 });

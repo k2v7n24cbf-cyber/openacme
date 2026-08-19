@@ -56,21 +56,18 @@ const msgraphTestCase: LiveParityToolCase = {
 };
 
 const mdeTestCase: LiveParityToolCase = {
-  familyId: "mde",
-  toolName: "mde_get",
-  hostedToolName: "hosted_mde__mde_get",
+  familyId: "microsoft_defender",
+  toolName: "mde_run_advanced_hunting_query",
+  hostedToolName: "hosted_microsoft_defender__mde_run_advanced_hunting_query",
   legacyServerName: "integration-hub",
-  legacyMcpToolName: "mcp_integration-hub__mde_get",
-  args: { path: "/machines", params: { "$top": "1" } },
-};
-
-const defenderAlertTestCase: LiveParityToolCase = {
-  familyId: "defender-alert",
-  toolName: "defender_alert_get",
-  hostedToolName: "hosted_defender-alert__defender_alert_get",
-  legacyServerName: "integration-hub",
-  legacyMcpToolName: "mcp_integration-hub__defender_alert_get",
-  args: { graph_alert_id: "sample-alert-id" },
+  legacyMcpToolName: "mcp_integration-hub__msgraph_run_hunting_query",
+  legacyComparison: "none",
+  args: {
+    query: "AlertEvidence | where Timestamp > ago(30d) | take 1",
+    max_rows: 1,
+    timeout_seconds: 20,
+    result_mode: "inline",
+  },
 };
 
 let dataDirs: string[] = [];
@@ -113,18 +110,24 @@ describe("hosted integration live parity runner", () => {
       ok: true,
       cases: [msgraphTestCase],
     });
-    expect(defaultLiveParityCasesForFamily("mde")).toEqual({
+    expect(defaultLiveParityCasesForFamily("microsoft_defender")).toEqual({
       ok: true,
       cases: [mdeTestCase],
     });
+    expect(defaultLiveParityCasesForFamily("mde")).toEqual({
+      ok: false,
+      diagnostic:
+        "live parity family 'mde' is not source-backed yet; supported families: qualys, splunk, msgraph, microsoft_defender",
+    });
     expect(defaultLiveParityCasesForFamily("defender-alert")).toEqual({
-      ok: true,
-      cases: [defenderAlertTestCase],
+      ok: false,
+      diagnostic:
+        "live parity family 'defender-alert' is not source-backed yet; supported families: qualys, splunk, msgraph, microsoft_defender",
     });
     expect(defaultLiveParityCasesForFamily("not-source-backed")).toEqual({
       ok: false,
       diagnostic:
-        "live parity family 'not-source-backed' is not source-backed yet; supported families: qualys, splunk, msgraph, mde, defender-alert",
+        "live parity family 'not-source-backed' is not source-backed yet; supported families: qualys, splunk, msgraph, microsoft_defender",
     });
   });
 
@@ -302,62 +305,86 @@ describe("hosted integration live parity runner", () => {
     ]);
   });
 
-  it("skips with explicit diagnostics when MDE runtime config is absent", async () => {
+  it("skips with explicit diagnostics when Microsoft Defender runtime config is absent", async () => {
+    const restoredEnv = withoutMicrosoftDefenderLiveEnv();
     const dataDir = tempDir();
-    saveGlobalMcpServers(dataDir, {
-      "integration-hub": {
-        command: "node",
-        args: ["server.js"],
-        env: {
-          MDE_TENANT_ID: "tenant-id",
-          MSGRAPH_CLIENT_ID: "graph-client-id",
-          MSGRAPH_CLIENT_SECRET: "graph-client-secret",
-        },
-      },
+    try {
+      const result = await runHostedIntegrationLiveParity({
+        dataDir,
+        cases: [mdeTestCase],
+        hostedClient: fakeHostedClient(),
+        legacyClient: fakeLegacyClient(),
+        createId: () => "live_parity_skip_microsoft_defender_creds",
+      });
+
+      expect(result.status).toBe("skipped");
+      expect(result.diagnostics).toEqual([
+        "MICROSOFT_DEFENDER_TENANT_ID is not configured (checked legacy MCP env, runner config override, runner secret override)",
+        "MICROSOFT_DEFENDER_CLIENT_ID is not configured (checked legacy MCP env, runner config override, runner secret override)",
+        "MICROSOFT_DEFENDER_CLIENT_SECRET is not configured (checked legacy MCP env, runner config override, runner secret override)",
+      ]);
+    } finally {
+      restoreEnv(restoredEnv);
+    }
+  });
+
+  it("runs Microsoft Defender hosted-only live smoke without requiring remote MCP", async () => {
+    const dataDir = tempDir();
+    const hosted = fakeHostedClient({
+      ok: true,
+      result: { result_count: 1, results: [{ deviceId: "redacted" }] },
+      runId: "hosted_microsoft_defender_run_1",
     });
+    const legacy = fakeLegacyClient();
 
     const result = await runHostedIntegrationLiveParity({
       dataDir,
       cases: [mdeTestCase],
-      hostedClient: fakeHostedClient(),
-      legacyClient: fakeLegacyClient(),
-      createId: () => "live_parity_skip_mde_creds",
+      hostedClient: hosted,
+      legacyClient: legacy,
+      familyConfig: {
+        MICROSOFT_DEFENDER_TENANT_ID: "tenant-id",
+        MICROSOFT_DEFENDER_CLIENT_ID: "client-id",
+      },
+      familySecrets: {
+        MICROSOFT_DEFENDER_CLIENT_SECRET: "raw-defender-secret",
+      },
+      createId: () => "live_parity_microsoft_defender_hosted_only",
     });
 
-    expect(result.status).toBe("skipped");
-    expect(result.diagnostics).toEqual([
-      "MDE_CLIENT_ID is not configured (checked legacy MCP env, runner config override, runner secret override)",
-      "MDE_CLIENT_SECRET is not configured (checked legacy MCP env, runner config override, runner secret override)",
+    expect(result.status).toBe("pass");
+    expect(hosted.prepared).toEqual([
+      {
+        config: {
+          MICROSOFT_DEFENDER_TENANT_ID: "tenant-id",
+          MICROSOFT_DEFENDER_CLIENT_ID: "client-id",
+          MICROSOFT_DEFENDER_MAX_PAGES: "1",
+        },
+        secrets: {
+          MICROSOFT_DEFENDER_CLIENT_SECRET: "raw-defender-secret",
+        },
+      },
     ]);
-  });
-
-  it("skips with explicit diagnostics when Defender Alert runtime config is absent", async () => {
-    const dataDir = tempDir();
-    saveGlobalMcpServers(dataDir, {
-      "integration-hub": {
-        command: "node",
-        args: ["server.js"],
-        env: {
-          DEFENDER_TENANT_ID: "tenant-id",
-          MSGRAPH_CLIENT_ID: "graph-client-id",
-          MDE_CLIENT_ID: "mde-client-id",
+    expect(legacy.calls).toEqual([]);
+    expect(result.cases[0]).toMatchObject({
+      familyId: "microsoft_defender",
+      toolName: "mde_run_advanced_hunting_query",
+      hostedToolName:
+        "hosted_microsoft_defender__mde_run_advanced_hunting_query",
+      legacyMcpToolName: "mcp_integration-hub__msgraph_run_hunting_query",
+      status: "match",
+      comparison: "not_compared",
+      hostedRunId: "hosted_microsoft_defender_run_1",
+      hosted: { summary: { resultCount: 1, payloadKind: "object" } },
+      legacy: {
+        summary: {
+          legacyComparison: "not_requested",
+          payloadKind: "object",
         },
       },
     });
-
-    const result = await runHostedIntegrationLiveParity({
-      dataDir,
-      cases: [defenderAlertTestCase],
-      hostedClient: fakeHostedClient(),
-      legacyClient: fakeLegacyClient(),
-      createId: () => "live_parity_skip_defender_alert_creds",
-    });
-
-    expect(result.status).toBe("skipped");
-    expect(result.diagnostics).toEqual([
-      "DEFENDER_CLIENT_ID is not configured (checked legacy MCP env, runner config override, runner secret override)",
-      "DEFENDER_CLIENT_SECRET is not configured (checked legacy MCP env, runner config override, runner secret override)",
-    ]);
+    const artifact = readFileSync(result.artifactPath!, "utf-8");
+    expect(artifact).not.toContain("raw-defender-secret");
   });
 
   it("runs Splunk parity with sanitized result-count comparison", async () => {
@@ -647,6 +674,45 @@ describe("hosted integration live parity runner", () => {
       await service.close();
     }
   });
+
+  it("seeds Microsoft Defender live parity through the external package artifact", async () => {
+    const dataDir = tempDir();
+    const service = createFileHostedIntegrationService({ dataDir });
+    try {
+      await seedHostedParityTarget(
+        service,
+        "microsoft_defender",
+        {
+          MICROSOFT_DEFENDER_TENANT_ID: "tenant-id",
+          MICROSOFT_DEFENDER_CLIENT_ID: "client-id",
+        },
+        { MICROSOFT_DEFENDER_CLIENT_SECRET: "raw-defender-secret" },
+      );
+
+      const families = await service.catalog.listFamilies();
+      expect(families.map((family) => family.id)).toEqual([
+        "microsoft_defender",
+      ]);
+      const configs = await service.environmentConfigs.listEnvironmentConfigs();
+      expect(configs.map((config) => config.id)).toEqual([
+        "microsoft_defender-test_debug",
+      ]);
+      expect(configs[0]).toMatchObject({
+        familyId: "microsoft_defender",
+        environment: "test_debug",
+        config: {
+          MICROSOFT_DEFENDER_TENANT_ID: "tenant-id",
+          MICROSOFT_DEFENDER_CLIENT_ID: "client-id",
+        },
+        secrets: {
+          MICROSOFT_DEFENDER_CLIENT_SECRET: { configured: true },
+        },
+      });
+      expect(JSON.stringify(configs)).not.toContain("raw-defender-secret");
+    } finally {
+      await service.close();
+    }
+  });
 });
 
 function tempDir(): string {
@@ -703,4 +769,37 @@ function jwtWithExpiration(iso: string): string {
     JSON.stringify({ exp: Math.floor(new Date(iso).getTime() / 1000) }),
   ).toString("base64url");
   return `${header}.${payload}.signature`;
+}
+
+function withoutMicrosoftDefenderLiveEnv(): Record<string, string | undefined> {
+  const keys = [
+    "MICROSOFT_DEFENDER_TENANT_ID",
+    "MICROSOFT_DEFENDER_CLIENT_ID",
+    "MICROSOFT_DEFENDER_CLIENT_SECRET",
+    "MDE_TENANT_ID",
+    "MDE_CLIENT_ID",
+    "MDE_CLIENT_SECRET",
+    "DEFENDER_TENANT_ID",
+    "DEFENDER_CLIENT_ID",
+    "DEFENDER_CLIENT_SECRET",
+    "MSGRAPH_TENANT_ID",
+    "MSGRAPH_CLIENT_ID",
+    "MSGRAPH_CLIENT_SECRET",
+  ];
+  const previous: Record<string, string | undefined> = {};
+  for (const key of keys) {
+    previous[key] = process.env[key];
+    delete process.env[key];
+  }
+  return previous;
+}
+
+function restoreEnv(previous: Record<string, string | undefined>): void {
+  for (const [key, value] of Object.entries(previous)) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
 }

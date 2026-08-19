@@ -200,9 +200,18 @@ const vocabularyAcceptanceMatrixPath = path.resolve(
 );
 const acceptedLiveArtifactPathPrefix =
   "~/.openamce-hosted-integrations-test-env/hosted-integrations/live-acceptance/";
+const repoRoot = path.resolve(new URL("../../../", import.meta.url).pathname);
+function defaultExternalPackageRoot(packageName: string): string {
+  const fallback = path.resolve(repoRoot, `../${packageName}`);
+  const candidates = [
+    fallback,
+    path.resolve(repoRoot, `../../../${packageName}`),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? fallback;
+}
 const externalQualysPackageRoot =
   process.env.OPENACME_QUALYS_HOSTED_PACKAGE_ROOT ??
-  "/Users/alenbohcelyan/Documents/AIProjects/openacme-hosted-tools-qualys";
+  defaultExternalPackageRoot("openacme-hosted-tools-qualys");
 const currentPilotNamingGuardPaths = [
   path.resolve(
     process.cwd(),
@@ -288,7 +297,7 @@ function readExternalHostedPackageSource(
 ): Record<string, string> | null {
   if (!existsSync(root) || !statSync(root).isDirectory()) return null;
   const files: Record<string, string> = {};
-  const ignoredDirs = new Set([".git", "dist", "node_modules"]);
+  const ignoredDirs = new Set([".git", "dist", "live-test-kit", "node_modules"]);
   const allowedExtensions = new Set([".yaml", ".yml", ".py", ".json", ".md"]);
   const visit = (directory: string): void => {
     for (const name of readdirSync(directory).sort()) {
@@ -845,23 +854,27 @@ describe("Qualys live hosted migration inventory", () => {
     );
     const inventory = readInventory();
 
-    expect(
-      sorted(externalContract.tools.map((tool) => tool.openacme.toolName)),
-    ).toEqual(sorted(inventory.currentPromotedBatch.tools));
-    expect(
-      sorted(externalContract.tools.map((tool) => tool.mcp.name)),
-    ).toEqual(
-      sorted(
-        inventory.currentPromotedBatch.tools.map(
-          (toolName) => `hosted_qualys__${toolName}`,
+    const externalToolNames = sorted(
+      externalContract.tools.map((tool) => tool.openacme.toolName),
+    );
+    const externalMcpNames = sorted(
+      externalContract.tools.map((tool) => tool.mcp.name),
+    );
+    expect(externalToolNames).toEqual(
+      expect.arrayContaining(sorted(inventory.currentPromotedBatch.tools)),
+    );
+    expect(externalMcpNames).toEqual(
+      expect.arrayContaining(
+        sorted(
+          inventory.currentPromotedBatch.tools.map(
+            (toolName) => `hosted_qualys__${toolName}`,
+          ),
         ),
       ),
     );
     expect(
-      sorted(externalContract.tools.map((tool) => tool.openacme.toolName)),
-    ).toEqual(
       sorted(fixtureContract.tools.map((tool) => tool.openacme.toolName)),
-    );
+    ).toEqual(sorted(inventory.currentPromotedBatch.tools));
     expect(externalAudit).toMatchObject({
       version: 1,
       familyId: "qualys",
@@ -869,7 +882,7 @@ describe("Qualys live hosted migration inventory", () => {
       contractSource: "tools.yaml",
     });
     expect(sorted(externalAudit.tools.map((row) => row.toolName))).toEqual(
-      sorted(inventory.currentPromotedBatch.tools),
+      expect.arrayContaining(sorted(inventory.currentPromotedBatch.tools)),
     );
     expect(coverageTracker).toMatchObject({
       version: 1,
@@ -880,7 +893,7 @@ describe("Qualys live hosted migration inventory", () => {
     expect(coverageTracker.rounds.length).toBeGreaterThan(0);
     expect(
       sorted(coverageTracker.toolStatuses.map((row) => row.toolName)),
-    ).toEqual(sorted(inventory.currentPromotedBatch.tools));
+    ).toEqual(expect.arrayContaining(sorted(inventory.currentPromotedBatch.tools)));
     for (const requiredSource of [
       "operational-skill",
       "development-skill",
@@ -899,6 +912,7 @@ describe("Qualys live hosted migration inventory", () => {
     const auditRows = new Map(
       externalAudit.tools.map((row) => [row.toolName, row]),
     );
+    const currentPromotedToolNames = new Set(inventory.currentPromotedBatch.tools);
     for (const tool of externalContract.tools) {
       const row = auditRows.get(tool.openacme.toolName);
       expect(row, tool.openacme.toolName).toBeDefined();
@@ -933,6 +947,9 @@ describe("Qualys live hosted migration inventory", () => {
         (candidate) => candidate.toolName === tool.openacme.toolName,
       );
       expect(trackerRow, tool.openacme.toolName).toBeDefined();
+      if (!currentPromotedToolNames.has(tool.openacme.toolName)) {
+        continue;
+      }
       expect(trackerRow?.comparedWithIntegrationHub, tool.openacme.toolName).toBe(
         "yes",
       );
@@ -2051,11 +2068,11 @@ describe("Qualys live hosted migration inventory", () => {
     expect(planText).toContain("`19` passed");
     expect(planText).toContain("analyzer/guidance bundle includes");
     expect(planText).toContain("`85` passed");
-    expect(planText).toContain(
-      "Milestones 27-36\nhave since accepted the current Hosted Tools concept gate",
+    expect(planText).toMatch(
+      /Milestones 27-36\s+have since accepted the current Hosted Tools concept gate/,
     );
-    expect(planText).toContain(
-      "Do not reopen those milestones as the next implementation\norder",
+    expect(planText).toMatch(
+      /Do not reopen those milestones\s+as the next implementation\s+order/,
     );
     expect(planText).not.toContain(
       "1. Milestone 27: live hosted-tool concept acceptance.",

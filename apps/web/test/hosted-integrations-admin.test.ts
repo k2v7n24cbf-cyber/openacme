@@ -471,6 +471,22 @@ describe("hosted integrations admin view model", () => {
       inputSchema: { type: "object" },
       canEdit: true,
     });
+
+    expect(
+      buildHostedIntegrationEditorModel({
+        row,
+        selectedToolName: "",
+        lock: row.lock,
+        actorId: "web-settings",
+        sourceView: null,
+      }),
+    ).toMatchObject({
+      selectedToolName: null,
+      selectedHandlerName: null,
+      selectedTool: null,
+      inputSchema: null,
+      helpSummary: null,
+    });
   });
 
   it("builds human-readable execution log rows without expanding raw details", () => {
@@ -2304,7 +2320,8 @@ describe("hosted integrations admin view model", () => {
       canExportActiveGeneration: true,
       canExportDraft: false,
       canExportCurrentSource: true,
-      updateBlockedReason: "Lock for editing before importing over this family.",
+      updateBlockedReason:
+        "Lock for editing before importing over this family.",
     });
 
     expect(
@@ -2389,7 +2406,8 @@ describe("hosted integrations admin view model", () => {
         files: [
           {
             path: "family.yaml",
-            content: "id: qualys\nname: Qualys\nversion: 1\nruntime:\n  entrypoint: qualys.py\n",
+            content:
+              "id: qualys\nname: Qualys\nversion: 1\nruntime:\n  entrypoint: qualys.py\n",
           },
           {
             path: "tools.yaml",
@@ -2434,7 +2452,10 @@ describe("hosted integrations admin view model", () => {
             path: "examples.yaml",
             content: "examples:\n  - id: smoke\n",
           },
-          { path: "qualys.py", content: "def tool_qualys_count_assets(args, ctx): pass\n" },
+          {
+            path: "qualys.py",
+            content: "def tool_qualys_count_assets(args, ctx): pass\n",
+          },
         ],
       }),
     });

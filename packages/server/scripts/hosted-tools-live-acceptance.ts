@@ -80,8 +80,7 @@ const liveParityFamilyIds = [
   "qualys",
   "splunk",
   "msgraph",
-  "mde",
-  "defender-alert",
+  "microsoft_defender",
 ] as const;
 
 let server: ServerType | null = null;

@@ -75,22 +75,14 @@ function liveParityOverridesFromEnv(
       ],
       secrets: ["MSGRAPH_CLIENT_SECRET"],
     },
-    mde: {
+    microsoft_defender: {
       config: [
-        "MDE_TENANT_ID",
-        "MDE_CLIENT_ID",
-        "MDE_TIMEOUT_SECONDS",
-        "MDE_MAX_PAGES",
+        "MICROSOFT_DEFENDER_TENANT_ID",
+        "MICROSOFT_DEFENDER_CLIENT_ID",
+        "MICROSOFT_DEFENDER_TIMEOUT_SECONDS",
+        "MICROSOFT_DEFENDER_MAX_PAGES",
       ],
-      secrets: ["MDE_CLIENT_SECRET"],
-    },
-    "defender-alert": {
-      config: [
-        "DEFENDER_TENANT_ID",
-        "DEFENDER_CLIENT_ID",
-        "DEFENDER_TIMEOUT_SECONDS",
-      ],
-      secrets: ["DEFENDER_CLIENT_SECRET"],
+      secrets: ["MICROSOFT_DEFENDER_CLIENT_SECRET"],
     },
   };
   const contract = contracts[familyId];

@@ -3964,11 +3964,8 @@ describe("Live parity matrix analyzer", () => {
             matchedCaseCount: 1,
             artifactPath: "/tmp/msgraph.json",
           }),
-          parityResult("mde", "skipped", {
-            diagnostics: ["MDE_CLIENT_SECRET is not configured"],
-          }),
-          parityResult("defender-alert", "skipped", {
-            diagnostics: ["DEFENDER_CLIENT_SECRET is not configured"],
+          parityResult("microsoft_defender", "skipped", {
+            diagnostics: ["MICROSOFT_DEFENDER_CLIENT_SECRET is not configured"],
           }),
         ],
         artifactPaths: ["/tmp/qualys.json", "/tmp/msgraph.json"],
@@ -3978,8 +3975,7 @@ describe("Live parity matrix analyzer", () => {
           "qualys",
           "splunk",
           "msgraph",
-          "mde",
-          "defender-alert",
+          "microsoft_defender",
         ],
         requiredPassFamilyIds: ["qualys"],
       },

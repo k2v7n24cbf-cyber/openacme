@@ -146,15 +146,18 @@ hosted_qualys__qualys_count_assets
 hosted_qualys__qualys_list_assets
 hosted_splunk__splunk_search
 hosted_msgraph__msgraph_get
-hosted_mde__mde_get
+hosted_microsoft_defender__mde_get_alert
+hosted_microsoft_defender__mde_get_machine
+hosted_microsoft_defender__mde_run_advanced_hunting_query
+hosted_microsoft_defender__defender_alert_get
 ```
 
 Hosted tool canonical names must be valid model-provider tool/function names. The
 canonical-name helper owns the provider-compatible pattern and length cap. It
 must reject a family/tool pair that cannot be exposed safely instead of
 silently truncating, hashing, aliasing, or rewriting the public tool name.
-Family ids may contain hyphens, native tool names may contain underscores, and
-the `__` separator keeps parsing unambiguous.
+Family ids may contain hyphens or underscores, native tool names may contain
+underscores, and the `__` separator keeps parsing unambiguous.
 
 The family manifest still owns family-native tool names. The hosted prefix is
 added only at the OpenAcme tool registry boundary. Runtime, examples, generation
@@ -1611,6 +1614,48 @@ not bundled under platform runtime directories such as
 `packages/hosted-integrations/families/`. Platform test-support fixtures and
 historical integration-hub code may provide evidence, sample fixtures, or
 regression inputs; they are not deployable provider package ownership.
+
+Integration-hub replacement families must follow the same package boundary.
+`qualys`, `msgraph`, `microsoft_defender`, and `splunk` are separate hosted
+family packages, not one bundled migration module. The historical
+`mde` and `defender-alert` surfaces merge into the single
+`microsoft_defender` package because they share Microsoft Defender auth,
+permissions, investigation context, and operational semantics. Each package
+owns its own `family.yaml`, `tools.yaml`, Python source, examples, references,
+validation, and live evidence. OpenAcme may keep fixture builders and parity
+runners for tests, but the product runtime imports only package artifacts
+through the hosted family package API. A fixture/mock package may be used to
+test package mechanics or draft workflows, but it is not promotable as a GA
+provider integration until real provider behavior is implemented and evidenced.
+
+The `microsoft_defender` package must expose specific agent capabilities rather
+than a generic MDE path wrapper. The default discovery and search surface is
+Advanced Hunting/KQL. REST tools should cover details, relationships, or
+provider objects that cannot be fetched well through KQL, such as fetching one
+alert by id, fetching one machine by id, or bridging Graph and MDE alert
+payloads. Logon/user activity is normally queried through Advanced Hunting
+tables such as `DeviceLogonEvents`, so it should not be a separate REST hosted
+tool unless provider evidence proves a needed detail is unavailable through
+KQL. Broad "GET any MDE path" tools and REST list/search tools that duplicate
+KQL are not acceptable hosted GA surface because they push endpoint knowledge,
+permissions, response shape, and safety decisions back onto the agent.
+
+Threat hunting belongs to the `microsoft_defender` family, not the Microsoft
+Graph generic GET family. A hosted Advanced Hunting tool may use HTTP POST
+while still being classified as a read operation, but it must be a dedicated
+`mde_run_advanced_hunting_query`-style capability with endpoint allowlisting,
+bounded query/result/timeout behavior, truncation or artifact handling, and
+provider evidence. It must not be implemented as a generic POST wrapper under
+`msgraph` or `microsoft_defender`.
+
+Hosted tool help for Advanced Hunting is the interface contract, not the
+complete hunting methodology. It should be strong enough for safe invocation:
+selection guidance, input schema, bounded-query expectations, result/artifact
+behavior, errors, permissions, and examples. The existing Microsoft Defender
+threat-hunting expert skill remains the operational reasoning layer for
+evidence planning, table selection, KQL review, interpretation, and
+custom-detection judgement, and should be used as-is rather than copied into
+the hosted package.
 
 A hosted family package is a versioned text-only file bundle containing
 canonical family source files such as `family.yaml`, `tools.yaml`, Python

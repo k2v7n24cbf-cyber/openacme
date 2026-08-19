@@ -58,8 +58,7 @@ export interface HostedIntegrationAgentBindingMatrixRowInput {
   updatedBy: string;
 }
 
-export interface HostedIntegrationAgentBindingMatrixRow
-  extends HostedIntegrationAgentBindingMatrixRowInput {
+export interface HostedIntegrationAgentBindingMatrixRow extends HostedIntegrationAgentBindingMatrixRowInput {
   generationLabel: string;
   noteLabel: string;
 }
@@ -235,7 +234,9 @@ export function hostedIntegrationExecutionConfigLabel(
     "environmentConfigId" | "executionPurpose"
   >,
 ): string {
-  return run.environmentConfigId ?? `config-free ${run.executionPurpose ?? "run"}`;
+  return (
+    run.environmentConfigId ?? `config-free ${run.executionPurpose ?? "run"}`
+  );
 }
 
 export function hostedIntegrationExecutionConfigRevisionLabel(
@@ -623,7 +624,8 @@ export function hostedIntegrationEnvironmentConfigAccessibleLabel(input: {
   configuredSecretCount: number;
   secretKeyCount: number;
 }): string {
-  const environmentConfigTarget = input.environmentConfigId?.trim() || "selected environment config";
+  const environmentConfigTarget =
+    input.environmentConfigId?.trim() || "selected environment config";
   const environmentTarget = input.environment?.trim() || "environment";
   const missingSecretCount = Math.max(
     input.secretKeyCount - input.configuredSecretCount,
@@ -648,7 +650,8 @@ export function hostedIntegrationSecretInputAccessibleLabel(input: {
   environmentConfigId: string | null | undefined;
   secretName: string | null | undefined;
 }): string {
-  const environmentConfigTarget = input.environmentConfigId?.trim() || "selected environment config";
+  const environmentConfigTarget =
+    input.environmentConfigId?.trim() || "selected environment config";
   const secretTarget = input.secretName?.trim() || "selected secret";
   return `New value for secret ${secretTarget} in ${environmentConfigTarget}`;
 }
@@ -657,7 +660,8 @@ export function hostedIntegrationSecretActionAccessibleLabel(input: {
   environmentConfigId: string | null | undefined;
   secretName: string | null | undefined;
 }): string {
-  const environmentConfigTarget = input.environmentConfigId?.trim() || "selected environment config";
+  const environmentConfigTarget =
+    input.environmentConfigId?.trim() || "selected environment config";
   const secretTarget = input.secretName?.trim() || "selected secret";
   return `Set secret ${secretTarget} for ${environmentConfigTarget}`;
 }
@@ -1044,8 +1048,9 @@ export function buildHostedIntegrationPackagePreviewState(input: {
     const removedFileCount =
       currentFilePaths.size === 0
         ? 0
-        : [...currentFilePaths].filter((filePath) => !packageFilePaths.has(filePath))
-            .length;
+        : [...currentFilePaths].filter(
+            (filePath) => !packageFilePaths.has(filePath),
+          ).length;
     return {
       status: "ready",
       error: null,
@@ -1104,10 +1109,7 @@ function objectField(value: unknown, field: string): unknown {
   return (value as Record<string, unknown>)[field];
 }
 
-function stringFieldFromObject(
-  value: unknown,
-  field: string,
-): string | null {
+function stringFieldFromObject(value: unknown, field: string): string | null {
   const fieldValue = objectField(value, field);
   return typeof fieldValue === "string" ? fieldValue : null;
 }
@@ -1446,7 +1448,15 @@ export interface HostedIntegrationFocusedSourceView {
       source: string;
     }>;
   };
-  diagnostics: Array<{ severity: string; code: string; message: string }>;
+  diagnostics: Array<{
+    severity: string;
+    code: string;
+    message: string;
+    line?: number;
+    column?: number;
+    endLine?: number;
+    endColumn?: number;
+  }>;
 }
 
 export interface HostedIntegrationToolMapping {
@@ -1675,8 +1685,14 @@ export function buildHostedIntegrationPublishViewState(input: {
     validationOk,
     publishReady,
     publishBlocked,
-    blockerLabel: publishBlocked ? readiness?.label ?? "Publish blocked" : null,
-    tabLabel: publishBlocked ? "Blocked" : publishReady ? "Publish" : "Validate",
+    blockerLabel: publishBlocked
+      ? (readiness?.label ?? "Publish blocked")
+      : null,
+    tabLabel: publishBlocked
+      ? "Blocked"
+      : publishReady
+        ? "Publish"
+        : "Validate",
     primaryLabel: publishReady
       ? "Publish"
       : hasValidationResult
@@ -1863,7 +1879,6 @@ export function buildHostedIntegrationEditorModel(input: {
   const selectedTool =
     input.row.tools.find((tool) => tool.name === input.selectedToolName) ??
     input.sourceView?.manifest.tool ??
-    input.row.tools.find((tool) => tool.lifecycle !== "removed") ??
     null;
   const selectedToolName = selectedTool?.name ?? null;
   return {

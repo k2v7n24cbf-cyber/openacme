@@ -33,6 +33,19 @@ describe("hosted tool naming", () => {
     });
   });
 
+  it("preserves underscored provider-domain family ids", () => {
+    const name = buildHostedToolName({
+      familyId: "microsoft_defender",
+      toolName: "mde_get_alert",
+    });
+
+    expect(name).toBe("hosted_microsoft_defender__mde_get_alert");
+    expect(parseHostedToolName(name)).toEqual({
+      familyId: "microsoft_defender",
+      toolName: "mde_get_alert",
+    });
+  });
+
   it("rejects invalid family or native tool segments", () => {
     expect(() =>
       buildHostedToolName({

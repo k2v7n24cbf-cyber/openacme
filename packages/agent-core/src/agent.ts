@@ -479,6 +479,7 @@ export interface AutonomousBroadcaster {
             parts: unknown[];
             metadata?: unknown;
           }>;
+          transient?: boolean;
         }
       | { kind: "session_title"; title: string },
   ): void;
@@ -1312,12 +1313,13 @@ export class Agent {
       // standard ReadableStream method; both branches must be drained
       // (or one will back-pressure the source).
       let assemblerStream = uiStream;
+      let broadcasterFanout: Promise<void> | null = null;
       if (this.broadcaster) {
         const [a, b] = uiStream.tee();
         assemblerStream = a;
         const sid = sessionId;
         const bc = this.broadcaster;
-        void (async () => {
+        broadcasterFanout = (async () => {
           const reader = b.getReader();
           // Cached from the `start` chunk so we can stamp it on every
           // subsequent envelope. A page refresh mid-stream gets a fresh
@@ -1356,6 +1358,7 @@ export class Agent {
               { err: e, sessionId: sid },
               "runAutonomous broadcaster stream failed",
             );
+            throw e;
           } finally {
             reader.releaseLock();
           }
@@ -1374,47 +1377,56 @@ export class Agent {
       let lastSnapshotAt = 0;
       const sid = sessionId;
       const bc = this.broadcaster;
-      for await (const m of readUIMessageStream<UIMessage>({
-        stream: assemblerStream,
-      })) {
-        assistantMessage = m;
-        if (bc && typeof m.id === "string" && m.id.length > 0) {
-          const now = Date.now();
-          if (now - lastSnapshotAt >= SNAPSHOT_INTERVAL_MS) {
-            lastSnapshotAt = now;
-            try {
-              bc.broadcast(sid, {
-                kind: "messages_appended",
-                messages: [
-                  {
-                    id: m.id,
-                    role: "assistant",
-                    parts: m.parts as unknown[],
-                    metadata: m.metadata,
-                  },
-                ],
-              });
-            } catch (e) {
-              log.warn(
-                { err: e, sessionId: sid },
-                "runAutonomous snapshot broadcast failed",
-              );
+      const consumeAssemblerStream = async () => {
+        for await (const m of readUIMessageStream<UIMessage>({
+          stream: assemblerStream,
+        })) {
+          assistantMessage = m;
+          if (bc && typeof m.id === "string" && m.id.length > 0) {
+            const now = Date.now();
+            if (now - lastSnapshotAt >= SNAPSHOT_INTERVAL_MS) {
+              lastSnapshotAt = now;
+              try {
+                bc.broadcast(sid, {
+                  kind: "messages_appended",
+                  transient: true,
+                  messages: [
+                    {
+                      id: m.id,
+                      role: "assistant",
+                      parts: m.parts as unknown[],
+                      metadata: m.metadata,
+                    },
+                  ],
+                });
+              } catch (e) {
+                log.warn(
+                  { err: e, sessionId: sid },
+                  "runAutonomous snapshot broadcast failed",
+                );
+              }
             }
           }
+          if (timeoutAbort.signal.aborted) {
+            timedOut = true;
+            break;
+          }
         }
-        if (timeoutAbort.signal.aborted) {
-          timedOut = true;
-          break;
-        }
-      }
 
-      if (!timedOut) {
-        const u = await result.usage;
-        usage = {
-          inputTokens: u?.inputTokens,
-          outputTokens: u?.outputTokens,
-          totalTokens: u?.totalTokens,
-        };
+        if (!timedOut) {
+          const u = await result.usage;
+          usage = {
+            inputTokens: u?.inputTokens,
+            outputTokens: u?.outputTokens,
+            totalTokens: u?.totalTokens,
+          };
+        }
+      };
+
+      if (broadcasterFanout) {
+        await Promise.all([consumeAssemblerStream(), broadcasterFanout]);
+      } else {
+        await consumeAssemblerStream();
       }
     };
 

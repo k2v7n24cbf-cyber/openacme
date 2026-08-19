@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TaskStore } from "@openacme/tasks";
 import { registry } from "../src/registry.js";
 import { bindTaskStore } from "../src/builtins/tasks.js";
@@ -101,6 +101,69 @@ describe("task_create", () => {
     );
     expect(r.ok).toBe(true);
     expect((r as { task: { session_id: string } }).task.session_id).toBe("s1");
+  });
+
+  it("clears stale defer when self-assigning ready work to the current session", async () => {
+    const clearSessionDeferUntil = vi.fn();
+    bindTaskStore({ store, clearSessionDeferUntil });
+
+    const r = await call(
+      "task_create",
+      { title: "x", assignee: "me" },
+      { agentId: "me", sessionId: "s1" },
+    );
+
+    expect(r.ok).toBe(true);
+    const task = (r as { task: { id: string; status: "open" } }).task;
+    expect(clearSessionDeferUntil).toHaveBeenCalledWith({
+      sessionId: "s1",
+      agentId: "me",
+      taskId: task.id,
+      taskStatus: "open",
+      source: "task_create",
+    });
+  });
+
+  it("does not clear defer for non-actionable or non-current task_create results", async () => {
+    const clearSessionDeferUntil = vi.fn();
+    bindTaskStore({ store, clearSessionDeferUntil });
+
+    await call(
+      "task_create",
+      { title: "cross-agent", assignee: "you" },
+      { agentId: "me", sessionId: "s1" },
+    );
+    await call(
+      "task_create",
+      { title: "fresh", assignee: "me", session: "fresh" },
+      { agentId: "me", sessionId: "s1" },
+    );
+    await call(
+      "task_create",
+      { title: "other session", assignee: "me", session: "s2" },
+      { agentId: "me", sessionId: "s1" },
+    );
+    await call(
+      "task_create",
+      {
+        title: "future",
+        assignee: "me",
+        start_at: new Date(Date.now() + 60_000).toISOString(),
+      },
+      { agentId: "me", sessionId: "s1" },
+    );
+    const dep = await store.create({
+      title: "dep",
+      assignee: "me",
+      created_by: "me",
+    });
+    await call(
+      "task_create",
+      { title: "blocked by dep", assignee: "me", depends_on: [dep.id] },
+      { agentId: "me", sessionId: "s1" },
+    );
+
+    expect(clearSessionDeferUntil).not.toHaveBeenCalled();
   });
 
   it('session field: explicit "fresh" leaves session_id null on self-assign', async () => {
@@ -376,6 +439,135 @@ describe("task_update", () => {
     );
     expect(r.ok).toBe(false);
     expect(String(r.error)).toMatch(/session_busy/);
+  });
+
+  it("clears stale defer when a current-session self-task becomes in_progress", async () => {
+    const clearSessionDeferUntil = vi.fn();
+    bindTaskStore({ store, clearSessionDeferUntil });
+    const task = await store.create({
+      title: "x",
+      assignee: "me",
+      created_by: "me",
+      session_id: "s1",
+    });
+
+    const r = await call(
+      "task_update",
+      { id: task.id, status: "in_progress" },
+      { agentId: "me", sessionId: "s1" },
+    );
+
+    expect(r.ok).toBe(true);
+    expect(clearSessionDeferUntil).toHaveBeenCalledWith({
+      sessionId: "s1",
+      agentId: "me",
+      taskId: task.id,
+      taskStatus: "in_progress",
+      source: "task_update",
+    });
+  });
+
+  it("clears stale defer when a current-session self-task becomes open and ready", async () => {
+    const clearSessionDeferUntil = vi.fn();
+    bindTaskStore({ store, clearSessionDeferUntil });
+    const task = await store.create({
+      title: "x",
+      assignee: "me",
+      created_by: "me",
+      session_id: "s1",
+      start_at: new Date(Date.now() + 60_000).toISOString(),
+    });
+
+    const r = await call(
+      "task_update",
+      { id: task.id, start_at: null },
+      { agentId: "me", sessionId: "s1" },
+    );
+
+    expect(r.ok).toBe(true);
+    expect(clearSessionDeferUntil).toHaveBeenCalledWith({
+      sessionId: "s1",
+      agentId: "me",
+      taskId: task.id,
+      taskStatus: "open",
+      source: "task_update",
+    });
+  });
+
+  it("keeps successful task_update results when defer clearing fails", async () => {
+    const clearSessionDeferUntil = vi.fn(() => {
+      throw new Error("defer clear failed");
+    });
+    bindTaskStore({ store, clearSessionDeferUntil });
+    const task = await store.create({
+      title: "x",
+      assignee: "me",
+      created_by: "me",
+      session_id: "s1",
+    });
+
+    const r = await call(
+      "task_update",
+      { id: task.id, status: "in_progress" },
+      { agentId: "me", sessionId: "s1" },
+    );
+
+    expect(r.ok).toBe(true);
+    expect(clearSessionDeferUntil).toHaveBeenCalledOnce();
+    expect(store.get(task.id)?.status).toBe("in_progress");
+  });
+
+  it("does not clear defer for non-actionable or non-current task_update results", async () => {
+    const clearSessionDeferUntil = vi.fn();
+    bindTaskStore({ store, clearSessionDeferUntil });
+    for (const status of [
+      "done",
+      "canceled",
+      "blocked",
+      "system_blocked",
+    ] as const) {
+      const task = await store.create({
+        title: status,
+        assignee: "me",
+        created_by: "me",
+        session_id: `s-${status}`,
+      });
+      const r = await call(
+        "task_update",
+        { id: task.id, status },
+        { agentId: "me", sessionId: `s-${status}` },
+      );
+      expect(r.ok).toBe(true);
+    }
+
+    const future = await store.create({
+      title: "future",
+      assignee: "me",
+      created_by: "me",
+      session_id: "s1",
+    });
+    await call(
+      "task_update",
+      {
+        id: future.id,
+        start_at: new Date(Date.now() + 60_000).toISOString(),
+      },
+      { agentId: "me", sessionId: "s1" },
+    );
+
+    const otherSession = await store.create({
+      title: "other session",
+      assignee: "me",
+      created_by: "me",
+      session_id: "s2",
+    });
+    await call(
+      "task_update",
+      { id: otherSession.id, title: "still other session" },
+      { agentId: "me", sessionId: "s1" },
+    );
+
+    expect(clearSessionDeferUntil).not.toHaveBeenCalled();
   });
 });
 

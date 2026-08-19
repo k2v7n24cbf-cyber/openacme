@@ -211,17 +211,21 @@ export function useLiveSession(
       },
       messages_appended: (e) => {
         try {
-          const env = JSON.parse(e.data) as { messages?: OpenAcmeUIMessage[] };
+          const env = JSON.parse(e.data) as {
+            messages?: OpenAcmeUIMessage[];
+            transient?: boolean;
+          };
           if (!env.messages?.length) return;
           // Drain any frame-buffered chunk snapshot first so a stale rAF
           // can't fire after this and overwrite the canonical message.
           if (upsertRaf) cancelAnimationFrame(upsertRaf);
           flushUpsert();
-          setMessagesRef.current?.((prev) => {
-            let out = prev;
-            for (const m of env.messages!) out = upsertById(out, m);
-            return out;
-          });
+          setMessagesRef.current?.((prev) =>
+            mergeLiveMessages(prev, env.messages!, {
+              activeMessageId: currentMessageId,
+              transient: env.transient === true,
+            })
+          );
         } catch {
           /* ignore */
         }
@@ -314,6 +318,26 @@ export function useLiveSession(
   }, [sessionId]);
 
   return { state, whenConnected };
+}
+
+export function mergeLiveMessages(
+  prev: OpenAcmeUIMessage[],
+  incoming: OpenAcmeUIMessage[],
+  opts: { activeMessageId?: string | null; transient?: boolean } = {}
+): OpenAcmeUIMessage[] {
+  let out = prev;
+  for (const m of incoming) {
+    if (
+      opts.transient &&
+      opts.activeMessageId &&
+      m.id === opts.activeMessageId &&
+      m.role === "assistant"
+    ) {
+      continue;
+    }
+    out = upsertById(out, m);
+  }
+  return out;
 }
 
 function upsertById(

@@ -6,7 +6,9 @@ import {
   WorkflowRunSchema,
   WorkflowRunStatusSchema,
   WorkflowTriggerSchema,
+  validateWorkflowDefinitionAuthoring,
   validateWorkflowInputSchema,
+  validateWorkflowGraphCompleteness,
   validateWorkflowJsonSchema,
   validateWorkflowNodeReferences,
   validateWorkflowTriggers,
@@ -609,6 +611,141 @@ describe("workflow schemas", () => {
     });
   });
 
+  it("rejects executable nodes that are unreachable from the workflow entry", () => {
+    const nodes = [
+      {
+        id: "start_log",
+        type: "builtin.log.info",
+        message: "start",
+        next: ["finish_log"],
+      },
+      {
+        id: "finish_log",
+        type: "builtin.log.info",
+        message: "finish",
+      },
+      {
+        id: "detached_log",
+        type: "builtin.log.info",
+        message: "detached",
+      },
+    ].map((node) => WorkflowNodeSchema.parse(node));
+
+    expect(validateWorkflowGraphCompleteness(nodes)).toMatchObject({
+      ok: false,
+      issues: [
+        {
+          nodeId: "detached_log",
+          field: "entry",
+        },
+      ],
+      message:
+        "Workflow flow is incomplete. Connect or remove unreachable card(s): detached_log",
+    });
+  });
+
+  it("treats branch, loop, and parallel children as reachable graph members", () => {
+    const nodes = [
+      {
+        id: "risk_gate",
+        type: "builtin.if",
+        condition: "$.workflowTrigger.input.enabled",
+        then: ["route_kind"],
+        else: ["parallel_checks"],
+      },
+      {
+        id: "route_kind",
+        type: "builtin.switch",
+        value: "$.workflowTrigger.input.kind",
+        cases: [{ id: "asset", value: "asset", nodes: ["each_asset"] }],
+        default: ["default_log"],
+      },
+      {
+        id: "each_asset",
+        type: "builtin.foreach",
+        items: "$.workflowTrigger.input.assets",
+        body: ["asset_log"],
+      },
+      {
+        id: "asset_log",
+        type: "builtin.log.info",
+        message: "asset",
+      },
+      {
+        id: "default_log",
+        type: "builtin.log.info",
+        message: "default",
+      },
+      {
+        id: "parallel_checks",
+        type: "builtin.parallel",
+        branches: [
+          { id: "a", nodes: ["check_a"] },
+          { id: "b", nodes: ["check_b"] },
+        ],
+      },
+      {
+        id: "check_a",
+        type: "builtin.log.info",
+        message: "a",
+      },
+      {
+        id: "check_b",
+        type: "builtin.log.info",
+        message: "b",
+      },
+    ].map((node) => WorkflowNodeSchema.parse(node));
+
+    expect(validateWorkflowGraphCompleteness(nodes)).toEqual({
+      ok: true,
+      issues: [],
+    });
+  });
+
+  it("ignores detached backend-only exit nodes for graph completeness", () => {
+    const nodes = [
+      {
+        id: "start_log",
+        type: "builtin.log.info",
+        message: "start",
+      },
+      {
+        id: "exit",
+        type: "builtin.exit",
+        status: "succeeded",
+      },
+    ].map((node) => WorkflowNodeSchema.parse(node));
+
+    expect(validateWorkflowGraphCompleteness(nodes)).toEqual({
+      ok: true,
+      issues: [],
+    });
+  });
+
+  it("rejects workflow definitions with whitespace-only names during authoring validation", () => {
+    const definition = WorkflowDefinitionSchema.parse({
+      id: "blank-name",
+      version: 1,
+      status: "draft",
+      name: "   ",
+      nodes: [
+        {
+          id: "start_log",
+          type: "builtin.log.info",
+          message: "start",
+        },
+      ],
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    expect(validateWorkflowDefinitionAuthoring(definition)).toEqual({
+      ok: false,
+      issues: [{ field: "name", message: "Workflow needs a name" }],
+      message: "Workflow needs a name",
+    });
+  });
+
   it("allows manual, scheduled, and webhook triggers to be enabled while keeping task deferred", () => {
     expect(
       WorkflowTriggerSchema.safeParse({
@@ -696,6 +833,39 @@ describe("workflow schemas", () => {
           triggerId: "incoming_a",
           field: "id",
           message: "Duplicate workflow trigger id: incoming_a",
+        },
+      ],
+    });
+  });
+
+  it("rejects whitespace-only trigger fields in shared trigger validation", () => {
+    const triggers = [
+      WorkflowTriggerSchema.parse({
+        id: "nightly",
+        kind: "scheduled",
+        enabled: true,
+        schedule: { kind: "cron", expr: "   " },
+      }),
+      WorkflowTriggerSchema.parse({
+        id: "incoming",
+        kind: "webhook",
+        enabled: true,
+        path: "   ",
+      }),
+    ];
+
+    expect(validateWorkflowTriggers(triggers)).toMatchObject({
+      ok: false,
+      issues: [
+        {
+          triggerId: "nightly",
+          field: "schedule",
+          message: "Scheduled trigger nightly needs a cron schedule",
+        },
+        {
+          triggerId: "incoming",
+          field: "path",
+          message: "Webhook trigger incoming path must be a string",
         },
       ],
     });

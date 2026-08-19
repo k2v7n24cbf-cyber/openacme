@@ -15,6 +15,10 @@ import {
   useBlocker,
   useNavigate,
 } from "@tanstack/react-router";
+import {
+  validateWorkflowGraphCompleteness,
+  type WorkflowNode as SharedWorkflowNode,
+} from "@openacme/workflows";
 import { z } from "zod";
 import {
   AlertCircle,
@@ -4240,6 +4244,71 @@ function InspectorSection({
   );
 }
 
+function TimeoutMsInput({
+  ariaLabel,
+  value,
+  min,
+  max = 300_000,
+  onCommit,
+}: {
+  ariaLabel: string;
+  value: string;
+  min: number;
+  max?: number;
+  onCommit: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  function commit() {
+    const trimmed = draft.trim();
+    if (!trimmed) {
+      onCommit("");
+      return;
+    }
+    const timeoutMs = Number.parseInt(trimmed, 10);
+    if (
+      Number.isFinite(timeoutMs) &&
+      String(timeoutMs) === trimmed &&
+      timeoutMs >= min &&
+      timeoutMs <= max
+    ) {
+      onCommit(trimmed);
+      return;
+    }
+    setDraft(value);
+  }
+
+  return (
+    <Input
+      aria-label={ariaLabel}
+      inputMode="numeric"
+      value={draft}
+      placeholder={`${min}-${max}`}
+      onChange={(event) => {
+        const next = event.target.value;
+        if (/^\d*$/.test(next)) setDraft(next);
+      }}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          commit();
+          event.currentTarget.blur();
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          setDraft(value);
+          event.currentTarget.blur();
+        }
+      }}
+    />
+  );
+}
+
 function ReferenceInput({
   value,
   onChange,
@@ -5892,12 +5961,12 @@ function NodeCard({
                 <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                   Timeout
                 </span>
-                <Input
-                  aria-label={`${label} python timeout`}
-                  inputMode="numeric"
+                <TimeoutMsInput
+                  ariaLabel={`${label} python timeout`}
                   value={python.timeoutMs}
-                  onChange={(event) =>
-                    onPythonConfigChange("timeoutMs", event.target.value)
+                  min={100}
+                  onCommit={(value) =>
+                    onPythonConfigChange("timeoutMs", value)
                   }
                 />
               </label>
@@ -5994,12 +6063,12 @@ function NodeCard({
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Timeout ms
               </span>
-              <Input
-                aria-label={`${label} MCP timeout`}
-                inputMode="numeric"
+              <TimeoutMsInput
+                ariaLabel={`${label} MCP timeout`}
                 value={mcpTool.timeoutMs}
-                onChange={(event) =>
-                  onMcpToolConfigChange("timeoutMs", event.target.value)
+                min={100}
+                onCommit={(value) =>
+                  onMcpToolConfigChange("timeoutMs", value)
                 }
               />
             </label>
@@ -6117,13 +6186,11 @@ function NodeCard({
               <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
                 Timeout ms
               </span>
-              <Input
-                aria-label={`${label} agent timeout`}
-                inputMode="numeric"
+              <TimeoutMsInput
+                ariaLabel={`${label} agent timeout`}
                 value={agentCall.timeoutMs}
-                onChange={(event) =>
-                  onAgentConfigChange("timeoutMs", event.target.value)
-                }
+                min={1}
+                onCommit={(value) => onAgentConfigChange("timeoutMs", value)}
               />
             </label>
           </div>
@@ -7765,55 +7832,15 @@ function validateWorkflowCanvasCompleteness(
   nodes: WorkflowNode[],
   _ui: WorkflowDefinitionUi | null,
 ): NodeReferenceValidation {
-  const executableNodes = nodes.filter((node) => node.type !== "builtin.exit");
-  const entry = executableNodes[0];
-  if (!entry) return { ok: true, message: "" };
-  const nodeById = new Map(nodes.map((node) => [node.id, node]));
-  const reachable = new Set<string>();
-  const visit = (nodeId: string) => {
-    if (reachable.has(nodeId)) return;
-    const node = nodeById.get(nodeId);
-    if (!node) return;
-    reachable.add(nodeId);
-    for (const targetId of node.next ?? []) visit(targetId);
-    if (node.type === "builtin.if" || node.type === "builtin.if_else") {
-      for (const targetId of nodeIdArray(node.then)) visit(targetId);
-      for (const targetId of nodeIdArray(node.else)) visit(targetId);
-    } else if (node.type === "builtin.foreach") {
-      for (const targetId of nodeIdArray(node.body)) visit(targetId);
-    } else if (node.type === "builtin.switch" && Array.isArray(node.cases)) {
-      for (const item of node.cases) {
-        if (!isRecord(item) || !Array.isArray(item.nodes)) continue;
-        for (const targetId of item.nodes) visit(String(targetId));
-      }
-      for (const targetId of nodeIdArray(node.default)) visit(targetId);
-    } else if (
-      node.type === "builtin.parallel" &&
-      Array.isArray(node.branches)
-    ) {
-      for (const branch of node.branches) {
-        if (!isRecord(branch) || !Array.isArray(branch.nodes)) continue;
-        for (const targetId of branch.nodes) visit(String(targetId));
-      }
-    }
-  };
-  visit(entry.id);
-  const unreachableNodeIds = executableNodes
-    .map((node) => node.id)
-    .filter((nodeId) => !reachable.has(nodeId));
-  if (unreachableNodeIds.length === 0) return { ok: true, message: "" };
-  return {
-    ok: false,
-    message: `Workflow flow is incomplete. Connect or remove unreachable card(s): ${unreachableNodeIds.join(
-      ", ",
-    )}`,
-  };
-}
-
-function nodeIdArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string" && !!item)
-    : [];
+  const validation = validateWorkflowGraphCompleteness(
+    nodes.map((node) => ({
+      ...node,
+      next: Array.isArray(node.next) ? node.next : [],
+    })) as SharedWorkflowNode[],
+  );
+  return validation.ok
+    ? { ok: true, message: "" }
+    : { ok: false, message: validation.message };
 }
 
 function preservedCanvasContinuationTargets(

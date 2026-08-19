@@ -4,14 +4,14 @@ import { z } from "zod";
 import type { WorkflowStore } from "@openacme/db";
 import {
   JsonValueSchema,
+  normalizeWorkflowDefinitionGraph,
+  WorkflowDefinitionSchema,
   WorkflowDefinitionUiSchema,
   WorkflowNodeSchema,
   WorkflowRunner,
   WorkflowTriggerSchema,
+  validateWorkflowDefinitionAuthoring,
   validateWorkflowInputSchema,
-  validateWorkflowJsonSchema,
-  validateWorkflowNodeReferences,
-  validateWorkflowTriggers,
   type JsonValue,
   type WorkflowExecutionPorts,
   type WorkflowEventPort,
@@ -54,6 +54,9 @@ const WorkflowRunBodySchema = z
     async: z.boolean().optional(),
   })
   .strict();
+
+type WorkflowCreateBody = z.infer<typeof WorkflowCreateBodySchema>;
+type WorkflowUpdateBody = z.infer<typeof WorkflowUpdateBodySchema>;
 
 const WorkflowArtifactPruneBodySchema = z
   .object({
@@ -153,15 +156,10 @@ export function registerWorkflowRoutes(
     if (body.value.id && !SAFE_ID.test(body.value.id)) {
       return c.json({ error: "invalid id" }, 400);
     }
-    const references = validateNodes(body.value.nodes ?? []);
-    if (!references.ok) return c.json({ error: references.message }, 400);
-    const triggers = validateTriggers(body.value.triggers ?? []);
-    if (!triggers.ok) return c.json({ error: triggers.message }, 400);
-    const schemas = validateInputSchemas(
-      body.value.inputSchema,
-      body.value.triggers ?? [],
+    const authoring = validateAuthoringDefinition(
+      workflowCreateCandidate(body.value),
     );
-    if (!schemas.ok) return c.json({ error: schemas.message }, 400);
+    if (!authoring.ok) return c.json({ error: authoring.message }, 400);
     try {
       const workflow = store.createDraft(body.value);
       return c.json({ workflow }, 201);
@@ -199,23 +197,12 @@ export function registerWorkflowRoutes(
     if (!SAFE_ID.test(id)) return c.json({ error: "invalid id" }, 400);
     const body = await parseBody(c.req.raw, WorkflowUpdateBodySchema);
     if (!body.ok) return c.json({ error: body.error }, 400);
-    if (body.value.nodes) {
-      const references = validateNodes(body.value.nodes);
-      if (!references.ok) return c.json({ error: references.message }, 400);
-    }
-    if (body.value.triggers) {
-      const triggers = validateTriggers(body.value.triggers);
-      if (!triggers.ok) return c.json({ error: triggers.message }, 400);
-    }
     const current = store.getDefinition(id);
     if (!current) return c.json({ error: "not_found" }, 404);
-    const schemas = validateInputSchemas(
-      body.value.inputSchema === null
-        ? undefined
-        : (body.value.inputSchema ?? current.inputSchema),
-      body.value.triggers ?? current.triggers,
+    const authoring = validateAuthoringDefinition(
+      workflowUpdateCandidate(current, body.value),
     );
-    if (!schemas.ok) return c.json({ error: schemas.message }, 400);
+    if (!authoring.ok) return c.json({ error: authoring.message }, 400);
     try {
       return c.json({ workflow: store.updateDraft(id, body.value) });
     } catch (err) {
@@ -238,15 +225,8 @@ export function registerWorkflowRoutes(
     if (!SAFE_ID.test(id)) return c.json({ error: "invalid id" }, 400);
     const workflow = store.getDefinition(id);
     if (!workflow) return c.json({ error: "not_found" }, 404);
-    const references = validateNodes(workflow.nodes);
-    if (!references.ok) return c.json({ error: references.message }, 400);
-    const triggers = validateTriggers(workflow.triggers);
-    if (!triggers.ok) return c.json({ error: triggers.message }, 400);
-    const schemas = validateInputSchemas(
-      workflow.inputSchema,
-      workflow.triggers,
-    );
-    if (!schemas.ok) return c.json({ error: schemas.message }, 400);
+    const authoring = validateAuthoringDefinition(workflow);
+    if (!authoring.ok) return c.json({ error: authoring.message }, 400);
     try {
       return c.json({ workflow: store.publish(id) });
     } catch (err) {
@@ -571,10 +551,8 @@ async function executeWorkflowRun(
     waitForCompletion?: boolean;
   },
 ) {
-  const references = validateNodes(args.definition.nodes);
-  if (!references.ok) throw new Error(references.message);
-  const triggers = validateTriggers(args.definition.triggers);
-  if (!triggers.ok) throw new Error(triggers.message);
+  const authoring = validateAuthoringDefinition(args.definition);
+  if (!authoring.ok) throw new RouteHttpError(authoring.message, 400);
   const inputValidation = validateWorkflowInputSchema(
     args.definition.inputSchema,
     args.input,
@@ -917,31 +895,52 @@ export async function executePublishedTriggerRun(
   });
 }
 
-function validateNodes(nodes: WorkflowDefinition["nodes"]) {
-  return validateWorkflowNodeReferences(nodes);
+function workflowCreateCandidate(input: WorkflowCreateBody): WorkflowDefinition {
+  const now = new Date().toISOString();
+  return normalizeWorkflowDefinitionGraph(
+    WorkflowDefinitionSchema.parse({
+      id: input.id ?? "workflow_draft",
+      version: 1,
+      status: "draft",
+      name: input.name,
+      description: input.description ?? undefined,
+      inputSchema: input.inputSchema,
+      triggers: input.triggers,
+      nodes: input.nodes ?? [],
+      ui: input.ui,
+      createdAt: now,
+      updatedAt: now,
+    }),
+  );
 }
 
-function validateTriggers(triggers: WorkflowDefinition["triggers"]) {
-  return validateWorkflowTriggers(triggers);
+function workflowUpdateCandidate(
+  current: WorkflowDefinition,
+  patch: WorkflowUpdateBody,
+): WorkflowDefinition {
+  return normalizeWorkflowDefinitionGraph(
+    WorkflowDefinitionSchema.parse({
+      ...current,
+      status: "draft",
+      name: patch.name ?? current.name,
+      description:
+        patch.description === null
+          ? undefined
+          : (patch.description ?? current.description),
+      inputSchema:
+        patch.inputSchema === null
+          ? undefined
+          : (patch.inputSchema ?? current.inputSchema),
+      triggers: patch.triggers ?? current.triggers,
+      nodes: patch.nodes ?? current.nodes,
+      ui: patch.ui === null ? undefined : (patch.ui ?? current.ui),
+      updatedAt: current.updatedAt,
+    }),
+  );
 }
 
-function validateInputSchemas(
-  inputSchema: JsonValue | undefined,
-  triggers: WorkflowDefinition["triggers"],
-): { ok: true } | { ok: false; message: string } {
-  const workflowSchema = validateWorkflowJsonSchema(inputSchema);
-  if (!workflowSchema.ok) return { ok: false, message: workflowSchema.message };
-
-  for (const trigger of triggers) {
-    const triggerSchema = validateWorkflowJsonSchema(
-      triggerInputSchema(trigger),
-      `Trigger ${trigger.id} input schema`,
-    );
-    if (!triggerSchema.ok) {
-      return { ok: false, message: triggerSchema.message };
-    }
-  }
-  return { ok: true };
+function validateAuthoringDefinition(definition: WorkflowDefinition) {
+  return validateWorkflowDefinitionAuthoring(definition);
 }
 
 function getRunDetail(store: WorkflowStore, id: string) {

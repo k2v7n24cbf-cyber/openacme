@@ -2598,6 +2598,336 @@ Package typechecks passed:
 - `pnpm --filter @openacme/server check-types`
 - `pnpm --filter web check-types`
 
+### Planned Hardening: Self-Task Defer Reset
+
+Date: 2026-08-13.
+
+#### Live Finding
+
+Live objective/task usage exposed a defer edge case in session
+`2277b450-2d97-48ad-83d9-47a7cb8a1b46`.
+
+The session started as a normal `chat` session and later had objective-linked
+self-assigned coordination task `1228` bound to the same session. The agent had
+previously called `defer_session("24h")`, leaving a sticky
+`sessions.defer_until` marker. In a later interactive turn, the same agent
+created task `1228`, bound it to the current session, and marked it
+`in_progress`. Because the actor, assignee, and creator were the same agent, no
+new inbox row targeted the same session. The next routine dispatcher pass saw
+`task_in_progress` work but skipped the wake because the older sticky defer was
+still active:
+
+```text
+session.dispatcher.defer.skipped
+taskId: 1228
+reason: task_in_progress
+hasInbox: false
+```
+
+A later user task comment did wake the same session through the normal inbox
+bypass path, proving sticky defer still behaves correctly for real signals. The
+gap is narrower: old sticky defer can suppress newly created same-session
+self-work when the agent itself creates or activates that work and no external
+signal is emitted.
+
+#### Goal
+
+Keep sticky defer as the default scheduler protection, but clear a session's
+stale defer marker when the current agent makes its own current-session task
+actionable.
+
+Success means:
+
+- `defer_session(...)` still suppresses routine tick spam after signal-driven
+  wakes.
+- Inbox/user/comment/objective signals still bypass defer without clearing it.
+- If an agent creates or activates a self-assigned task bound to its current
+  session, old defer no longer prevents routine `task_in_progress` wake.
+- If the agent still wants quiet time after creating the new active work, it can
+  explicitly call `defer_session(...)` again in the same turn.
+
+#### Non-Goals
+
+- Do not remove sticky defer globally.
+- Do not clear defer on every dispatcher spawn.
+- Do not clear defer for cross-agent, fresh-session, or future-scheduled work.
+- Do not change objective closeout rules. Objective summaries still require all
+  linked tasks to be terminal.
+- Do not introduce an objective-specific scheduler path.
+- Do not use this hardening slice to extract a central ticker or
+  `TaskSchedulerService`. That is a later architecture simplification, not part
+  of this repair.
+
+#### Milestone
+
+Milestone: bounded scheduler/task-tool semantic repair.
+
+The milestone owns one production behavior: same-session self-task activation
+invalidates stale defer, while all other sticky defer behavior remains intact.
+
+Acceptance:
+
+- Existing dispatcher sticky defer tests continue to pass.
+- New task-tool tests prove exactly when defer clear is requested.
+- New wiring/integration regression proves a deferred same-session self-task
+  clears the stale defer marker through the task tool binding and can then be
+  woken by routine `task_in_progress`.
+- No API/schema migration is required.
+
+#### Slice 1: Tool-Level Defer Clear Hook
+
+Owner seam:
+
+- `packages/tools/src/builtins/tasks.ts`
+- `packages/server/src/agent-manager.ts`
+- `packages/db/src/stores/session-store.ts`
+
+Design:
+
+- Extend `TaskStoreBindings` with an optional callback:
+
+```ts
+clearSessionDeferUntil?: (event: {
+  sessionId: string;
+  agentId: string;
+  taskId: string;
+  taskStatus: "open" | "in_progress";
+  source: "task_create" | "task_update";
+}) => void;
+```
+
+- `AgentManager` wires the callback to
+  `this.sessionStore.clearDeferUntil(sessionId)` when binding task tools.
+- The `AgentManager` callback may read the prior defer value before clearing.
+  Clearing is idempotent; timeline/log output should only claim a stale defer
+  was cleared when a previous defer value existed.
+- `task_create` and `task_update` call a shared helper after successful store
+  mutation.
+- Defer clearing is best-effort. A callback failure must not turn an already
+  successful task create/update mutation into an `ok:false` tool result.
+- The helper clears defer only when all conditions hold:
+  - current agent id exists
+  - current session id exists
+  - task assignee equals current agent id
+  - task `session_id` equals current session id
+  - task status is active:
+    - `in_progress`, regardless of `start_at`, matching dispatcher wake
+      semantics
+    - `open` with all `depends_on` tasks currently `done` and `start_at`
+      absent or not in the future
+
+Dependency readiness must use the current task store state, matching the
+dispatcher's eligibility rule. The store no longer persists dependency-waiting
+tasks as `blocked`; an `open` task can still be non-actionable if one of its
+dependencies is not `done`. `TaskStore.update` already rejects
+`in_progress` transitions while dependencies are unsatisfied, so the extra
+dependency check matters primarily for newly created or still-`open` tasks.
+
+This keeps the tools package loosely coupled to session storage and avoids
+adding a direct `SessionStore` dependency to task tools.
+
+Observability:
+
+- Reuse existing server/session timeline or logger seams from `AgentManager`.
+- Record a compact event when a stale defer is cleared by self-task activation,
+  for example event type `session.defer.cleared_by_self_task`, with task id,
+  session id, agent id, resulting task status, source tool, and prior defer
+  value.
+- Do not add a new telemetry/exporter layer for this slice.
+
+While touching `packages/tools/src/builtins/tasks.ts`, also align the
+`task_create` description and warnings with current dependency behavior:
+
+- replace stale guidance that says unmet `depends_on` force persisted
+  `blocked`
+- remove or update the now-stale create-time warning that says the task was
+  created in `blocked` status because dependencies are not done
+
+TDD:
+
+1. Add failing `task_create` test: self-assigned current-session task calls
+   `clearSessionDeferUntil(...)` with session id, agent id, task id, status,
+   and source metadata.
+2. Add failing `task_create` negative tests:
+   - cross-agent task does not clear
+   - `session: "fresh"` self-task does not clear
+   - explicit other-session task does not clear
+   - `open` task with future `start_at` does not clear
+   - `open` task with unmet `depends_on` does not clear
+3. Add failing `task_update` test: self-assigned current-session task updated
+   to `in_progress` calls `clearSessionDeferUntil(...)` with source
+   `task_update`.
+4. Add failing `task_update` test: self-assigned current-session task made
+   `open` and ready in the current session calls `clearSessionDeferUntil(...)`
+   with source `task_update`.
+5. Add failing best-effort test: if `clearSessionDeferUntil` throws after a
+   successful store mutation, the tool still returns `ok:true` and the task
+   mutation remains visible.
+6. Add failing `task_update` negative tests:
+   - `done`, `canceled`, `blocked`, and `system_blocked` do not clear
+   - `open` task with future `start_at` does not clear
+   - task bound to another session does not clear
+7. Implement the helper and callback binding.
+8. Update stale task dependency guidance in the same file.
+9. Run:
+
+```sh
+pnpm --filter @openacme/tools test -- tasks.test.ts
+pnpm --filter @openacme/tools check-types
+```
+
+#### Slice 2: Dispatcher Semantics Guard
+
+Owner seam:
+
+- `packages/server/src/dispatcher.ts`
+- `packages/server/test/dispatcher.test.ts`
+
+Design:
+
+- Dispatcher defer semantics do not need a broad rewrite for this slice.
+- Preserve the existing rule:
+  - active `defer_until` suppresses routine wakes when `hasInbox=false`
+  - targeted inbox bypasses defer
+  - defer is not cleared by spawn
+- Do not put self-task knowledge into `Dispatcher`; the dispatcher should only
+  observe that defer is either present or absent.
+- Add only a narrow guard if current coverage does not already prove the
+  repaired state: a session that previously had defer, then has defer cleared
+  before a current-session `in_progress` task is inspected, is woken by routine
+  `task_in_progress`.
+
+TDD:
+
+1. Keep existing test:
+
+```text
+defer_until suppresses routine wakes but an inbox row bypasses it
+```
+
+2. Add a narrow guard only if not already covered:
+   - create session for agent `a1`
+   - set defer in the future
+   - simulate tool repair by clearing defer after creating or activating a
+     self-task bound to the session
+   - run dispatcher tick
+   - expect `runAutonomous` called with that session
+   - expect reason/task timeline shows `task_in_progress`
+3. Run:
+
+```sh
+pnpm --filter @openacme/server test -- dispatcher.test.ts
+pnpm --filter @openacme/server check-types
+```
+
+#### Slice 3: Focused Integration Validation
+
+Owner seam:
+
+- Task tools plus dispatcher wiring inside `createApp`/`AgentManager`.
+
+Validation path:
+
+- Use an existing lightweight server/app test only if current coverage does not
+  prove callback wiring.
+- Avoid live model dependency for CI. The live failure mode is already
+  understood from production state and timeline evidence.
+- This is the primary regression for the slice because the dispatcher should
+  not know why defer was cleared.
+
+Candidate test:
+
+- In a server-level test, bind a task store through `AgentManager`, set a
+  session defer, invoke the task tool in current-session context, and assert the
+  session store defer is null afterward.
+- Cover both:
+  - `task_create` self/current/open/ready clears defer
+  - `task_update` self/current/in_progress clears defer
+- Cover non-actionable dependency state by creating a dependency that is not
+  `done`, then creating an `open` dependent task in the same session and
+  asserting defer remains set.
+
+Run if implemented:
+
+```sh
+pnpm --filter @openacme/server test -- app-routes.test.ts dispatcher.test.ts
+pnpm --filter @openacme/server check-types
+```
+
+#### Release Validation
+
+Before shipping:
+
+```sh
+pnpm --filter @openacme/tools test -- tasks.test.ts
+pnpm --filter @openacme/server test -- dispatcher.test.ts
+pnpm --filter @openacme/tools check-types
+pnpm --filter @openacme/server check-types
+```
+
+If the implementation touches shared task binding or app wiring more broadly,
+also run:
+
+```sh
+pnpm --filter @openacme/server test -- app-routes.test.ts objective-closeout-service.test.ts objective-closeout-watcher.test.ts
+```
+
+#### Product Guidance Update
+
+After code behavior is fixed, update task/defer guidance so agents learn the
+intended semantics:
+
+- Sticky defer is for suppressing routine idle polling.
+- Starting new current-session self-work invalidates old quiet-time intent.
+- If the agent creates active work but is intentionally waiting, it should call
+  `defer_session(...)` again with a deliberate duration.
+- Correct stale task dependency guidance that says unmet dependencies force a
+  persisted `blocked` status. Current behavior keeps the task `open` and makes
+  readiness a dispatcher/reader eligibility decision until dependencies are
+  `done`.
+
+#### Implementation Result: 2026-08-13
+
+Implemented in the `local-stage` worktree without touching local prod.
+
+Code changes:
+
+- `packages/tools/src/builtins/tasks.ts`
+  - added best-effort `clearSessionDeferUntil` binding callback metadata
+  - clears stale defer after successful `task_create` / `task_update` only for
+    current-agent/current-session actionable self-work
+  - treats `in_progress` as actionable regardless of `start_at`
+  - treats `open` as actionable only when dependencies are `done` and
+    `start_at` is ready
+  - corrected stale `depends_on` tool guidance
+- `packages/server/src/agent-manager.ts`
+  - wires the callback to `SessionStore.clearDeferUntil`
+  - records `session.defer.cleared_by_self_task` timeline events only when a
+    prior defer value existed
+- `packages/server/test/task-defer-reset-wiring.test.ts`
+  - verifies real app wiring clears persisted defer and records timeline
+- `packages/server/test/dispatcher.test.ts`
+  - guards that routine `task_in_progress` wake works after defer has been
+    externally cleared
+
+TDD evidence:
+
+- Initial `pnpm --filter @openacme/tools test -- tasks.test.ts` failed with 4
+  expected callback-related failures before implementation.
+- After implementation, focused tests passed:
+
+```sh
+pnpm --filter @openacme/tools test -- tasks.test.ts
+pnpm --filter @openacme/server test -- task-defer-reset-wiring.test.ts
+pnpm --filter @openacme/server test -- dispatcher.test.ts
+pnpm --filter @openacme/tools check-types
+pnpm --filter @openacme/server check-types
+pnpm --filter @openacme/tools build
+pnpm --filter @openacme/server build
+pnpm --filter @openacme/server test -- app-routes.test.ts objective-closeout-service.test.ts objective-closeout-watcher.test.ts
+pnpm --filter @openacme/server test -- objective-closeout-wiring.test.ts
+```
+
 ## Resolved Design Decisions
 
 ### Store Ownership

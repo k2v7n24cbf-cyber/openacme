@@ -1,9 +1,19 @@
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  existsSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConfigSchema, loadGlobalMcpServers } from "@openacme/config";
-import { HOSTED_TOOL_MANAGEMENT_TOOL_NAMES } from "@openacme/tools";
+import {
+  HOSTED_TOOL_MANAGEMENT_TOOL_NAMES,
+  WORKFLOW_MANAGEMENT_TOOL_NAMES,
+} from "@openacme/tools";
 import { AgentManager } from "../src/agent-manager.js";
 
 /**
@@ -240,6 +250,7 @@ describe("AgentManager.ensureManagedAgents", () => {
     expect(agents.map((agent) => agent.id).sort()).toEqual([
       "acme",
       "tool-developer",
+      "workflow-engineer",
     ]);
     const acme = agents.find((agent) => agent.id === "acme")!;
     expect(acme.id).toBe("acme");
@@ -254,6 +265,15 @@ describe("AgentManager.ensureManagedAgents", () => {
       expect.arrayContaining([...HOSTED_TOOL_MANAGEMENT_TOOL_NAMES]),
     );
     expect(toolDeveloper.skills).toEqual(["hosted-integrations-development"]);
+    const workflowEngineer = agents.find(
+      (agent) => agent.id === "workflow-engineer",
+    )!;
+    expect(workflowEngineer.name).toBe("Workflow Engineer");
+    expect(workflowEngineer.managed).toBe(true);
+    expect(workflowEngineer.tools).toEqual(
+      expect.arrayContaining([...WORKFLOW_MANAGEMENT_TOOL_NAMES]),
+    );
+    expect(workflowEngineer.skills).toEqual(["openacme-workflow-author"]);
 
     // Agent folder
     expect(existsSync(path.join(dataDir, "agents", "acme", "AGENT.md"))).toBe(
@@ -267,6 +287,12 @@ describe("AgentManager.ensureManagedAgents", () => {
     ).toBe(true);
     expect(
       existsSync(path.join(dataDir, "agents", "tool-developer", "workspace")),
+    ).toBe(true);
+    expect(
+      existsSync(path.join(dataDir, "agents", "workflow-engineer", "AGENT.md")),
+    ).toBe(true);
+    expect(
+      existsSync(path.join(dataDir, "agents", "workflow-engineer", "workspace")),
     ).toBe(true);
 
     // Bundled skill landed
@@ -286,6 +312,9 @@ describe("AgentManager.ensureManagedAgents", () => {
     expect(platformSkill?.body).toContain(
       "Tool Developer Agent owns routine hosted integration source work",
     );
+    expect(platformSkill?.body).toContain(
+      "Workflow Engineer Agent owns routine workflow definition work",
+    );
     expect(
       existsSync(
         path.join(
@@ -296,6 +325,28 @@ describe("AgentManager.ensureManagedAgents", () => {
         ),
       ),
     ).toBe(true);
+    expect(
+      existsSync(
+        path.join(dataDir, "skills", "openacme-workflow-author", "SKILL.md"),
+      ),
+    ).toBe(true);
+    const workflowAuthorSkill = manager.skillRegistry.getSkill(
+      "openacme-workflow-author",
+    );
+    expect(workflowEngineer.persona).toContain("workflow_help");
+    expect(workflowEngineer.persona).toContain("workflow_card_test_run");
+    expect(workflowEngineer.persona).toContain("builtin.output.set");
+    expect(workflowEngineer.persona).toContain("Prefer deterministic cards");
+    expect(workflowAuthorSkill?.body).toContain("workflow_card_catalog");
+    expect(workflowAuthorSkill?.body).toContain("workflow_help");
+    expect(workflowAuthorSkill?.body).toContain("workflow_help_upsert");
+    expect(workflowAuthorSkill?.body).toContain("workflow_validate");
+    expect(workflowAuthorSkill?.body).toContain("workflow_card_test_run");
+    expect(workflowAuthorSkill?.body).toContain("workflow_test_run");
+    expect(workflowAuthorSkill?.body).toContain("builtin.output.set");
+    expect(workflowAuthorSkill?.body).toContain(
+      "full test run for the current draft",
+    );
     const hostedIntegrationSkill = manager.skillRegistry.getSkill(
       "hosted-integrations-development",
     );
@@ -358,7 +409,7 @@ describe("AgentManager.ensureManagedAgents", () => {
         .listAgents()
         .map((agent) => agent.id)
         .sort(),
-    ).toEqual(["acme", "tool-developer"]);
+    ).toEqual(["acme", "tool-developer", "workflow-engineer"]);
   });
 
   it("installs managed agents even when other unmanaged agents exist", async () => {
@@ -376,11 +427,92 @@ describe("AgentManager.ensureManagedAgents", () => {
       .listAgents()
       .map((a) => a.id)
       .sort();
-    expect(ids).toEqual(["acme", "software-engineer", "tool-developer"]);
+    expect(ids).toEqual([
+      "acme",
+      "software-engineer",
+      "tool-developer",
+      "workflow-engineer",
+    ]);
     expect(existsSync(path.join(dataDir, "agents", "acme"))).toBe(true);
     expect(existsSync(path.join(dataDir, "agents", "tool-developer"))).toBe(
       true,
     );
+    expect(existsSync(path.join(dataDir, "agents", "workflow-engineer"))).toBe(
+      true,
+    );
+  });
+
+  it("adopts a stale reserved workflow-engineer slot into the managed template", async () => {
+    const agentDir = path.join(dataDir, "agents", "workflow-engineer");
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(
+      path.join(agentDir, "AGENT.md"),
+      `---
+name: Workflow Engineer
+role: Old hand-authored workflow helper.
+model:
+  provider: openai
+  model: gpt-5.5
+  auth: oauth
+tools:
+  - shell
+  - process
+skills:
+  - openacme-platform
+mcpServers: {}
+mcpDisabled: []
+---
+Old workflow engineer.
+`,
+      "utf-8",
+    );
+
+    await manager.ensureManagedAgents();
+
+    const adopted = manager.agentStore.get("workflow-engineer")!;
+    expect(adopted.managed).toBe(true);
+    expect(adopted.tools).toEqual(
+      expect.arrayContaining([...WORKFLOW_MANAGEMENT_TOOL_NAMES]),
+    );
+    expect(adopted.skills).toEqual(["openacme-workflow-author"]);
+    expect(
+      existsSync(
+        path.join(dataDir, "skills", "openacme-workflow-author", "SKILL.md"),
+      ),
+    ).toBe(true);
+  });
+
+  it("leaves explicitly unmanaged reserved slots alone", async () => {
+    const agentDir = path.join(dataDir, "agents", "workflow-engineer");
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(
+      path.join(agentDir, "AGENT.md"),
+      `---
+name: Workflow Engineer
+managed: false
+role: User-owned workflow helper.
+model:
+  provider: openai
+  model: gpt-5.5
+  auth: oauth
+tools:
+  - shell
+skills:
+  - openacme-platform
+mcpServers: {}
+mcpDisabled: []
+---
+User-owned workflow engineer.
+`,
+      "utf-8",
+    );
+
+    await manager.ensureManagedAgents();
+
+    const untouched = manager.agentStore.get("workflow-engineer")!;
+    expect(untouched.managed).toBe(false);
+    expect(untouched.tools).toEqual(["shell"]);
+    expect(untouched.skills).toEqual(["openacme-platform"]);
   });
 
   it("rejects mutations on a managed agent", async () => {
@@ -397,5 +529,55 @@ describe("AgentManager.ensureManagedAgents", () => {
     await expect(manager.deleteAgent("tool-developer")).rejects.toThrow(
       /platform-managed/,
     );
+    await expect(
+      manager.updateAgent("workflow-engineer", { persona: "hacked" }),
+    ).rejects.toThrow(/platform-managed/);
+    await expect(manager.deleteAgent("workflow-engineer")).rejects.toThrow(
+      /platform-managed/,
+    );
+  });
+});
+
+describe("Workflow Engineer bundled authoring guidance", () => {
+  it("documents the first-class workflow development loop and evidence tools", () => {
+    const repoRoot = path.resolve("../..");
+    const skill = readFileSync(
+      path.resolve(
+        repoRoot,
+        "packages/skills/builtin/openacme-workflow-author/SKILL.md",
+      ),
+      "utf-8",
+    );
+    const reference = readFileSync(
+      path.resolve(
+        repoRoot,
+        "packages/skills/builtin/openacme-workflow-author/references/workflow-authoring.md",
+      ),
+      "utf-8",
+    );
+    const template = readFileSync(
+      path.resolve(
+        repoRoot,
+        "packages/agent-catalog/templates/workflow-engineer/AGENT.md",
+      ),
+      "utf-8",
+    );
+
+    for (const text of [skill, reference, template]) {
+      expect(text).toContain("workflow_help");
+      expect(text).toContain("workflow_callable_list");
+      expect(text).toContain("workflow_run");
+      expect(text).toContain("workflow_card_test_run");
+      expect(text).toContain("workflow_test_run");
+      expect(text).toContain("workflow_run_get");
+      expect(text).toContain("builtin.output.set");
+    }
+    expect(skill).toContain("workflow_help_upsert");
+    expect(reference).toContain("stop_after_step_id");
+    expect(reference).toContain("summary-first");
+    expect(reference).toContain("current draft");
+    expect(template).toContain("Prefer deterministic cards");
+    expect(reference).toContain("workflow_tool_inventory");
+    expect(reference).toContain("workflow_agent_inventory");
   });
 });

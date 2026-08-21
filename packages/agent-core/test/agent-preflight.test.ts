@@ -346,6 +346,31 @@ describe("Agent.preflightCompress", () => {
     expect(newId).toBe("s1");
   });
 
+  it("estimates request tokens without throwing on circular tool schemas", async () => {
+    const db = freshDb();
+    const sessions = createSessionStore(db);
+    sessions.create("a1", { id: "s1" });
+    const circular: Record<string, unknown> = { description: "circular" };
+    circular.self = circular;
+    const toolRegistry = {
+      get: () => undefined,
+      getVercelTools: () => ({ workflow_validate: circular }),
+    } as unknown as ToolRegistry;
+    const agent = makeAgent({
+      db,
+      thresholdTokens: 10_000,
+      tools: ["workflow_validate"],
+      toolRegistry,
+    });
+
+    const prepared = await agent.prepareModelHistory("s1", [
+      bigUserMsg("u1", 20),
+    ]);
+
+    expect(prepared.compressed).toBe(false);
+    expect(prepared.estimatedTokens).toBeGreaterThan(0);
+  });
+
   it("no-ops when history is under threshold", async () => {
     const db = freshDb();
     const sessions = createSessionStore(db);

@@ -115,6 +115,67 @@ describe("WorkflowStore definitions", () => {
     expect(store.getVersion("wf_layout", 2)?.ui).toEqual(updated.ui);
   });
 
+  it("round-trips output schema and snapshots it on publish", () => {
+    const outputSchema = {
+      type: "object",
+      required: ["greeting"],
+      properties: { greeting: { type: "string" } },
+    };
+    store.createDraft({
+      id: "wf_output_schema",
+      name: "Output schema workflow",
+      outputSchema,
+      nodes: [
+        {
+          id: "set_output",
+          type: "builtin.output.set",
+          path: "greeting",
+          value: "$.workflowTrigger.input.name",
+        },
+      ],
+      now,
+    });
+
+    expect(store.getDefinition("wf_output_schema")?.outputSchema).toEqual(
+      outputSchema,
+    );
+
+    const updatedSchema = {
+      type: "object",
+      required: ["result"],
+      properties: { result: { type: "string" } },
+    };
+    const updated = store.updateDraft("wf_output_schema", {
+      outputSchema: updatedSchema,
+      nodes: [
+        {
+          id: "set_output",
+          type: "builtin.output.set",
+          path: "result",
+          value: "$.workflowTrigger.input.name",
+        },
+      ],
+      now: later,
+    });
+
+    expect(updated.outputSchema).toEqual(updatedSchema);
+    const published = store.publish(
+      "wf_output_schema",
+      "2026-07-30T00:02:00.000Z",
+    );
+    expect(published.outputSchema).toEqual(updatedSchema);
+
+    store.updateDraft("wf_output_schema", {
+      outputSchema: null,
+      now: "2026-07-30T00:03:00.000Z",
+    });
+
+    expect(store.getDefinition("wf_output_schema")?.outputSchema).toBeUndefined();
+    expect(store.getVersion("wf_output_schema", 2)?.outputSchema).toEqual(
+      updatedSchema,
+    );
+  });
+
   it("publishes immutable versions while later drafts remain editable", () => {
     store.createDraft({
       id: "wf_publish",

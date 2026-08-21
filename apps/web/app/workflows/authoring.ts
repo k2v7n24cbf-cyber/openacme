@@ -11,6 +11,7 @@ export type WorkflowPaletteKind =
   | "parallel"
   | "python"
   | "mcp"
+  | "hosted"
   | "agent";
 
 export interface WorkflowAuthoringNode {
@@ -25,9 +26,18 @@ export interface WorkflowAuthoringMcpTool {
   tool: string;
 }
 
+export interface WorkflowAuthoringHostedTool {
+  name: string;
+}
+
 export interface WorkflowAuthoringAgent {
   id: string;
 }
+
+type WorkflowAuthoringTool =
+  | WorkflowAuthoringMcpTool
+  | WorkflowAuthoringHostedTool
+  | WorkflowAuthoringAgent;
 
 export interface WorkflowTransformPreset {
   id: string;
@@ -236,7 +246,7 @@ export function workflowTransformPresetForNodeType(
 export function appendWorkflowNode(
   nodes: WorkflowAuthoringNode[],
   kind: WorkflowPaletteKind,
-  tool?: WorkflowAuthoringMcpTool | WorkflowAuthoringAgent,
+  tool?: WorkflowAuthoringTool,
   transformPresetId?: string,
 ): WorkflowAuthoringNode[] {
   return insertWorkflowNodeAfter(nodes, null, kind, tool, transformPresetId);
@@ -246,7 +256,7 @@ export function insertWorkflowNodeAfter(
   nodes: WorkflowAuthoringNode[],
   afterNodeId: string | null,
   kind: WorkflowPaletteKind,
-  tool?: WorkflowAuthoringMcpTool | WorkflowAuthoringAgent,
+  tool?: WorkflowAuthoringTool,
   transformPresetId?: string,
 ): WorkflowAuthoringNode[] {
   const nextNode = createNextWorkflowNodeTemplate(
@@ -264,7 +274,7 @@ export function insertWorkflowNodeAfter(
 export function insertWorkflowNodeFirst(
   nodes: WorkflowAuthoringNode[],
   kind: WorkflowPaletteKind,
-  tool?: WorkflowAuthoringMcpTool | WorkflowAuthoringAgent,
+  tool?: WorkflowAuthoringTool,
   transformPresetId?: string,
 ): WorkflowAuthoringNode[] {
   return [
@@ -408,7 +418,7 @@ export function setWorkflowForeachBodyFirst(
 export function createWorkflowNodeTemplate(
   kind: WorkflowPaletteKind,
   index: number,
-  tool?: WorkflowAuthoringMcpTool | WorkflowAuthoringAgent,
+  tool?: WorkflowAuthoringTool,
   transformPresetId?: string,
 ): WorkflowAuthoringNode {
   const suffix = String(index).padStart(2, "0");
@@ -528,6 +538,16 @@ export function createWorkflowNodeTemplate(
       input: {},
     };
   }
+  if (kind === "hosted") {
+    const hostedTool = isHostedToolSummary(tool) ? tool : undefined;
+    const toolName = hostedTool?.name ?? "hosted_tool";
+    return {
+      id: `hosted_${safeIdSegment(toolName)}_${suffix}`,
+      type: "hosted.tool",
+      toolName,
+      input: {},
+    };
+  }
   if (kind === "agent") {
     const agent = isAgentSummary(tool) ? tool : undefined;
     const agentId = agent?.id ?? "agent";
@@ -558,6 +578,12 @@ export function isMcpToolSummary(
   );
 }
 
+export function isHostedToolSummary(
+  value: unknown,
+): value is WorkflowAuthoringHostedTool {
+  return isRecord(value) && typeof value["name"] === "string";
+}
+
 export function isAgentSummary(
   value: unknown,
 ): value is WorkflowAuthoringAgent {
@@ -572,7 +598,7 @@ function safeIdSegment(value: string): string {
 function createNextWorkflowNodeTemplate(
   nodes: WorkflowAuthoringNode[],
   kind: WorkflowPaletteKind,
-  tool?: WorkflowAuthoringMcpTool | WorkflowAuthoringAgent,
+  tool?: WorkflowAuthoringTool,
   transformPresetId?: string,
 ): WorkflowAuthoringNode {
   const existingIds = new Set(nodes.map((node) => node.id));

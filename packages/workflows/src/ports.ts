@@ -62,6 +62,35 @@ export interface McpExecutionPort {
   callTool(req: McpToolCallRequest): Promise<McpToolCallResult>;
 }
 
+export interface HostedToolCallRequest {
+  toolName: string;
+  input: JsonValue;
+  actorId?: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+
+export interface HostedToolCallResult {
+  output: JsonValue;
+}
+
+export interface HostedToolSummary {
+  name: string;
+  familyId: string;
+  familyName?: string;
+  toolName: string;
+  generationId?: string;
+  description?: string;
+  inputSchema?: unknown;
+  outputSchema?: unknown;
+  annotations?: Record<string, unknown>;
+}
+
+export interface HostedToolExecutionPort {
+  listTools?(): Promise<HostedToolSummary[]>;
+  callTool(req: HostedToolCallRequest): Promise<HostedToolCallResult>;
+}
+
 export interface PythonExecutionRequest {
   code: string;
   input: JsonValue;
@@ -94,6 +123,7 @@ export interface WorkflowEventPort {
 export interface WorkflowExecutionPorts {
   agent?: AgentCallPort;
   mcp?: McpExecutionPort;
+  hosted?: HostedToolExecutionPort;
   python?: PythonExecutionPort;
   events?: WorkflowEventPort;
 }

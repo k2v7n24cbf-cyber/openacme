@@ -18,6 +18,7 @@ mcp.json
 # Testing
 coverage
 output/
+packages/server/test-artifacts/
 
 # Turbo
 .turbo

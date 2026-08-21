@@ -88,6 +88,7 @@ import {
   insertWorkflowNodeFirst,
   isWorkflowTransformNodeType,
   isAgentSummary,
+  isHostedToolSummary,
   isMcpToolSummary,
   moveWorkflowNode,
   moveWorkflowNodeAfter,
@@ -294,6 +295,18 @@ interface McpToolSummary {
   inputSchema?: unknown;
 }
 
+interface HostedToolSummary {
+  name: string;
+  familyId: string;
+  familyName?: string;
+  toolName: string;
+  generationId?: string;
+  description?: string;
+  inputSchema?: unknown;
+  outputSchema?: unknown;
+  annotations?: Record<string, unknown>;
+}
+
 interface AgentSummary {
   id: string;
   name: string;
@@ -366,6 +379,7 @@ interface WorkflowPalettePayload {
   kind: WorkflowPaletteKind;
   server?: string;
   tool?: string;
+  toolName?: string;
   agentId?: string;
   transformPresetId?: string;
 }
@@ -492,6 +506,7 @@ function WorkflowsPage() {
   );
   const [inputDraft, setInputDraft] = useState(formatJson(DEFAULT_INPUT));
   const [mcpTools, setMcpTools] = useState<McpToolSummary[]>([]);
+  const [hostedTools, setHostedTools] = useState<HostedToolSummary[]>([]);
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [triggers, setTriggers] = useState<WorkflowTriggerSummary[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -589,6 +604,7 @@ function WorkflowsPage() {
   useEffect(() => {
     void loadWorkflows(search.id);
     void loadMcpTools();
+    void loadHostedTools();
     void loadAgents();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -910,6 +926,17 @@ function WorkflowsPage() {
       setMcpTools(data.tools);
     } catch {
       setMcpTools([]);
+    }
+  }
+
+  async function loadHostedTools() {
+    try {
+      const data = await api<{ tools: HostedToolSummary[] }>(
+        "/api/workflows/hosted/tools",
+      );
+      setHostedTools(data.tools);
+    } catch {
+      setHostedTools([]);
     }
   }
 
@@ -1572,7 +1599,7 @@ function WorkflowsPage() {
     kind: WorkflowPaletteKind,
     afterNodeId: string | null,
     sourceHandle?: WorkflowReferenceEdgeKind | null,
-    tool?: McpToolSummary | AgentSummary,
+    tool?: McpToolSummary | HostedToolSummary | AgentSummary,
     transformPresetId?: string,
     placement?: WorkflowCanvasAddPlacement | null,
   ) {
@@ -1583,6 +1610,10 @@ function WorkflowsPage() {
     }
     if (kind === "mcp" && !isMcpToolSummary(tool)) {
       toast.error("No MCP tools available");
+      return;
+    }
+    if (kind === "hosted" && !isHostedToolSummary(tool)) {
+      toast.error("No hosted tools available");
       return;
     }
     if (kind === "agent" && !isAgentSummary(tool)) {
@@ -1669,6 +1700,7 @@ function WorkflowsPage() {
   ) {
     setDesignerView("edit");
     void loadMcpTools();
+    void loadHostedTools();
     void loadAgents();
     setAddStepTargetNodeId(afterNodeId);
     setAddStepTargetSourceHandle(referenceEdgeKind(sourceHandle));
@@ -1735,7 +1767,7 @@ function WorkflowsPage() {
 
   function toolForPalettePayload(
     payload: WorkflowPalettePayload,
-  ): McpToolSummary | AgentSummary | undefined {
+  ): McpToolSummary | HostedToolSummary | AgentSummary | undefined {
     if (payload.kind === "mcp") {
       if (payload.server && payload.tool) {
         return mcpTools.find(
@@ -1744,6 +1776,12 @@ function WorkflowsPage() {
         );
       }
       return firstMcpTool;
+    }
+    if (payload.kind === "hosted") {
+      if (payload.toolName) {
+        return hostedTools.find((tool) => tool.name === payload.toolName);
+      }
+      return firstHostedTool;
     }
     if (payload.kind === "agent") {
       if (payload.agentId) {
@@ -2487,6 +2525,49 @@ function WorkflowsPage() {
     });
   }
 
+  function updateHostedToolConfig(
+    index: number,
+    field: "toolName" | "input" | "timeoutMs",
+    value: string,
+  ) {
+    updateNode(index, (node) => {
+      if (node.type !== "hosted.tool") return node;
+      if (field === "input") {
+        const parsed = parseJsonObjectDraft(value);
+        if (!parsed.ok) return node;
+        return { ...node, input: parsed.value };
+      }
+      if (field === "timeoutMs") {
+        const timeoutMs = parseOptionalTimeoutMs(value, 100, 300_000);
+        return timeoutMs === null
+          ? omitNodeKey(node, "timeoutMs")
+          : { ...node, timeoutMs };
+      }
+      if (field === "toolName" && !value) return node;
+      return { ...node, toolName: value };
+    });
+  }
+
+  function updateHostedToolSelection(index: number, toolName: string) {
+    updateNode(index, (node) => {
+      if (node.type !== "hosted.tool") return node;
+      return { ...node, toolName };
+    });
+  }
+
+  function updateHostedSchemaInput(index: number, key: string, value: string) {
+    updateNode(index, (node) => {
+      if (node.type !== "hosted.tool") return node;
+      const input = isRecord(node.input) ? { ...node.input } : {};
+      const next = value.trim();
+      if (next) input[key] = next;
+      else delete input[key];
+      return Object.keys(input).length === 0
+        ? omitNodeKey(node, "input")
+        : { ...node, input };
+    });
+  }
+
   function updateAgentConfig(
     index: number,
     field: "agentId" | "prompt" | "input" | "timeoutMs",
@@ -2552,6 +2633,7 @@ function WorkflowsPage() {
       onPythonConfigChange: (field, value) =>
         updatePythonConfig(index, field, value),
       mcpTools,
+      hostedTools,
       agents,
       onMcpToolConfigChange: (field, value) =>
         updateMcpToolConfig(index, field, value),
@@ -2559,12 +2641,19 @@ function WorkflowsPage() {
         updateMcpToolSelection(index, server, tool),
       onMcpSchemaInputChange: (key, value) =>
         updateMcpSchemaInput(index, key, value),
+      onHostedToolConfigChange: (field, value) =>
+        updateHostedToolConfig(index, field, value),
+      onHostedToolSelect: (toolName) =>
+        updateHostedToolSelection(index, toolName),
+      onHostedSchemaInputChange: (key, value) =>
+        updateHostedSchemaInput(index, key, value),
       onAgentConfigChange: (field, value) =>
         updateAgentConfig(index, field, value),
     };
   }
 
   const firstMcpTool = mcpTools[0];
+  const firstHostedTool = hostedTools[0];
   const firstAvailableAgent = agents.find(
     (agent) => agent.instantMessagesEnabled !== false,
   );
@@ -2891,6 +2980,7 @@ function WorkflowsPage() {
                   }
                   referenceSuggestions={referenceSuggestions}
                   mcpTools={mcpTools}
+                  hostedTools={hostedTools}
                   agents={agents}
                   pendingRunId={pendingRunId}
                   busy={busy}
@@ -2919,6 +3009,7 @@ function WorkflowsPage() {
             triggers.length === 0
           }
           mcpTools={mcpTools}
+          hostedTools={hostedTools}
           agents={agents}
           triggers={triggers}
           onOpenChange={(open) => {
@@ -3420,6 +3511,7 @@ type AddStepCategory =
   | "Transformers"
   | "Logic"
   | "AI"
+  | "Hosted Tools"
   | "Tools";
 
 interface AddStepCatalogItem {
@@ -3440,6 +3532,7 @@ function AddStepDialog({
   targetNodeId,
   triggerOnly,
   mcpTools,
+  hostedTools,
   agents,
   triggers,
   onOpenChange,
@@ -3449,6 +3542,7 @@ function AddStepDialog({
   targetNodeId: string | null;
   triggerOnly: boolean;
   mcpTools: McpToolSummary[];
+  hostedTools: HostedToolSummary[];
   agents: AgentSummary[];
   triggers: WorkflowTriggerSummary[];
   onOpenChange: (open: boolean) => void;
@@ -3467,12 +3561,13 @@ function AddStepDialog({
     const items = workflowStepCatalog({
       hasTrigger: triggers.length > 0,
       mcpTools,
+      hostedTools,
       agents,
     });
     return triggerOnly
       ? items.filter((item) => item.category === "Trigger")
       : items;
-  }, [agents, mcpTools, triggerOnly, triggers.length]);
+  }, [agents, hostedTools, mcpTools, triggerOnly, triggers.length]);
   const normalizedQuery = query.trim().toLowerCase();
   const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean);
   const matchesCatalogQuery = (item: AddStepCatalogItem) => {
@@ -3493,7 +3588,15 @@ function AddStepDialog({
   const categories = useMemo(
     () =>
       (
-        ["Trigger", "Built-in", "Transformers", "Logic", "AI", "Tools"] as const
+        [
+          "Trigger",
+          "Built-in",
+          "Transformers",
+          "Logic",
+          "AI",
+          "Hosted Tools",
+          "Tools",
+        ] as const
       ).filter((item) =>
         catalog.some(
           (step) => step.category === item && matchesCatalogQuery(step),
@@ -3517,7 +3620,9 @@ function AddStepDialog({
     filteredCatalog.find((item) => item.id === previewItemId) ??
     filteredCatalog[0] ??
     catalog[0];
-  const catalogCount = triggerOnly ? 0 : mcpTools.length + agents.length;
+  const catalogCount = triggerOnly
+    ? 0
+    : mcpTools.length + hostedTools.length + agents.length;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -3738,6 +3843,7 @@ function StepCategoryIcon({ category }: { category: AddStepCategory }) {
   if (category === "Built-in") return <Braces className="size-4" />;
   if (category === "Transformers") return <Code2 className="size-4" />;
   if (category === "AI") return <Bot className="size-4" />;
+  if (category === "Hosted Tools") return <Wrench className="size-4" />;
   if (category === "Tools") return <Workflow className="size-4" />;
   return <GitBranch className="size-4" />;
 }
@@ -3747,6 +3853,7 @@ function StepKindIcon({ kind }: { kind: WorkflowAddPayload["kind"] }) {
   if (kind === "agent") return <Bot className="size-4" />;
   if (kind === "python") return <Code2 className="size-4" />;
   if (kind === "mcp") return <Wrench className="size-4" />;
+  if (kind === "hosted") return <Wrench className="size-4" />;
   if (kind === "set") return <Braces className="size-4" />;
   if (kind === "transform") return <Code2 className="size-4" />;
   if (kind === "log") return <ScrollText className="size-4" />;
@@ -3770,7 +3877,12 @@ function stepKindIconClass(kind: WorkflowAddPayload["kind"]): string {
   ) {
     return "border-plot-red/35 bg-plot-red/10 text-plot-red";
   }
-  if (kind === "agent" || kind === "mcp" || kind === "python") {
+  if (
+    kind === "agent" ||
+    kind === "mcp" ||
+    kind === "hosted" ||
+    kind === "python"
+  ) {
     return "border-signal-blue/30 bg-signal-blue/10 text-signal-blue";
   }
   if (kind === "log") {
@@ -3791,10 +3903,12 @@ function stepKindIconClass(kind: WorkflowAddPayload["kind"]): string {
 function workflowStepCatalog({
   hasTrigger,
   mcpTools,
+  hostedTools,
   agents,
 }: {
   hasTrigger: boolean;
   mcpTools: McpToolSummary[];
+  hostedTools: HostedToolSummary[];
   agents: AgentSummary[];
 }): AddStepCatalogItem[] {
   const builtInItems: AddStepCatalogItem[] = [
@@ -3985,11 +4099,40 @@ function workflowStepCatalog({
             outputs: ["steps.<id>.output.result"],
           },
         ];
+  const hostedItems: AddStepCatalogItem[] =
+    hostedTools.length > 0
+      ? hostedTools.map((tool) => ({
+          id: `hosted:${tool.name}`,
+          label: `${tool.familyName || tool.familyId}/${tool.toolName}`,
+          ariaLabel: `Hosted tool ${tool.name}`,
+          category: "Hosted Tools",
+          description: tool.description || `Call ${tool.name}.`,
+          payload: {
+            kind: "hosted",
+            toolName: tool.name,
+          },
+          inputs: ["toolName", "input"],
+          outputs: ["steps.<id>.output.result"],
+        }))
+      : [
+          {
+            id: "hosted",
+            label: "Hosted Tool",
+            category: "Hosted Tools",
+            description: "Call an OpenAcme hosted integration tool.",
+            payload: { kind: "hosted" },
+            disabled: true,
+            title: "No hosted tools are available for workflows",
+            inputs: ["toolName", "input"],
+            outputs: ["steps.<id>.output.result"],
+          },
+        ];
   return [
     ...builtInItems,
     ...transformerItems,
     ...flowControlItems,
     ...agentItems,
+    ...hostedItems,
     ...mcpItems,
   ];
 }
@@ -4037,6 +4180,9 @@ function parseWorkflowPalettePayload(
         ? { server: parsed["server"] }
         : {}),
       ...(typeof parsed["tool"] === "string" ? { tool: parsed["tool"] } : {}),
+      ...(typeof parsed["toolName"] === "string"
+        ? { toolName: parsed["toolName"] }
+        : {}),
       ...(typeof parsed["agentId"] === "string"
         ? { agentId: parsed["agentId"] }
         : {}),
@@ -4063,6 +4209,7 @@ function isWorkflowPaletteKind(value: unknown): value is WorkflowPaletteKind {
     value === "parallel" ||
     value === "python" ||
     value === "mcp" ||
+    value === "hosted" ||
     value === "agent"
   );
 }
@@ -4179,6 +4326,7 @@ type NodeCardProps = {
     value: string | boolean,
   ) => void;
   mcpTools: McpToolSummary[];
+  hostedTools: HostedToolSummary[];
   agents: AgentSummary[];
   onMcpToolConfigChange: (
     field: "server" | "tool" | "input" | "timeoutMs",
@@ -4186,6 +4334,12 @@ type NodeCardProps = {
   ) => void;
   onMcpToolSelect: (server: string, tool: string) => void;
   onMcpSchemaInputChange: (key: string, value: string) => void;
+  onHostedToolConfigChange: (
+    field: "toolName" | "input" | "timeoutMs",
+    value: string,
+  ) => void;
+  onHostedToolSelect: (toolName: string) => void;
+  onHostedSchemaInputChange: (key: string, value: string) => void;
   onAgentConfigChange: (
     field: "agentId" | "prompt" | "input" | "timeoutMs",
     value: string,
@@ -5218,10 +5372,14 @@ function NodeCard({
   onParallelConfigChange,
   onPythonConfigChange,
   mcpTools,
+  hostedTools,
   agents,
   onMcpToolConfigChange,
   onMcpToolSelect,
   onMcpSchemaInputChange,
+  onHostedToolConfigChange,
+  onHostedToolSelect,
+  onHostedSchemaInputChange,
   onAgentConfigChange,
   readOnly = false,
   showMetadata = true,
@@ -5240,6 +5398,7 @@ function NodeCard({
   const parallel = parallelControl(node);
   const python = pythonControl(node);
   const mcpTool = mcpToolControl(node);
+  const hostedTool = hostedToolControl(node);
   const agentCall = agentCallControl(node);
   const selectedMcpTool =
     mcpTool === null
@@ -5249,6 +5408,13 @@ function NodeCard({
             tool.server === mcpTool.server && tool.tool === mcpTool.tool,
         );
   const mcpSchemaFields = mcpSchemaInputFields(selectedMcpTool?.inputSchema);
+  const selectedHostedTool =
+    hostedTool === null
+      ? undefined
+      : hostedTools.find((tool) => tool.name === hostedTool.toolName);
+  const hostedSchemaFields = mcpSchemaInputFields(
+    selectedHostedTool?.inputSchema,
+  );
   const label = node.label ?? node.id;
   const [nodeIdDraft, setNodeIdDraft] = useState(node.id);
   const [switchValueQuoteWarning, setSwitchValueQuoteWarning] = useState<
@@ -6121,6 +6287,113 @@ function NodeCard({
           </label>
         </InspectorSection>
       )}
+      {hostedTool && (
+        <InspectorSection title="Hosted Tool" defaultOpen>
+          <div className="grid gap-3">
+            {hostedTools.length > 0 && (
+              <label className="grid gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                  Available
+                </span>
+                <Select
+                  value={hostedTool.toolName}
+                  onValueChange={(value) => onHostedToolSelect(value)}
+                >
+                  <SelectTrigger
+                    size="sm"
+                    aria-label={`${label} hosted tool picker`}
+                  >
+                    <SelectValue placeholder="Select hosted tool" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {hostedTools.map((tool) => (
+                      <SelectItem key={tool.name} value={tool.name}>
+                        {tool.familyName || tool.familyId}/{tool.toolName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+            )}
+            <label className="grid gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                Tool name
+              </span>
+              <Input
+                aria-label={`${label} hosted tool name`}
+                value={hostedTool.toolName}
+                onChange={(event) =>
+                  onHostedToolConfigChange("toolName", event.target.value)
+                }
+              />
+            </label>
+            <label className="grid gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                Timeout ms
+              </span>
+              <TimeoutMsInput
+                ariaLabel={`${label} hosted timeout`}
+                value={hostedTool.timeoutMs}
+                min={100}
+                onCommit={(value) =>
+                  onHostedToolConfigChange("timeoutMs", value)
+                }
+              />
+            </label>
+          </div>
+          {hostedSchemaFields.length > 0 && (
+            <div className="grid gap-2">
+              <div className="flex items-center justify-between gap-2">
+                <SectionEyebrow>Schema Input</SectionEyebrow>
+                <Badge variant="outline">
+                  {hostedSchemaFields.length} fields
+                </Badge>
+              </div>
+              <div className="grid gap-2">
+                {hostedSchemaFields.map((field) => (
+                  <label key={field.name} className="grid gap-1">
+                    <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+                      {field.name}
+                      {field.required && (
+                        <Badge variant="secondary">required</Badge>
+                      )}
+                      {field.type && (
+                        <Badge variant="outline">{field.type}</Badge>
+                      )}
+                    </span>
+                    <ReferenceInput
+                      aria-label={`${label} hosted schema ${field.name}`}
+                      value={hostedTool.inputValues[field.name] ?? ""}
+                      suggestions={referenceSuggestions}
+                      onChange={(event) =>
+                        onHostedSchemaInputChange(
+                          field.name,
+                          event.target.value,
+                        )
+                      }
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+          <label className="grid gap-1">
+            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint">
+              Input JSON
+            </span>
+            <ReferenceTextarea
+              aria-label={`${label} hosted input JSON`}
+              value={hostedTool.input}
+              suggestions={referenceSuggestions}
+              rows={8}
+              onChange={(event) =>
+                onHostedToolConfigChange("input", event.target.value)
+              }
+              className="min-h-40 font-mono text-xs leading-relaxed"
+            />
+          </label>
+        </InspectorSection>
+      )}
       {agentCall && (
         <InspectorSection title="Agent Call" defaultOpen>
           <div className="grid gap-3">
@@ -6219,6 +6492,7 @@ function readonlyNodeCardProps(
   node: WorkflowNode,
   referenceSuggestions: WorkflowReferenceSuggestion[],
   mcpTools: McpToolSummary[],
+  hostedTools: HostedToolSummary[],
   agents: AgentSummary[],
 ): NodeCardProps {
   const noop = () => undefined;
@@ -6247,10 +6521,14 @@ function readonlyNodeCardProps(
     onParallelConfigChange: noop,
     onPythonConfigChange: noop,
     mcpTools,
+    hostedTools,
     agents,
     onMcpToolConfigChange: noop,
     onMcpToolSelect: noop,
     onMcpSchemaInputChange: noop,
+    onHostedToolConfigChange: noop,
+    onHostedToolSelect: noop,
+    onHostedSchemaInputChange: noop,
     onAgentConfigChange: noop,
     readOnly: true,
     showMetadata: false,
@@ -6264,6 +6542,7 @@ function RunConsole({
   selectedStep,
   referenceSuggestions,
   mcpTools,
+  hostedTools,
   agents,
   pendingRunId,
   busy,
@@ -6281,6 +6560,7 @@ function RunConsole({
   selectedStep: WorkflowStepAttempt | null;
   referenceSuggestions: WorkflowReferenceSuggestion[];
   mcpTools: McpToolSummary[];
+  hostedTools: HostedToolSummary[];
   agents: AgentSummary[];
   pendingRunId: string | null;
   busy: string | null;
@@ -6372,9 +6652,10 @@ function RunConsole({
               detail={detail}
               step={selectedStep}
               runId={detail.run.id}
-              referenceSuggestions={referenceSuggestions}
-              mcpTools={mcpTools}
-              agents={agents}
+                  referenceSuggestions={referenceSuggestions}
+                  mcpTools={mcpTools}
+                  hostedTools={hostedTools}
+                  agents={agents}
             />
           </section>
         ) : (
@@ -6877,6 +7158,7 @@ function StepDetailPanel({
   runId,
   referenceSuggestions,
   mcpTools,
+  hostedTools,
   agents,
 }: {
   detail: RunDetail;
@@ -6884,6 +7166,7 @@ function StepDetailPanel({
   runId: string;
   referenceSuggestions: WorkflowReferenceSuggestion[];
   mcpTools: McpToolSummary[];
+  hostedTools: HostedToolSummary[];
   agents: AgentSummary[];
 }) {
   const nodeType = stepNodeType(detail, step);
@@ -6897,6 +7180,7 @@ function StepDetailPanel({
         runSnapshotNode,
         referenceSuggestions,
         mcpTools,
+        hostedTools,
         agents,
       )
     : null;
@@ -7149,6 +7433,11 @@ function outputFieldSpecsForNode(node: WorkflowNode): OutputFieldSpec[] {
       return [
         { path: "server", label: "Server", type: "string" },
         { path: "tool", label: "Tool", type: "string" },
+        { path: "result", label: "Result", type: "json" },
+      ];
+    case "hosted.tool":
+      return [
+        { path: "toolName", label: "Tool name", type: "string" },
         { path: "result", label: "Result", type: "json" },
       ];
     case "agent.call":
@@ -8017,6 +8306,30 @@ function validateImportedNodeShape(
       validateAssignmentMap(errors, node, displayId, true);
       continue;
     }
+    if (type === "builtin.output.set") {
+      if (
+        typeof node.path !== "string" ||
+        !ASSIGNMENT_TARGET_PATTERN.test(node.path)
+      ) {
+        errors.push(
+          `Imported workflow node ${displayId} output path must be a dotted context path`,
+        );
+      }
+      if (node.value === undefined) {
+        errors.push(`Imported workflow node ${displayId} needs output value`);
+      }
+      if (
+        node.mode !== undefined &&
+        node.mode !== "replace" &&
+        node.mode !== "merge" &&
+        node.mode !== "append"
+      ) {
+        errors.push(
+          `Imported workflow node ${displayId} output mode is invalid`,
+        );
+      }
+      continue;
+    }
     if (isWorkflowTransformNodeType(type)) {
       validateInputMap(errors, node, displayId);
       validateAssignmentMap(errors, node, displayId, false);
@@ -8217,6 +8530,17 @@ function validateImportedNodeShape(
       }
       if (typeof node.tool !== "string" || !node.tool.trim()) {
         errors.push(`Imported workflow node ${displayId} needs an MCP tool`);
+      }
+      validateTimeout(errors, node, displayId, 100);
+      continue;
+    }
+    if (type === "hosted.tool") {
+      validateInputMap(errors, node, displayId);
+      validateAssignmentMap(errors, node, displayId, false);
+      if (typeof node.toolName !== "string" || !node.toolName.trim()) {
+        errors.push(
+          `Imported workflow node ${displayId} needs a hosted tool name`,
+        );
       }
       validateTimeout(errors, node, displayId, 100);
       continue;
@@ -8553,6 +8877,7 @@ function nodeTypeDisplayName(node: WorkflowNode): string {
   if (node.type === "builtin.sleep") return "Sleep";
   if (node.type === "builtin.python") return "Python";
   if (node.type === "mcp.tool") return "MCP tool";
+  if (node.type === "hosted.tool") return "Hosted tool";
   if (node.type === "agent.call") return "Agent call";
   if (node.type.startsWith("builtin.log.")) {
     return `${capitalizeWord(node.type.slice("builtin.log.".length))} log`;
@@ -8682,6 +9007,8 @@ function workflowNodeOutputReferenceSuggestions(
       return [{ path: "value", detail: "Step output value" }];
     case "mcp.tool":
       return [{ path: "result", detail: "MCP raw tool result" }];
+    case "hosted.tool":
+      return [{ path: "result", detail: "Hosted raw tool result" }];
     case "agent.call":
       return [
         { path: "response", detail: "Agent text response" },
@@ -9227,6 +9554,21 @@ function mcpToolControl(node: WorkflowNode): {
   return {
     server: typeof node.server === "string" ? node.server : "",
     tool: typeof node.tool === "string" ? node.tool : "",
+    timeoutMs: typeof node.timeoutMs === "number" ? String(node.timeoutMs) : "",
+    input: formatJsonObjectInput(node.input),
+    inputValues: stringInputValues(node.input),
+  };
+}
+
+function hostedToolControl(node: WorkflowNode): {
+  toolName: string;
+  timeoutMs: string;
+  input: string;
+  inputValues: Record<string, string>;
+} | null {
+  if (node.type !== "hosted.tool") return null;
+  return {
+    toolName: typeof node.toolName === "string" ? node.toolName : "",
     timeoutMs: typeof node.timeoutMs === "number" ? String(node.timeoutMs) : "",
     input: formatJsonObjectInput(node.input),
     inputValues: stringInputValues(node.input),

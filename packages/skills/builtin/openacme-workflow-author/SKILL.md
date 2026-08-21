@@ -5,30 +5,31 @@ description: Create, edit, save, test, publish, import, export, and validate Ope
 
 # OpenAcme Workflow Author
 
-Use this skill to build OpenAcme workflows in the platform repository without
-rediscovering the workflow schema, UI/API flow, or validation practice.
+Use this skill to build OpenAcme workflows without rediscovering the workflow
+schema, tool surface, UI/API flow, or validation practice.
 
 ## Start Here
 
-1. Work from the repo root or the active worktree.
-2. Read the current workflow contracts before editing:
-   - `docs/workflow-engine-plan.md`
-   - `docs/workflow-flow-control-capabilities-plan.md`
-   - `packages/workflows/src/schemas.ts`
-   - `packages/workflows/src/validation.ts`
-   - `packages/server/src/routes/workflows.ts`
-   - `apps/web/app/routes/workflows.tsx`
-3. For detailed authoring rules, read
+1. When first-class `workflow_*` tools are available, use them as the source of
+   truth for authoring. Start with `workflow_help`, then
+   `workflow_card_catalog`.
+2. Use `workflow_tool_inventory` before MCP or Hosted Tool cards and
+   `workflow_agent_inventory` before agent-call cards. Do not assume an agent
+   already knows every MCP tool, hosted tool, tool description, input schema,
+   or callable agent id.
+3. Inspect platform source files only when you are developing the workflow
+   platform itself, not when authoring routine workflow definitions.
+4. For detailed authoring rules, read
    `references/workflow-authoring.md`.
-4. Use `rg` to confirm current names and endpoints; workflow code is moving
-   quickly.
+5. If tool-backed help is wrong or incomplete and you are the Workflow Engineer
+   or an admin context, correct it with `workflow_help_upsert`.
 
 ## Authoring Loop
 
 Human UI workflows and agent workflows must have parity. If a human can do a
-workflow lifecycle operation in `/workflows`, an agent should know the API or
-JSON import/export path for the same operation. Do not leave an operation
-documented only as a UI click.
+workflow lifecycle operation in `/workflows`, an agent should know the
+first-class `workflow_*` tool path for the same operation. Do not leave an
+operation documented only as a UI click.
 
 Use this loop for every workflow you create or materially edit:
 
@@ -36,29 +37,39 @@ Use this loop for every workflow you create or materially edit:
    workflow input contract as JSON Schema. Use normal JSON Schema object
    patterns for nested data; arrays of complex objects must define
    `items.type = "object"`, `items.required`, and `items.properties`.
-2. Draft the workflow as JSON first. Use safe ids:
+2. Call `workflow_help` for overview, reference syntax, schema, run evidence,
+   and promotion guidance. Request parameter-specific help when an input schema
+   or card field is unclear.
+3. Call `workflow_card_catalog` before choosing cards. Treat its card types,
+   `configSchema`, `defaultConfig`, `routePorts`, `outputSchema`, and examples
+   as the source of truth for authoring.
+4. Draft the workflow as JSON first. Use safe ids:
    `[A-Za-z0-9][A-Za-z0-9_.-]*`.
-3. Discover external inventory before using MCP tools or agent calls:
-   `GET /api/workflows/mcp/tools` for MCP `server`, `tool`, `description`, and
-   `inputSchema`; `GET /api/workflows/agents` for callable agents. Treat these
-   responses as the runtime source of truth and refresh them before authoring or
-   validating external-call nodes. Do not assume an agent already knows all
-   available MCP tools.
-4. Add nodes in execution order, then add explicit route references:
+5. Discover external inventory before using MCP tools, Hosted Tools, or agent
+   calls: `workflow_tool_inventory` for MCP `server`, `tool`, `description`,
+   and `inputSchema`, plus hosted `toolName`, `description`, and `inputSchema`;
+   `workflow_agent_inventory` for callable agents. Treat these responses as the
+   runtime source of truth and refresh them before authoring or validating
+   external-call nodes. Do not assume an agent already knows all available MCP
+   or hosted tools.
+6. Prefer deterministic cards and flow control. Call agents only when the
+   requested task needs judgment or deterministic transforms/tools cannot
+   satisfy the requirement.
+7. Add nodes in execution order, then add explicit route references:
    `builtin.if` true/false, `builtin.switch` case/default, `builtin.foreach`
    body, and `builtin.parallel` branch references. Use `builtin.if` for new
    branching workflows; do not create new `builtin.if_else` definitions.
    Do not rely on adjacent `nodes[]` entries for execution. Normal card-to-card
    continuation must be stored as `source.next = ["target"]`; without that edge,
    the later card is not part of the execution chain.
-5. Use the canonical reference roots: `$.workflowTrigger.input` for the
+8. Use the canonical reference roots: `$.workflowTrigger.input` for the
    run-start payload, `$.workflowTrigger.meta` for trigger provenance,
    `$.context` for run variables, and `$.steps.<nodeId>.input/output/status/error`
    for per-card evidence.
-6. Step ids are human-editable stable slugs. Labels may contain spaces; when a
+9. Step ids are human-editable stable slugs. Labels may contain spaces; when a
    label changes, the UI derives a clean id and updates `$.steps.<oldId>`
    references automatically.
-7. Treat every step output as inspectable under `$.steps.<nodeId>.output`, but
+10. Treat every step output as inspectable under `$.steps.<nodeId>.output`, but
    use the node-type-specific fields from the standard output contract in
    `references/workflow-authoring.md`. For example, transformer values are at
    `$.steps.<nodeId>.output.value`, MCP raw results are at
@@ -68,16 +79,53 @@ Use this loop for every workflow you create or materially edit:
    `builtin.transform.object_pick`, `builtin.transform.json_parse`, or
    `builtin.transform.uri_parse`. The node type must match `transform.kind`.
    Persist reusable variables with an explicit `builtin.set` node.
-8. Save the draft through the API or import/export JSON path. Human operators
-   may use the UI; workflow-authoring agents should not use Playwright to
-   create definitions.
-9. Run a draft test run and inspect the run console.
-10. Fix step input/output, variables, and trigger input until the run trace is
+11. Make the caller-facing workflow output explicit with `builtin.output.set`
+    when the workflow will be consumed by another agent, UI, or API caller.
+12. Call `workflow_validate` before saving. Use
+   `{ "mode": "candidate", "candidate": <create body> }` before create,
+   `{ "mode": "saved", "workflow_id": "<id>" }` for an existing draft, or
+   `{ "mode": "definition", "definition": <full definition> }` for a stored or
+   exported definition. Fix every issue before continuing.
+13. Save the draft through `workflow_create`, `workflow_update`, or
+    `workflow_import`. Human operators may use the UI; workflow-authoring
+    agents should not use Playwright to create definitions.
+14. Run risky or newly configured cards with `workflow_card_test_run` before
+    relying on full-run behavior.
+15. Use `workflow_test_run({ "stop_after_step_id": "<id>" })` to test up to a
+    checkpoint without executing the rest of the workflow.
+16. Run a full draft test through `workflow_test_run` and inspect summary-first
+    evidence through
+    `workflow_run_get`.
+17. Fix step input/output, variables, and trigger input until the run trace is
     explainable.
-11. Publish only after local validation and a passing test run.
-12. Run the published trigger path when the workflow is meant to be live.
-13. Export the definition when a reusable artifact is needed.
-14. Update docs or task notes with exact commands, run ids, and evidence.
+18. Publish through `workflow_publish` only after validation and a successful
+    full test run for the current draft. Partial stop-after tests do not satisfy
+    the publish gate.
+19. Export through `workflow_export` when a reusable artifact is needed.
+20. Use `workflow_run_list`, `workflow_run_get`, `workflow_run_cancel`,
+    `workflow_run_rerun`, and `workflow_artifact_get` for run history,
+    cancellation, reruns, and large output inspection.
+21. Update docs or task notes with exact tool calls, run ids, and evidence.
+
+## Normal Agent Consumption
+
+Normal agents that only need to use workflows should receive the consumer tool
+subset, not the authoring tools:
+
+- `workflow_help`
+- `workflow_callable_list`
+- `workflow_callable_get`
+- `workflow_run`
+- `workflow_run_get`
+- `workflow_artifact_get`
+
+They should discover published callables with `workflow_callable_list`, inspect
+input/output contracts with `workflow_callable_get`, run only published
+workflows through `workflow_run`, then inspect summary-first evidence with
+`workflow_run_get`. They must not receive `workflow_create`, `workflow_update`,
+`workflow_delete`, `workflow_publish`, `workflow_test_run`,
+`workflow_card_test_run`, or `workflow_help_upsert` unless they are acting as
+Workflow Engineer or an admin authoring context.
 
 ## Required Validation
 

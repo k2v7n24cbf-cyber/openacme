@@ -41,9 +41,22 @@ export interface WorkflowJsonSchemaIssue {
   message: string;
 }
 
+export interface WorkflowJsonSchemaValueIssue {
+  path: string;
+  message: string;
+}
+
 export type WorkflowJsonSchemaValidation =
   | { ok: true; issues: [] }
   | { ok: false; issues: WorkflowJsonSchemaIssue[]; message: string };
+
+export type WorkflowJsonSchemaValueValidation =
+  | { ok: true }
+  | {
+      ok: false;
+      issue: WorkflowJsonSchemaValueIssue;
+      message: string;
+    };
 
 export type WorkflowInputSchemaValidation =
   | { ok: true }
@@ -272,6 +285,12 @@ export function validateWorkflowDefinitionAuthoring(
   const workflowSchema = validateWorkflowJsonSchema(definition.inputSchema);
   if (!workflowSchema.ok) return workflowSchema;
 
+  const outputSchema = validateWorkflowJsonSchema(
+    definition.outputSchema,
+    "Output schema",
+  );
+  if (!outputSchema.ok) return outputSchema;
+
   for (const trigger of definition.triggers) {
     const triggerSchema = validateWorkflowJsonSchema(
       workflowTriggerInputSchema(trigger),
@@ -323,7 +342,39 @@ export function validateWorkflowInputSchema(
   if (!isRecord(schema)) return { ok: true };
   const issue = validateJsonSchemaValue(schema, input, "$");
   return issue
-    ? { ok: false, error: `${label} does not match schema: ${issue}` }
+    ? {
+        ok: false,
+        error: `${label} does not match schema: ${formatJsonSchemaValueIssue(
+          issue,
+        )}`,
+      }
+    : { ok: true };
+}
+
+export function validateWorkflowJsonSchemaValue(
+  schema: JsonValue | undefined,
+  value: JsonValue,
+  path = "$",
+): WorkflowJsonSchemaValueValidation {
+  const schemaValidation = validateWorkflowJsonSchema(schema, `${path} schema`);
+  if (!schemaValidation.ok) {
+    return {
+      ok: false,
+      issue: { path, message: schemaValidation.message },
+      message: schemaValidation.message,
+    };
+  }
+  if (schema === undefined || schema === null || schema === true) {
+    return { ok: true };
+  }
+  if (schema === false) {
+    const issue = { path, message: "is disallowed" };
+    return { ok: false, issue, message: formatJsonSchemaValueIssue(issue) };
+  }
+  if (!isRecord(schema)) return { ok: true };
+  const issue = validateJsonSchemaValue(schema, value, path);
+  return issue
+    ? { ok: false, issue, message: formatJsonSchemaValueIssue(issue) }
     : { ok: true };
 }
 
@@ -590,15 +641,18 @@ function validateJsonSchemaValue(
   schema: Record<string, unknown>,
   value: JsonValue,
   path: string,
-): string | null {
+): WorkflowJsonSchemaValueIssue | null {
   if ("const" in schema && !jsonEquals(value, schema.const)) {
-    return `${path} must equal ${JSON.stringify(schema.const)}`;
+    return { path, message: `must equal ${JSON.stringify(schema.const)}` };
   }
   if (
     Array.isArray(schema.enum) &&
     !schema.enum.some((item) => jsonEquals(value, item))
   ) {
-    return `${path} must be one of ${JSON.stringify(schema.enum)}`;
+    return {
+      path,
+      message: `must be one of ${JSON.stringify(schema.enum)}`,
+    };
   }
   const typeIssue = validateJsonSchemaType(schema.type, value, path);
   if (typeIssue) return typeIssue;
@@ -608,28 +662,31 @@ function validateJsonSchemaValue(
       typeof schema.minLength === "number" &&
       value.length < schema.minLength
     ) {
-      return `${path} must have length >= ${schema.minLength}`;
+      return { path, message: `must have length >= ${schema.minLength}` };
     }
     if (
       typeof schema.maxLength === "number" &&
       value.length > schema.maxLength
     ) {
-      return `${path} must have length <= ${schema.maxLength}`;
+      return { path, message: `must have length <= ${schema.maxLength}` };
     }
     if (
       typeof schema.pattern === "string" &&
       !new RegExp(schema.pattern).test(value)
     ) {
-      return `${path} must match pattern ${JSON.stringify(schema.pattern)}`;
+      return {
+        path,
+        message: `must match pattern ${JSON.stringify(schema.pattern)}`,
+      };
     }
   }
 
   if (typeof value === "number") {
     if (typeof schema.minimum === "number" && value < schema.minimum) {
-      return `${path} must be >= ${schema.minimum}`;
+      return { path, message: `must be >= ${schema.minimum}` };
     }
     if (typeof schema.maximum === "number" && value > schema.maximum) {
-      return `${path} must be <= ${schema.maximum}`;
+      return { path, message: `must be <= ${schema.maximum}` };
     }
   }
 
@@ -640,7 +697,9 @@ function validateJsonSchemaValue(
         )
       : [];
     for (const key of required) {
-      if (!(key in value)) return `${path}.${key} is required`;
+      if (!(key in value)) {
+        return { path: `${path}.${key}`, message: "is required" };
+      }
     }
     const properties = isRecord(schema.properties) ? schema.properties : {};
     for (const [key, childSchema] of Object.entries(properties)) {
@@ -655,7 +714,9 @@ function validateJsonSchemaValue(
     if (schema.additionalProperties === false) {
       const allowed = new Set(Object.keys(properties));
       const extra = Object.keys(value).find((key) => !allowed.has(key));
-      if (extra) return `${path}.${extra} is not allowed`;
+      if (extra) {
+        return { path: `${path}.${extra}`, message: "is not allowed" };
+      }
     } else if (isJsonSchemaObject(schema.additionalProperties)) {
       const allowed = new Set(Object.keys(properties));
       for (const [key, childValue] of Object.entries(value)) {
@@ -672,13 +733,19 @@ function validateJsonSchemaValue(
 
   if (Array.isArray(value)) {
     if (typeof schema.minItems === "number" && value.length < schema.minItems) {
-      return `${path} must contain at least ${schema.minItems} items`;
+      return {
+        path,
+        message: `must contain at least ${schema.minItems} items`,
+      };
     }
     if (typeof schema.maxItems === "number" && value.length > schema.maxItems) {
-      return `${path} must contain at most ${schema.maxItems} items`;
+      return {
+        path,
+        message: `must contain at most ${schema.maxItems} items`,
+      };
     }
     if (schema.items === false && value.length > 0) {
-      return `${path} must not contain items`;
+      return { path, message: "must not contain items" };
     }
     if (isJsonSchemaObject(schema.items)) {
       for (let index = 0; index < value.length; index += 1) {
@@ -699,7 +766,7 @@ function validateJsonSchemaType(
   type: unknown,
   value: JsonValue,
   path: string,
-): string | null {
+): WorkflowJsonSchemaValueIssue | null {
   if (type === undefined) return null;
   const allowed = Array.isArray(type)
     ? type.filter(isJsonSchemaType)
@@ -709,7 +776,13 @@ function validateJsonSchemaType(
   if (allowed.length === 0) return null;
   return allowed.some((item) => jsonSchemaTypeMatches(item, value))
     ? null
-    : `${path} must be ${allowed.join("|")}`;
+    : { path, message: `must be ${allowed.join("|")}` };
+}
+
+function formatJsonSchemaValueIssue(
+  issue: WorkflowJsonSchemaValueIssue,
+): string {
+  return `${issue.path} ${issue.message}`;
 }
 
 const JSON_SCHEMA_TYPES = new Set([

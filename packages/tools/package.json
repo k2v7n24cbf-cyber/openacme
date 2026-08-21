@@ -45,6 +45,7 @@
     "@openacme/hosted-integrations": "workspace:*",
     "@openacme/memory": "workspace:*",
     "@openacme/tasks": "workspace:*",
+    "@openacme/workflows": "workspace:*",
     "jimp": "^1.6.0",
     "jsdom": "^25.0.1",
     "turndown": "^7.2.0",

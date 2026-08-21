@@ -36,6 +36,7 @@ export interface WorkflowDraftInput {
   name: string;
   description?: string | null;
   inputSchema?: JsonValue;
+  outputSchema?: JsonValue;
   triggers?: WorkflowTrigger[];
   nodes?: WorkflowNode[];
   ui?: WorkflowDefinition["ui"];
@@ -46,6 +47,7 @@ export interface WorkflowDraftUpdate {
   name?: string;
   description?: string | null;
   inputSchema?: JsonValue | null;
+  outputSchema?: JsonValue | null;
   triggers?: WorkflowTrigger[];
   nodes?: WorkflowNode[];
   ui?: WorkflowDefinition["ui"] | null;
@@ -193,6 +195,7 @@ export function createWorkflowStore(
           name: input.name,
           description: input.description ?? undefined,
           inputSchema: input.inputSchema,
+          outputSchema: input.outputSchema,
           triggers: input.triggers,
           nodes: input.nodes ?? [],
           ui: input.ui,
@@ -203,10 +206,12 @@ export function createWorkflowStore(
       db.prepare(
         `INSERT INTO workflow_definitions
          (id, status, current_version, name, description, input_schema_json,
-          triggers_json, nodes_json, ui_json, created_at, updated_at)
+          output_schema_json, triggers_json, nodes_json, ui_json, created_at,
+          updated_at)
          VALUES
          (@id, @status, @currentVersion, @name, @description, @inputSchemaJson,
-          @triggersJson, @nodesJson, @uiJson, @createdAt, @updatedAt)`,
+          @outputSchemaJson, @triggersJson, @nodesJson, @uiJson, @createdAt,
+          @updatedAt)`,
       ).run(definitionToParams(definition));
       return definition;
     },
@@ -250,6 +255,10 @@ export function createWorkflowStore(
             patch.inputSchema === null
               ? undefined
               : (patch.inputSchema ?? current.inputSchema),
+          outputSchema:
+            patch.outputSchema === null
+              ? undefined
+              : (patch.outputSchema ?? current.outputSchema),
           triggers: patch.triggers ?? current.triggers,
           nodes: patch.nodes ?? current.nodes,
           ui: patch.ui === null ? undefined : (patch.ui ?? current.ui),
@@ -262,6 +271,7 @@ export function createWorkflowStore(
              name = @name,
              description = @description,
              input_schema_json = @inputSchemaJson,
+             output_schema_json = @outputSchemaJson,
              triggers_json = @triggersJson,
              nodes_json = @nodesJson,
              ui_json = @uiJson,
@@ -273,6 +283,7 @@ export function createWorkflowStore(
         name: updated.name,
         description: updated.description ?? null,
         inputSchemaJson: maybeStringify(updated.inputSchema),
+        outputSchemaJson: maybeStringify(updated.outputSchema),
         triggersJson: stringify(updated.triggers),
         nodesJson: stringify(updated.nodes),
         uiJson: maybeStringify(updated.ui),
@@ -332,10 +343,10 @@ export function createWorkflowStore(
         db.prepare(
           `INSERT INTO workflow_versions
            (workflow_id, version, name, description, input_schema_json,
-            triggers_json, nodes_json, ui_json, created_at)
+            output_schema_json, triggers_json, nodes_json, ui_json, created_at)
            VALUES
            (@workflowId, @version, @name, @description, @inputSchemaJson,
-            @triggersJson, @nodesJson, @uiJson, @createdAt)`,
+            @outputSchemaJson, @triggersJson, @nodesJson, @uiJson, @createdAt)`,
         ).run(versionToParams(published, now));
         db.prepare(
           `UPDATE workflow_definitions
@@ -835,6 +846,7 @@ function definitionToParams(def: WorkflowDefinition) {
     name: def.name,
     description: def.description ?? null,
     inputSchemaJson: maybeStringify(def.inputSchema),
+    outputSchemaJson: maybeStringify(def.outputSchema),
     triggersJson: stringify(def.triggers),
     nodesJson: stringify(def.nodes),
     uiJson: maybeStringify(def.ui),
@@ -850,6 +862,7 @@ function versionToParams(def: WorkflowDefinition, createdAt: string) {
     name: def.name,
     description: def.description ?? null,
     inputSchemaJson: maybeStringify(def.inputSchema),
+    outputSchemaJson: maybeStringify(def.outputSchema),
     triggersJson: stringify(def.triggers),
     nodesJson: stringify(def.nodes),
     uiJson: maybeStringify(def.ui),
@@ -887,6 +900,7 @@ function definitionFromRow(row: WorkflowDefinitionRaw): WorkflowDefinition {
       name: row.name,
       description: row.description ?? undefined,
       inputSchema: parseOptionalJson(row.input_schema_json),
+      outputSchema: parseOptionalJson(row.output_schema_json),
       triggers: parseJson(row.triggers_json),
       nodes: parseJson(row.nodes_json),
       ui: parseOptionalJson(row.ui_json),
@@ -905,6 +919,7 @@ function definitionFromVersionRow(row: WorkflowVersionRaw): WorkflowDefinition {
       name: row.name,
       description: row.description ?? undefined,
       inputSchema: parseOptionalJson(row.input_schema_json),
+      outputSchema: parseOptionalJson(row.output_schema_json),
       triggers: parseJson(row.triggers_json),
       nodes: parseJson(row.nodes_json),
       ui: parseOptionalJson(row.ui_json),
@@ -1369,6 +1384,7 @@ interface WorkflowDefinitionRaw {
   name: string;
   description: string | null;
   input_schema_json: string | null;
+  output_schema_json: string | null;
   triggers_json: string;
   nodes_json: string;
   ui_json: string | null;
@@ -1382,6 +1398,7 @@ interface WorkflowVersionRaw {
   name: string;
   description: string | null;
   input_schema_json: string | null;
+  output_schema_json: string | null;
   triggers_json: string;
   nodes_json: string;
   ui_json: string | null;

@@ -475,6 +475,7 @@ export async function createApp(
   registerSessionTimelineRoutes(app, manager);
   registerWorkflowRoutes(app, runtime.workflowStore, {
     ports: runtime.workflowExecutionPorts,
+    runAbortControllers: runtime.workflowRunAbortControllers,
   });
 
   app.get("/api/sessions/:id", (c) => {

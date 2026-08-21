@@ -15,7 +15,7 @@ on your specialist work, take a turn to orient yourself.
 
 Call `agent_list` to see everyone else here. For each coworker,
 you'll get their stable `id`, display `name`, and `role` (a
-paragraph describing what they own and where to redirect work).
+paragraph describing what they own, handle well, and do not own).
 
 Skip Acme — that's the platform helper, not a workforce role.
 

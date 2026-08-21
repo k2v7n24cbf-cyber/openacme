@@ -770,6 +770,7 @@ function workflowNodeIcon(data: WorkflowCanvasNodeData): LucideIcon {
   if (data.kind === "trigger") return WorkflowIcon;
   if (data.type === "agent.call") return Bot;
   if (data.type === "mcp.tool") return Wrench;
+  if (data.type === "hosted.tool") return Wrench;
   if (data.type === "builtin.if" || data.type === "builtin.switch") {
     return GitBranch;
   }
@@ -791,6 +792,7 @@ function workflowNodeIconLabel(data: WorkflowCanvasNodeData): string {
   if (data.kind === "trigger") return "Workflow trigger";
   if (data.type === "agent.call") return "Agent step";
   if (data.type === "mcp.tool") return "MCP tool step";
+  if (data.type === "hosted.tool") return "Hosted tool step";
   if (data.type === "builtin.if" || data.type === "builtin.switch") {
     return "Branch step";
   }
@@ -824,6 +826,7 @@ function workflowNodeIconClass(data: WorkflowCanvasNodeData): string {
   if (
     data.type === "agent.call" ||
     data.type === "mcp.tool" ||
+    data.type === "hosted.tool" ||
     data.type === "builtin.python"
   ) {
     return "border-signal-blue/30 bg-signal-blue/10 text-signal-blue";

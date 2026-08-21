@@ -51,7 +51,7 @@ re-do.
 ## Notes
 
 - **`name`** — display name, any string.
-- **`role`** — third-person paragraph for coworkers (surfaced via `agent_list`). Recommended shape: what they own, what they handle well, where to redirect work that isn't theirs.
+- **`role`** — third-person paragraph for coworkers (surfaced via `agent_list`). Recommended shape: what they own, what they handle well, and what they explicitly do not own. Do not put routing, delegation, or "ask another agent" instructions here.
 - **`agentAskEnabled`** — whether this agent may call `agent_ask` to synchronously ask coworkers for quick answers. Defaults to `true`; set `false` when the agent should only coordinate through durable tasks and comments. Users can change this under Agent → Tools → System tools.
 - **`instantMessagesEnabled`** — whether coworkers may call this agent with `agent_ask` for a direct synchronous answer. Defaults to `true`; set `false` when the agent should only receive durable `task_create` assignments. Users can change this under Agent → Settings → Instant messages.
 - **`model`** — optional. Absent inherits root `config.yaml`'s `model`. Per-agent override is useful for models the agent benefits from specifically (e.g., a researcher on a long-context model).

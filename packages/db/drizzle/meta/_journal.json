@@ -169,6 +169,13 @@
       "when": 1786653964531,
       "tag": "0023_mixed_dreadnoughts",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1787272600000,
+      "tag": "0024_workflow_output_schema",
+      "breakpoints": true
     }
   ]
 }

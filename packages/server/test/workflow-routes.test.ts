@@ -71,6 +71,51 @@ it("lists workflow MCP metadata without exposing builtin tool registry", async (
   });
 });
 
+it("lists workflow hosted tool metadata through the workflow port", async () => {
+  await replaceAppWithWorkflowPorts({
+    hosted: {
+      async listTools() {
+        return [
+          {
+            name: "hosted_qualys__qualys_gav_asset_count",
+            familyId: "qualys",
+            familyName: "Qualys",
+            toolName: "qualys_gav_asset_count",
+            generationId: "gen_1",
+            description: "Count Qualys assets",
+            inputSchema: {
+              type: "object",
+              properties: { filter_body: { type: "object" } },
+            },
+          },
+        ];
+      },
+      async callTool() {
+        return { output: {} };
+      },
+    },
+  });
+
+  const res = await req("/api/workflows/hosted/tools");
+  expect(res.status).toBe(200);
+  expect(await res.json()).toEqual({
+    tools: [
+      {
+        name: "hosted_qualys__qualys_gav_asset_count",
+        familyId: "qualys",
+        familyName: "Qualys",
+        toolName: "qualys_gav_asset_count",
+        generationId: "gen_1",
+        description: "Count Qualys assets",
+        inputSchema: {
+          type: "object",
+          properties: { filter_body: { type: "object" } },
+        },
+      },
+    ],
+  });
+});
+
 it("lists workflow agent metadata through the workflow port", async () => {
   await replaceAppWithWorkflowPorts({
     agent: {

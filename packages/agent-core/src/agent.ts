@@ -249,6 +249,25 @@ function stringifyJsonForEvidence(
   return json;
 }
 
+function stringifyForTokenEstimate(value: unknown): string {
+  const seen = new WeakSet<object>();
+  try {
+    return JSON.stringify(value, (_key, child) => {
+      if (typeof child === "bigint") return child.toString();
+      if (typeof child === "function" || typeof child === "symbol") {
+        return undefined;
+      }
+      if (child && typeof child === "object") {
+        if (seen.has(child)) return "[Circular]";
+        seen.add(child);
+      }
+      return child;
+    });
+  } catch {
+    return "";
+  }
+}
+
 function estimateJsonBytes(
   value: unknown,
   limit: number,
@@ -2209,7 +2228,7 @@ export class Agent {
           // flat per-image cost is for.
           imageTokens += IMAGE_TOKEN_COST;
         } else {
-          chars += JSON.stringify(p).length;
+          chars += stringifyForTokenEstimate(p).length;
         }
       }
     }
@@ -2217,7 +2236,7 @@ export class Agent {
       ? this.config.tools.filter((toolName) => options.toolFilter!.has(toolName))
       : this.config.tools;
     const tools = this.toolRegistry.getVercelTools(new Set(effectiveToolNames));
-    chars += JSON.stringify(tools).length;
+    chars += stringifyForTokenEstimate(tools).length;
     return Math.floor(chars / 4) + imageTokens;
   }
 

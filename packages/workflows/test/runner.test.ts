@@ -126,6 +126,288 @@ describe("WorkflowRunner builtin MVP", () => {
     ]);
   });
 
+  it("does not expose final context as workflow output without an explicit output card", async () => {
+    const result = await new WorkflowRunner().run({
+      runId: "run_no_explicit_output",
+      definition: definition([
+        {
+          id: "set_customer",
+          type: "builtin.set",
+          assign: { customer: "$.workflowTrigger.input.customer" },
+        },
+      ]),
+      input: { customer: "Acme" },
+    });
+
+    expect(result.context).toEqual({ customer: "Acme" });
+    expect(result.output).toEqual({});
+  });
+
+  it("composes explicit workflow output with output.set cards", async () => {
+    const result = await new WorkflowRunner().run({
+      runId: "run_explicit_output",
+      definition: definition([
+        {
+          id: "set_customer",
+          type: "builtin.set",
+          assign: { customer: "$.workflowTrigger.input.customer" },
+          next: ["output_customer"],
+        },
+        {
+          id: "output_customer",
+          type: "builtin.output.set",
+          path: "customer",
+          value: "$.context.customer",
+          mode: "replace",
+          next: ["output_meta_base"],
+        },
+        {
+          id: "output_meta_base",
+          type: "builtin.output.set",
+          path: "meta",
+          value: { source: "test" },
+          mode: "replace",
+          next: ["output_meta"],
+        },
+        {
+          id: "output_meta",
+          type: "builtin.output.set",
+          path: "meta",
+          value: { verified: true },
+          mode: "merge",
+          next: ["output_tags"],
+        },
+        {
+          id: "output_tags",
+          type: "builtin.output.set",
+          path: "tags",
+          value: "first",
+          mode: "append",
+          next: ["output_more_tags"],
+        },
+        {
+          id: "output_more_tags",
+          type: "builtin.output.set",
+          path: "tags",
+          value: "second",
+          mode: "append",
+        },
+      ]),
+      input: { customer: "Acme" },
+    });
+
+    expect(result.output).toEqual({
+      customer: "Acme",
+      meta: { source: "test", verified: true },
+      tags: ["first", "second"],
+    });
+    expect(
+      result.stepAttempts.find((step) => step.nodeId === "output_customer")
+        ?.output,
+    ).toEqual({ path: "customer", value: "Acme", mode: "replace" });
+  });
+
+  it("stops after the requested top-level step without executing downstream steps", async () => {
+    const result = await new WorkflowRunner().run({
+      runId: "run_stop_after_top_level",
+      definition: {
+        id: "wf_runner",
+        version: 1,
+        status: "draft",
+        name: "Runner workflow",
+        triggers: [{ id: "manual", kind: "manual", enabled: true }],
+        nodes: [
+          {
+            id: "start",
+            type: "builtin.log.info",
+            message: "Start",
+            next: ["middle"],
+          },
+          {
+            id: "middle",
+            type: "builtin.log.info",
+            message: "Middle",
+            next: ["after_middle"],
+          },
+          {
+            id: "after_middle",
+            type: "builtin.log.info",
+            message: "Should not run",
+          },
+        ],
+        createdAt: now,
+        updatedAt: now,
+      },
+      input: {},
+      stopAfterStepId: "middle",
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(result.stepAttempts.map((step) => step.nodeId)).toEqual([
+      "start",
+      "middle",
+    ]);
+  });
+
+  it("stops after a selected branch step without executing its downstream continuation", async () => {
+    const result = await new WorkflowRunner().run({
+      runId: "run_stop_after_branch",
+      definition: {
+        id: "wf_runner",
+        version: 1,
+        status: "draft",
+        name: "Runner workflow",
+        triggers: [{ id: "manual", kind: "manual", enabled: true }],
+        nodes: [
+          {
+            id: "gate",
+            type: "builtin.if",
+            condition: "$.workflowTrigger.input.enabled == true",
+            then: ["enabled_log"],
+            else: ["disabled_log"],
+          },
+          {
+            id: "enabled_log",
+            type: "builtin.log.info",
+            message: "Enabled",
+            next: ["after_branch"],
+          },
+          {
+            id: "disabled_log",
+            type: "builtin.log.info",
+            message: "Disabled",
+          },
+          {
+            id: "after_branch",
+            type: "builtin.log.info",
+            message: "Should not run",
+          },
+        ],
+        createdAt: now,
+        updatedAt: now,
+      },
+      input: { enabled: true },
+      stopAfterStepId: "enabled_log",
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(result.stepAttempts.map((step) => step.nodeId)).toEqual([
+      "gate",
+      "disabled_log",
+      "enabled_log",
+    ]);
+    expect(
+      result.stepAttempts.find((step) => step.nodeId === "disabled_log")
+        ?.status,
+    ).toBe("skipped");
+  });
+
+  it("stops foreach after the requested body step", async () => {
+    const result = await new WorkflowRunner().run({
+      runId: "run_stop_after_foreach_body",
+      definition: {
+        id: "wf_runner",
+        version: 1,
+        status: "draft",
+        name: "Runner workflow",
+        triggers: [{ id: "manual", kind: "manual", enabled: true }],
+        nodes: [
+          {
+            id: "each_item",
+            type: "builtin.foreach",
+            items: "$.workflowTrigger.input.items",
+            itemVar: "item",
+            body: ["log_item"],
+            next: ["after_loop"],
+          },
+          {
+            id: "log_item",
+            type: "builtin.log.info",
+            message: "item",
+          },
+          {
+            id: "after_loop",
+            type: "builtin.log.info",
+            message: "Should not run",
+          },
+        ],
+        createdAt: now,
+        updatedAt: now,
+      },
+      input: { items: ["a", "b", "c"] },
+      stopAfterStepId: "log_item",
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(result.stepAttempts.map((step) => step.nodeId)).toEqual([
+      "log_item",
+      "each_item",
+    ]);
+  });
+
+  it("stops parallel parent continuation after a branch reaches the requested step", async () => {
+    const result = await new WorkflowRunner().run({
+      runId: "run_stop_after_parallel_branch",
+      definition: {
+        id: "wf_runner",
+        version: 1,
+        status: "draft",
+        name: "Runner workflow",
+        triggers: [{ id: "manual", kind: "manual", enabled: true }],
+        nodes: [
+          {
+            id: "parallel_checks",
+            type: "builtin.parallel",
+            branches: [
+              { id: "a", nodes: ["branch_a"] },
+              { id: "b", nodes: ["branch_b"] },
+            ],
+            failFast: false,
+            next: ["after_parallel"],
+          },
+          {
+            id: "branch_a",
+            type: "builtin.log.info",
+            message: "A",
+            next: ["after_a"],
+          },
+          {
+            id: "after_a",
+            type: "builtin.log.info",
+            message: "Should not run",
+          },
+          {
+            id: "branch_b",
+            type: "builtin.log.info",
+            message: "B",
+          },
+          {
+            id: "after_parallel",
+            type: "builtin.log.info",
+            message: "Should not run",
+          },
+        ],
+        createdAt: now,
+        updatedAt: now,
+      },
+      input: {},
+      stopAfterStepId: "branch_a",
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(result.stepAttempts.map((step) => step.nodeId).sort()).toEqual([
+      "branch_a",
+      "branch_b",
+      "parallel_checks",
+    ]);
+    expect(result.stepAttempts.map((step) => step.nodeId)).not.toContain(
+      "after_a",
+    );
+    expect(result.stepAttempts.map((step) => step.nodeId)).not.toContain(
+      "after_parallel",
+    );
+  });
+
   it("normalizes legacy route arrays into explicit next chains before execution", async () => {
     const result = await new WorkflowRunner().run({
       runId: "run_legacy_route_array_normalized",
@@ -242,7 +524,10 @@ describe("WorkflowRunner builtin MVP", () => {
             triggerCustomer: "$.workflowTrigger.input.customer",
             triggerKind: "$.workflowTrigger.meta.kind",
           },
-          transform: { kind: "value.resolve", value: "$.workflowTrigger.input.customer" },
+          transform: {
+            kind: "value.resolve",
+            value: "$.workflowTrigger.input.customer",
+          },
           assign: {
             normalizedCustomer: "$.steps.normalize.output.value",
             triggerKind: "$.workflowTrigger.meta.kind",
@@ -287,6 +572,47 @@ describe("WorkflowRunner builtin MVP", () => {
         triggerKind: "manual",
       },
     });
+  });
+
+  it("resolves log messages from references and templates", async () => {
+    const result = await new WorkflowRunner().run({
+      runId: "run_log_message_refs",
+      definition: definition([
+        {
+          id: "log_direct",
+          type: "builtin.log.info",
+          message: "$.workflowTrigger.input.message",
+          next: ["log_template"],
+        },
+        {
+          id: "log_template",
+          type: "builtin.log.info",
+          message: "Received {{ $.workflowTrigger.input.message }}",
+        },
+      ]),
+      input: { message: "hello from trigger" },
+      trigger: {
+        kind: "manual",
+        triggerId: "manual",
+        input: { message: "hello from trigger" },
+      },
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(result.stepAttempts[0]?.input).toMatchObject({
+      message: "hello from trigger",
+    });
+    expect(result.stepAttempts[0]?.output).toEqual({
+      message: "hello from trigger",
+    });
+    expect(result.stepAttempts[1]?.input).toMatchObject({
+      message: "Received hello from trigger",
+    });
+    expect(
+      result.events
+        .filter((event) => event.kind === "log")
+        .map((event) => event.message),
+    ).toEqual(["hello from trigger", "Received hello from trigger"]);
   });
 
   it("executes set, transform, log, and exit with inspectable trace", async () => {
@@ -1123,7 +1449,10 @@ describe("WorkflowRunner builtin MVP", () => {
           id: "make_tag",
           type: "builtin.transform.value_resolve",
           input: { tag: "$.workflowTrigger.input.nextTag" },
-          transform: { kind: "value.resolve", value: "$.workflowTrigger.input.nextTag" },
+          transform: {
+            kind: "value.resolve",
+            value: "$.workflowTrigger.input.nextTag",
+          },
           assign: {
             tags: {
               from: "$.steps.make_tag.output.value",
@@ -1153,7 +1482,10 @@ describe("WorkflowRunner builtin MVP", () => {
         {
           id: "reference_transform",
           type: "builtin.transform.value_resolve",
-          transform: { kind: "value.resolve", value: "$.workflowTrigger.input.customer.id" },
+          transform: {
+            kind: "value.resolve",
+            value: "$.workflowTrigger.input.customer.id",
+          },
           assign: {
             customerId: "$.steps.reference_transform.output.value",
           },
@@ -1658,19 +1990,28 @@ describe("WorkflowRunner builtin MVP", () => {
         {
           id: "is_ipv4",
           type: "builtin.transform.ip_is_ipv4",
-          transform: { kind: "ip.is_ipv4", value: "$.workflowTrigger.input.ipv4" },
+          transform: {
+            kind: "ip.is_ipv4",
+            value: "$.workflowTrigger.input.ipv4",
+          },
           assign: { isIpv4: "$.steps.is_ipv4.output.value" },
         },
         {
           id: "is_ipv6",
           type: "builtin.transform.ip_is_ipv6",
-          transform: { kind: "ip.is_ipv6", value: "$.workflowTrigger.input.ipv6" },
+          transform: {
+            kind: "ip.is_ipv6",
+            value: "$.workflowTrigger.input.ipv6",
+          },
           assign: { isIpv6: "$.steps.is_ipv6.output.value" },
         },
         {
           id: "invalid_ipv4",
           type: "builtin.transform.ip_is_ipv4",
-          transform: { kind: "ip.is_ipv4", value: "$.workflowTrigger.input.invalid" },
+          transform: {
+            kind: "ip.is_ipv4",
+            value: "$.workflowTrigger.input.invalid",
+          },
           assign: { invalidIsIpv4: "$.steps.invalid_ipv4.output.value" },
         },
       ]),
@@ -2598,7 +2939,10 @@ describe("WorkflowRunner builtin MVP", () => {
         {
           id: "parse_asset",
           type: "builtin.transform.value_resolve",
-          transform: { kind: "value.resolve", value: "$.workflowTrigger.input.asset" },
+          transform: {
+            kind: "value.resolve",
+            value: "$.workflowTrigger.input.asset",
+          },
           assign: {
             shared: "$.steps.parse_asset.output.value",
           },
@@ -2606,7 +2950,10 @@ describe("WorkflowRunner builtin MVP", () => {
         {
           id: "parse_owner",
           type: "builtin.transform.value_resolve",
-          transform: { kind: "value.resolve", value: "$.workflowTrigger.input.owner" },
+          transform: {
+            kind: "value.resolve",
+            value: "$.workflowTrigger.input.owner",
+          },
           assign: {
             shared: "$.steps.parse_owner.output.value",
           },
@@ -2701,7 +3048,10 @@ describe("WorkflowRunner builtin MVP", () => {
         {
           id: "ok_transform",
           type: "builtin.transform.value_resolve",
-          transform: { kind: "value.resolve", value: "$.workflowTrigger.input.ok" },
+          transform: {
+            kind: "value.resolve",
+            value: "$.workflowTrigger.input.ok",
+          },
         },
         {
           id: "bad_check",
@@ -3124,7 +3474,10 @@ describe("WorkflowRunner builtin MVP", () => {
           id: "pick_customer",
           type: "builtin.transform.value_resolve",
           input: { customer: "item" },
-          transform: { kind: "value.resolve", value: "$.workflowTrigger.input.never" },
+          transform: {
+            kind: "value.resolve",
+            value: "$.workflowTrigger.input.never",
+          },
         },
       ]),
       input: { customers: [] },
@@ -3330,6 +3683,57 @@ describe("WorkflowRunner builtin MVP", () => {
           stderr: "timeout\n",
         },
       },
+    });
+  });
+
+  it("executes hosted tools with mapped input and trigger actor", async () => {
+    const calls: Array<{
+      toolName: string;
+      input: unknown;
+      actorId?: string;
+      timeoutMs?: number;
+    }> = [];
+    const result = await new WorkflowRunner({
+      ports: {
+        hosted: {
+          async callTool(req) {
+            calls.push(req);
+            return { output: { ok: true, count: 5 } };
+          },
+        },
+      },
+    }).run({
+      runId: "run_hosted_success",
+      definition: definition([
+        {
+          id: "asset_count",
+          type: "hosted.tool",
+          toolName: "hosted_qualys__qualys_gav_asset_count",
+          input: { limit: "$.workflowTrigger.input.limit" },
+          timeoutMs: 1500,
+        },
+      ]),
+      input: { limit: 5 },
+      trigger: {
+        kind: "manual",
+        triggerId: "manual",
+        requestedBy: "workflow-engineer",
+        input: { limit: 5 },
+      },
+    });
+
+    expect(calls).toEqual([
+      {
+        toolName: "hosted_qualys__qualys_gav_asset_count",
+        input: { limit: 5 },
+        actorId: "workflow-engineer",
+        timeoutMs: 1500,
+      },
+    ]);
+    expect(result.status).toBe("succeeded");
+    expect(result.stepAttempts[0]?.output).toEqual({
+      toolName: "hosted_qualys__qualys_gav_asset_count",
+      result: { ok: true, count: 5 },
     });
   });
 });

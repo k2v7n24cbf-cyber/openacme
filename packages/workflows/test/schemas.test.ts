@@ -58,6 +58,13 @@ describe("workflow schemas", () => {
           assign: { notificationId: "$.steps.notify.output.id" },
         },
         {
+          id: "hosted_asset_count",
+          type: "hosted.tool",
+          toolName: "hosted_qualys__qualys_gav_asset_count",
+          input: { filter_body: { filters: [] } },
+          assign: { assetCount: "$.steps.hosted_asset_count.output.result" },
+        },
+        {
           id: "review",
           type: "agent.call",
           agentId: "soc-analyst",
@@ -88,6 +95,7 @@ describe("workflow schemas", () => {
       "builtin.transform.object_pick",
       "builtin.if_else",
       "mcp.tool",
+      "hosted.tool",
       "agent.call",
       "builtin.log.info",
       "builtin.foreach",

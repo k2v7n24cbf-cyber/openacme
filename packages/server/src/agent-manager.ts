@@ -2033,17 +2033,65 @@ export class AgentManager {
     }
   }
 
+  private agentExplicitlyOptedOutOfManaged(targetId: string): boolean {
+    const dir = this.agentStore.agentDir(targetId);
+    if (!dir) return false;
+    try {
+      const raw = fs.readFileSync(path.join(dir, "AGENT.md"), "utf-8");
+      const frontmatter = raw.match(/^---\n([\s\S]*?)\n---/);
+      return Boolean(
+        frontmatter?.[1]?.match(/^\s*managed\s*:\s*false\s*(?:#.*)?$/m),
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private async installManagedAgentFromTemplate(
+    templateId: string,
+    template: AgentTemplate,
+    targetId: string,
+  ): Promise<void> {
+    await this.installTemplateDependencies(template);
+
+    const existingIds = new Set(this.agentStore.list().map((d) => d.id));
+    existingIds.delete(targetId);
+    const fresh = buildAgentFromTemplate(
+      template,
+      { idOverride: targetId },
+      existingIds,
+    );
+    this.agentStore.upsert(fresh);
+    this.copyTemplateResources(template, fresh.id);
+
+    await this.queueMcpReinit(fresh.id);
+    this.evictAgent(fresh.id);
+
+    log.info({ templateId, agentId: fresh.id }, "wrote managed agent");
+  }
+
   /**
-   * Materialize platform-managed catalog templates (today: Acme) that
-   * aren't on disk. Per-template idempotent — occupied slots are left
-   * alone; the refresh path handles version drift. Failure-tolerant: a
-   * busted install logs and the next template is tried.
+   * Materialize platform-managed catalog templates (today: Acme, Tool
+   * Developer, Workflow Engineer). Empty slots install from the catalog.
+   * Legacy same-id agents without an explicit `managed: false` are adopted
+   * into the platform-managed template so newly reserved built-in agents can
+   * self-heal existing workforces. Explicit opt-outs are left alone.
    */
   async ensureManagedAgents(): Promise<void> {
-    for (const { templateId, targetId } of this.managedTemplates()) {
-      if (this.agentStore.get(targetId)) continue;
+    for (const { templateId, template, targetId } of this.managedTemplates()) {
+      const existing = this.agentStore.get(targetId);
+      if (existing?.managed) continue;
+      if (existing && this.agentExplicitlyOptedOutOfManaged(targetId)) continue;
       try {
-        await this.importAgentFromTemplate(templateId, {});
+        if (existing) {
+          await this.installManagedAgentFromTemplate(
+            templateId,
+            template,
+            targetId,
+          );
+        } else {
+          await this.importAgentFromTemplate(templateId, {});
+        }
       } catch (e) {
         log.warn({ err: e, templateId }, "failed to materialize managed agent");
       }
@@ -2064,22 +2112,11 @@ export class AgentManager {
       if (!onDisk || !onDisk.managed) continue;
 
       try {
-        await this.installTemplateDependencies(template);
-
-        const existingIds = new Set(this.agentStore.list().map((d) => d.id));
-        existingIds.delete(targetId);
-        const fresh = buildAgentFromTemplate(
+        await this.installManagedAgentFromTemplate(
+          templateId,
           template,
-          { idOverride: targetId },
-          existingIds,
+          targetId,
         );
-        this.agentStore.upsert(fresh);
-        this.copyTemplateResources(template, fresh.id);
-
-        await this.queueMcpReinit(fresh.id);
-        this.evictAgent(fresh.id);
-
-        log.info({ templateId, agentId: fresh.id }, "refreshed managed agent");
       } catch (e) {
         log.warn({ err: e, templateId }, "failed to refresh managed agent");
       }

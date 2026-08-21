@@ -216,6 +216,26 @@ Set context variables directly:
 }
 ```
 
+### `builtin.output.set`
+
+Set the workflow's caller-facing final output explicitly:
+
+```json
+{
+  "id": "set_final_output",
+  "type": "builtin.output.set",
+  "path": "result",
+  "value": "$.steps.normalize.output.value",
+  "mode": "replace"
+}
+```
+
+`path` is a dotted output path such as `result`, `result.summary`, or
+`assets.prioritized`. Valid modes are `replace`, `merge`, and `append`. Use
+`builtin.output.set` whenever another agent, workflow, UI, or API caller needs
+a stable output contract. When `outputSchema` is declared, validation expects
+required top-level fields to be covered by `builtin.output.set` cards.
+
 ### Transformer Nodes
 
 Use concrete transformer node types; do not use a generic `builtin.transform`
@@ -231,7 +251,7 @@ become a context variable:
     "input": { "customer": "$.context.customer" },
     "transform": {
       "kind": "object_pick",
-      "source": "$.steps.normalize.input.customer",
+      "source": "customer",
       "fields": ["id", "name", "riskScore"]
     }
   },
@@ -521,9 +541,9 @@ Standard step output contract:
 
 | Node type                           | Output shape                                                                                                                                                     | Common reference                          |
 | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
-| `builtin.transform`                 | `{ "value": <transformedValue> }`                                                                                                                                | `$.steps.<id>.output.value`               |
-| Transformer UI cards                | Same as `builtin.transform`; UI cards save as `builtin.transform`                                                                                                | `$.steps.<id>.output.value`               |
+| `builtin.transform.<operation>`      | `{ "value": <transformedValue> }`                                                                                                                                | `$.steps.<id>.output.value`               |
 | `builtin.set`                       | `{ "assigned": { "<context.path>": <writtenValue> } }`                                                                                                           | `$.steps.<id>.output.assigned.<path>`     |
+| `builtin.output.set`                | `{ "path": string, "value": <resolvedValue>, "mode": "replace" \| "merge" \| "append" }`                                                                         | `$.steps.<id>.output.value`               |
 | `builtin.if`                        | `{ "result": boolean, "selected": string[], "skipped": string[] }`                                                                                               | `$.steps.<id>.output.result`              |
 | `builtin.switch`                    | `{ "value": <switchValue>, "case": string, "matched": boolean, "selected": string[], "skipped": string[] }`                                                      | `$.steps.<id>.output.case`                |
 | `builtin.foreach`                   | `{ "count": number, "succeededCount": number, "failedCount": number, "items": [...] }`                                                                           | `$.steps.<id>.output.items`               |
@@ -534,6 +554,7 @@ Standard step output contract:
 | `builtin.throw_error`               | No success output; inspect `$.steps.<id>.error`                                                                                                                  | `$.steps.<id>.error.message`              |
 | `builtin.python`                    | `{ "value": <pythonReturn>, "stdout"?: string, "stderr"?: string }`                                                                                              | `$.steps.<id>.output.value`               |
 | `mcp.tool`                          | `{ "server": string, "tool": string, "result": <rawToolOutput> }`                                                                                                | `$.steps.<id>.output.result`              |
+| `hosted.tool`                       | `{ "toolName": string, "result": <rawHostedToolOutput> }`                                                                                                        | `$.steps.<id>.output.result`              |
 | `agent.call`                        | `{ "response": string, "sessionId"?: string, "assistantMessageId"?: string, ... }` for normal free-text agent replies                                            | `$.steps.<id>.output.response`            |
 
 Type interpretation rules:
@@ -571,9 +592,9 @@ Persist reusable variables with `builtin.set`:
 - `merge` requires object-compatible values.
 - `append` appends to list-like values.
 
-For tool, agent, Python, and transform cards, do not rely on hidden generic
+For tool, agent, Python, and transformer cards, do not rely on hidden generic
 assignment UI. Use the standard output field for the card type. If a downstream
-workflow needs a stable context variable, add a `builtin.transform` node to
+workflow needs a stable context variable, add a concrete transformer node to
 normalize the result when needed and then a `builtin.set` node to write
 `$.context.<name>`.
 
@@ -599,6 +620,7 @@ Use flow-control nodes to make routing explicit and inspectable:
 - `builtin.throw_error`: fail intentionally with structured details.
 - `builtin.sleep`: pause briefly for rate limit or eventual consistency.
 - `builtin.set`: write values into run context.
+- `builtin.output.set`: write explicit caller-facing workflow output.
 - `builtin.transform.<operation>`: normalize, parse, convert, or reshape values
   with a concrete transformer node type.
 - `builtin.log.debug/info/warn/error`: write structured timeline logs.
@@ -732,20 +754,106 @@ Current UI local prevalidation covers node references, node shape, trigger
 shape, trigger identity, import/export shape, save, publish, test/live, and
 trigger-card run paths. Server validation remains authoritative.
 
+## Workflow Tool Workflow
+
+Agents should use the first-class `workflow_*` tools as the primary authoring
+surface:
+
+- `workflow_card_catalog`: discover built-in, flow-control, transformer, log,
+  MCP wrapper, Hosted Tool wrapper, and agent-call cards. Use the returned
+  `configSchema`,
+  `defaultConfig`, `routePorts`, `outputSchema`, and `examples` before drafting
+  nodes.
+- `workflow_help`: get overview, card-specific, schema, reference syntax, run
+  evidence, and promotion gate guidance. Use `parameters[]` when a specific
+  field or schema path is unclear.
+- `workflow_help_upsert`: correct or extend reusable workflow help when running
+  as Workflow Engineer or an admin context.
+- `workflow_tool_inventory`: discover callable MCP workflow tools and hosted
+  tools plus their parameter schemas before authoring `mcp.tool` or
+  `hosted.tool` nodes.
+- `workflow_agent_inventory`: discover callable agents before authoring
+  `agent.call` nodes.
+- `workflow_validate`: validate before saving or publishing. Use
+  `{ "mode": "candidate", "candidate": <create body> }` before create,
+  `{ "mode": "saved", "workflow_id": "<id>" }` for an existing workflow, or
+  `{ "mode": "definition", "definition": <full definition> }` for a stored or
+  exported definition. Do not call it with an empty `{}` candidate.
+- `workflow_create`, `workflow_update`, `workflow_delete`,
+  `workflow_publish`, `workflow_export`, `workflow_import`: manage definition
+  lifecycle without raw transport work.
+- `workflow_card_test_run`: run one candidate, saved-workflow, or previous-run
+  card in isolation for card-level TDD.
+- `workflow_test_run`, `workflow_run_list`, `workflow_run_get`,
+  `workflow_run_cancel`, `workflow_run_rerun`, `workflow_artifact_get`: execute
+  tests and inspect run history, step input/output/error/logs, final context,
+  and spilled artifacts.
+  Use `workflow_test_run({ "stop_after_step_id": "<stepId>" })` to run a
+  draft only up to a checkpoint during development. A stop-after run is partial
+  evidence and does not satisfy the publish gate.
+  Use summary-first run inspection: call
+  `workflow_run_get({ "run_id": "<runId>", "detail": "summary" })` before
+  asking for targeted step evidence with `detail: "step"` and `step_id`.
+  Reserve `detail: "full"` for debugging exports or UI parity checks.
+
+Every saved or published agent-authored workflow should have this evidence:
+
+- `workflow_card_catalog` was used for card capabilities.
+- `workflow_help` was used for unfamiliar cards, references, schemas, run
+  evidence, or promotion questions.
+- `workflow_tool_inventory` or `workflow_agent_inventory` was used before any
+  external call node, including `mcp.tool`, `hosted.tool`, and `agent.call`.
+- `workflow_validate` returned `ok: true`.
+- `workflow_card_test_run` was used for risky card configuration or external
+  input/output uncertainty.
+- `workflow_test_run` produced a full current-draft run id.
+- `workflow_run_get` confirmed the expected status and step evidence.
+- `workflow_publish` succeeded only after validation and a successful full test
+  run for the current draft when publishing was requested.
+
+Normal agents that consume workflows instead of authoring them should use only
+the consumer-safe subset:
+
+- `workflow_help`: read reference, schema, output, run evidence, and promotion
+  guidance.
+- `workflow_callable_list`: list published callable workflows. Drafts and
+  archived workflows are excluded.
+- `workflow_callable_get`: inspect one published workflow contract, including
+  description, enabled triggers, input schema, and output schema. It does not
+  expose the draft node graph.
+- `workflow_run`: run a published workflow through an enabled manual trigger.
+  It never runs draft definitions.
+- `workflow_run_get`: inspect run summary first, then targeted step evidence
+  with `detail: "step"` and `step_id` when needed.
+- `workflow_artifact_get`: fetch spilled run artifacts when run or step output
+  is too large for inline display.
+
+Consumer agents must not receive mutation or authoring tools such as
+`workflow_create`, `workflow_update`, `workflow_delete`, `workflow_publish`,
+`workflow_test_run`, `workflow_card_test_run`, or `workflow_help_upsert` unless
+they are explicitly acting as Workflow Engineer or an admin authoring context.
+
+For log cards, `message` is runtime-resolved. Use a direct reference when the
+whole message should be a value, for example
+`"message": "$.workflowTrigger.input.message"`. Use template syntax for mixed
+text, for example
+`"message": "Received {{ $.workflowTrigger.input.message }}"`. The run trace
+shows the resolved message in step input, step output, and log events; the
+definition snapshot preserves the original config.
+
 ## API Workflow
 
 First-release workflow definitions and run history are global. Do not send
 `teamId`, `agentId`, or `ownerId` filters to workflow list APIs; those scoping
 contracts are future work.
 
-Agents must discover external callable inventory through the workflow API
-before authoring nodes that call external capabilities. Do not assume the
-authoring agent already knows every installed MCP server, tool name, tool
-description, or parameter schema.
+Workflow HTTP endpoints remain the transport/API surface behind the product UI
+and are useful for debugging platform behavior.
 
-The workflow API inventory endpoints are the runtime source of truth. Refresh
-them before creating or validating an external-call node because connected MCP
-servers and their tool schemas can change between authoring sessions.
+The workflow API inventory endpoints are the same runtime source of truth as
+the workflow inventory tools. Refresh inventory before creating or validating
+an external-call node because connected MCP servers and their tool schemas can
+change between authoring sessions.
 
 Every human UI operation must have an agent path:
 

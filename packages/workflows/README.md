@@ -39,7 +39,9 @@ node-type-specific stable shape. Common fields:
 - `builtin.parallel`: `output.count`, `output.succeededCount`,
   `output.failedCount`, `output.canceledCount`, `output.branches`,
   `output.branchOrder`
-- `builtin.log.*`: `output.message`, optional `output.payload`
+- `builtin.log.*`: `output.message`, optional `output.payload`. `message`
+  resolves direct references such as `$.workflowTrigger.input.message` and
+  templates such as `Received {{ $.workflowTrigger.input.message }}`.
 - `builtin.sleep`: `output.delayMs`, optional `output.reason`
 - `builtin.exit`: `output.status`, optional `output.output`
 

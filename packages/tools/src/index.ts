@@ -114,6 +114,15 @@ export {
   type HostedToolHelpBindings,
   type HostedToolHelpRequest,
 } from "./builtins/hosted-integration-help.js";
+export {
+  bindWorkflowManagement,
+  WORKFLOW_CONSUMER_TOOL_NAMES,
+  WORKFLOW_MANAGEMENT_TOOL_NAMES,
+  WORKFLOW_AUTHORING_TOOL_NAMES,
+  type WorkflowManagementBindings,
+  type WorkflowManagementRequest,
+  type WorkflowManagementToolName,
+} from "./builtins/workflow-management.js";
 export { SYSTEM_TOOLS, type SystemTool } from "./system.js";
 export {
   sweepOverflow,
@@ -143,5 +152,6 @@ import "./builtins/ping.js";
 import "./builtins/defer-session.js";
 import "./builtins/hosted-integration-management.js";
 import "./builtins/hosted-integration-help.js";
+import "./builtins/workflow-management.js";
 import "./builtins/browser/index.js";
 import "./builtins/email/index.js";

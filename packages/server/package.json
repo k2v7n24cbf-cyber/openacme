@@ -45,6 +45,7 @@
     "dogfood:hosted-tools:live:unguided-management": "tsx scripts/hosted-tools-unguided-management.ts",
     "dogfood:hosted-tools:accepted-artifacts:audit": "tsx scripts/hosted-tools-accepted-artifacts-audit.ts",
     "dogfood:hosted-integrations:real-llm": "tsx scripts/hosted-integrations-real-llm-dogfood.ts",
+    "dogfood:workflow-engineer:live": "tsx scripts/workflow-engineer-live-dogfood.ts",
     "integration-hub:parity": "tsx scripts/integration-hub-parity.ts",
     "prepack": "rm -rf web && cp -r ../../apps/web/out web"
   },

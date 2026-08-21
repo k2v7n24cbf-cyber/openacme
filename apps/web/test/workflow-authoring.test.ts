@@ -53,6 +53,7 @@ describe("workflow authoring helpers", () => {
       "parallel",
       "python",
       "mcp",
+      "hosted",
       "agent",
     ];
 
@@ -61,6 +62,7 @@ describe("workflow authoring helpers", () => {
       const node = createWorkflowNodeTemplate(kind, index + 1, {
         server: "demo/server",
         tool: "echo",
+        name: "hosted_demo__echo",
         id: "demo-agent",
       }, transformPresetId);
       if (kind === "if") {
@@ -141,9 +143,18 @@ describe("workflow authoring helpers", () => {
       tool: "echo-message",
     });
     expect(
-      createWorkflowNodeTemplate("agent", 8, { id: "risk-review" }),
+      createWorkflowNodeTemplate("hosted", 8, {
+        name: "hosted_qualys__qualys_gav_asset_count",
+      }),
     ).toMatchObject({
-      id: "agent_risk_review_08",
+      id: "hosted_hosted_qualys__qualys_gav_asset_count_08",
+      type: "hosted.tool",
+      toolName: "hosted_qualys__qualys_gav_asset_count",
+    });
+    expect(
+      createWorkflowNodeTemplate("agent", 9, { id: "risk-review" }),
+    ).toMatchObject({
+      id: "agent_risk_review_09",
       type: "agent.call",
       agentId: "risk-review",
     });
@@ -519,7 +530,14 @@ function workflowNodeTypesFromSchemaSource(source: string): string[] {
       .map((enumMatch) => enumMatch[1])
       .filter(isWorkflowNodeType),
   );
-  return uniqueSorted([...literalTypes, ...enumTypes]);
+  const logTypes = [
+    ...source.matchAll(/export const WorkflowLogNodeTypeValues = \[([\s\S]*?)\]/g),
+  ].flatMap((match) =>
+    [...(match[1] ?? "").matchAll(/"([^"]+)"/g)]
+      .map((enumMatch) => enumMatch[1])
+      .filter(isWorkflowNodeType),
+  );
+  return uniqueSorted([...literalTypes, ...enumTypes, ...logTypes]);
 }
 
 function workflowNodeTypesFromValidatorSource(source: string): string[] {
@@ -542,6 +560,7 @@ function isWorkflowNodeType(value: string | undefined): value is string {
     typeof value === "string" &&
     (value.startsWith("builtin.") ||
       value === "mcp.tool" ||
+      value === "hosted.tool" ||
       value === "agent.call")
   );
 }

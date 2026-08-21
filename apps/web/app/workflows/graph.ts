@@ -1552,6 +1552,13 @@ function nodeSummary(node: WorkflowGraphNode): string | undefined {
       ? `Run ${humanizeIdentifier(tool)} on ${humanizeIdentifier(server)}`
       : "Call an MCP tool";
   }
+  if (node.type === "hosted.tool") {
+    const toolName =
+      typeof node["toolName"] === "string" ? node["toolName"] : "";
+    return toolName
+      ? `Run hosted ${humanizeIdentifier(toolName)}`
+      : "Call a hosted tool";
+  }
   if (node.type === "agent.call") {
     const agentId = typeof node["agentId"] === "string" ? node["agentId"] : "";
     const prompt = typeof node["prompt"] === "string" ? node["prompt"] : "";
@@ -1567,6 +1574,9 @@ function nodeDisplayLabel(node: WorkflowGraphNode): string {
   if (typeof node.label === "string" && node.label.trim()) return node.label;
   if (node.type === "mcp.tool" && typeof node["tool"] === "string") {
     return humanizeIdentifier(node["tool"]);
+  }
+  if (node.type === "hosted.tool" && typeof node["toolName"] === "string") {
+    return humanizeIdentifier(node["toolName"]);
   }
   if (node.type === "agent.call" && typeof node["agentId"] === "string") {
     return `Ask ${humanizeIdentifier(node["agentId"])}`;
@@ -1591,6 +1601,7 @@ function nodeTypeLabel(node: WorkflowGraphNode): string {
   if (node.type === "builtin.sleep") return "Sleep";
   if (node.type === "builtin.python") return "Python";
   if (node.type === "mcp.tool") return "MCP tool";
+  if (node.type === "hosted.tool") return "Hosted tool";
   if (node.type === "agent.call") return "Agent";
   if (node.type.startsWith("builtin.log.")) {
     return humanizeIdentifier(node.type.slice("builtin.".length));

@@ -155,6 +155,47 @@ export function workflowTransformKindFromNodeType(
   }
 }
 
+export const WorkflowLogNodeTypeValues = [
+  "builtin.log.info",
+  "builtin.log.debug",
+  "builtin.log.warn",
+  "builtin.log.error",
+] as const;
+export const WorkflowLogNodeTypeSchema = z.enum(WorkflowLogNodeTypeValues);
+export type WorkflowLogNodeType = z.infer<typeof WorkflowLogNodeTypeSchema>;
+
+export const WorkflowBuiltinNodeTypeValues = [
+  "builtin.set",
+  "builtin.output.set",
+  ...WorkflowTransformNodeTypeValues,
+  "builtin.if",
+  "builtin.if_else",
+  "builtin.switch",
+  "builtin.foreach",
+  "builtin.exit",
+  "builtin.throw_error",
+  "builtin.sleep",
+  ...WorkflowLogNodeTypeValues,
+  "builtin.parallel",
+  "builtin.python",
+] as const;
+export const WorkflowExternalNodeTypeValues = [
+  "mcp.tool",
+  "hosted.tool",
+  "agent.call",
+] as const;
+export const WorkflowNodeTypeValues = [
+  ...WorkflowBuiltinNodeTypeValues,
+  ...WorkflowExternalNodeTypeValues,
+] as const;
+export const WorkflowAuthoringNodeTypeValues = WorkflowNodeTypeValues.filter(
+  (value) => value !== "builtin.if_else",
+);
+export const WorkflowNodeTypeSchema = z.enum(WorkflowNodeTypeValues);
+export type WorkflowNodeType = z.infer<typeof WorkflowNodeTypeSchema>;
+export type WorkflowAuthoringNodeType =
+  (typeof WorkflowAuthoringNodeTypeValues)[number];
+
 export const WorkflowTriggerSchema = z.discriminatedUnion("kind", [
   z
     .object({
@@ -210,6 +251,28 @@ export const WorkflowRunTriggerSchema = z.discriminatedUnion("kind", [
       triggerId: z.string().min(1).default("manual"),
       requestedBy: z.string().min(1).optional(),
       input: JsonValueSchema.optional(),
+      draftHash: z.string().min(1).optional(),
+      stopAfterStepId: z.string().min(1).optional(),
+      testAssertions: z
+        .array(
+          z
+            .object({
+              path: z.string().min(1),
+              operator: z.enum([
+                "exists",
+                "equals",
+                "not_equals",
+                "contains",
+                "not_contains",
+                "matches",
+                "greater_than",
+                "less_than",
+              ]),
+              value: JsonValueSchema.optional(),
+            })
+            .strict(),
+        )
+        .optional(),
     })
     .strict(),
   z
@@ -325,6 +388,18 @@ export const BuiltinSetNodeSchema = z
     ...NodeContinuationSchema,
     type: z.literal("builtin.set"),
     assign: WorkflowAssignmentMapSchema,
+  })
+  .strict();
+
+export const BuiltinOutputSetNodeSchema = z
+  .object({
+    id: NodeIdSchema,
+    label: z.string().min(1).optional(),
+    ...NodeContinuationSchema,
+    type: z.literal("builtin.output.set"),
+    path: WorkflowAssignmentPathSchema,
+    value: JsonValueSchema,
+    mode: WorkflowAssignmentModeSchema.default("replace"),
   })
   .strict();
 
@@ -447,12 +522,7 @@ export const BuiltinSleepNodeSchema = z
 export const BuiltinLogNodeSchema = z
   .object({
     ...AssignableNodeBase,
-    type: z.enum([
-      "builtin.log.info",
-      "builtin.log.debug",
-      "builtin.log.warn",
-      "builtin.log.error",
-    ]),
+    type: WorkflowLogNodeTypeSchema,
     message: z.string().min(1),
     payload: JsonValueSchema.optional(),
   })
@@ -497,6 +567,15 @@ export const McpToolNodeSchema = z
   })
   .strict();
 
+export const HostedToolNodeSchema = z
+  .object({
+    ...AssignableNodeBase,
+    type: z.literal("hosted.tool"),
+    toolName: z.string().min(1),
+    timeoutMs: z.number().int().min(100).max(300_000).optional(),
+  })
+  .strict();
+
 export const AgentCallNodeSchema = z
   .object({
     ...AssignableNodeBase,
@@ -509,6 +588,7 @@ export const AgentCallNodeSchema = z
 
 export const WorkflowNodeSchema = z.discriminatedUnion("type", [
   BuiltinSetNodeSchema,
+  BuiltinOutputSetNodeSchema,
   BuiltinTransformNodeSchema,
   BuiltinIfNodeSchema,
   BuiltinIfElseNodeSchema,
@@ -521,6 +601,7 @@ export const WorkflowNodeSchema = z.discriminatedUnion("type", [
   BuiltinParallelNodeSchema,
   BuiltinPythonNodeSchema,
   McpToolNodeSchema,
+  HostedToolNodeSchema,
   AgentCallNodeSchema,
 ]);
 export type WorkflowNode = z.infer<typeof WorkflowNodeSchema>;
@@ -533,6 +614,7 @@ export const WorkflowDefinitionSchema = z
     name: z.string().min(1),
     description: z.string().optional(),
     inputSchema: JsonValueSchema.optional(),
+    outputSchema: JsonValueSchema.optional(),
     triggers: z
       .array(WorkflowTriggerSchema)
       .default([{ id: "manual", kind: "manual", enabled: true }]),

@@ -16,6 +16,7 @@ import {
   type WorkflowExecutionPorts,
   type WorkflowEventPort,
   type WorkflowDefinition,
+  type WorkflowRunnerInitialStepState,
   type WorkflowRun,
   type WorkflowRunMode,
   type WorkflowRunTrigger,
@@ -30,6 +31,7 @@ const WorkflowCreateBodySchema = z
     name: z.string().min(1),
     description: z.string().nullable().optional(),
     inputSchema: JsonValueSchema.optional(),
+    outputSchema: JsonValueSchema.optional(),
     triggers: z.array(WorkflowTriggerSchema).optional(),
     nodes: z.array(WorkflowNodeSchema).optional(),
     ui: WorkflowDefinitionUiSchema.optional(),
@@ -41,6 +43,7 @@ const WorkflowUpdateBodySchema = z
     name: z.string().min(1).optional(),
     description: z.string().nullable().optional(),
     inputSchema: JsonValueSchema.nullable().optional(),
+    outputSchema: JsonValueSchema.nullable().optional(),
     triggers: z.array(WorkflowTriggerSchema).optional(),
     nodes: z.array(WorkflowNodeSchema).optional(),
     ui: WorkflowDefinitionUiSchema.nullable().optional(),
@@ -55,8 +58,8 @@ const WorkflowRunBodySchema = z
   })
   .strict();
 
-type WorkflowCreateBody = z.infer<typeof WorkflowCreateBodySchema>;
-type WorkflowUpdateBody = z.infer<typeof WorkflowUpdateBodySchema>;
+export type WorkflowCreateBody = z.infer<typeof WorkflowCreateBodySchema>;
+export type WorkflowUpdateBody = z.infer<typeof WorkflowUpdateBodySchema>;
 
 const WorkflowArtifactPruneBodySchema = z
   .object({
@@ -67,9 +70,13 @@ const WorkflowArtifactPruneBodySchema = z
 export function registerWorkflowRoutes(
   app: Hono,
   store: WorkflowStore,
-  opts: { ports?: WorkflowExecutionPorts } = {},
+  opts: {
+    ports?: WorkflowExecutionPorts;
+    runAbortControllers?: Map<string, AbortController>;
+  } = {},
 ): void {
-  const runAbortControllers = new Map<string, AbortController>();
+  const runAbortControllers =
+    opts.runAbortControllers ?? new Map<string, AbortController>();
 
   app.post("/api/workflow-webhooks/:id/by-path/*", async (c) => {
     const id = c.req.param("id");
@@ -171,6 +178,16 @@ export function registerWorkflowRoutes(
   app.get("/api/workflows/mcp/tools", async (c) => {
     try {
       return c.json({ tools: (await opts.ports?.mcp?.listTools?.()) ?? [] });
+    } catch (err) {
+      return routeError(c, err);
+    }
+  });
+
+  app.get("/api/workflows/hosted/tools", async (c) => {
+    try {
+      return c.json({
+        tools: (await opts.ports?.hosted?.listTools?.()) ?? [],
+      });
     } catch (err) {
       return routeError(c, err);
     }
@@ -472,7 +489,7 @@ export function registerWorkflowRoutes(
   });
 }
 
-function cancelWorkflowRun(
+export function cancelWorkflowRun(
   store: WorkflowStore,
   id: string,
   runAbortControllers?: Map<string, AbortController>,
@@ -538,7 +555,7 @@ function cancelCurrentStepAttempt(
   });
 }
 
-async function executeWorkflowRun(
+export async function executeWorkflowRun(
   store: WorkflowStore,
   args: {
     definition: WorkflowDefinition;
@@ -549,6 +566,9 @@ async function executeWorkflowRun(
     ports?: WorkflowExecutionPorts;
     runAbortControllers?: Map<string, AbortController>;
     waitForCompletion?: boolean;
+    stopAfterStepId?: string;
+    initialContext?: Record<string, JsonValue>;
+    initialSteps?: Record<string, WorkflowRunnerInitialStepState>;
   },
 ) {
   const authoring = validateAuthoringDefinition(args.definition);
@@ -598,6 +618,9 @@ async function finishWorkflowRunExecution(
     runAbortControllers?: Map<string, AbortController>;
     run: WorkflowRun;
     abortController: AbortController;
+    stopAfterStepId?: string;
+    initialContext?: Record<string, JsonValue>;
+    initialSteps?: Record<string, WorkflowRunnerInitialStepState>;
   },
 ) {
   const eventPorts = {
@@ -623,7 +646,10 @@ async function finishWorkflowRunExecution(
       definition: args.definition,
       input: executionInputForRun(store, args.run),
       trigger: args.run.trigger,
+      initialContext: args.initialContext,
+      initialSteps: args.initialSteps,
       signal: args.abortController.signal,
+      stopAfterStepId: args.stopAfterStepId,
     });
   } catch (err) {
     const latest = store.getRun(args.run.id);
@@ -682,6 +708,7 @@ async function finishWorkflowRunExecution(
   });
   return {
     run: updated,
+    output: result.output,
     steps: store.listStepAttempts(args.run.id),
     events: store.listRunEvents(args.run.id),
     artifacts: store.listArtifacts(args.run.id),
@@ -895,7 +922,9 @@ export async function executePublishedTriggerRun(
   });
 }
 
-function workflowCreateCandidate(input: WorkflowCreateBody): WorkflowDefinition {
+export function workflowCreateCandidate(
+  input: WorkflowCreateBody,
+): WorkflowDefinition {
   const now = new Date().toISOString();
   return normalizeWorkflowDefinitionGraph(
     WorkflowDefinitionSchema.parse({
@@ -905,6 +934,7 @@ function workflowCreateCandidate(input: WorkflowCreateBody): WorkflowDefinition 
       name: input.name,
       description: input.description ?? undefined,
       inputSchema: input.inputSchema,
+      outputSchema: input.outputSchema,
       triggers: input.triggers,
       nodes: input.nodes ?? [],
       ui: input.ui,
@@ -914,7 +944,7 @@ function workflowCreateCandidate(input: WorkflowCreateBody): WorkflowDefinition 
   );
 }
 
-function workflowUpdateCandidate(
+export function workflowUpdateCandidate(
   current: WorkflowDefinition,
   patch: WorkflowUpdateBody,
 ): WorkflowDefinition {
@@ -931,6 +961,10 @@ function workflowUpdateCandidate(
         patch.inputSchema === null
           ? undefined
           : (patch.inputSchema ?? current.inputSchema),
+      outputSchema:
+        patch.outputSchema === null
+          ? undefined
+          : (patch.outputSchema ?? current.outputSchema),
       triggers: patch.triggers ?? current.triggers,
       nodes: patch.nodes ?? current.nodes,
       ui: patch.ui === null ? undefined : (patch.ui ?? current.ui),
@@ -939,11 +973,24 @@ function workflowUpdateCandidate(
   );
 }
 
-function validateAuthoringDefinition(definition: WorkflowDefinition) {
+export function validateAuthoringDefinition(definition: WorkflowDefinition) {
   return validateWorkflowDefinitionAuthoring(definition);
 }
 
-function getRunDetail(store: WorkflowStore, id: string) {
+type WorkflowRunDetailMode = "summary" | "step" | "full";
+type WorkflowRunStepInclude = "input" | "output" | "logs" | "error" | "context";
+
+interface WorkflowRunDetailOptions {
+  detail?: WorkflowRunDetailMode;
+  stepId?: string | null;
+  include?: WorkflowRunStepInclude[];
+}
+
+export function getRunDetail(
+  store: WorkflowStore,
+  id: string,
+  options: WorkflowRunDetailOptions = {},
+) {
   const run = store.getRun(id);
   if (!run) return null;
   healTerminalRunStepAttemptsFromEvents(store, run);
@@ -952,12 +999,131 @@ function getRunDetail(store: WorkflowStore, id: string) {
     (run.definitionSource === "published"
       ? store.getVersion(run.workflowId, run.workflowVersion)
       : store.getDefinition(run.workflowId));
+  const detail = options.detail ?? "full";
+  const steps = store.listStepAttempts(id);
+  const events = store.listRunEvents(id);
+  const artifacts = store.listArtifacts(id);
+  if (detail === "full") {
+    return {
+      run,
+      ...(definition ? { definition } : {}),
+      steps,
+      events,
+      artifacts,
+    };
+  }
+  const summary = buildRunSummary({ run, steps, events, artifacts });
+  if (detail === "step") {
+    const stepId = options.stepId;
+    const include = new Set<WorkflowRunStepInclude>(
+      options.include ?? ["input", "output", "logs", "error", "context"],
+    );
+    const matchingSteps = stepId
+      ? steps.filter((step) => step.nodeId === stepId || step.id === stepId)
+      : [];
+    const stepRunIds = new Set(matchingSteps.map((step) => step.id));
+    const stepLogs = include.has("logs")
+      ? events
+          .filter((event) => event.kind === "log" && stepRunIds.has(event.stepRunId ?? ""))
+          .map((event) => ({
+            id: event.id,
+            stepRunId: event.stepRunId,
+            level: event.level,
+            message: event.message,
+            createdAt: event.createdAt,
+            ...(event.payload === undefined ? {} : { payload: event.payload }),
+          }))
+      : undefined;
+    return {
+      run,
+      ...(definition ? { definition } : {}),
+      summary,
+      stepId,
+      steps: matchingSteps.map((step) => ({
+        id: step.id,
+        runId: step.runId,
+        nodeId: step.nodeId,
+        attempt: step.attempt,
+        status: step.status,
+        startedAt: step.startedAt,
+        endedAt: step.endedAt,
+        durationMs: step.durationMs,
+        ...(include.has("input") && step.input !== undefined
+          ? { input: step.input }
+          : {}),
+        ...(include.has("output") && step.output !== undefined
+          ? { output: step.output }
+          : {}),
+        ...(include.has("error") && step.error !== undefined
+          ? { error: step.error }
+          : {}),
+        ...(include.has("context") && step.contextDiff !== undefined
+          ? { contextDiff: step.contextDiff }
+          : {}),
+      })),
+      ...(stepLogs === undefined ? {} : { logs: stepLogs }),
+      artifacts: artifacts.filter((artifact) =>
+        stepRunIds.has(artifact.stepRunId ?? ""),
+      ),
+    };
+  }
   return {
     run,
     ...(definition ? { definition } : {}),
-    steps: store.listStepAttempts(id),
-    events: store.listRunEvents(id),
-    artifacts: store.listArtifacts(id),
+    summary,
+    artifacts,
+  };
+}
+
+function buildRunSummary(input: {
+  run: WorkflowRun;
+  steps: ReturnType<WorkflowStore["listStepAttempts"]>;
+  events: ReturnType<WorkflowStore["listRunEvents"]>;
+  artifacts: ReturnType<WorkflowStore["listArtifacts"]>;
+}) {
+  return {
+    status: input.run.status,
+    durationMs: input.run.durationMs,
+    stepCount: input.steps.length,
+    steps: input.steps.map((step) => ({
+      id: step.id,
+      stepId: step.nodeId,
+      attempt: step.attempt,
+      status: step.status,
+      durationMs: step.durationMs,
+      hasInput: step.input !== undefined,
+      hasOutput: step.output !== undefined,
+      hasError: step.error !== undefined,
+      hasContextDiff: step.contextDiff !== undefined,
+    })),
+    logs: input.events
+      .filter((event) => event.kind === "log")
+      .map((event) => ({
+        stepRunId: event.stepRunId,
+        level: event.level,
+        message: event.message,
+        createdAt: event.createdAt,
+      })),
+    branchDecisions: input.events
+      .filter((event) => event.kind === "branch_selected")
+      .map((event) => ({
+        stepRunId: event.stepRunId,
+        message: event.message,
+        payload: event.payload,
+      })),
+    parallel: input.events
+      .filter(
+        (event) =>
+          event.kind === "parallel_completed" ||
+          event.kind === "parallel_failed",
+      )
+      .map((event) => ({
+        stepRunId: event.stepRunId,
+        status: event.kind === "parallel_failed" ? "failed" : "succeeded",
+        message: event.message,
+        payload: event.payload,
+      })),
+    artifactCount: input.artifacts.length,
   };
 }
 

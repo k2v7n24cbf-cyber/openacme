@@ -1036,6 +1036,9 @@ importers:
       "@openacme/tasks":
         specifier: workspace:*
         version: link:../tasks
+      "@openacme/workflows":
+        specifier: workspace:*
+        version: link:../workflows
       jimp:
         specifier: ^1.6.0
         version: 1.6.1

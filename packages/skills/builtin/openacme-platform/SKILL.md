@@ -40,6 +40,12 @@ Workflow reference syntax, human-editable step ids, run-history inspection, MCP
 tool discovery, and agent-call authoring rules are owned by that workflow skill.
 Do not duplicate or reinterpret those contracts here.
 
+Workflow Engineer Agent owns routine workflow definition work through the
+first-class `workflow_*` tools. Acme should understand the routing and platform
+boundaries, then either use the workflow authoring skill for platform-admin
+coordination or delegate workflow creation, validation, test-run inspection, and
+publish/export work to Workflow Engineer Agent.
+
 Hosted integration development has its own skill file. If the task involves
 creating, editing, validating, promoting, debugging, repairing, migrating, or
 cutting over hosted integration tool families, read
@@ -198,6 +204,10 @@ Key fields:
 
 - `name` — display name (any string).
 - `role` — third-person paragraph for coworkers (used by `agent_list`).
+  It describes only this agent's own scope, strengths, limits, and
+  non-ownership boundaries. Do not put routing, delegation, or "ask
+  another agent" instructions in `role`; those belong in skills, peer
+  notes, tasks, or the persona body when needed.
 - `instantMessagesEnabled` — whether this agent accepts direct
   synchronous `agent_ask` calls from coworkers. Defaults to `true`.
   Set `false` for agents that should only receive durable `task_create`
@@ -498,7 +508,9 @@ When the user asks you to create a new agent:
 1. Decide id, name, role, persona, tools, model (inherit from
    `config.yaml` if no specific reason), and whether the agent should
    accept `agent_ask` instant messages (`instantMessagesEnabled`,
-   default `true`).
+   default `true`). Keep `role` self-contained: describe only what the
+   agent owns, handles well, and explicitly does not own; do not include
+   instructions to route work to other agents.
 2. Write `<dataDir>/agents/<id>/AGENT.md` with the frontmatter +
    persona body.
 3. File an onboarding task on the new agent so they learn the team.
